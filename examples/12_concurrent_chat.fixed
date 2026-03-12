@@ -1,0 +1,167 @@
+// 12_concurrent_chat.fixed
+// Channel-based concurrency as effects.
+//
+// Demonstrates:
+//   - Concurrency modeled as algebraic effects (not built-in primitives)
+//   - effect trait Channel<A> for typed message passing
+//   - effect trait Async for spawning concurrent tasks
+//   - Handler-based scheduling (the runtime is a handler, not magic)
+//   - Combining concurrency effects with I/O effects
+//   - Shows how Fixed's effect system subsumes async/await
+
+use std::io::Console;
+
+// --- Concurrency as effects ---
+
+// A typed channel for sending/receiving messages
+effect trait Channel<A> {
+    fn send(value: A) -> ();
+    fn receive() -> A;
+}
+
+// Spawning concurrent tasks
+effect trait Async {
+    fn spawn(task: fn() -> () with Async) -> ();
+    fn yield_now() -> ();
+}
+
+// --- A chat message ---
+
+trait Message {
+    fn new(sender: String, body: String) -> Self;
+    fn sender(self) -> String;
+    fn body(self) -> String;
+}
+
+// --- Chat room logic ---
+
+// A participant: reads from console, sends to channel
+fn participant(name: String) -> ()
+    with Console + Channel<is Message> + Async
+{
+    Console::print_line(name.concat(" joined the chat"));
+
+    fn chat_loop(name: String) -> ()
+        with Console + Channel<is Message> + Async
+    {
+        Console::print_line(name.concat("> "));
+        let input = Console::read_line();
+
+        if input == "quit" {
+            Console::print_line(name.concat(" left the chat"));
+        } else {
+            Channel::send(Message::new(name.clone(), input));
+            Async::yield_now();
+            chat_loop(name)
+        }
+    }
+
+    chat_loop(name)
+}
+
+// A listener: receives messages and displays them
+fn listener() -> () with Console + Channel<is Message> + Async {
+    fn listen_loop() -> () with Console + Channel<is Message> + Async {
+        let msg = Channel::receive();
+        Console::print_line(
+            "[".concat(msg.sender()).concat("]: ").concat(msg.body())
+        );
+        Async::yield_now();
+        listen_loop()
+    }
+
+    listen_loop()
+}
+
+// --- A simple round-robin scheduler (handler for Async) ---
+//
+// This is the key insight: the scheduler is a HANDLER, not a
+// language primitive. Different handlers give different scheduling
+// strategies. The user code is the same regardless.
+
+trait TaskQueue {
+    fn empty() -> Self;
+    fn push(self, task: fn() -> ()) -> Self;
+    fn pop(self) -> is Optional<is Pair<fn() -> (), Self>>;
+    fn is_empty(self) -> bool;
+}
+
+fn run_scheduler(task: fn() -> () with Async) -> () {
+    fn schedule(queue: is TaskQueue) -> () {
+        match queue.pop() {
+            Optional::some(pair) => {
+                let Pair { first: next_task, second: remaining } = pair;
+                handle next_task() {
+                    Async::spawn(new_task) => {
+                        let q = remaining.push(new_task);
+                        resume(());
+                        schedule(q)
+                    },
+                    Async::yield_now() => {
+                        let q = remaining.push(|| resume(()));
+                        schedule(q)
+                    },
+                }
+            },
+            Optional::none() => (),  // all tasks done
+        }
+    }
+
+    let initial_queue = TaskQueue::empty().push(|| {
+        handle task() {
+            Async::spawn(t) => { resume(()); },
+            Async::yield_now() => { resume(()); },
+        }
+    });
+    schedule(initial_queue)
+}
+
+// --- In-memory channel handler ---
+
+fn run_with_channel<A>(task: fn() -> () with Channel<A>) -> () {
+    // Buffer messages in a list
+    fn go<A>(buffer: is List<A>, task: fn() -> () with Channel<A>) -> () {
+        handle task() {
+            Channel::send(value) => {
+                go(List::cons(value, buffer), || resume(()))
+            },
+            Channel::receive() => {
+                match buffer {
+                    List::cons(head, tail) => {
+                        go(tail, || resume(head))
+                    },
+                    List::nil() => {
+                        // Block: in a real system, yield and retry
+                        // For this demo, just return
+                        ()
+                    },
+                }
+            },
+        }
+    }
+
+    go(List::nil(), task)
+}
+
+// --- Putting it all together ---
+
+fn main() -> () {
+    handle {
+        run_scheduler(|| {
+            run_with_channel(|| {
+                // Spawn participants and a listener
+                Async::spawn(|| participant("Alice"));
+                Async::spawn(|| participant("Bob"));
+                Async::spawn(|| listener());
+            })
+        })
+    } {
+        Console::print_line(msg) => {
+            builtin::stdout_write(msg.concat("\n"));
+            resume(())
+        },
+        Console::read_line() => {
+            resume(builtin::stdin_read_line())
+        },
+    }
+}

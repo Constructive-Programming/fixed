@@ -1,0 +1,20 @@
+// 01_hello.fixed
+// Minimal program: main function, Console effect, string literals.
+//
+// Demonstrates:
+//   - Entry point convention (fn main)
+//   - The Console effect trait for I/O
+//   - Stringlike things (including Vectors of chars, or lists of chars) are String
+//   - Effect handling at the top level
+
+use std::io::Console;
+
+fn greet(name: String) -> () with Console {
+    Console::print_line("Hello, ".concat(name).concat("!"));
+}
+
+fn main() -> () with Console {
+    Console::print_line("What is your name?");
+    let name = Console::read_line();
+    greet(name);
+}

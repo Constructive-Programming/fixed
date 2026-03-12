@@ -1,0 +1,152 @@
+// 09_binary_tree.fixed
+// Recursive Tree capability, fold-based traversals, Show blanket impl.
+//
+// Demonstrates:
+//   - Recursive sum capability with Self in two constructor positions
+//   - Multiple traversal orders via fold
+//   - Blanket impl: Show for any Tree<A is Show>
+//   - Building a binary search tree (insert, search)
+//   - Named capability alias: `A is Ord` constrains A across params
+//   - The compiler handles all allocation decisions for the recursive structure
+
+use std::io::Console;
+
+trait Tree<A> {
+    fn leaf(value: A) -> Self;
+    fn branch(left: Self, value: A, right: Self) -> Self;
+    fn empty() -> Self;
+    fn fold<R>(self, on_leaf: fn(A) -> R, on_branch: fn(R, A, R) -> R, on_empty: fn() -> R) -> R;
+}
+
+// --- Traversals ---
+
+// In-order: left, root, right (gives sorted order for BST)
+fn in_order<A>(tree: is Tree<A>) -> is List<A> {
+    match tree {
+        Tree::empty() => List::nil(),
+        Tree::leaf(v) => List::cons(v, List::nil()),
+        Tree::branch(left, v, right) =>
+            concat(in_order(left), List::cons(v, in_order(right))),
+    }
+}
+
+// Pre-order: root, left, right
+fn pre_order<A>(tree: is Tree<A>) -> is List<A> {
+    match tree {
+        Tree::empty() => List::nil(),
+        Tree::leaf(v) => List::cons(v, List::nil()),
+        Tree::branch(left, v, right) =>
+            List::cons(v, concat(pre_order(left), pre_order(right))),
+    }
+}
+
+// Depth of the tree
+fn depth<A>(tree: is Tree<A>) -> u64 {
+    match tree {
+        Tree::empty() => 0,
+        Tree::leaf(_) => 1,
+        Tree::branch(left, _, right) => {
+            let ld = depth(left);
+            let rd = depth(right);
+            1 + if ld > rd { ld } else { rd }
+        },
+    }
+}
+
+// Count nodes
+fn size<A>(tree: is Tree<A>) -> u64 {
+    match tree {
+        Tree::empty() => 0,
+        Tree::leaf(_) => 1,
+        Tree::branch(left, _, right) => 1 + size(left) + size(right),
+    }
+}
+
+// --- Binary Search Tree operations ---
+
+// `A is Ord` — named alias constraining A to have the Ord capability.
+// Both `tree` and `value` share the same A, ensuring the element type
+// matches what's already in the tree.
+fn insert<A is Ord>(tree: is Tree<A>, value: A) -> is Tree<A> {
+    match tree {
+        Tree::empty() => Tree::leaf(value),
+        Tree::leaf(v) => {
+            match value.compare(v) {
+                Ordering::less() => Tree::branch(Tree::leaf(value), v, Tree::empty()),
+                Ordering::equal() => Tree::leaf(v),  // no duplicates
+                Ordering::greater() => Tree::branch(Tree::empty(), v, Tree::leaf(value)),
+            }
+        },
+        Tree::branch(left, v, right) => {
+            match value.compare(v) {
+                Ordering::less() => Tree::branch(insert(left, value), v, right),
+                Ordering::equal() => Tree::branch(left, v, right),
+                Ordering::greater() => Tree::branch(left, v, insert(right, value)),
+            }
+        },
+    }
+}
+
+fn search<A is Ord>(tree: is Tree<A>, target: A) -> bool {
+    match tree {
+        Tree::empty() => false,
+        Tree::leaf(v) => v == target,
+        Tree::branch(left, v, right) => {
+            match target.compare(v) {
+                Ordering::less() => search(left, target),
+                Ordering::equal() => true,
+                Ordering::greater() => search(right, target),
+            }
+        },
+    }
+}
+
+// Build a BST from a list
+fn from_list<A is Ord>(items: is List<A>) -> is Tree<A> {
+    fold_left(items, Tree::empty(), |tree, item| insert(tree, item))
+}
+
+// --- Fold-based map (structural, not BST-preserving) ---
+
+fn map_tree<A, B>(tree: is Tree<A>, f: fn(A) -> B) -> is Tree<B> {
+    tree.fold(
+        |v| Tree::leaf(f(v)),
+        |left, v, right| Tree::branch(left, f(v), right),
+        || Tree::empty(),
+    )
+}
+
+// --- Show blanket implementation ---
+
+impl<A is Show> Show for is Tree<A> {
+    fn show(self) -> String {
+        match self {
+            Tree::empty() => ".",
+            Tree::leaf(v) => v.show(),
+            Tree::branch(left, v, right) =>
+                "(".concat(left.show())
+                   .concat(" ")
+                   .concat(v.show())
+                   .concat(" ")
+                   .concat(right.show())
+                   .concat(")"),
+        }
+    }
+}
+
+fn main() -> () with Console {
+    let tree = from_list([5, 3, 7, 1, 4, 6, 8, 2]);
+
+    Console::print_line("Tree: ".concat(tree.show()));
+    Console::print_line("In-order: ".concat(in_order(tree.clone()).show()));
+    Console::print_line("Pre-order: ".concat(pre_order(tree.clone()).show()));
+    Console::print_line("Depth: ".concat(depth(tree.clone()).show()));
+    Console::print_line("Size: ".concat(size(tree.clone()).show()));
+
+    Console::print_line("Contains 4? ".concat(search(tree.clone(), 4).show()));
+    Console::print_line("Contains 9? ".concat(search(tree.clone(), 9).show()));
+
+    // Map: double all values (structural, not BST-preserving)
+    let doubled = map_tree(tree, |x| x * 2);
+    Console::print_line("Doubled: ".concat(doubled.show()));
+}

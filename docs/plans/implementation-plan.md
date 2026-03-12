@@ -1,0 +1,485 @@
+# Fixed Language — Implementation Plan
+
+## Overview
+
+Fixed is a purely functional, capability-only programming language inspired by Quine's predicate functor logic and De Goes' "Kill Data" philosophy, compiling to C via Perceus-style reference counting.
+
+The programmer never defines concrete data types. All abstraction flows through **capabilities** (what other languages call traits/typeclasses). The compiler owns all representation decisions — it analyzes the set of capabilities a value must satisfy and selects the optimal concrete representation.
+
+---
+
+## Core Syntax Philosophy
+
+Fixed's syntax is designed around the insight that if the programmer never names concrete types, the syntax for type parameters should be minimal and readable. Key principles:
+
+### Capabilities, not types
+
+The `trait` keyword defines a **capability** — what a value can *do*. There are no structs, enums, classes, or data declarations. The word "type" in Fixed refers to the compiler's internal representation choice, never to something the programmer writes.
+
+### The `is` keyword
+
+Declares that a value satisfies a capability. Two forms:
+
+```
+// Named alias — N can be reused to relate parameters
+fn fib(n: N is Numeric) -> N
+
+// Anonymous — the compiler infers independently
+fn count(collection: is Folding) -> u64
+```
+
+### The `of` keyword
+
+Specifies what a capability operates over. Replaces angle brackets:
+
+```
+is Folding of i64           // a collection of i64s
+is Folding of (N is Numeric) // a collection of some numeric type N
+is Optional of u64           // an optional u64
+```
+
+Multi-parameter capabilities use tuple-style `of`:
+
+```
+trait Sized of (Part, Size is Numeric)
+trait RandomAccess of (Part, Index is Numeric)
+```
+
+### `Part` — the implicit element type
+
+Inside trait definitions, `Part` refers to the element type without needing an explicit type parameter:
+
+```
+trait Folding {
+    fn fold<R>(init: R, f: (R, Part) -> R) -> R;
+}
+```
+
+This eliminates `<A>` boilerplate. When a trait has multiple type parameters, they're named explicitly in `of`.
+
+### `Self.fn` vs `fn` — static vs instance methods
+
+```
+trait Sequencing {
+    fn head -> is Optional;          // instance method (called on a value)
+    fn tail -> Self;                  // instance method
+    Self.fn cons(h: Part, t: Self) -> Self;  // static/constructor (called on the type)
+}
+
+trait Empty {
+    Self.fn empty -> Self;           // static constructor
+}
+```
+
+Static methods are called via dot on the type alias: `C.empty`, `C.cons(x, acc)`.
+
+### `extends` for supertrait relationships
+
+```
+trait Optional extends Functor + Folding {
+    fn isDefined -> Boolean;
+    fn orElse(e: Part) -> Part;
+}
+```
+
+### `Self of B` for higher-kinded returns
+
+```
+trait Functor {
+    fn map<B>(f: Part -> B) -> Self of B;
+}
+```
+
+`Self` is the container shape, `of B` changes the element type. This replaces the `F for <_>` machinery with something more intuitive.
+
+### Type aliases
+
+`type` creates a shorthand for a set of capabilities. It does **not** create a new type — anywhere you write `is ArrayLike` the compiler sees the expanded capability set.
+
+```
+type ArrayLike = Sequencing + RandomAccess + Sized + Empty
+type Collection = Sequencing + Functor + Folding + Filtering + Empty
+```
+
+Used in signatures just like any capability:
+
+```
+fn take(collection: C is ArrayLike, n: u64) -> C
+fn binary_search(sorted: C is ArrayLike of (A is Ordered), target: A) -> ...
+```
+
+### Data declarations (the escape hatch)
+
+Most code should use capabilities, but sometimes you need a specific **closed set of variants** — enumerations, tagged unions, domain-specific value types. The `data` keyword defines a general algebraic data type (GADT):
+
+```
+// Simple enumeration — all unit variants
+data Direction { North, South, East, West }
+
+// Mixed variants — some carry data, some don't.
+// Capability constraints work inside data definitions.
+data Color { Red, Green, Blue, RGB(red: N is Numeric, green: N, blue: N) }
+
+// Recursive data — the compiler handles allocation
+data Expr {
+    Lit(value: f64),
+    Add(left: Expr, right: Expr),
+    Mul(left: Expr, right: Expr),
+    Neg(inner: Expr),
+}
+
+// Phantom-typed data
+data Tagged of (phantom Tag, Value) {
+    Tagged(value: Value)
+}
+```
+
+Key properties:
+- **The compiler still owns the representation** — `data` declares the shape (variants and fields), not the layout
+- **Data types automatically satisfy capabilities** their shape supports (e.g., a multi-variant data gets `Folding` for free, a data with fields gets accessors)
+- **Pattern matching** uses dot syntax: `Expr.Lit(v)`, `Color.RGB(r, g, b)`, `Direction.North`
+- **`of` works on data** just like on traits: `data Tagged of (phantom Tag, Value)` introduces type parameters
+- **Capability constraints inside data fields**: `RGB(red: N is Numeric, green: N, blue: N)` — all three fields share the same numeric type
+
+### When to use `data` vs `trait`
+
+| Use `trait` (capability) when... | Use `data` when... |
+|---|---|
+| You want the compiler to choose the representation | You need a specific closed set of variants |
+| Multiple representations could work | The shape itself is the point (e.g., Red/Green/Blue) |
+| You want maximum reusability across callers | You want exhaustive pattern matching on known variants |
+| You're defining *what something can do* | You're defining *what something is* |
+
+### Additional syntax
+
+| Feature | Syntax | Replaces |
+|---|---|---|
+| Arrow function types | `Part -> B`, `(R, Part) -> R` | `fn(Part) -> B`, `fn(R, Part) -> R` |
+| Parenthesless zero-arg methods | `fn head -> is Optional` | `fn head() -> is Optional` |
+| Block lambdas | `.map { value -> expr }` | `.map(\|value\| expr)` |
+| Dot static calls | `C.empty`, `C.cons(x, acc)` | `C::empty()`, `C::cons(x, acc)` |
+| Type aliases | `type ArrayLike = Seq + RA + Sized + Empty` | Repeating capability bundles everywhere |
+| Data declarations | `data Color { Red, Green, Blue, RGB(...) }` | No prior equivalent (escape hatch) |
+
+---
+
+## Right-Bias and Ambiguity Resolution
+
+### Right-bias convention
+
+When the compiler auto-derives capability instances for multi-parameter types, it uses a **right-bias** convention. The rightmost (last) type parameter is the "active" one:
+
+- A **Tuple of (A, B)** is both a `BiFunctor` (mapping over both `A` and `B`) and a `Functor` (mapping over `B` only). The `Functor` instance is derived automatically because of right-bias — `B` is the rightmost parameter.
+- A **Result of (E, A)** is a `Functor` over `A` (the success value, rightmost), not `E` (the error).
+- A **Map of (K, V)** is a `Functor` over `V` (the value), not `K` (the key).
+
+This matches Haskell's convention and the natural reading: the "main" content is the last parameter, context/metadata comes first.
+
+### Ambiguity resolution via compiler suggestions
+
+When the compiler encounters an **ambiguity** — multiple valid ways to derive a capability instance — it does **not** silently pick one. Instead, it:
+
+1. **Halts compilation** with a clear error describing the ambiguity
+2. **Lists all valid options** as concrete code snippets the developer can copy-paste
+3. The developer picks one and adds it to their code, resolving the ambiguity explicitly
+
+Example compiler output:
+
+```
+error[E042]: ambiguous Functor instance for Pair of (A, B)
+
+  Pair satisfies Functor in multiple ways:
+
+  Option 1 — Functor over B (right-biased, conventional):
+  │  impl Functor for Pair {
+  │      fn map<C>(f: B -> C) -> Pair of (A, C) { Pair(self.first, f(self.second)) }
+  │  }
+
+  Option 2 — Functor over A (left-biased):
+  │  impl Functor for Pair {
+  │      fn map<C>(f: A -> C) -> Pair of (C, B) { Pair(f(self.first), self.second) }
+  │  }
+
+  hint: Option 1 is the right-biased default. Copy one of the above
+        into your code to resolve this ambiguity.
+```
+
+This design principle applies broadly:
+- **Auto-derived capabilities** use right-bias as the default heuristic
+- **When right-bias is insufficient** (e.g., a type with three parameters, or a non-obvious "natural" parameter), the compiler asks
+- **The developer always has the final word** — the compiler suggests, never silently decides on ambiguous cases
+- **Suggestions are copy-pasteable code**, not abstract descriptions
+
+---
+
+## Capability-Driven Representation Selection
+
+This is the central compiler innovation. The programmer never names a data structure — they declare **what capabilities** they need, and the compiler selects the best concrete representation.
+
+### How it works
+
+1. The compiler collects all capability bounds on a value across its entire lifetime
+2. It builds a **capability set** — the intersection of all representations that satisfy those bounds
+3. It selects the optimal representation from that set, considering performance characteristics
+
+### Capability → representation mapping
+
+| Capabilities requested | Compiler likely selects |
+|---|---|
+| `Folding` only | Anything — linked list, array, tree, stream |
+| `Sequencing + Folding` | Linked list or array (both support cons/fold) |
+| `RandomAccess + Sized` | Contiguous array (linked list cannot satisfy RandomAccess efficiently) |
+| `Sequencing + RandomAccess + Sized + Functor + Filtering` | Resizable contiguous array (all constraints force this) |
+| `Folding` with PGO showing sequential-only access | Contiguous array (PGO narrows further) |
+
+### The key insight
+
+The **more capabilities** you request, the **fewer representations** qualify. This is a feature: it means the programmer controls performance characteristics *indirectly* by expressing what operations they need, and the compiler handles the rest. A function that only needs `Folding` is maximally reusable; one that needs `RandomAccess + Sized` gets guaranteed O(1) indexing.
+
+---
+
+## Phase 0: Example Programs — COMPLETE
+
+12 example `.fixed` programs stress-testing the language design:
+
+| # | File | Exercises |
+|---|---|---|
+| 1 | `examples/01_hello.fixed` | `main`, `Console` effect, string literals |
+| 2 | `examples/02_fibonacci.fixed` | `is Numeric`, named aliases, anonymous capabilities |
+| 3 | `examples/03_linked_list.fixed` | Capability-driven collections, type aliases, `data` declarations, GADTs |
+| 4 | `examples/04_option_result.fixed` | `Optional`/`Result`, `?` operator, `Fail` effect |
+| 5 | `examples/05_json_parser.fixed` | Recursive 6-variant sum capability, deep pattern matching |
+| 6 | `examples/06_state_machine.fixed` | Phantom-typed state transitions, marker capabilities |
+| 7 | `examples/07_effectful_io.fixed` | Multiple effects, handler composition, effect rows |
+| 8 | `examples/08_functor_monad.fixed` | HKTs, `Functor`/`Monad`, `do` notation |
+| 9 | `examples/09_binary_tree.fixed` | Recursive `Tree`, fold-based traversals, blanket impls |
+| 10 | `examples/10_tagged_units.fixed` | Phantom types for unit safety (Quine's padding + reflection) |
+| 11 | `examples/11_interpreter.fixed` | Mini expression language, deep matching, effects for eval errors |
+| 12 | `examples/12_concurrent_chat.fixed` | Channel-based concurrency as effects |
+| 13 | `examples/13_geometry.fixed` | `type` aliases, `data` declarations, geometry ops (area, perimeter, bounding box) |
+
+---
+
+## Phase 1: Specification
+
+Formal specification documents that pin down semantics before implementation.
+
+### Deliverables
+
+| File | Contents |
+|---|---|
+| `spec/syntax_grammar.ebnf` | Complete formal grammar covering all syntactic forms |
+| `spec/type_system.md` | Capability classification rules, `of`/`Part`/`Self of B` semantics, representation selection, inference |
+| `spec/effects.md` | Algebraic effects semantics, effect rows, evidence-passing compilation |
+| `spec/pattern_matching.md` | Desugaring rules (`match` → `fold`), exhaustiveness checking algorithm |
+| `spec/perceus.md` | Reference counting insertion, reuse analysis (FBIP), drop specialization, borrowing optimization |
+
+### Key decisions to formalize
+
+- **`of` and `Part` semantics**: How `Part` is resolved in multi-parameter capabilities. How `of` interacts with named aliases. How `Self of B` works for HKT returns.
+- **`Self.fn` vs `fn`**: Static vs instance method distinction. Rules for when each is allowed. How static methods are dispatched via dot syntax on type aliases.
+- **`extends` inheritance**: How capability extension works. Multiple inheritance via `+`. Diamond problem resolution.
+- **Capability-driven representation selection**: The algorithm by which the compiler narrows representation choices from capability sets. How conflicting heuristics are resolved. PGO integration points.
+- **Capability classification**: compiler-inferred categories (sum, product, recursive, capability-only, marker) based on signature shape
+- **No `&` operator**: the programmer never writes references; the compiler handles all borrowing/moving/cloning via Perceus
+- **No explicit `self`**: instance methods don't declare a self parameter; the compiler infers it
+- **Coherence rules**: how orphan rules work when there are no concrete types
+- **Recursive capability detection**: Self in constructor parameter position
+
+---
+
+## Phase 2: Parser + AST
+
+Rust implementation of the front-end.
+
+### Deliverables
+
+| Component | Description |
+|---|---|
+| **Lexer** (`src/lexer/`) | Tokenizer targeting the EBNF grammar. Keywords: `trait`, `fn`, `is`, `of`, `extends`, `effect`, `match`, `handle`, `with`, `let`, `if`, `else`, `do`, `use`, `mod`, `pub`, `phantom`, `Self` |
+| **Parser** (`src/parser/`) | Recursive descent or Pratt parser producing AST |
+| **AST** (`src/ast/`) | Type definitions for all language constructs |
+
+### AST node types needed
+
+- **Items**: `TraitDef`, `EffectTraitDef`, `DataDef`, `TypeAlias`, `ImplBlock`, `FnDef`, `UseDecl`, `ModDecl`
+- **Trait members**: `InstanceMethod`, `StaticMethod` (the `Self.fn` distinction)
+- **Capability refs**: `IsCap` (anonymous), `NamedAlias` (`N is Numeric`), `OfApp` (`Folding of i64`), `SelfOf` (`Self of B`)
+- **Expressions**: `Match`, `If`, `Let`, `FnCall`, `MethodCall`, `StaticCall` (`C.empty`), `Closure`, `BlockLambda`, `Do`, `Handle`, `Block`, `Literal`, `BinaryOp`, `UnaryOp`, `FieldAccess`, `ListLiteral`, `QuestionMark`, `Pipe`
+- **Data**: `DataVariant` (unit variant, tuple variant with named fields), `PhantomParam`, `OfParams`
+- **Patterns**: `ConstructorPat`, `DataVariantPat` (`Expr.Lit(v)`), `WildcardPat`, `BindingPat`, `LiteralPat`, `DestructurePat`, `GuardedPat`
+- **Types**: `ArrowType` (`A -> B`), `TupleArrowType` (`(A, B) -> C`), `CapBound` (`is Cap + Cap`), `OfType` (`Cap of X`)
+
+### Milestone
+
+All 12 example programs parse successfully into AST.
+
+---
+
+## Phase 3: Type Checker
+
+### Deliverables
+
+| Component | Description |
+|---|---|
+| **Capability classifier** (`src/types/classify.rs`) | Analyze capability signatures → sum/product/recursive/capability-only/marker |
+| **Type alias expander** (`src/types/alias.rs`) | Expand `type` aliases to their underlying capability sets |
+| **Data type analyzer** (`src/types/data.rs`) | Analyze `data` declarations: variant shapes, auto-derive capabilities, GADT type parameter constraints |
+| **Type inference** (`src/types/infer.rs`) | Bidirectional inference with capability bounds, `Part` resolution, `of` application |
+| **Representation selector** (`src/types/repr.rs`) | Analyze capability sets → narrow to viable concrete representations |
+| **Effect inference** (`src/types/effects.rs`) | Infer and propagate effect rows, verify all effects handled |
+| **Exhaustiveness checker** (`src/types/exhaustive.rs`) | Verify `match` arms cover all constructors |
+
+### Capability classification rules
+
+| Category | Detection rule | Representation |
+|---|---|---|
+| **Sum** | Multiple `Self.fn(...) -> Self` constructors + `fold` method | Tagged union |
+| **Product** | Single `Self.fn(...) -> Self` constructor + accessor methods | Flat struct |
+| **Recursive** | `Self` appears in constructor parameter types | Heap-allocated (optimizable) |
+| **Capability-only** | No constructors returning `Self` (only instance methods) | Vtable / monomorphized |
+| **Marker** | No methods at all | Zero-sized, compile-time only |
+
+### Capability-set representation narrowing
+
+New compiler pass: given all capabilities a value must satisfy, determine which concrete representations are viable:
+
+1. Collect all `is` bounds on a value across its entire usage scope
+2. For each candidate representation, check if it can satisfy all bounds
+3. Rank remaining candidates by performance (PGO data if available, heuristics otherwise)
+4. Select the best candidate
+
+### Milestone
+
+All 12 example programs type-check with correct capability classifications, representation selection, and effect tracking.
+
+---
+
+## Phase 4: Code Generation (to C)
+
+### Compilation pipeline
+
+```
+Typed AST
+  → Capability-set analysis (collect all bounds per value)
+  → Representation selection (capability set → concrete layout)
+  → Monomorphization (specialize generic functions)
+  → Match desugaring (match → fold calls)
+  → Perceus insertion (dup/drop/reuse token placement)
+  → Evidence passing (effect operations → evidence vector lookups)
+  → C emission (structs, tagged unions, function pointers, refcount ops)
+```
+
+### Deliverables
+
+| Component | Description |
+|---|---|
+| **Capability analyzer** (`src/codegen/caps.rs`) | Collect and resolve capability sets per value |
+| **Representation selector** (`src/codegen/repr.rs`) | Map capability sets to C layouts |
+| **Monomorphizer** (`src/codegen/mono.rs`) | Specialize generic functions for concrete type params |
+| **Match desugarer** (`src/codegen/desugar.rs`) | Convert `match` to `fold` calls, `if` to `bool.fold`, `?` to `fold` + `Fail` |
+| **Perceus inserter** (`src/codegen/perceus.rs`) | Insert `dup`/`drop` operations, compute reuse tokens |
+| **Evidence passer** (`src/codegen/evidence.rs`) | Compile effects to evidence vector lookups |
+| **C emitter** (`src/codegen/emit_c.rs`) | Generate readable C code |
+
+### C representation mapping
+
+| Fixed concept | C representation |
+|---|---|
+| Sum capability (e.g., `Optional`) | `struct { uint8_t tag; union { ... } data; }` |
+| Data type (e.g., `Color`, `Expr`) | `struct { uint8_t tag; union { ... } data; }` (same as sum, but shape is programmer-defined) |
+| Product capability (e.g., `Config`) | `struct { field1_t field1; field2_t field2; ... }` |
+| Recursive capability (e.g., `Sequencing` backed by linked list) | Heap-allocated node with refcount header |
+| Capability satisfied by contiguous array (e.g., `RandomAccess + Sized`) | `struct { size_t len; size_t cap; T* data; }` |
+| Closure | `struct { fn_ptr code; env_ptr env; }` |
+| Block lambda | Same as closure (syntactic difference only) |
+| Effect operation | Evidence vector lookup + indirect call |
+| `resume` | Direct function call (single-shot) |
+| Refcount | `struct { atomic_int rc; ... }` header on heap objects |
+
+### Milestone
+
+All 12 example programs compile to C, the C compiles with gcc/clang, and the binaries run correctly.
+
+---
+
+## Phase 5: Standard Library
+
+Written in Fixed itself. The standard library defines the core capabilities that the compiler uses for representation selection.
+
+### Deliverables
+
+| File | Contents |
+|---|---|
+| `stdlib/core.fixed` | `Optional`, `Result`, `Pair`, `Ordering`, `Boolean`, `Empty` |
+| `stdlib/capabilities.fixed` | `Eq`, `Ord`, `Show`, `Clone`, `Default`, `Hash`, `Numeric`, `String` |
+| `stdlib/collections.fixed` | `Sequencing`, `Functor`, `Folding`, `Filtering`, `Sized`, `RandomAccess`, `Map`, `Set` |
+| `stdlib/io.fixed` | `Console`, `FileSystem`, `Clock`, `Random` effect traits + `Fail` |
+
+### Notes
+
+- Primitives (`i8`..`i128`, `u8`..`u128`, `f32`, `f64`, `bool`, `char`, `()`) are compiler-provided and satisfy relevant capabilities
+- The compiler has built-in knowledge of stdlib capabilities for representation selection (e.g., `RandomAccess` implies contiguous storage is preferred)
+- `String` is a capability, not a concrete type — the compiler chooses the backing representation
+
+---
+
+## Phase 6: PGO + Optimization
+
+Profile-guided optimization for representation selection.
+
+### Deliverables
+
+| Component | Description |
+|---|---|
+| **Instrumented mode** | Compiler flag that inserts profiling counters into generated C |
+| **Profile reader** | Reads profile data and feeds it back into compilation |
+| **Representation optimizer** | Narrows representation choices further based on profile data |
+| **Hot-path specializer** | Inline frequently-called closures, eliminate dynamic dispatch on hot paths |
+
+### PGO-driven decisions
+
+- Sequential-only fold access → contiguous array (even if capabilities didn't require it)
+- Heap allocation → stack allocation (when lifetime is short and bounded)
+- Dynamic dispatch → monomorphized (when callee is statically known in practice)
+- Closure allocation → inlined (when closure is called exactly once)
+- Linked list → contiguous array (when profiling shows random access patterns despite only `Sequencing` being required)
+
+---
+
+## Open Design Questions
+
+1. **`Part` resolution in multi-param capabilities**: `Sized of (Part, Size is Numeric)` — is `Part` always the first parameter? Can it be renamed? How does it interact with `extends`?
+
+2. **Coherence with capability-only types**: Orphan rules when there are no concrete types. Current direction: compiler auto-generates implementations; users write blanket impls constrained by other capabilities.
+
+3. **Mutual recursion**: Two capabilities referencing each other's `Self`. The compiler must detect cycles and co-allocate.
+
+4. **Error messages**: Must speak in capability terms, never expose generated struct names. "Expected `is Folding of i64`, found `is Folding of String`."
+
+5. **FFI boundary**: C interop requires concrete types. `extern` blocks declare C functions with concrete primitive types; the compiler generates wrapper functions.
+
+6. **Effect handler composition syntax**: Nested `handle` blocks work but are verbose. Consider a cleaner composition syntax.
+
+7. **`Self of B` vs `F for <_>`**: The new `Self of B` syntax is more intuitive for single-param HKTs. Does `F for <_>` survive for cases where you need to abstract over the container itself (e.g., `fn sequence<M is Monad for <_>>`)?
+
+8. **Block lambda vs closure syntax**: When does `{ x -> expr }` apply vs `|x| expr`? Are both supported, or does block lambda replace closures entirely?
+
+9. **Data auto-deriving capabilities**: Which capabilities does a `data` type automatically satisfy? Multi-variant → `Folding`? With accessors → `Functor`? Recursive → auto-heap-allocation? Right-bias determines which parameter `Functor` maps over. Need clear rules for the full derivation matrix.
+
+10. **GADT type equality constraints**: `data Expr of (A) { Lit(value: A), Add(left: Expr of i64, right: Expr of i64) }` — do we support type-level constraints per variant (true GADT power)? Or is `of` on data purely parametric?
+
+11. **Type alias `of` interaction**: `is ArrayLike of (A is Ordered)` — how does `of` distribute across the expanded capabilities? Does it apply to all of them, or only those that accept `of`?
+
+---
+
+## Verification Plan
+
+1. Parse all 12 example programs → AST
+2. Type-check all 12 programs (capability classification, representation selection, effect tracking)
+3. Verify pattern match exhaustiveness on sum capabilities
+4. Verify effect tracking catches unhandled effects
+5. Verify capability-set narrowing selects correct representations
+6. Compile to C → compile C → run binaries → verify output
+7. Benchmark against equivalent Koka programs
+8. Test PGO: verify representation changes improve performance on profiled workloads

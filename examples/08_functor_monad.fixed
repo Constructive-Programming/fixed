@@ -1,0 +1,150 @@
+// 08_functor_monad.fixed
+// Higher-kinded types: Functor, Monad, do-notation, generic programming.
+//
+// Demonstrates:
+//   - HKT syntax: `F for <_>` declares a type constructor
+//   - Functor/Applicative/Monad capability hierarchy
+//   - `do` notation as sugar for flat_map chains
+//   - Generic functions that work over any Monad
+//   - How Optional and Result both satisfy Monad
+//   - `M is Monad for <_>` for HKT capability constraints
+
+// --- The capability hierarchy ---
+
+trait Functor<F for <_>> {
+    fn map<A, B>(self: F<A>, f: fn(A) -> B) -> F<B>;
+}
+
+trait Applicative<F for <_>>: Functor<F> {
+    fn pure<A>(value: A) -> F<A>;
+    fn apply<A, B>(self: F<fn(A) -> B>, arg: F<A>) -> F<B>;
+}
+
+trait Monad<M for <_>>: Applicative<M> {
+    fn flat_map<A, B>(self: M<A>, f: fn(A) -> M<B>) -> M<B>;
+}
+
+// --- Optional is a Monad ---
+
+trait Optional<A> {
+    fn some(value: A) -> Self;
+    fn none() -> Self;
+    fn fold<R>(self, on_some: fn(A) -> R, on_none: fn() -> R) -> R;
+}
+
+impl Functor<Optional> {
+    fn map<A, B>(self: Optional<A>, f: fn(A) -> B) -> Optional<B> {
+        match self {
+            Optional::some(a) => Optional::some(f(a)),
+            Optional::none() => Optional::none(),
+        }
+    }
+}
+
+impl Applicative<Optional> {
+    fn pure<A>(value: A) -> Optional<A> {
+        Optional::some(value)
+    }
+
+    fn apply<A, B>(self: Optional<fn(A) -> B>, arg: Optional<A>) -> Optional<B> {
+        match self {
+            Optional::some(f) => Functor::map(arg, f),
+            Optional::none() => Optional::none(),
+        }
+    }
+}
+
+impl Monad<Optional> {
+    fn flat_map<A, B>(self: Optional<A>, f: fn(A) -> Optional<B>) -> Optional<B> {
+        match self {
+            Optional::some(a) => f(a),
+            Optional::none() => Optional::none(),
+        }
+    }
+}
+
+// --- Generic monadic functions ---
+
+// `M is Monad for <_>` — M is a named alias for a type constructor
+// with the Monad capability. The `for <_>` indicates it takes one
+// type parameter (it's a * -> * kind).
+fn when<M is Monad for <_>>(condition: bool, action: M<()>) -> M<()> {
+    if condition {
+        action
+    } else {
+        Applicative::pure(())
+    }
+}
+
+fn sequence<M is Monad for <_>, A>(list: is List<M<A>>) -> M<is List<A>> {
+    match list {
+        List::cons(head, tail) => do {
+            a <- head;
+            rest <- sequence(tail);
+            Applicative::pure(List::cons(a, rest))
+        },
+        List::nil() => Applicative::pure(List::nil()),
+    }
+}
+
+fn map_m<M is Monad for <_>, A, B>(list: is List<A>, f: fn(A) -> M<B>) -> M<is List<B>> {
+    sequence(map(list, f))
+}
+
+fn fold_m<M is Monad for <_>, A, B>(
+    list: is List<A>,
+    init: B,
+    f: fn(B, A) -> M<B>,
+) -> M<B> {
+    match list {
+        List::cons(head, tail) => do {
+            acc <- f(init, head);
+            fold_m(tail, acc, f)
+        },
+        List::nil() => Applicative::pure(init),
+    }
+}
+
+// --- do notation example ---
+
+fn safe_divide(a: f64, b: f64) -> is Optional<f64> {
+    if b == 0.0 {
+        Optional::none()
+    } else {
+        Optional::some(a / b)
+    }
+}
+
+fn compute() -> is Optional<f64> {
+    // `do` desugars to flat_map chains:
+    //   safe_divide(100.0, 3.0).flat_map(|x|
+    //     safe_divide(x, 2.0).flat_map(|y|
+    //       safe_divide(y, 7.0).flat_map(|z|
+    //         Applicative::pure(z))))
+    do {
+        x <- safe_divide(100.0, 3.0);
+        y <- safe_divide(x, 2.0);
+        z <- safe_divide(y, 7.0);
+        Applicative::pure(x + y + z)
+    }
+}
+
+// --- Functor laws (expressed as tests) ---
+
+// These are properties, not executable tests (yet).
+// fmap id == id
+// fmap (f . g) == fmap f . fmap g
+
+fn main() -> () with Console {
+    match compute() {
+        Optional::some(result) => Console::print_line("Result: ".concat(result.show())),
+        Optional::none() => Console::print_line("Division by zero encountered"),
+    }
+
+    // sequence example: all-or-nothing
+    let opts = [Optional::some(1), Optional::some(2), Optional::some(3)];
+    match sequence(opts) {
+        Optional::some(list) => Console::print_line("All present: ".concat(list.show())),
+        Optional::none() => Console::print_line("At least one was none"),
+    }
+}

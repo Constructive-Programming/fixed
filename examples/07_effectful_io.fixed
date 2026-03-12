@@ -1,0 +1,118 @@
+// 07_effectful_io.fixed
+// Multiple effects, handler composition, effect rows.
+//
+// Demonstrates:
+//   - Multiple effect capabilities (Console, FileSystem, Fail)
+//   - Effect rows with `+` composition
+//   - Nested handlers
+//   - Effect polymorphism in higher-order functions
+//   - Pure functions as guaranteed-effect-free
+//   - A "real" program that reads a config file and interacts with the user
+
+use std::io::{Console, FileSystem};
+
+effect trait Fail<E> {
+    fn fail(error: E) -> !;
+}
+
+effect trait Log {
+    fn log(level: String, message: String) -> ();
+}
+
+// --- A config file reader ---
+
+// Config is a product capability: single constructor + accessors.
+trait Config {
+    fn new(host: String, port: u16, debug: bool) -> Self;
+    fn host(self) -> String;
+    fn port(self) -> u16;
+    fn debug(self) -> bool;
+}
+
+fn read_config(path: String) -> is Config
+    with FileSystem + Fail<String>
+{
+    let contents = FileSystem::read_file(path)?;
+    parse_config(contents)
+}
+
+fn parse_config(text: String) -> is Config
+    with Fail<String>
+{
+    let lines = split_lines(text);
+    let host = find_value(lines, "host")?;
+    let port_str = find_value(lines, "port")?;
+    let port = parse_u16(port_str)?;
+    let debug = find_value(lines, "debug")
+        |> map_optional(|v| v == "true")
+        |> unwrap_or(false);
+    Config::new(host, port, debug)
+}
+
+// Pure helper — no effects needed, no `with` clause
+fn find_value(
+    lines: is List<String>,
+    key: String,
+) -> is Optional<String> {
+    find(lines, |line| starts_with(line, key))
+        |> map_optional(|line| after_char(line, '='))
+        |> map_optional(|value| trim(value))
+}
+
+// --- The main application: combines multiple effects ---
+
+fn run_server(config: is Config) -> () with Console + Log {
+    Log::log("info", "Starting server...");
+    Console::print_line(
+        "Server running on "
+            .concat(config.host())
+            .concat(":")
+            .concat(config.port().show())
+    );
+
+    if config.debug() {
+        Log::log("debug", "Debug mode enabled");
+        Console::print_line("[DEBUG] Verbose output on");
+    } else {
+        ()
+    }
+}
+
+fn main() -> () {
+    // The outermost handler peels off all effects.
+    // Each `handle` removes one effect from the row.
+
+    handle {
+        handle {
+            handle {
+                let config = read_config("server.conf");
+                run_server(config);
+            } {
+                // Handle Fail by printing error and exiting
+                Fail::fail(e) => {
+                    builtin::stderr_write("Fatal: ".concat(e));
+                    builtin::exit(1);
+                },
+            }
+        } {
+            // Handle Log by writing to stderr with timestamp
+            Log::log(level, msg) => {
+                builtin::stderr_write("[".concat(level).concat("] ").concat(msg).concat("\n"));
+                resume(())
+            },
+        }
+    } {
+        // Handle Console with real stdin/stdout
+        Console::print_line(msg) => {
+            builtin::stdout_write(msg.concat("\n"));
+            resume(())
+        },
+        Console::read_line() => {
+            resume(builtin::stdin_read_line())
+        },
+    }
+
+    // Note: `handle` blocks can also be composed more cleanly:
+    // handle run() with console_handler + log_handler + fail_handler
+    // (syntax TBD — this is one area to refine)
+}

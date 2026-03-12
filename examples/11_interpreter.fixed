@@ -1,0 +1,201 @@
+// 11_interpreter.fixed
+// A mini expression language interpreter.
+//
+// Demonstrates:
+//   - Deep pattern matching on a multi-variant recursive sum capability
+//   - Mutual recursion (Expr references itself)
+//   - Effects for runtime errors (EvalError)
+//   - Combining pattern matching with effects
+//   - fold-based pretty printing (no pattern matching needed)
+//   - A non-trivial program showing Fixed's expressiveness
+
+use std::io::Console;
+
+// --- The expression AST ---
+
+trait Expr {
+    fn lit(value: f64) -> Self;
+    fn var(name: String) -> Self;
+    fn add(left: Self, right: Self) -> Self;
+    fn mul(left: Self, right: Self) -> Self;
+    fn neg(inner: Self) -> Self;
+    fn let_in(name: String, value: Self, body: Self) -> Self;
+    fn if_then(cond: Self, then_branch: Self, else_branch: Self) -> Self;
+    fn call(func_name: String, args: is List<Self>) -> Self;
+    fn fold<R>(
+        self,
+        on_lit: fn(f64) -> R,
+        on_var: fn(String) -> R,
+        on_add: fn(R, R) -> R,
+        on_mul: fn(R, R) -> R,
+        on_neg: fn(R) -> R,
+        on_let: fn(String, R, R) -> R,
+        on_if: fn(R, R, R) -> R,
+        on_call: fn(String, is List<R>) -> R,
+    ) -> R;
+}
+
+// --- The environment (variable bindings) ---
+
+trait Env {
+    fn empty() -> Self;
+    fn bind(self, name: String, value: f64) -> Self;
+    fn lookup(self, name: String) -> is Optional<f64>;
+}
+
+// --- Built-in function registry ---
+
+trait Builtins {
+    fn eval_builtin(
+        name: String,
+        args: is List<f64>,
+    ) -> is Optional<f64>;
+}
+
+fn default_builtins() -> is Builtins {
+    // The compiler generates a concrete implementation.
+    // In practice this would use a Map internally.
+    fn eval_builtin(name: String, args: is List<f64>) -> is Optional<f64> {
+        if name == "sqrt" {
+            match args {
+                List::cons(x, List::nil()) => Optional::some(builtin::sqrt(x)),
+                _ => Optional::none(),
+            }
+        } else if name == "abs" {
+            match args {
+                List::cons(x, List::nil()) =>
+                    Optional::some(if x < 0.0 { 0.0 - x } else { x }),
+                _ => Optional::none(),
+            }
+        } else if name == "max" {
+            match args {
+                List::cons(a, List::cons(b, List::nil())) =>
+                    Optional::some(if a > b { a } else { b }),
+                _ => Optional::none(),
+            }
+        } else {
+            Optional::none()
+        }
+    }
+}
+
+// --- The evaluator ---
+
+effect trait EvalError {
+    fn eval_error(message: String) -> !;
+}
+
+fn eval(expr: is Expr, env: is Env) -> f64 with EvalError {
+    match expr {
+        Expr::lit(value) =>
+            value,
+
+        Expr::var(name) =>
+            match env.lookup(name) {
+                Optional::some(v) => v,
+                Optional::none() => EvalError::eval_error(
+                    "undefined variable: ".concat(name)
+                ),
+            },
+
+        Expr::add(left, right) =>
+            eval(left, env) + eval(right, env),
+
+        Expr::mul(left, right) =>
+            eval(left, env) * eval(right, env),
+
+        Expr::neg(inner) =>
+            0.0 - eval(inner, env),
+
+        Expr::let_in(name, value_expr, body) => {
+            let value = eval(value_expr, env);
+            let new_env = env.clone().bind(name, value);
+            eval(body, new_env)
+        },
+
+        Expr::if_then(cond, then_branch, else_branch) => {
+            let c = eval(cond, env);
+            // Nonzero is truthy
+            if c != 0.0 {
+                eval(then_branch, env)
+            } else {
+                eval(else_branch, env)
+            }
+        },
+
+        Expr::call(func_name, arg_exprs) => {
+            let arg_values = map(arg_exprs, |arg| eval(arg, env));
+            match default_builtins().eval_builtin(func_name, arg_values) {
+                Optional::some(result) => result,
+                Optional::none() => EvalError::eval_error(
+                    "unknown function: ".concat(func_name)
+                ),
+            }
+        },
+    }
+}
+
+// --- Pretty printer (using fold — no pattern matching!) ---
+
+fn pretty(expr: is Expr) -> String {
+    expr.fold(
+        |v| v.show(),
+        |name| name,
+        |l, r| "(".concat(l).concat(" + ").concat(r).concat(")"),
+        |l, r| "(".concat(l).concat(" * ").concat(r).concat(")"),
+        |inner| "(-".concat(inner).concat(")"),
+        |name, val, body|
+            "let ".concat(name).concat(" = ").concat(val)
+                  .concat(" in ").concat(body),
+        |c, t, e|
+            "if ".concat(c).concat(" then ").concat(t)
+                 .concat(" else ").concat(e),
+        |name, args|
+            name.concat("(").concat(join(args, ", ")).concat(")"),
+    )
+}
+
+fn main() -> () with Console {
+    // Build: let x = 3.0 in let y = 4.0 in sqrt(x*x + y*y)
+    let expr = Expr::let_in("x", Expr::lit(3.0),
+        Expr::let_in("y", Expr::lit(4.0),
+            Expr::call("sqrt", [
+                Expr::add(
+                    Expr::mul(Expr::var("x"), Expr::var("x")),
+                    Expr::mul(Expr::var("y"), Expr::var("y")),
+                )
+            ])
+        )
+    );
+
+    Console::print_line("Expression: ".concat(pretty(expr)));
+
+    let env = Env::empty();
+    handle {
+        let result = eval(expr, env);
+        Console::print_line("Result: ".concat(result.show()));
+    } {
+        EvalError::eval_error(msg) => {
+            Console::print_line("Eval error: ".concat(msg));
+        },
+    }
+
+    // Build: if (x - 5) then x * 2 else 0
+    let expr2 = Expr::if_then(
+        Expr::add(Expr::var("x"), Expr::neg(Expr::lit(5.0))),
+        Expr::mul(Expr::var("x"), Expr::lit(2.0)),
+        Expr::lit(0.0),
+    );
+
+    Console::print_line("Expression: ".concat(pretty(expr2)));
+
+    let env2 = Env::empty().bind("x", 10.0);
+    handle {
+        let result = eval(expr2, env2);
+        Console::print_line("Result: ".concat(result.show()));
+    } {
+        EvalError::eval_error(msg) => {
+            Console::print_line("Eval error: ".concat(msg));
+        },
+    }
+}

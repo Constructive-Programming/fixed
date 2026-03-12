@@ -1,0 +1,135 @@
+// 10_tagged_units.fixed
+// Phantom types for unit safety, Quine's padding + reflection.
+//
+// Demonstrates:
+//   - Phantom type parameters (Quine's "padding")
+//   - Type-level unit tracking prevents unit mismatch at compile time
+//   - Quine's "reflection": same type variable constrains two values to share units
+//   - Zero runtime cost: phantom tags are erased at compile time
+//   - Capability composition for building a unit-safe arithmetic system
+
+use std::io::Console;
+
+// --- Unit marker capabilities (zero-sized, compile-time only) ---
+
+trait Meters {}
+trait Seconds {}
+trait MetersPerSecond {}
+trait MetersPerSecondSq {}
+trait Kilograms {}
+trait Newtons {}
+
+// --- A quantity tagged with its unit ---
+
+trait Quantity<phantom Unit> {
+    fn new(value: f64) -> Self;
+    fn value(self) -> f64;
+}
+
+// Arithmetic on quantities — only valid when units match (Quine's "reflection").
+// `U` is a free type variable: both `a` and `b` must share it, so the compiler
+// rejects `add(meters, seconds)` at compile time.
+fn add<U>(a: is Quantity<U>, b: is Quantity<U>) -> is Quantity<U> {
+    Quantity::new(a.value() + b.value())
+}
+
+fn sub<U>(a: is Quantity<U>, b: is Quantity<U>) -> is Quantity<U> {
+    Quantity::new(a.value() - b.value())
+}
+
+fn scale<U>(q: is Quantity<U>, factor: f64) -> is Quantity<U> {
+    Quantity::new(q.value() * factor)
+}
+
+fn negate<U>(q: is Quantity<U>) -> is Quantity<U> {
+    Quantity::new(0.0 - q.value())
+}
+
+// --- Unit conversions (type-changing operations) ---
+
+// Dividing meters by seconds gives meters-per-second.
+// The input and output unit types are different — this is where
+// phantom types shine: the compiler tracks the unit change.
+fn divide_units(
+    distance: is Quantity<Meters>,
+    time: is Quantity<Seconds>,
+) -> is Quantity<MetersPerSecond> {
+    Quantity::new(distance.value() / time.value())
+}
+
+fn acceleration(
+    velocity: is Quantity<MetersPerSecond>,
+    time: is Quantity<Seconds>,
+) -> is Quantity<MetersPerSecondSq> {
+    Quantity::new(velocity.value() / time.value())
+}
+
+fn force(
+    mass: is Quantity<Kilograms>,
+    accel: is Quantity<MetersPerSecondSq>,
+) -> is Quantity<Newtons> {
+    Quantity::new(mass.value() * accel.value())
+}
+
+// --- Show for quantities ---
+
+// UnitName is a capability capability: it describes what a phantom
+// type parameter can do (provide its display name).
+trait UnitName<phantom U> {
+    fn unit_name() -> String;
+}
+
+impl UnitName<Meters>            { fn unit_name() -> String { "m" } }
+impl UnitName<Seconds>           { fn unit_name() -> String { "s" } }
+impl UnitName<MetersPerSecond>   { fn unit_name() -> String { "m/s" } }
+impl UnitName<MetersPerSecondSq> { fn unit_name() -> String { "m/s²" } }
+impl UnitName<Kilograms>         { fn unit_name() -> String { "kg" } }
+impl UnitName<Newtons>           { fn unit_name() -> String { "N" } }
+
+fn show_quantity<U is UnitName>(q: is Quantity<U>) -> String {
+    q.value().show().concat(" ").concat(UnitName::unit_name())
+}
+
+// --- Physics example ---
+
+fn kinematic_distance(
+    v0: is Quantity<MetersPerSecond>,
+    a: is Quantity<MetersPerSecondSq>,
+    t: is Quantity<Seconds>,
+) -> is Quantity<Meters> {
+    // d = v0*t + 0.5*a*t^2
+    let v0t = Quantity::new(v0.value() * t.value());  // Meters
+    let at2 = Quantity::new(0.5 * a.value() * t.value() * t.value());  // Meters
+    add(v0t, at2)
+}
+
+fn main() -> () with Console {
+    let distance = Quantity::new(100.0);   // 100 meters
+    let time = Quantity::new(9.58);        // 9.58 seconds (Usain Bolt!)
+
+    let speed = divide_units(distance, time);
+    Console::print_line("Speed: ".concat(show_quantity(speed)));
+
+    // This would be a compile error — can't add meters to seconds:
+    // let nonsense = add(distance, time);
+    // ERROR: expected Quantity<Meters>, found Quantity<Seconds>
+
+    // But this works — same units (reflection):
+    let d1 = Quantity::new(50.0);  // Meters
+    let d2 = Quantity::new(30.0);  // Meters
+    let total = add(d1, d2);
+    Console::print_line("Total distance: ".concat(show_quantity(total)));
+
+    // F = ma
+    let mass = Quantity::new(70.0);   // 70 kg
+    let accel = Quantity::new(9.81);  // 9.81 m/s²
+    let weight = force(mass, accel);
+    Console::print_line("Weight: ".concat(show_quantity(weight)));
+
+    // Kinematics
+    let v0 = Quantity::new(10.0);    // 10 m/s
+    let a = Quantity::new(2.0);      // 2 m/s²
+    let t = Quantity::new(5.0);      // 5 seconds
+    let d = kinematic_distance(v0, a, t);
+    Console::print_line("Distance traveled: ".concat(show_quantity(d)));
+}
