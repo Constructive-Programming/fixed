@@ -19,9 +19,7 @@ Fixed takes both insights seriously:
 
 Capabilities *are* predicate functors over the type universe. Cropping = existential types. Padding = phantom parameters. Reflection = type equality constraints. Composition = capability bounds. The five operations are complete — nothing is lost.
 
-### What we take from Koka
-
-[Koka](https://koka-lang.github.io/koka/doc/index.html) is a research language that got several hard things right:
+### Keeping performance without explicit data
 
 - **Algebraic effect handlers** — effects are declared, tracked in types, and handled with composable handlers. No monads, no transformers, no colored functions.
 - **Perceus reference counting** — compiles to C with precise, garbage-free RC. No GC pauses, deterministic deallocation.
@@ -29,21 +27,20 @@ Capabilities *are* predicate functors over the type universe. Cropping = existen
 - **Evidence passing** — effects compile to efficient evidence-vector lookups, not full delimited continuations.
 - **C emission** — clean, readable generated C. No runtime beyond the RC primitives.
 
-Fixed adopts all of these wholesale. The compilation target is C. Memory management is Perceus. Effects are algebraic with evidence passing. FBIP optimizes functional updates.
+You will recognize some of these features from [Koka](https://koka-lang.github.io/koka/doc/index.html). Koka is a research language that got several hard things right and Fixed adopts all of them wholesale. The compilation target is C. Memory management is Perceus. Effects are algebraic with evidence passing. FBIP optimizes functional updates.
 
-### What Fixed changes
+#### What Fixed changes
 
 Where Koka still has `struct`, `enum`, and named data types, Fixed pushes the language up one level of abstraction:
 
 | Koka | Fixed |
 |---|---|
-| `struct Point { x: int; y: int }` | `trait HasX { fn x -> Part }` + `trait HasY { fn y -> Part }` |
-| `type list<a> { Cons(a, list<a>); Nil }` | `trait Sequencing { fn head -> is Optional; ... }` |
-| `type either<a,b> { Left(a); Right(b) }` | `trait Result of (E, A) { ... }` |
+| `struct Point { x: int; y: int }` | `cap HasX { fn x -> Part }` + `cap HasY { fn y -> Part }` |
+| `type list<a> { Cons(a, list<a>); Nil }` | `cap Sequencing { fn head -> is Optional ... }` |
+| `type either<a,b> { Left(a); Right(b) }` | `cap Result of (E, A) { ... }` |
 | Programmer picks the representation | Compiler picks the representation |
-| Algebraic data types | Capabilities (typeclasses) + `data` escape hatch |
 
-The programmer writes **capabilities** — what values can do — and the compiler decides how to lay them out in memory. Request `Sequencing + Folding`? The compiler might choose a linked list. Add `RandomAccess + Sized`? Now it *must* use a contiguous array. The capability set narrows the representation space.
+The programmer writes **capabilities** — what values can do — and the compiler decides how to lay them out in memory. Request `Sequencing + Folding`? The compiler might choose a linked list. Add `RandomAccess + Sized`? Now it *should* use a contiguous array. The capability set narrows the representation space.
 
 This is the tagless final encoding applied to an entire language: programs are written against abstract interfaces, and the "interpreter" (the compiler) chooses the concrete semantics.
 
@@ -52,16 +49,16 @@ This is the tagless final encoding applied to an entire language: programs are w
 ### Hello world
 
 ```
-use std::io::Console;
+use std.io.Console
 
 fn greet(name: String) -> () with Console {
-    Console::print_line("Hello, ".concat(name).concat("!"));
+    Console.print_line("Hello, ".concat(name).concat("!"))
 }
 
 fn main() -> () with Console {
-    Console::print_line("What is your name?");
-    let name = Console::read_line();
-    greet(name);
+    Console.print_line("What is your name?")
+    let name = Console.read_line()
+    greet(name)
 }
 ```
 
@@ -74,10 +71,13 @@ Functions declare what they need. The compiler picks the data structure:
 ```
 // Works on ANY collection — linked list, array, tree, anything
 fn sum(numbers: is Folding of (N is Numeric)) -> N {
-    numbers.fold(0, |acc, x| acc + x)
+    numbers.fold(0, (acc, x) -> acc + x)
 }
 
-// Requires O(1) indexing — compiler MUST choose a contiguous representation
+// Capability bundles via type aliases
+type ArrayLike = Sequencing + RandomAccess + Sized + Empty
+
+// Requires index based access — compiler SHOULD choose a contiguous representation
 fn binary_search(
     sorted: C is ArrayLike of (A is Ordered),
     target: A,
@@ -86,18 +86,23 @@ fn binary_search(
 }
 ```
 
+The output types themselves are also left for the compiler to select.
+
 ### The `is` / `of` syntax
 
-```
-// Named alias — N is reused to relate parameters
-fn fib(n: N is Numeric) -> N { ... }
+Not having to specify the data structure is ergonomic, feels natural and is the
+main reason Fixed exists:
 
-// Anonymous — compiler infers independently
-fn count(collection: is Folding) -> u64 { ... }
-
-// Capability bundles via type aliases
-type ArrayLike = Sequencing + RandomAccess + Sized + Empty
 ```
+// The type of the collection isn't needed here
+fn sum(collection: is Folding of Numeric) -> u64 {
+  collection.fold(0, (acc, n) -> acc + n)
+}
+```
+
+the type of `collection` (**C**) above doesn't even show up in the previous
+example. However, we still know it contains numbers and can be folded over.
+
 
 ### Data types (when you need them)
 
@@ -119,19 +124,19 @@ data Expr {
 ### Algebraic effects
 
 ```
-effect trait Fail<E> {
-    fn fail(error: E) -> !;
+effect Fail of E {
+    fn fail(error: E) -> !
 }
 
-fn compute(input: String) -> u64 with Fail<String> {
-    let n = parse_u64(input)?;    // ? desugars to fold + Fail
-    divide(n * 2, 3)?
+fn compute(input: String) -> u64 with Fail of (NotANumber | DivisionByZero) { //explictly specifying the Parts of the Fail are not necessary
+    let n = parse_u64(input) // Fail of NotANumber
+    divide(n * 2, 3) // Fail of DivisionByZero
 }
 
 // Handle the effect, converting to Result
 handle compute("42") {
-    Fail::fail(e) => Result::err(e),
-    return(v) => Result::ok(v),
+    Fail.fail(e) => Result.err(e),
+    return(v) => Result.ok(v),
 }
 ```
 
@@ -139,14 +144,16 @@ Effects are declared, tracked, and handled — never implicit. Unhandled effects
 
 ## Design principles
 
-1. **`trait` is the primary abstraction** — capabilities describe what values can do, not what they are
+1. **`cap` is the primary abstraction** — capabilities describe what values can do, not what they are
 2. **`data` is the escape hatch** — for closed variant sets when capabilities aren't enough
 3. **The compiler owns all representation decisions** — the programmer never specifies heap/stack, boxing, contiguous/linked
-4. **Algebraic effects for all side effects** — declared with `effect trait`, handled with `handle`/`resume`
-5. **Perceus memory management** — compiles to C with precise RC, reuse analysis, drop specialization
-6. **No mutation** — purely functional; the compiler optimizes in-place updates via FBIP
-7. **Right-bias convention** — multi-parameter types derive Functor over the rightmost parameter; when ambiguous, the compiler suggests options for the developer to choose from
-8. **No `&` operator** — the programmer never writes references; the compiler handles borrowing/moving/cloning
+4. **Everything is an expression** — no statements, no semicolons; blocks return their last expression
+5. **No recursive functions** — only capabilities and data can be recursive; all recursion is structural via fold/unfold
+6. **Algebraic effects for all side effects** — declared with `effect`, handled with `handle`/`resume`
+7. **Perceus memory management** — compiles to C with precise RC, reuse analysis, drop specialization
+8. **No mutation** — purely functional; the compiler optimizes in-place updates via FBIP
+9. **Right-bias convention** — multi-parameter types derive Functor over the rightmost parameter; when ambiguous, the compiler suggests options for the developer to choose from
+10. **No `&` operator** — the programmer never writes references; the compiler handles borrowing/moving/cloning
 
 ## Theoretical foundation
 
@@ -154,7 +161,7 @@ Quine's five predicate functor operations map directly onto Fixed's capability c
 
 | Quine | Logic | Fixed |
 |---|---|---|
-| **Cropping** | Existential quantification (hide a variable) | Existential capabilities — return `is Trait`, hide the concrete type |
+| **Cropping** | Existential quantification (hide a variable) | Existential capabilities — return `is Cap`, hide the concrete type |
 | **Padding** | Add a vacuous variable | Phantom type parameters — `data Tagged of (phantom Tag, Value)` |
 | **Permutation** | Reorder arguments | Capability bounds are unordered — `A + B` = `B + A` |
 | **Reflection** | Identify two variables | Named aliases — `N is Numeric` constrains multiple params to share a type |
@@ -165,7 +172,7 @@ These five operations are **complete**: any data type expressible with concrete 
 ## Project structure
 
 ```
-examples/           13 example programs exercising the language design
+examples/           14 example programs exercising the language design
 docs/plans/         Implementation plan (phases 0–6)
 spec/               (planned) Formal specification
 stdlib/             (planned) Standard library in Fixed
@@ -174,11 +181,11 @@ src/                (planned) Compiler implementation in Rust
 
 ## Status
 
-**Phase 0 (design) is complete.** The language design is explored through 13 example programs covering:
+**Phase 0 (design) is under way.** The language design is explored through 14 example programs covering:
 
-- Basic I/O, recursion, numeric polymorphism
+- Basic I/O, numeric polymorphism
 - Capability-driven collections (Sequencing, Functor, Folding, RandomAccess, etc.)
-- Optional/Result, error handling, the `?` operator
+- Optional/Result, error handling, the `Fail` effect
 - JSON parsing with recursive capabilities
 - Phantom-typed state machines
 - Multiple effect composition and handler nesting
@@ -188,6 +195,7 @@ src/                (planned) Compiler implementation in Rust
 - A mini interpreter with eval effects
 - Channel-based concurrency as effects
 - Geometry with type aliases and data declarations
+- Recursion schemes (catamorphism, anamorphism, hylomorphism, paramorphism)
 
 Next: formal specification (Phase 1) and parser implementation (Phase 2).
 

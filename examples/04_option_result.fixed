@@ -1,98 +1,90 @@
 // 04_option_result.fixed
-// Optional and Result capabilities, the ? operator, Fail effect interplay.
+// Optional and Result capabilities, Fail effect interplay.
 //
 // Demonstrates:
 //   - Sum capabilities for success/failure
-//   - The ? operator desugaring to fold + Fail effect
+//   - Explicit fold/match with the Fail effect for error propagation
 //   - Composing Optional and Result
 //   - Effect-based error propagation as an alternative to Result chaining
 
-use std::io::Console;
+use std.io.Console
 
-trait Optional<A> {
-    fn some(value: A) -> Self;
-    fn none() -> Self;
-    fn fold<R>(self, on_some: fn(A) -> R, on_none: fn() -> R) -> R;
+cap Optional<A> {
+    fn some(value: A) -> Self
+    fn none() -> Self
+    fn fold<R>(self, on_some: fn(A) -> R, on_none: fn() -> R) -> R
 }
 
-trait Result<A, E> {
-    fn ok(value: A) -> Self;
-    fn err(error: E) -> Self;
-    fn fold<R>(self, on_ok: fn(A) -> R, on_err: fn(E) -> R) -> R;
+cap Result<A, E> {
+    fn ok(value: A) -> Self
+    fn err(error: E) -> Self
+    fn fold<R>(self, on_ok: fn(A) -> R, on_err: fn(E) -> R) -> R
 }
 
-effect trait Fail<E> {
-    fn fail(error: E) -> !;
+effect Fail<E> {
+    fn fail(error: E) -> !
 }
 
 // --- Utility functions ---
 
 fn unwrap_or<A>(opt: is Optional<A>, default: A) -> A {
     match opt {
-        Optional::some(value) => value,
-        Optional::none() => default,
+        Optional.some(value) => value,
+        Optional.none() => default,
     }
 }
 
 fn map_optional<A, B>(opt: is Optional<A>, f: fn(A) -> B) -> is Optional<B> {
     match opt {
-        Optional::some(value) => Optional::some(f(value)),
-        Optional::none() => Optional::none(),
+        Optional.some(value) => Optional.some(f(value)),
+        Optional.none() => Optional.none(),
     }
 }
 
 fn and_then<A, B>(opt: is Optional<A>, f: fn(A) -> is Optional<B>) -> is Optional<B> {
     match opt {
-        Optional::some(value) => f(value),
-        Optional::none() => Optional::none(),
+        Optional.some(value) => f(value),
+        Optional.none() => Optional.none(),
     }
 }
 
-// --- The ? operator in action ---
-// `result?` desugars to:
-//   match result {
-//       Result::ok(v) => v,
-//       Result::err(e) => Fail::fail(e),
-//   }
-// This means ? works in any function with `with Fail<E>`.
+// --- Propagating errors with fold + Fail ---
 
 fn parse_u64(s: String) -> is Result<u64, String> {
     // (builtin parsing — placeholder)
-    builtin::parse_u64(s)
+    builtin.parse_u64(s)
 }
 
 fn divide(a: u64, b: u64) -> is Result<u64, String> {
     if b == 0 {
-        Result::err("division by zero")
+        Result.err("division by zero")
     } else {
-        Result::ok(a / b)
+        Result.ok(a / b)
     }
 }
 
-// Chain multiple fallible operations using ?
+// Chain multiple fallible operations using fold + Fail
 fn compute(input: String) -> is Result<u64, String> {
-    // Without ?, this would be deeply nested fold calls.
-    // With ?, it reads like imperative code:
     fn inner(input: String) -> u64 with Fail<String> {
-        let n = parse_u64(input)?;
-        let doubled = n * 2;
-        let result = divide(doubled, 3)?;
+        let n = parse_u64(input).fold((v) -> v, (e) -> Fail.fail(e))
+        let doubled = n * 2
+        let result = divide(doubled, 3).fold((v) -> v, (e) -> Fail.fail(e))
         result
     }
 
     // Handle the Fail effect, converting it back to Result
     handle inner(input) {
-        Fail::fail(e) => Result::err(e),
-        return(v) => Result::ok(v),
+        Fail.fail(e) => Result.err(e),
+        return(v) => Result.ok(v),
     }
 }
 
 // --- Optional as a "soft" failure ---
 
-trait Map<K, V> {
-    fn empty() -> Self;
-    fn insert(self, key: K, value: V) -> Self;
-    fn get(self, key: K) -> is Optional<V>;
+cap Map<K, V> {
+    fn empty() -> Self
+    fn insert(self, key: K, value: V) -> Self
+    fn get(self, key: K) -> is Optional<V>
 }
 
 fn lookup_user_age(users: is Map<String, u64>, name: String)
@@ -106,15 +98,15 @@ fn require_user_age(users: is Map<String, u64>, name: String)
     -> u64 with Fail<String>
 {
     match lookup_user_age(users, name) {
-        Optional::some(age) => age,
-        Optional::none() => Fail::fail("user not found: ".concat(name)),
+        Optional.some(age) => age,
+        Optional.none() => Fail.fail("user not found: ".concat(name)),
     }
 }
 
 fn main() -> () with Console {
-    let result = compute("42");
+    let result = compute("42")
     match result {
-        Result::ok(v) => Console::print_line("Result: ".concat(v.show())),
-        Result::err(e) => Console::print_line("Error: ".concat(e)),
+        Result.ok(v) => Console.print_line("Result: ".concat(v.show())),
+        Result.err(e) => Console.print_line("Error: ".concat(e)),
     }
 }

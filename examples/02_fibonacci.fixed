@@ -14,7 +14,7 @@
 //   - if/else as sugar for bool.fold
 //   - Show capability for converting values to strings
 
-use std::io::Console;
+use std.io.Console
 
 // `N is Numeric` introduces a named capability alias `N`.
 // All parameters typed `N` must share the same concrete type.
@@ -43,8 +43,8 @@ fn print_fibs(count: u64) -> () with Console {
     // requires them to be comparable, i.e., the same type).
     fn go(i: is Numeric, count: is Numeric) -> () with Console {
         if i < count {
-            let val = fib_iter(i);
-            Console::print_line("fib(".concat(i.show()).concat(") = ").concat(val.show()));
+            let val = fib_iter(i)
+            Console.print_line("fib(".concat(i.show()).concat(") = ").concat(val.show()))
             go(i + 1, count)
         } else {
             ()
@@ -54,6 +54,6 @@ fn print_fibs(count: u64) -> () with Console {
 }
 
 fn main() -> () with Console {
-    Console::print_line("First 20 Fibonacci numbers:");
-    print_fibs(20);
+    Console.print_line("First 20 Fibonacci numbers:")
+    print_fibs(20)
 }

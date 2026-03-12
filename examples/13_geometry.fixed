@@ -3,16 +3,16 @@
 //
 // Demonstrates:
 //   - `data` for closed sets of variants (Shape, Color)
-//   - `type` aliases for naming capability bundles (Point, Transformable)
-//   - `data` with capability-constrained fields (N is Numeric)
+//   - `type` aliases for naming cap bundles (Point, Transformable)
+//   - `data` with cap-constrained fields (N is Numeric)
 //   - Recursive functions over data types
-//   - Mixing data types with capabilities (Show, Numeric)
+//   - Mixing data types with caps (Show, Numeric)
 //   - Three geometry operations: area, perimeter, bounding box
 
-use std::io::Console;
+use std.io.Console
 
 // =========================================================================
-// Type aliases — naming common capability bundles
+// Type aliases — naming common cap bundles
 // =========================================================================
 
 // A Point is anything with two numeric coordinates.
@@ -21,8 +21,8 @@ use std::io::Console;
 // type satisfies `is Point`.
 type Point = HasX + HasY
 
-trait HasX { fn x -> Part }
-trait HasY { fn y -> Part }
+cap HasX { fn x -> Part }
+cap HasY { fn y -> Part }
 
 // =========================================================================
 // Data declarations — concrete shapes with known variants
@@ -51,9 +51,9 @@ fn point(x: N, y: N) -> is Point of N {
 }
 
 fn distance(p1: is Point of (N is Numeric), p2: is Point of N) -> f64 {
-    let dx = p1.x - p2.x;
-    let dy = p1.y - p2.y;
-    builtin::sqrt(dx * dx + dy * dy)
+    let dx = p1.x - p2.x
+    let dy = p1.y - p2.y
+    builtin.sqrt(dx * dx + dy * dy)
 }
 
 fn min(a: N is Numeric, b: N) -> N {
@@ -79,7 +79,7 @@ fn max3(a: N is Numeric, b: N, c: N) -> N {
 fn area(shape: Shape of (N is Numeric)) -> f64 {
     match shape {
         Shape.Circle(_, r) =>
-            builtin::pi * r * r,
+            builtin.pi * r * r,
 
         Shape.Rectangle(_, w, h) =>
             w * h,
@@ -88,8 +88,8 @@ fn area(shape: Shape of (N is Numeric)) -> f64 {
             // Shoelace formula: |x_a(y_b - y_c) + x_b(y_c - y_a) + x_c(y_a - y_b)| / 2
             let double_area = a.x * (b.y - c.y)
                             + b.x * (c.y - a.y)
-                            + c.x * (a.y - b.y);
-            builtin::abs(double_area) / 2.0
+                            + c.x * (a.y - b.y)
+            builtin.abs(double_area) / 2.0
         },
     }
 }
@@ -101,7 +101,7 @@ fn area(shape: Shape of (N is Numeric)) -> f64 {
 fn perimeter(shape: Shape of (N is Numeric)) -> f64 {
     match shape {
         Shape.Circle(_, r) =>
-            2.0 * builtin::pi * r,
+            2.0 * builtin.pi * r,
 
         Shape.Rectangle(_, w, h) =>
             2.0 * (w + h),
@@ -153,25 +153,25 @@ fn show_bbox(bb: BoundingBox of (N is Numeric)) -> String {
 // =========================================================================
 
 fn main() -> () with Console {
-    let circle    = Shape.Circle(point(0.0, 0.0), 5.0);
-    let rectangle = Shape.Rectangle(point(1.0, 1.0), 4.0, 3.0);
+    let circle    = Shape.Circle(point(0.0, 0.0), 5.0)
+    let rectangle = Shape.Rectangle(point(1.0, 1.0), 4.0, 3.0)
     let triangle  = Shape.Triangle(
         point(0.0, 0.0),
         point(4.0, 0.0),
         point(2.0, 3.0),
-    );
+    )
 
-    let shapes = [circle, rectangle, triangle];
-    let names  = ["Circle", "Rectangle", "Triangle"];
+    let shapes = [circle, rectangle, triangle]
+    let names  = ["Circle", "Rectangle", "Triangle"]
 
     fn print_shape(name: String, shape: Shape of f64) -> () with Console {
-        Console::print_line(name.concat(":"));
-        Console::print_line("  Area:      ".concat(area(shape).show()));
-        Console::print_line("  Perimeter: ".concat(perimeter(shape).show()));
-        Console::print_line("  ".concat(show_bbox(bounding_box(shape))));
+        Console.print_line(name.concat(":"))
+        Console.print_line("  Area:      ".concat(area(shape).show()))
+        Console.print_line("  Perimeter: ".concat(perimeter(shape).show()))
+        Console.print_line("  ".concat(show_bbox(bounding_box(shape))))
     }
 
-    print_shape("Circle",    circle);
-    print_shape("Rectangle", rectangle);
-    print_shape("Triangle",  triangle);
+    print_shape("Circle",    circle)
+    print_shape("Rectangle", rectangle)
+    print_shape("Triangle",  triangle)
 }

@@ -15,65 +15,65 @@
 //   - `data` declarations for when concrete algebraic types are strictly needed
 //   - Standard library capabilities vs user-defined ones
 
-use std::io::Console;
+use std.io.Console
 
 // =========================================================================
-// These capabilities would live in the standard library (std::collections).
+// These capabilities would live in the standard library (std.collections).
 // We define them here for illustration.
 // =========================================================================
 
 // --- Sequencing: ordered construction and deconstruction ---
 // Any collection that can be built element-by-element and taken apart.
 // The compiler provides cons to all types implementing Sequencing
-trait Sequencing {
-    fn head -> is Optional;
-    fn init -> Self;
-    fn tail -> Self;
-    fn last -> is Optional;
+cap Sequencing {
+    fn head -> is Optional
+    fn init -> Self
+    fn tail -> Self
+    fn last -> is Optional
     Self.fn cons(h: Part, t: Self) -> Self
 }
 
 // --- Functor: structure-preserving transformation ---
-trait Functor {
-    fn map<B>(f: Part -> B) -> Self of B;
+cap Functor {
+    fn map<B>(f: Part -> B) -> Self of B
 }
 
 // --- Folding: structural reduction ---
-trait Folding {
-    fn fold<R>(init: R, f: (R, Part) -> R) -> R;
-    fn fold_right<R>(init: R, f: (Part, R) -> R) -> R;
+cap Folding {
+    fn fold<R>(init: R, f: (R, Part) -> R) -> R
+    fn fold_right<R>(init: R, f: (Part, R) -> R) -> R
 }
 
 // --- Filtering: selection by predicate ---
-trait Filtering {
-    fn filter(pred: Part -> bool) -> Self;
+cap Filtering {
+    fn filter(pred: Part -> bool) -> Self
 }
 
 // --- Empty: a capability used to provide the 'empty' value
-trait Empty {
-    Self.fn empty -> Self;
+cap Empty {
+    Self.fn empty -> Self
 }
 
 // --- Optional: a value that may or may not exist ---
-trait Optional extends Functor + Folding {
-    fn isDefined -> Boolean;
-    fn orElse(e: Part) -> Part;
+cap Optional extends Functor + Folding {
+    fn isDefined -> Boolean
+    fn orElse(e: Part) -> Part
 }
 
 // --- Sized: the collection knows its length ---
 // This is a key signal to the compiler. A collection that is Sized
 // can be backed by a contiguous array. Without Sized, the compiler
 // may prefer a linked structure that doesn't track length.
-trait Sized of (Part, Size is Numeric) extends Optional of Part {
-    fn size -> Size;
+cap Sized of (Part, Size is Numeric) extends Optional of Part {
+    fn size -> Size
 }
 
 // --- RandomAccess: indexing by position ---
 // This is the strongest hint to the compiler: if you need RandomAccess,
 // the backing store *must* support direct indexing (contiguous array,
 // chunked array, etc.) — heuristics should attempt to avoid linked lists.
-trait RandomAccess of (Part, Index is Numeric) {
-    fn get(index: Index) -> is Optional of Part;
+cap RandomAccess of (Part, Index is Numeric) {
+    fn get(index: Index) -> is Optional of Part
 }
 
 // =========================================================================
@@ -129,25 +129,25 @@ data Tagged of (phantom Tag, Value) {
 
 // --- Only needs Folding: works on ANY collection ---
 fn sum(numbers: is Folding of (N is Numeric)) -> N {
-    numbers.fold(0, |acc, x| acc + x)
+    numbers.fold(0, (acc, x) -> acc + x)
 }
 
 fn product(numbers: is Folding of i64) -> i64 {
-    numbers.fold(1, |acc, x| acc * x)
+    numbers.fold(1, (acc, x) -> acc * x)
 }
 
 fn count(collection: is Folding) -> u64 {
-    collection.fold(0, |acc, _| acc + 1)
+    collection.fold(0, (acc, _) -> acc + 1)
 }
 
 // --- Needs Functor: transform elements ---
 fn double(numbers: is Functor of (N is Numeric)) -> is Functor {
-    numbers.map(|x| x * 2)
+    numbers.map((x) -> x * 2)
 }
 
 // --- Needs Functor: transform elements ---
 // fn double(numbers: is Functor of (N is Numeric)) -> is Functor of String {
-//    numbers.map(|x| x * 2)
+//    numbers.map((x) -> x * 2)
 // }
 // the above example would be a compilation error, since there is no direct path from a Numeric to a String
 
@@ -155,17 +155,17 @@ fn double(numbers: is Functor of (N is Numeric)) -> is Functor {
 // --- Needs Filtering + Functor: transform and select ---
 // notice N is reused in the Functor part specification and is known to be Numeric for the map call
 fn even_doubled(numbers: C is Filtering of (N is Numeric) + Functor of N) -> C {
-    numbers.filter(|x| x % 2 == 0).map(|x| x * 2)
+    numbers.filter((x) -> x % 2 == 0).map((x) -> x * 2)
 }
 
 // --- Needs Sequencing + Folding: build and reduce ---
 fn reverse(collection: C is Sequencing + Folding + Empty) -> C {
-    collection.fold(C.empty, |acc, x| C.cons(x, acc))
+    collection.fold(C.empty, (acc, x) -> C.cons(x, acc))
 }
 
 fn concat(left: C is Sequencing + Folding, right: C) -> C {
     // fold_right preserves order: [1,2,3] ++ [4,5] → cons each from right
-    left.fold_right(right, |x, acc| C.cons(x, acc))
+    left.fold_right(right, (x, acc) -> C.cons(x, acc))
 }
 
 // --- Uses type alias: ArrayLike bundles the capabilities ---
@@ -182,7 +182,7 @@ fn binary_search(
         if low >= high {
             R.empty
         } else {
-            let mid = low + (high - low) / 2;
+            let mid = low + (high - low) / 2
             sorted.get(mid).map { value ->
                 match target.compare(value) {
                     Ordered.equal()   => mid,
@@ -254,53 +254,53 @@ fn main() -> () with Console {
     // The compiler chooses a representation based on how `numbers` is used
     // below. Since we call binary_search (which needs RandomAccess), the
     // compiler must select a contiguous array.
-    let numbers = range(1, 11);  // [1, 2, ..., 10]
+    let numbers = range(1, 11)  // [1, 2, ..., 10]
 
     // Uses Functor
-    let doubled = double(numbers.clone());
+    let doubled = double(numbers.clone())
 
     // Uses Filtering + Functor
-    let even_d = even_doubled(numbers.clone());
+    let even_d = even_doubled(numbers.clone())
 
     // Uses Folding only — the compiler could back this with anything
-    let total = sum(numbers.clone());
+    let total = sum(numbers.clone())
 
     // Uses Sequencing + Folding
-    let rev = reverse(numbers.clone());
+    let rev = reverse(numbers.clone())
 
-    Console::print_line("Numbers: ".concat(numbers.show()));
-    Console::print_line("Doubled: ".concat(doubled.show()));
-    Console::print_line("Even×2:  ".concat(even_d.show()));
-    Console::print_line("Sum:     ".concat(total.show()));
-    Console::print_line("Reverse: ".concat(rev.show()));
+    Console.print_line("Numbers: ".concat(numbers.show()))
+    Console.print_line("Doubled: ".concat(doubled.show()))
+    Console.print_line("Even×2:  ".concat(even_d.show()))
+    Console.print_line("Sum:     ".concat(total.show()))
+    Console.print_line("Reverse: ".concat(rev.show()))
 
     // Uses ArrayLike (type alias) — forces contiguous representation
-    let sorted = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19];
+    let sorted = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
     match binary_search(sorted, 7) {
-        Optional::some(idx) =>
-            Console::print_line("Found 7 at index ".concat(idx.show())),
-        Optional::none() =>
-            Console::print_line("7 not found"),
+        Optional.some(idx) =>
+            Console.print_line("Found 7 at index ".concat(idx.show())),
+        Optional.none() =>
+            Console.print_line("7 not found"),
     }
 
     // Uses ArrayLike via take
-    let first_three = take(sorted, 3);
-    Console::print_line("First 3: ".concat(first_three.show()));
+    let first_three = take(sorted, 3)
+    Console.print_line("First 3: ".concat(first_three.show()))
 
     // --- Data type usage ---
 
-    Console::print_line("Direction: ".concat(direction_name(Direction.North)));
+    Console.print_line("Direction: ".concat(direction_name(Direction.North)))
 
-    let c = Color.RGB(128, 64, 255);
+    let c = Color.RGB(128, 64, 255)
     match c {
         Color.RGB(r, g, b) =>
-            Console::print_line("RGB: ".concat(r.show()).concat(", ")
+            Console.print_line("RGB: ".concat(r.show()).concat(", ")
                 .concat(g.show()).concat(", ").concat(b.show())),
         _ =>
-            Console::print_line("Named color: ".concat(color_to_rgb(c).show())),
+            Console.print_line("Named color: ".concat(color_to_rgb(c).show())),
     }
 
     // Expr data type — concrete when you need a closed set of variants
-    let expr = Expr.Add(Expr.Lit(3.0), Expr.Mul(Expr.Lit(4.0), Expr.Lit(5.0)));
-    Console::print_line("3 + 4*5 = ".concat(eval(expr).show()));
+    let expr = Expr.Add(Expr.Lit(3.0), Expr.Mul(Expr.Lit(4.0), Expr.Lit(5.0)))
+    Console.print_line("3 + 4*5 = ".concat(eval(expr).show()))
 }

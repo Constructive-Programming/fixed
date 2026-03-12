@@ -1,0 +1,289 @@
+// 14_recursion_schemes.fixed
+// Recursion schemes: structured recursion without recursive functions.
+//
+// Demonstrates:
+//   - Functions in Fixed are NOT recursive — only capabilities and data can be
+//   - All recursion is driven by `fold` (catamorphism) and `unfold` (anamorphism)
+//     on recursive data structures
+//   - Catamorphism: collapse a structure bottom-up (fold)
+//   - Anamorphism: build a structure top-down from a seed (unfold)
+//   - Hylomorphism: unfold then fold (build then collapse, fused)
+//   - Paramorphism: fold with access to the original subtree at each step
+//   - How "no recursive functions" is not a limitation — it's a design choice
+//     that makes all recursion explicit, compositional, and total
+
+use std.io.Console
+
+// =========================================================================
+// The key insight: data and capabilities define recursive structure.
+// Functions consume or produce that structure — they are never recursive
+// themselves. The recursion lives in the data, not the function.
+// =========================================================================
+
+// --- A simple expression tree ---
+
+data Expr {
+    Lit(value: f64),
+    Add(left: Expr, right: Expr),
+    Mul(left: Expr, right: Expr),
+    Neg(inner: Expr),
+}
+
+// =========================================================================
+// Catamorphism (fold): collapse a recursive structure bottom-up
+// =========================================================================
+//
+// The fundamental elimination form. Every recursive data type provides a
+// fold that replaces each constructor with a user-supplied function.
+// The recursion is handled by the data type's fold — not by the caller.
+// In each callback, the children have ALREADY been folded to type R.
+
+fn eval(expr: Expr) -> f64 {
+    expr.fold(
+        (v) -> v,                        // Lit: just the value
+        (left, right) -> left + right,   // Add: children already folded to f64
+        (left, right) -> left * right,   // Mul: children already folded to f64
+        (inner) -> 0.0 - inner,          // Neg: child already folded to f64
+    )
+}
+
+fn show_expr(expr: Expr) -> String {
+    expr.fold(
+        (v) -> v.show(),
+        (l, r) -> "(".concat(l).concat(" + ").concat(r).concat(")"),
+        (l, r) -> "(".concat(l).concat(" * ").concat(r).concat(")"),
+        (inner) -> "(-".concat(inner).concat(")"),
+    )
+}
+
+fn count_nodes(expr: Expr) -> u64 {
+    expr.fold(
+        (_) -> 1,
+        (l, r) -> 1 + l + r,
+        (l, r) -> 1 + l + r,
+        (inner) -> 1 + inner,
+    )
+}
+
+fn depth(expr: Expr) -> u64 {
+    expr.fold(
+        (_) -> 1,
+        (l, r) -> 1 + max(l, r),
+        (l, r) -> 1 + max(l, r),
+        (inner) -> 1 + inner,
+    )
+}
+
+// =========================================================================
+// Anamorphism (unfold): build a recursive structure from a seed
+// =========================================================================
+//
+// The dual of fold. Instead of collapsing structure, we produce it.
+// unfold takes a seed and a step function. The step function returns
+// one "layer" of the data type, with seeds in place of recursive children.
+// The unfold mechanism applies the step to each seed until the structure
+// is complete. The function itself never calls itself.
+
+// Natural numbers — the simplest recursive data type
+data Nat {
+    Zero,
+    Succ(pred: Nat),
+}
+
+// Build a Nat from a u64.
+// Nat.unfold takes a seed and a step that produces one layer.
+// The step returns either Zero (stop) or Succ with a new seed (continue).
+// unfold applies the step repeatedly — no function recursion needed.
+fn to_nat(n: u64) -> Nat {
+    Nat.unfold(
+        n,                               // initial seed
+        (remaining) ->                   // step: produce one layer
+            if remaining == 0 {
+                Nat.Zero                 // base case: stop unfolding
+            } else {
+                Nat.Succ(remaining - 1)  // recursive case: Succ with new seed
+            }
+    )
+}
+
+// Collapse a Nat back to u64 — catamorphism
+fn to_u64(n: Nat) -> u64 {
+    n.fold(
+        () -> 0,            // Zero
+        (pred) -> 1 + pred  // Succ: pred is already folded to u64
+    )
+}
+
+// Addition via catamorphism: fold over the first argument
+fn nat_add(a: Nat, b: Nat) -> Nat {
+    a.fold(
+        () -> b,                               // Zero + b = b
+        (folded_pred) -> Nat.Succ(folded_pred) // Succ(a') + b = Succ(a' + b)
+    )
+}
+
+// Multiplication via catamorphism
+fn nat_mul(a: Nat, b: Nat) -> Nat {
+    a.fold(
+        () -> Nat.Zero,                          // Zero * b = Zero
+        (folded_pred) -> nat_add(folded_pred, b) // Succ(a') * b = (a' * b) + b
+    )
+}
+
+// =========================================================================
+// Hylomorphism: unfold then fold (build then collapse, fused)
+// =========================================================================
+//
+// A hylomorphism = anamorphism followed by catamorphism.
+// The intermediate structure can be fused away by the compiler —
+// it never needs to exist in memory.
+
+// A list structure for intermediate computation
+data ListF of A {
+    Nil,
+    Cons(head: A, tail: ListF of A),
+}
+
+// Factorial as a hylomorphism:
+//   1. Unfold n into a list [n, n-1, ..., 1]
+//   2. Fold that list by multiplying
+// The compiler can fuse these, eliminating the intermediate list.
+fn factorial(n: u64) -> u64 {
+    // Phase 1: Unfold — produce [n, n-1, ..., 1]
+    let sequence = ListF.unfold(
+        n,
+        (remaining) ->
+            if remaining == 0 {
+                ListF.Nil
+            } else {
+                ListF.Cons(remaining, remaining - 1)  // head=remaining, seed=remaining-1
+            }
+    )
+    // Phase 2: Fold — multiply all elements
+    sequence.fold(
+        () -> 1,                     // Nil: identity for multiplication
+        (head, tail) -> head * tail  // Cons: head * already-folded tail
+    )
+}
+
+// Fibonacci as fold over a Nat with a pair accumulator
+fn fibonacci(n: u64) -> u64 {
+    let chain = to_nat(n)
+    let result = chain.fold(
+        () -> (0, 1),           // Zero: (fib(0), fib(1))
+        (pair) -> {             // Succ: shift the pair window
+            let (current, next) = pair
+            (next, current + next)
+        }
+    )
+    result.first()
+}
+
+// Build a balanced sum tree from a range — anamorphism on Expr
+fn balanced_sum(start: u64, end: u64) -> Expr {
+    Expr.unfold(
+        (start, end),
+        (pair) -> {
+            let (lo, hi) = pair
+            if lo == hi {
+                Expr.Lit(lo.to_f64())
+            } else {
+                let mid = lo + (hi - lo) / 2
+                // Add with two seeds: (lo, mid) and (mid+1, hi)
+                // unfold will recursively expand each seed
+                Expr.Add((lo, mid), (mid + 1, hi))
+            }
+        }
+    )
+}
+
+// =========================================================================
+// Paramorphism: fold with access to original subtree
+// =========================================================================
+//
+// A paramorphism is like a catamorphism, but each step also receives
+// the original (un-folded) subtree alongside the folded result.
+// This lets you make decisions based on the structure, not just
+// the accumulated value.
+//
+// Every recursive data type auto-derives `para` alongside `fold`.
+
+fn optimize(expr: Expr) -> Expr {
+    expr.para(
+        // Lit: nothing to optimize
+        (v) -> Expr.Lit(v),
+
+        // Add: check for x + 0 and 0 + x
+        // Each child gives (optimized_result, original_subtree)
+        (left_opt, left_orig, right_opt, right_orig) ->
+            match (left_opt, right_opt) {
+                (Expr.Lit(0.0), _) => right_opt,
+                (_, Expr.Lit(0.0)) => left_opt,
+                _ => Expr.Add(left_opt, right_opt),
+            },
+
+        // Mul: check for x * 0, x * 1, 0 * x, 1 * x
+        (left_opt, left_orig, right_opt, right_orig) ->
+            match (left_opt, right_opt) {
+                (Expr.Lit(0.0), _) => Expr.Lit(0.0),
+                (_, Expr.Lit(0.0)) => Expr.Lit(0.0),
+                (Expr.Lit(1.0), _) => right_opt,
+                (_, Expr.Lit(1.0)) => left_opt,
+                _ => Expr.Mul(left_opt, right_opt),
+            },
+
+        // Neg: check for double negation using the ORIGINAL subtree
+        (inner_opt, inner_orig) ->
+            match inner_orig {
+                Expr.Neg(inner_inner) => inner_inner,  // --x => x (use original!)
+                _ => Expr.Neg(inner_opt),
+            },
+    )
+}
+
+// =========================================================================
+// Main
+// =========================================================================
+
+fn main() -> () with Console {
+    Console.print_line("=== Catamorphism (fold) ===")
+    let expr = Expr.Add(
+        Expr.Mul(Expr.Lit(3.0), Expr.Lit(4.0)),
+        Expr.Neg(Expr.Lit(2.0))
+    )
+    Console.print_line("Expression: ".concat(show_expr(expr.clone())))
+    Console.print_line("Eval:       ".concat(eval(expr.clone()).show()))
+    Console.print_line("Nodes:      ".concat(count_nodes(expr.clone()).show()))
+    Console.print_line("Depth:      ".concat(depth(expr).show()))
+
+    Console.print_line("")
+    Console.print_line("=== Anamorphism (unfold) ===")
+    let nat3 = to_nat(3)
+    let nat4 = to_nat(4)
+    Console.print_line("3 as Nat -> u64: ".concat(to_u64(nat3.clone()).show()))
+    Console.print_line("3 + 4 = ".concat(to_u64(nat_add(nat3.clone(), nat4.clone())).show()))
+    Console.print_line("3 * 4 = ".concat(to_u64(nat_mul(nat3, nat4)).show()))
+
+    Console.print_line("")
+    Console.print_line("=== Hylomorphism (unfold then fold) ===")
+    Console.print_line("5! = ".concat(factorial(5).show()))
+    Console.print_line("fib(10) = ".concat(fibonacci(10).show()))
+    let balanced = balanced_sum(1, 8)
+    Console.print_line("balanced_sum(1,8): ".concat(show_expr(balanced.clone())))
+    Console.print_line("eval: ".concat(eval(balanced).show()))
+
+    Console.print_line("")
+    Console.print_line("=== Paramorphism (fold with original subtree) ===")
+    // (0 + (3 * 1)) should optimize to just 3
+    let unopt = Expr.Add(
+        Expr.Lit(0.0),
+        Expr.Mul(Expr.Lit(3.0), Expr.Lit(1.0))
+    )
+    Console.print_line("Before: ".concat(show_expr(unopt.clone())))
+    Console.print_line("After:  ".concat(show_expr(optimize(unopt))))
+
+    // --x should optimize to x
+    let double_neg = Expr.Neg(Expr.Neg(Expr.Lit(42.0)))
+    Console.print_line("Before: ".concat(show_expr(double_neg.clone())))
+    Console.print_line("After:  ".concat(show_expr(optimize(double_neg))))
+}

@@ -14,7 +14,7 @@ Fixed's syntax is designed around the insight that if the programmer never names
 
 ### Capabilities, not types
 
-The `trait` keyword defines a **capability** — what a value can *do*. There are no structs, enums, classes, or data declarations. The word "type" in Fixed refers to the compiler's internal representation choice, never to something the programmer writes.
+The `cap` keyword defines a **capability** — what a value can *do*. There are no structs, enums, classes, or data declarations. The word "type" in Fixed refers to the compiler's internal representation choice, never to something the programmer writes.
 
 ### The `is` keyword
 
@@ -41,33 +41,33 @@ is Optional of u64           // an optional u64
 Multi-parameter capabilities use tuple-style `of`:
 
 ```
-trait Sized of (Part, Size is Numeric)
-trait RandomAccess of (Part, Index is Numeric)
+cap Sized of (Part, Size is Numeric)
+cap RandomAccess of (Part, Index is Numeric)
 ```
 
 ### `Part` — the implicit element type
 
-Inside trait definitions, `Part` refers to the element type without needing an explicit type parameter:
+Inside cap definitions, `Part` refers to the element type without needing an explicit type parameter:
 
 ```
-trait Folding {
-    fn fold<R>(init: R, f: (R, Part) -> R) -> R;
+cap Folding {
+    fn fold<R>(init: R, f: (R, Part) -> R) -> R
 }
 ```
 
-This eliminates `<A>` boilerplate. When a trait has multiple type parameters, they're named explicitly in `of`.
+This eliminates `<A>` boilerplate. When a cap has multiple type parameters, they're named explicitly in `of`.
 
 ### `Self.fn` vs `fn` — static vs instance methods
 
 ```
-trait Sequencing {
-    fn head -> is Optional;          // instance method (called on a value)
-    fn tail -> Self;                  // instance method
-    Self.fn cons(h: Part, t: Self) -> Self;  // static/constructor (called on the type)
+cap Sequencing {
+    fn head -> is Optional          // instance method (called on a value)
+    fn tail -> Self                  // instance method
+    Self.fn cons(h: Part, t: Self) -> Self  // static/constructor (called on the type)
 }
 
-trait Empty {
-    Self.fn empty -> Self;           // static constructor
+cap Empty {
+    Self.fn empty -> Self           // static constructor
 }
 ```
 
@@ -76,17 +76,17 @@ Static methods are called via dot on the type alias: `C.empty`, `C.cons(x, acc)`
 ### `extends` for supertrait relationships
 
 ```
-trait Optional extends Functor + Folding {
-    fn isDefined -> Boolean;
-    fn orElse(e: Part) -> Part;
+cap Optional extends Functor + Folding {
+    fn isDefined -> Boolean
+    fn orElse(e: Part) -> Part
 }
 ```
 
 ### `Self of B` for higher-kinded returns
 
 ```
-trait Functor {
-    fn map<B>(f: Part -> B) -> Self of B;
+cap Functor {
+    fn map<B>(f: Part -> B) -> Self of B
 }
 ```
 
@@ -138,28 +138,73 @@ Key properties:
 - **The compiler still owns the representation** — `data` declares the shape (variants and fields), not the layout
 - **Data types automatically satisfy capabilities** their shape supports (e.g., a multi-variant data gets `Folding` for free, a data with fields gets accessors)
 - **Pattern matching** uses dot syntax: `Expr.Lit(v)`, `Color.RGB(r, g, b)`, `Direction.North`
-- **`of` works on data** just like on traits: `data Tagged of (phantom Tag, Value)` introduces type parameters
+- **`of` works on data** just like on caps: `data Tagged of (phantom Tag, Value)` introduces type parameters
 - **Capability constraints inside data fields**: `RGB(red: N is Numeric, green: N, blue: N)` — all three fields share the same numeric type
 
-### When to use `data` vs `trait`
+### When to use `data` vs `cap`
 
-| Use `trait` (capability) when... | Use `data` when... |
+| Use `cap` (capability) when... | Use `data` when... |
 |---|---|
 | You want the compiler to choose the representation | You need a specific closed set of variants |
 | Multiple representations could work | The shape itself is the point (e.g., Red/Green/Blue) |
 | You want maximum reusability across callers | You want exhaustive pattern matching on known variants |
 | You're defining *what something can do* | You're defining *what something is* |
 
+### Everything is an expression
+
+Fixed has **no statements**. Every construct — `let`, `if`, `match`, `handle`, `use` — is an expression that produces a value. There are no semicolons. Block expressions return the value of their last sub-expression.
+
+```
+// `let` introduces a binding, the block returns the last expression
+let x = 5
+let y = x + 1
+y * 2              // this block evaluates to 12
+
+// `if` is an expression
+let abs_n = if n < 0 { 0 - n } else { n }
+
+// `match` is an expression
+let name = match direction {
+    Direction.North => "North"
+    Direction.South => "South"
+}
+```
+
+### No recursive functions — recursion lives in data
+
+Functions in Fixed **cannot call themselves**. Only capabilities and `data` types can be recursive (via `Self` appearing in constructor parameters). All recursion is driven by structural operations on recursive data — primarily `fold` (catamorphism) and `unfold` (anamorphism).
+
+This is a deliberate design choice:
+- Makes all recursion **explicit and structural** — you can see the recursion scheme being used
+- Guarantees **totality** — fold over a finite structure always terminates
+- Enables **fusion** — the compiler can fuse unfold-then-fold (hylomorphism) to eliminate intermediate structures
+- Aligns with the capability philosophy — recursion is a property of data, not of functions
+
+```
+// This is a compile error — functions cannot be recursive:
+// fn factorial(n: u64) -> u64 { if n == 0 { 1 } else { n * factorial(n - 1) } }
+
+// Instead, use fold on a recursive data structure:
+fn factorial(n: u64) -> u64 {
+    to_nat(n).fold(
+        () -> 1,
+        (acc) -> (acc_index + 1) * acc
+    )
+}
+```
+
 ### Additional syntax
 
 | Feature | Syntax | Replaces |
 |---|---|---|
 | Arrow function types | `Part -> B`, `(R, Part) -> R` | `fn(Part) -> B`, `fn(R, Part) -> R` |
+| Arrow lambdas | `(x, y) -> x + y` | Rust-style `\|x, y\| x + y` |
 | Parenthesless zero-arg methods | `fn head -> is Optional` | `fn head() -> is Optional` |
-| Block lambdas | `.map { value -> expr }` | `.map(\|value\| expr)` |
-| Dot static calls | `C.empty`, `C.cons(x, acc)` | `C::empty()`, `C::cons(x, acc)` |
+| Block lambdas | `.map { value -> expr }` | `.map((value) -> expr)` |
+| Dot static calls | `C.empty`, `C.cons(x, acc)` | `C.empty()`, `C.cons(x, acc)` |
 | Type aliases | `type ArrayLike = Seq + RA + Sized + Empty` | Repeating capability bundles everywhere |
 | Data declarations | `data Color { Red, Green, Blue, RGB(...) }` | No prior equivalent (escape hatch) |
+| No semicolons | Newlines separate expressions | `;` statement terminators |
 
 ---
 
@@ -247,7 +292,7 @@ The **more capabilities** you request, the **fewer representations** qualify. Th
 | 1 | `examples/01_hello.fixed` | `main`, `Console` effect, string literals |
 | 2 | `examples/02_fibonacci.fixed` | `is Numeric`, named aliases, anonymous capabilities |
 | 3 | `examples/03_linked_list.fixed` | Capability-driven collections, type aliases, `data` declarations, GADTs |
-| 4 | `examples/04_option_result.fixed` | `Optional`/`Result`, `?` operator, `Fail` effect |
+| 4 | `examples/04_option_result.fixed` | `Optional`/`Result`, `Fail` effect, error propagation |
 | 5 | `examples/05_json_parser.fixed` | Recursive 6-variant sum capability, deep pattern matching |
 | 6 | `examples/06_state_machine.fixed` | Phantom-typed state transitions, marker capabilities |
 | 7 | `examples/07_effectful_io.fixed` | Multiple effects, handler composition, effect rows |
@@ -257,6 +302,7 @@ The **more capabilities** you request, the **fewer representations** qualify. Th
 | 11 | `examples/11_interpreter.fixed` | Mini expression language, deep matching, effects for eval errors |
 | 12 | `examples/12_concurrent_chat.fixed` | Channel-based concurrency as effects |
 | 13 | `examples/13_geometry.fixed` | `type` aliases, `data` declarations, geometry ops (area, perimeter, bounding box) |
+| 14 | `examples/14_recursion_schemes.fixed` | Catamorphism, anamorphism, hylomorphism, paramorphism — no recursive functions |
 
 ---
 
@@ -281,6 +327,8 @@ Formal specification documents that pin down semantics before implementation.
 - **`extends` inheritance**: How capability extension works. Multiple inheritance via `+`. Diamond problem resolution.
 - **Capability-driven representation selection**: The algorithm by which the compiler narrows representation choices from capability sets. How conflicting heuristics are resolved. PGO integration points.
 - **Capability classification**: compiler-inferred categories (sum, product, recursive, capability-only, marker) based on signature shape
+- **No statements**: everything is an expression; no semicolons; blocks return their last expression
+- **No recursive functions**: only capabilities and data can be recursive; all recursion is via fold/unfold on recursive data
 - **No `&` operator**: the programmer never writes references; the compiler handles all borrowing/moving/cloning via Perceus
 - **No explicit `self`**: instance methods don't declare a self parameter; the compiler infers it
 - **Coherence rules**: how orphan rules work when there are no concrete types
@@ -296,14 +344,14 @@ Rust implementation of the front-end.
 
 | Component | Description |
 |---|---|
-| **Lexer** (`src/lexer/`) | Tokenizer targeting the EBNF grammar. Keywords: `trait`, `fn`, `is`, `of`, `extends`, `effect`, `match`, `handle`, `with`, `let`, `if`, `else`, `do`, `use`, `mod`, `pub`, `phantom`, `Self` |
+| **Lexer** (`src/lexer/`) | Tokenizer targeting the EBNF grammar. Keywords: `cap`, `fn`, `is`, `of`, `extends`, `effect`, `match`, `handle`, `with`, `let`, `if`, `else`, `do`, `use`, `mod`, `pub`, `phantom`, `Self` |
 | **Parser** (`src/parser/`) | Recursive descent or Pratt parser producing AST |
 | **AST** (`src/ast/`) | Type definitions for all language constructs |
 
 ### AST node types needed
 
-- **Items**: `TraitDef`, `EffectTraitDef`, `DataDef`, `TypeAlias`, `ImplBlock`, `FnDef`, `UseDecl`, `ModDecl`
-- **Trait members**: `InstanceMethod`, `StaticMethod` (the `Self.fn` distinction)
+- **Items**: `CapDef`, `EffectDef`, `DataDef`, `TypeAlias`, `ImplBlock`, `FnDef`, `UseDecl`, `ModDecl`
+- **Cap members**: `InstanceMethod`, `StaticMethod` (the `Self.fn` distinction)
 - **Capability refs**: `IsCap` (anonymous), `NamedAlias` (`N is Numeric`), `OfApp` (`Folding of i64`), `SelfOf` (`Self of B`)
 - **Expressions**: `Match`, `If`, `Let`, `FnCall`, `MethodCall`, `StaticCall` (`C.empty`), `Closure`, `BlockLambda`, `Do`, `Handle`, `Block`, `Literal`, `BinaryOp`, `UnaryOp`, `FieldAccess`, `ListLiteral`, `QuestionMark`, `Pipe`
 - **Data**: `DataVariant` (unit variant, tuple variant with named fields), `PhantomParam`, `OfParams`
@@ -377,7 +425,7 @@ Typed AST
 | **Capability analyzer** (`src/codegen/caps.rs`) | Collect and resolve capability sets per value |
 | **Representation selector** (`src/codegen/repr.rs`) | Map capability sets to C layouts |
 | **Monomorphizer** (`src/codegen/mono.rs`) | Specialize generic functions for concrete type params |
-| **Match desugarer** (`src/codegen/desugar.rs`) | Convert `match` to `fold` calls, `if` to `bool.fold`, `?` to `fold` + `Fail` |
+| **Match desugarer** (`src/codegen/desugar.rs`) | Convert `match` to `fold` calls, `if` to `bool.fold` |
 | **Perceus inserter** (`src/codegen/perceus.rs`) | Insert `dup`/`drop` operations, compute reuse tokens |
 | **Evidence passer** (`src/codegen/evidence.rs`) | Compile effects to evidence vector lookups |
 | **C emitter** (`src/codegen/emit_c.rs`) | Generate readable C code |
@@ -414,7 +462,7 @@ Written in Fixed itself. The standard library defines the core capabilities that
 | `stdlib/core.fixed` | `Optional`, `Result`, `Pair`, `Ordering`, `Boolean`, `Empty` |
 | `stdlib/capabilities.fixed` | `Eq`, `Ord`, `Show`, `Clone`, `Default`, `Hash`, `Numeric`, `String` |
 | `stdlib/collections.fixed` | `Sequencing`, `Functor`, `Folding`, `Filtering`, `Sized`, `RandomAccess`, `Map`, `Set` |
-| `stdlib/io.fixed` | `Console`, `FileSystem`, `Clock`, `Random` effect traits + `Fail` |
+| `stdlib/io.fixed` | `Console`, `FileSystem`, `Clock`, `Random` effects + `Fail` |
 
 ### Notes
 
@@ -463,7 +511,7 @@ Profile-guided optimization for representation selection.
 
 7. **`Self of B` vs `F for <_>`**: The new `Self of B` syntax is more intuitive for single-param HKTs. Does `F for <_>` survive for cases where you need to abstract over the container itself (e.g., `fn sequence<M is Monad for <_>>`)?
 
-8. **Block lambda vs closure syntax**: When does `{ x -> expr }` apply vs `|x| expr`? Are both supported, or does block lambda replace closures entirely?
+8. **Block lambda vs closure syntax**: When does `{ x -> expr }` apply vs `(x) -> expr`? Are both supported, or does block lambda replace closures entirely?
 
 9. **Data auto-deriving capabilities**: Which capabilities does a `data` type automatically satisfy? Multi-variant → `Folding`? With accessors → `Functor`? Recursive → auto-heap-allocation? Right-bias determines which parameter `Functor` maps over. Need clear rules for the full derivation matrix.
 
