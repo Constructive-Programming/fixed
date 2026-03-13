@@ -108,9 +108,9 @@ fn take(collection: C is ArrayLike, n: u64) -> C
 fn binary_search(sorted: C is ArrayLike of (A is Ordered), target: A) -> ...
 ```
 
-### Data declarations (the escape hatch)
+### Data declarations — planning structure
 
-Most code should use capabilities, but sometimes you need a specific **closed set of variants** — enumerations, tagged unions, domain-specific value types. The `data` keyword defines a general algebraic data type (GADT):
+`data` is where structure gets planned. When you need a specific **closed set of variants** — enumerations, tagged unions, domain-specific value types — the `data` keyword lets you express the shape. The `data` keyword defines a general algebraic data type (GADT):
 
 ```
 // Simple enumeration — all unit variants
@@ -170,13 +170,13 @@ let name = match direction {
 }
 ```
 
-### No recursive functions — recursion lives in data
+### Functions are total — recursion lives in data
 
-Functions in Fixed **cannot call themselves**. Only capabilities and `data` types can be recursive (via `Self` appearing in constructor parameters). All recursion is driven by structural operations on recursive data — primarily `fold` (catamorphism) and `unfold` (anamorphism).
+Functions in Fixed **cannot call themselves** — they are total. Only capabilities and `data` types can be recursive (via `Self` appearing in constructor parameters). All recursion is driven by structural operations on recursive data — primarily `fold` (catamorphism) and `unfold` (anamorphism).
 
 This is a deliberate design choice:
+- **Totality** — fold over a finite structure always terminates; every function returns
 - Makes all recursion **explicit and structural** — you can see the recursion scheme being used
-- Guarantees **totality** — fold over a finite structure always terminates
 - Enables **fusion** — the compiler can fuse unfold-then-fold (hylomorphism) to eliminate intermediate structures
 - Aligns with the capability philosophy — recursion is a property of data, not of functions
 
@@ -205,6 +205,88 @@ fn factorial(n: u64) -> u64 {
 | Type aliases | `type ArrayLike = Seq + RA + Sized + Empty` | Repeating capability bundles everywhere |
 | Data declarations | `data Color { Red, Green, Blue, RGB(...) }` | No prior equivalent (escape hatch) |
 | No semicolons | Newlines separate expressions | `;` statement terminators |
+
+### `prop` — invariants specified in place
+
+Properties from property-based testing are built into the language as a form of **lightweight theorem proving**. The `prop` keyword declares invariants directly inside capability or data definitions. The compiler checks them — statically where possible, via property-based testing otherwise.
+
+```
+cap Sorted extends Sequencing {
+    prop sorted: fold(true, (acc, prev, curr) -> acc && prev <= curr)
+}
+
+cap Stack extends Sequencing + Sized {
+    prop push_increments: forall (s: Self, x: Part) ->
+        s.push(x).size == s.size + 1
+
+    prop pop_decrements: forall (s: Self) ->
+        s.size > 0 implies s.pop().size == s.size - 1
+}
+```
+
+Key properties of `prop`:
+- **Lives where the capability is defined** — not in a separate test file. Properties are part of the interface contract.
+- **Machine-checked documentation** — properties serve as documentation that the compiler verifies.
+- **Compiler optimization hints** — a `prop sorted` on a collection lets the compiler assume sortedness and choose binary search over linear scan.
+- **Lightweight proofs** — not full dependent types, but enough to catch common invariant violations at compile time.
+- **Fallback to testing** — when static verification is insufficient, the compiler generates property-based tests automatically.
+
+Properties can also appear on `data` types:
+
+```
+data Nat {
+    Zero,
+    Succ(pred: Nat),
+
+    prop non_negative: fold(() -> true, (inner) -> inner)
+}
+```
+
+And on functions, as postconditions:
+
+```
+fn sort(collection: C is Sequencing) -> C is Sorted {
+    prop result_same_size: result.size == collection.size
+    ...
+}
+```
+
+---
+
+## Agent-Friendly CLI and Compiler Output
+
+The compiler is designed to produce clear, structured output for **humans** — which turns out to be exactly what AI harnesses need too. No special "machine-readable" mode; just good defaults.
+
+### The CLI
+
+Everything starts from the CLI. Four commands, composable:
+
+| Command | What it does |
+|---|---|
+| `fixed compile` | Compiles Fixed source to C |
+| `fixed verify` | Validates all `prop` invariants — static proofs where possible, property-based tests otherwise |
+| `fixed ship` | Builds a static executable (compile → C compiler → binary) |
+| `fixed verify + ship` | Incrementally does all three: verify props, compile to C, build static binary |
+
+The `+` operator composes commands. Each stage is incremental — if source hasn't changed since the last run, that stage is skipped. `fixed verify + ship` is the standard development loop: prove your properties, then produce a binary.
+
+### Output design principles
+
+- **Structured errors**: every diagnostic has a code (e.g., `E042`), a location, and a human-readable explanation. Copy-pasteable suggestions where applicable (see ambiguity resolution below).
+- **No noise**: successful compilation produces no output. Only errors and warnings print.
+- **Incremental feedback**: long-running `verify` reports progress per `prop` — which properties passed, which are being tested, which failed.
+- **Exit codes**: `0` = success, `1` = compile error, `2` = verification failure, `3` = build failure. Clean for CI and scripting.
+- **JSON output**: `--format json` flag on any command for structured output. Same information, machine-parseable. Useful for editor integrations, AI agents, and CI pipelines.
+
+### Why this matters for AI
+
+An AI agent running `fixed verify + ship` gets:
+1. Clear pass/fail per property (not buried in a test log)
+2. Structured errors with exact locations and suggested fixes
+3. Deterministic exit codes for control flow
+4. The same output a human reads — no translation layer needed
+
+The compiler treats the developer's terminal and an AI's stdin/stdout as the same interface.
 
 ---
 
@@ -302,7 +384,8 @@ The **more capabilities** you request, the **fewer representations** qualify. Th
 | 11 | `examples/11_interpreter.fixed` | Mini expression language, deep matching, effects for eval errors |
 | 12 | `examples/12_concurrent_chat.fixed` | Channel-based concurrency as effects |
 | 13 | `examples/13_geometry.fixed` | `type` aliases, `data` declarations, geometry ops (area, perimeter, bounding box) |
-| 14 | `examples/14_recursion_schemes.fixed` | Catamorphism, anamorphism, hylomorphism, paramorphism — no recursive functions |
+| 14 | `examples/14_recursion_schemes.fixed` | Catamorphism, anamorphism, hylomorphism, paramorphism — total functions |
+| 15 | `examples/15_properties.fixed` | `prop` invariants, `forall`, `implies`, postconditions, composing properties via `extends` |
 
 ---
 
@@ -319,6 +402,7 @@ Formal specification documents that pin down semantics before implementation.
 | `spec/effects.md` | Algebraic effects semantics, effect rows, evidence-passing compilation |
 | `spec/pattern_matching.md` | Desugaring rules (`match` → `fold`), exhaustiveness checking algorithm |
 | `spec/perceus.md` | Reference counting insertion, reuse analysis (FBIP), drop specialization, borrowing optimization |
+| `spec/properties.md` | `prop` semantics, static verification vs property-based testing fallback, `forall`/`implies`, composability with `extends` |
 
 ### Key decisions to formalize
 
@@ -328,8 +412,9 @@ Formal specification documents that pin down semantics before implementation.
 - **Capability-driven representation selection**: The algorithm by which the compiler narrows representation choices from capability sets. How conflicting heuristics are resolved. PGO integration points.
 - **Capability classification**: compiler-inferred categories (sum, product, recursive, capability-only, marker) based on signature shape
 - **No statements**: everything is an expression; no semicolons; blocks return their last expression
-- **No recursive functions**: only capabilities and data can be recursive; all recursion is via fold/unfold on recursive data
-- **No `&` operator**: the programmer never writes references; the compiler handles all borrowing/moving/cloning via Perceus
+- **Functions are total**: only capabilities and data can be recursive; all recursion is via fold/unfold on recursive data
+- **No explicit layouts**: the programmer never writes references; the compiler handles all borrowing/moving/cloning via Perceus
+- **`prop` semantics**: how properties are checked (static analysis vs property-based testing), what expressions are allowed inside `prop`, how `forall` quantification works, how properties on capabilities compose with `extends`
 - **No explicit `self`**: instance methods don't declare a self parameter; the compiler infers it
 - **Coherence rules**: how orphan rules work when there are no concrete types
 - **Recursive capability detection**: Self in constructor parameter position
@@ -344,16 +429,16 @@ Rust implementation of the front-end.
 
 | Component | Description |
 |---|---|
-| **Lexer** (`src/lexer/`) | Tokenizer targeting the EBNF grammar. Keywords: `cap`, `fn`, `is`, `of`, `extends`, `effect`, `match`, `handle`, `with`, `let`, `if`, `else`, `do`, `use`, `mod`, `pub`, `phantom`, `Self` |
+| **Lexer** (`src/lexer/`) | Tokenizer targeting the EBNF grammar. Keywords: `cap`, `fn`, `is`, `of`, `extends`, `effect`, `match`, `handle`, `with`, `let`, `if`, `else`, `do`, `use`, `mod`, `pub`, `phantom`, `Self`, `data`, `type`, `prop`, `forall`, `implies` |
 | **Parser** (`src/parser/`) | Recursive descent or Pratt parser producing AST |
 | **AST** (`src/ast/`) | Type definitions for all language constructs |
 
 ### AST node types needed
 
-- **Items**: `CapDef`, `EffectDef`, `DataDef`, `TypeAlias`, `ImplBlock`, `FnDef`, `UseDecl`, `ModDecl`
+- **Items**: `CapDef`, `EffectDef`, `DataDef`, `TypeAlias`, `ImplBlock`, `FnDef`, `PropDef`, `UseDecl`, `ModDecl`
 - **Cap members**: `InstanceMethod`, `StaticMethod` (the `Self.fn` distinction)
 - **Capability refs**: `IsCap` (anonymous), `NamedAlias` (`N is Numeric`), `OfApp` (`Folding of i64`), `SelfOf` (`Self of B`)
-- **Expressions**: `Match`, `If`, `Let`, `FnCall`, `MethodCall`, `StaticCall` (`C.empty`), `Closure`, `BlockLambda`, `Do`, `Handle`, `Block`, `Literal`, `BinaryOp`, `UnaryOp`, `FieldAccess`, `ListLiteral`, `QuestionMark`, `Pipe`
+- **Expressions**: `Match`, `If`, `Let`, `FnCall`, `MethodCall`, `StaticCall` (`C.empty`), `Closure`, `BlockLambda`, `Do`, `Handle`, `Block`, `Literal`, `BinaryOp`, `UnaryOp`, `FieldAccess`, `ListLiteral`, `Pipe`, `Forall`, `Implies`
 - **Data**: `DataVariant` (unit variant, tuple variant with named fields), `PhantomParam`, `OfParams`
 - **Patterns**: `ConstructorPat`, `DataVariantPat` (`Expr.Lit(v)`), `WildcardPat`, `BindingPat`, `LiteralPat`, `DestructurePat`, `GuardedPat`
 - **Types**: `ArrowType` (`A -> B`), `TupleArrowType` (`(A, B) -> C`), `CapBound` (`is Cap + Cap`), `OfType` (`Cap of X`)
@@ -377,6 +462,7 @@ All 12 example programs parse successfully into AST.
 | **Representation selector** (`src/types/repr.rs`) | Analyze capability sets → narrow to viable concrete representations |
 | **Effect inference** (`src/types/effects.rs`) | Infer and propagate effect rows, verify all effects handled |
 | **Exhaustiveness checker** (`src/types/exhaustive.rs`) | Verify `match` arms cover all constructors |
+| **Property verifier** (`src/types/props.rs`) | Static verification of `prop` invariants; generate property-based tests for those that can't be proven statically |
 
 ### Capability classification rules
 

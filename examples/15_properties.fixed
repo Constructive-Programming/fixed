@@ -1,0 +1,153 @@
+// 15_properties.fixed
+// Properties as lightweight theorem proving.
+//
+// Demonstrates:
+//   - `prop` declarations inside capabilities and data types
+//   - Invariants that the compiler checks (statically or via testing)
+//   - `forall` quantification over values
+//   - `implies` for conditional properties
+//   - Properties as machine-checked documentation
+//   - How props compose through `extends`
+//   - Postconditions on functions
+
+use std.io.Console
+
+// =========================================================================
+// Properties on capabilities
+// =========================================================================
+
+// A Sorted collection carries a proof that its elements are in order.
+// The `prop` is part of the interface — any implementation must satisfy it.
+cap Sorted of (Part is Ord) extends Sequencing {
+    prop sorted: fold(true, (acc, prev, curr) -> acc && prev <= curr)
+}
+
+// A NonEmpty collection guarantees at least one element.
+cap NonEmpty extends Sequencing + Sized {
+    prop non_empty: size > 0
+}
+
+// A Stack with properties relating push/pop to size.
+cap Stack extends Sequencing + Sized {
+    fn push(value: Part) -> Self
+    fn pop -> Self
+
+    prop push_increments: forall (s: Self, x: Part) ->
+        s.push(x).size == s.size + 1
+
+    prop pop_decrements: forall (s: Self) ->
+        s.size > 0 implies s.pop().size == s.size - 1
+
+    prop push_pop_identity: forall (s: Self, x: Part) ->
+        s.push(x).pop == s
+}
+
+// =========================================================================
+// Properties on data types
+// =========================================================================
+
+data Nat {
+    Zero,
+    Succ(pred: Nat),
+
+    // Every Nat is non-negative (trivially true by construction,
+    // but demonstrates that data types can carry props)
+    prop non_negative: fold(
+        () -> true,
+        (inner) -> inner
+    )
+}
+
+// A bounded integer — value is always within [lo, hi]
+data Bounded of (N is Numeric + Ord) {
+    Bounded(value: N, lo: N, hi: N),
+
+    prop in_range: forall (b: Self) ->
+        b.lo <= b.value && b.value <= b.hi
+}
+
+// =========================================================================
+// Properties as postconditions on functions
+// =========================================================================
+
+// sort returns a Sorted collection of the same size
+fn sort(collection: C is Sequencing + Sized of (A is Ord)) -> C is Sorted {
+    prop result_same_size: result.size == collection.size
+    // The compiler verifies that whatever sort algorithm is used,
+    // the result satisfies both `Sorted.sorted` and `result_same_size`
+    collection.fold_right(C.empty, (x, acc) -> insert_sorted(acc, x))
+}
+
+// insert into a sorted collection preserves sortedness
+fn insert_sorted(
+    sorted: C is Sorted of (A is Ord),
+    value: A
+) -> C is Sorted {
+    prop grows_by_one: result.size == sorted.size + 1
+    // Compiler checks: result is Sorted (from return type) and grows_by_one
+    match sorted.head {
+        Optional.some(h) =>
+            if value <= h {
+                C.cons(value, sorted)
+            } else {
+                C.cons(h, insert_sorted(sorted.tail, value))
+            },
+        Optional.none() =>
+            C.cons(value, C.empty),
+    }
+}
+
+// clamp a value into a Bounded range
+fn clamp(value: N is Numeric + Ord, lo: N, hi: N) -> Bounded of N {
+    prop lo_le_hi: lo <= hi
+    if value < lo {
+        Bounded.Bounded(lo, lo, hi)
+    } else if value > hi {
+        Bounded.Bounded(hi, lo, hi)
+    } else {
+        Bounded.Bounded(value, lo, hi)
+    }
+    // The compiler verifies Bounded.in_range holds for all three branches
+}
+
+// =========================================================================
+// Properties composing through `extends`
+// =========================================================================
+
+// SortedNonEmpty combines both invariants
+cap SortedNonEmpty of (Part is Ord) extends Sorted + NonEmpty {
+    // Both `sorted` and `non_empty` props are inherited
+    // No new props needed — they compose automatically
+}
+
+fn median(collection: C is SortedNonEmpty of (N is Numeric)) -> N {
+    // We can safely index the middle — `non_empty` guarantees size > 0,
+    // `sorted` guarantees the middle element is the median
+    let mid = collection.size / 2
+    collection.get(mid).fold(
+        (v) -> v,
+        () -> unreachable  // compiler knows this via `non_empty`
+    )
+}
+
+// =========================================================================
+// Main
+// =========================================================================
+
+fn main() -> () with Console {
+    // The compiler checks all props at their definition sites.
+    // At runtime, we just use the capabilities knowing the invariants hold.
+
+    let numbers = [5, 2, 8, 1, 9, 3]
+    let sorted = sort(numbers)
+    Console.print_line("Sorted: ".concat(sorted.show()))
+
+    let bounded = clamp(42, 0, 10)
+    Console.print_line("Clamped 42 to [0,10]: ".concat(bounded.value.show()))
+
+    let bounded2 = clamp(-5, 0, 10)
+    Console.print_line("Clamped -5 to [0,10]: ".concat(bounded2.value.show()))
+
+    let nat5 = Nat.Succ(Nat.Succ(Nat.Succ(Nat.Succ(Nat.Succ(Nat.Zero)))))
+    Console.print_line("Nat 5 to u64: ".concat(nat5.fold(() -> 0, (n) -> n + 1).show()))
+}

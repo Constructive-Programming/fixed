@@ -104,22 +104,22 @@ the type of `collection` (**C**) above doesn't even show up in the previous
 example. However, we still know it contains numbers and can be folded over.
 
 
-### Data types (when you need them)
+### Data types — planning structure
 
-Capabilities are the default, but sometimes a closed set of variants is the right tool:
+When you need a specific closed set of variants, `data` lets you express the shape:
 
 ```
 data Color { Red, Green, Blue, RGB(red: N is Numeric, green: N, blue: N) }
 
 data Expr {
-    Lit(value: f64),
+    Lit(value: Part),
     Add(left: Expr, right: Expr),
     Mul(left: Expr, right: Expr),
     Neg(inner: Expr),
 }
 ```
 
-`data` is the escape hatch. The compiler still owns the representation — you declare the shape, not the layout.
+`data` is where structure gets planned. The compiler still owns the representation — you declare the shape, not the layout.
 
 ### Algebraic effects
 
@@ -142,18 +142,48 @@ handle compute("42") {
 
 Effects are declared, tracked, and handled — never implicit. Unhandled effects are compile errors.
 
+### Properties — lightweight theorem proving
+
+`prop` declares invariants directly alongside the code they govern. Properties are checked by the compiler — via static analysis where possible, and via property-based testing otherwise:
+
+```
+cap Sorted extends Sequencing {
+    prop sorted: fold(true, (acc, prev, curr) -> acc && prev <= curr)
+}
+
+cap NonEmpty extends Sequencing {
+    prop non_empty: size > 0
+}
+
+fn insert(sorted: S is Sorted, value: Part) -> S is Sorted {
+    // compiler verifies the result still satisfies `sorted`
+    ...
+}
+```
+
+Properties live where the capability is defined — not in a separate test file. They serve as machine-checked documentation and as lightweight proofs that the compiler can use to optimize and verify.
+
+```
+cap Stack extends Sequencing + Sized {
+    prop push_increments: forall (s: Self, x: Part) ->
+        s.push(x).size == s.size + 1
+
+    prop pop_decrements: forall (s: Self) ->
+        s.size > 0 implies s.pop().size == s.size - 1
+}
+```
+
 ## Design principles
 
 1. **`cap` is the primary abstraction** — capabilities describe what values can do, not what they are
-2. **`data` is the escape hatch** — for closed variant sets when capabilities aren't enough
-3. **The compiler owns all representation decisions** — the programmer never specifies heap/stack, boxing, contiguous/linked
-4. **Everything is an expression** — no statements, no semicolons; blocks return their last expression
-5. **No recursive functions** — only capabilities and data can be recursive; all recursion is structural via fold/unfold
-6. **Algebraic effects for all side effects** — declared with `effect`, handled with `handle`/`resume`
-7. **Perceus memory management** — compiles to C with precise RC, reuse analysis, drop specialization
+2. **`data` is where structure gets planned** — `data` lets you express the shape of your data when you need a specific closed set of variants
+3. **`prop` invariants are specified in place** — properties (from property-based testing) are built into the language as a form of lightweight theorem proving
+4. **Functions are total** — only capabilities and data can be recursive; all recursion is structural via fold/unfold
+5. **No explicit layouts** — the programmer never writes references; the compiler handles borrowing/moving/cloning via Perceus
+6. **Everything is an expression** — no statements, no semicolons; blocks return their last expression
+7. **Algebraic effects for all side effects** — declared with `effect`, handled with `handle`/`resume`
 8. **No mutation** — purely functional; the compiler optimizes in-place updates via FBIP
-9. **Right-bias convention** — multi-parameter types derive Functor over the rightmost parameter; when ambiguous, the compiler suggests options for the developer to choose from
-10. **No `&` operator** — the programmer never writes references; the compiler handles borrowing/moving/cloning
+9. **Agent friendly** — the compiler produces clear, structured output designed for humans, which also makes it ideal for AI harnesses and automated tooling
 
 ## Theoretical foundation
 
@@ -167,12 +197,11 @@ Quine's five predicate functor operations map directly onto Fixed's capability c
 | **Reflection** | Identify two variables | Named aliases — `N is Numeric` constrains multiple params to share a type |
 | **Composition** | Conjoin predicates | Capability composition — `extends`, `+` bounds |
 
-These five operations are **complete**: any data type expressible with concrete `struct`/`enum` can be equivalently expressed as a capability using only these operations.
 
-## Project structure
+## Repository structure
 
 ```
-examples/           14 example programs exercising the language design
+examples/           15 example programs exercising the language design
 docs/plans/         Implementation plan (phases 0–6)
 spec/               (planned) Formal specification
 stdlib/             (planned) Standard library in Fixed
@@ -181,7 +210,7 @@ src/                (planned) Compiler implementation in Rust
 
 ## Status
 
-**Phase 0 (design) is under way.** The language design is explored through 14 example programs covering:
+**Phase 0 (design) is under way.** The language design is explored through 15 example programs covering:
 
 - Basic I/O, numeric polymorphism
 - Capability-driven collections (Sequencing, Functor, Folding, RandomAccess, etc.)
@@ -196,6 +225,7 @@ src/                (planned) Compiler implementation in Rust
 - Channel-based concurrency as effects
 - Geometry with type aliases and data declarations
 - Recursion schemes (catamorphism, anamorphism, hylomorphism, paramorphism)
+- Property-based invariants (`prop`, `forall`, `implies`)
 
 Next: formal specification (Phase 1) and parser implementation (Phase 2).
 
