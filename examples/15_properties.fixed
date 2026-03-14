@@ -46,24 +46,22 @@ cap Stack extends Sequencing + Sized {
 // Properties on data types
 // =========================================================================
 
-data Nat {
-    Zero,
-    Succ(pred: Nat),
-
-    // Every Nat is non-negative (trivially true by construction,
-    // but demonstrates that data types can carry props)
-    prop non_negative: fold(
-        () -> true,
-        (inner) -> inner
-    )
-}
-
-// A bounded integer — value is always within [lo, hi]
-data Bounded of (N is Numeric + Ord) {
-    Bounded(value: N, lo: N, hi: N),
+// A bounded integer — value is always within [Lo, Hi].
+// This is the *data wrapper* approach: the bounds are part of the structure.
+// See also: `cap Between` in 16_refinement_types.fixed for the *refinement*
+// approach, which constrains without wrapping (zero runtime cost).
+data Bounded of (N is Numeric + Ord, Lo = 16, hi = 24) {
+    Bounded(value: N),
 
     prop in_range: forall (b: Self) ->
         b.lo <= b.value && b.value <= b.hi
+}
+
+// Refinement alternative — a function that generates a capability.
+// A value `N is Numeric + between(0, 100)` is still just an N.
+// See 16_refinement_types.fixed for the full dependent types story.
+fn between(min: N is Ord, max: N) -> cap of N {
+    prop in_range: min <= Self && Self <= max
 }
 
 // =========================================================================

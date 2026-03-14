@@ -14,7 +14,7 @@ Fixed's syntax is designed around the insight that if the programmer never names
 
 ### Capabilities, not types
 
-The `cap` keyword defines a **capability** — what a value can *do*. There are no structs, enums, classes, or data declarations. The word "type" in Fixed refers to the compiler's internal representation choice, never to something the programmer writes.
+The `cap` keyword defines a **capability** — what a value can *do*. There are no structs, enums, or classes. The word "type" in Fixed refers to the compiler's internal representation choice, never to something the programmer writes.
 
 ### The `is` keyword
 
@@ -44,6 +44,118 @@ Multi-parameter capabilities use tuple-style `of`:
 cap Sized of (Part, Size is Numeric)
 cap RandomAccess of (Part, Index is Numeric)
 ```
+
+### Dependent types — functions that generate capabilities
+
+A capability with value parameters is already a function from values to a constraint. Fixed makes this explicit: **`fn` can return `cap`**, making capabilities first-class and value-dependent.
+
+#### The `fn -> cap` syntax
+
+```
+fn between(min: N is Ord, max: N) -> cap of N {
+    prop in_range: min <= Self && Self <= max
+}
+```
+
+At use sites, a cap-generating function is called wherever a capability name would appear:
+
+```
+fn validate_age(age: N is Numeric + between(0, 150)) -> N
+
+type Port = u16 + between(1, 65535)
+type Username = String + min_length(3) + max_length(32)
+```
+
+Constraints are declared at first use of the type variable (same rule as function params). `of N` names the type being refined. Bare `Self` in props refers to the constrained value (sugar for `forall (v: Self) -> v > 0`).
+
+#### Cap-generating functions are first-class
+
+Because `fn -> cap` produces a regular function, cap generators compose like any other value:
+
+```
+// Pass a cap generator as an argument
+fn validate(
+    value: N is Numeric,
+    constraint: fn(N, N) -> cap of N,
+    lo: N,
+    hi: N,
+) -> N is constraint(lo, hi) {
+    if value < lo { Fail.fail("too low") }
+    else if value > hi { Fail.fail("too high") }
+    else { value }
+}
+
+// Compose cap generators
+fn strict_between(min: N is Ord, max: N) -> cap of N {
+    prop in_range: min < Self && Self < max    // strict inequality
+}
+
+// Return a cap generator from a function
+fn range_for(unit: String) -> fn(f64, f64) -> cap of f64 {
+    match unit {
+        "celsius" => between,
+        "kelvin" => fn(lo, hi) -> cap of f64 {
+            prop in_range: lo <= Self && Self <= hi
+            prop absolute: Self >= 0.0
+        },
+    }
+}
+```
+
+#### Symbolic value params
+
+Value arguments can be literals or in-scope bindings — the compiler verifies props symbolically:
+
+```
+fn clamp(value: N is Numeric + Ord, lo: N, hi: N) -> N is between(lo, hi) {
+    if value < lo { lo }
+    else if value > hi { hi }
+    else { value }
+}
+```
+
+#### `cap Name(params)` as sugar
+
+A named capability with value params is sugar for a cap-generating function:
+
+```
+// These are equivalent:
+cap Between(min: N is Ord, max: N) of N {
+    prop in_range: min <= Self && Self <= max
+}
+
+fn between(min: N is Ord, max: N) -> cap of N {
+    prop in_range: min <= Self && Self <= max
+}
+```
+
+The `cap` form is convenient for simple, named refinements. The `fn` form is the general mechanism — use it when you need first-class cap generation, composition, or conditional logic.
+
+#### Refinement capabilities are zero-cost
+
+Whether defined via `cap(...)` or `fn -> cap`, refinement capabilities are **Marker** caps (no methods, zero-sized, compile-time only). They add zero constraint on representation — only prop obligations. A value `N is between(0, 100)` is still just an `N`.
+
+### Quantities — how values interact with types and runtime
+
+Fixed uses Quantitative Type Theory (QTT) to track how each binding is used. This is what makes dependent types (`fn -> cap`) sound with Perceus reference counting.
+
+| Quantity | Meaning | Fixed example |
+|----------|---------|---------------|
+| **0** | Erased — type-level only, no runtime code | `fn -> cap` value params, `prop` expressions, `phantom` |
+| **1** | Linear — used exactly once, no RC overhead | FBIP reuse, single-shot `resume`, unique handles |
+| **ω** | Unrestricted — freely shared, Perceus RC | General values, captured closures |
+
+Quantities are **inferred by the compiler**, not written by the programmer. The programmer sees capabilities; the compiler decides which values need RC, which can be reused in-place, and which are erased entirely.
+
+The soundness argument: in `fn clamp(value: N, lo: N, hi: N) -> N is between(lo, hi)`, the return type mentions `lo` and `hi`. QTT assigns quantity 0 to these type-level uses — they generate no runtime code. The runtime uses of `lo` and `hi` in the function body are quantity ω (they may be used multiple times in comparisons). Total quantity per binding: ω. Perceus manages their lifetime normally. The type-level mentions are erased.
+
+This replaces three ad-hoc mechanisms with one principled system:
+
+| Before QTT | After QTT |
+|---|---|
+| "Compile-time only" refinements (ad hoc) | Quantity 0 — erased by the type system |
+| Perceus reuse analysis heuristic for FBIP | Quantity 1 — guaranteed linearity, in-place mutation is sound |
+| Perceus RC for everything else | Quantity ω — RC only where the type system says it's needed |
 
 ### `Part` — the implicit element type
 
@@ -107,6 +219,25 @@ Used in signatures just like any capability:
 fn take(collection: C is ArrayLike, n: u64) -> C
 fn binary_search(sorted: C is ArrayLike of (A is Ordered), target: A) -> ...
 ```
+
+#### Parameterized type aliases
+
+Type aliases can take value parameters, making them functions from values to capability sets:
+
+```
+type PortRange(min: u16, max: u16) = u16 + between(min, max)
+type BoundedString(max: u64) = String + max_length(max)
+type Clamped(lo: N is Numeric + Ord, hi: N) = N + between(lo, hi)
+```
+
+At use sites, they are called like cap-generating functions:
+
+```
+fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String { ... }
+fn read_name() -> S is BoundedString(255) with Console { ... }
+```
+
+This is consistent with the `fn -> cap` story: `type Name(params) = expr` is sugar for a function that returns a capability set. The compiler expands it at every use site, just like plain type aliases.
 
 ### Data declarations — planning structure
 
@@ -203,8 +334,11 @@ fn factorial(n: u64) -> u64 {
 | Block lambdas | `.map { value -> expr }` | `.map((value) -> expr)` |
 | Dot static calls | `C.empty`, `C.cons(x, acc)` | `C.empty()`, `C.cons(x, acc)` |
 | Type aliases | `type ArrayLike = Seq + RA + Sized + Empty` | Repeating capability bundles everywhere |
+| Parameterized type aliases | `type PortRange(min, max) = u16 + between(min, max)` | Repeating parameterized refinements |
 | Data declarations | `data Color { Red, Green, Blue, RGB(...) }` | No prior equivalent (escape hatch) |
 | No semicolons | Newlines separate expressions | `;` statement terminators |
+| Cap-generating functions | `fn between(min, max) -> cap of N { prop ... }` | Separate type-level and value-level abstractions |
+| Cap sugar | `cap Between(min, max) of N { ... }` | `fn between(min, max) -> cap of N { ... }` (equivalent) |
 
 ### `prop` — invariants specified in place
 
@@ -228,7 +362,7 @@ Key properties of `prop`:
 - **Lives where the capability is defined** — not in a separate test file. Properties are part of the interface contract.
 - **Machine-checked documentation** — properties serve as documentation that the compiler verifies.
 - **Compiler optimization hints** — a `prop sorted` on a collection lets the compiler assume sortedness and choose binary search over linear scan.
-- **Lightweight proofs** — not full dependent types, but enough to catch common invariant violations at compile time.
+- **Dependent verification** — props are checked at quantity 0 (erased at runtime). Combined with `fn -> cap`, they form Fixed's dependent type system.
 - **Fallback to testing** — when static verification is insufficient, the compiler generates property-based tests automatically.
 
 Properties can also appear on `data` types:
@@ -367,7 +501,7 @@ The **more capabilities** you request, the **fewer representations** qualify. Th
 
 ## Phase 0: Example Programs — COMPLETE
 
-12 example `.fixed` programs stress-testing the language design:
+16 example `.fixed` programs stress-testing the language design:
 
 | # | File | Exercises |
 |---|---|---|
@@ -386,6 +520,7 @@ The **more capabilities** you request, the **fewer representations** qualify. Th
 | 13 | `examples/13_geometry.fixed` | `type` aliases, `data` declarations, geometry ops (area, perimeter, bounding box) |
 | 14 | `examples/14_recursion_schemes.fixed` | Catamorphism, anamorphism, hylomorphism, paramorphism — total functions |
 | 15 | `examples/15_properties.fixed` | `prop` invariants, `forall`, `implies`, postconditions, composing properties via `extends` |
+| 16 | `examples/16_refinement_types.fixed` | Dependent types: `fn -> cap`, first-class cap generators, parameterized type aliases, refinements |
 
 ---
 
@@ -403,6 +538,7 @@ Formal specification documents that pin down semantics before implementation.
 | `spec/pattern_matching.md` | Desugaring rules (`match` → `fold`), exhaustiveness checking algorithm |
 | `spec/perceus.md` | Reference counting insertion, reuse analysis (FBIP), drop specialization, borrowing optimization |
 | `spec/properties.md` | `prop` semantics, static verification vs property-based testing fallback, `forall`/`implies`, composability with `extends` |
+| `spec/quantities.md` | QTT quantity inference (0/1/ω), interaction with Perceus RC, erasure rules for 0-quantity bindings, linearity checking for 1-quantity bindings, soundness argument for dependent types + RC |
 
 ### Key decisions to formalize
 
@@ -415,6 +551,11 @@ Formal specification documents that pin down semantics before implementation.
 - **Functions are total**: only capabilities and data can be recursive; all recursion is via fold/unfold on recursive data
 - **No explicit layouts**: the programmer never writes references; the compiler handles all borrowing/moving/cloning via Perceus
 - **`prop` semantics**: how properties are checked (static analysis vs property-based testing), what expressions are allowed inside `prop`, how `forall` quantification works, how properties on capabilities compose with `extends`
+- **Dependent types via `fn -> cap`**: how cap-generating functions are type-checked, how symbolic value params are tracked through prop verification, equivalence between `cap Name(params)` sugar and `fn name(params) -> cap`, how first-class cap generators compose and are passed as arguments
+- **QTT quantity inference**: how the compiler determines 0/1/ω for each binding. Type-level positions (cap params, props, phantoms) force 0. Single-use patterns yield 1. Everything else is ω. Interaction with Perceus: 0 → erased, 1 → no RC (direct reuse), ω → full RC
+- **Erasure soundness**: 0-quantity bindings generate no runtime code. The compiler must verify they are never used at runtime — only in types, props, and phantom positions. This is what makes `fn -> cap` sound with RC.
+- **Linearity and FBIP**: quantity-1 bindings enable guaranteed in-place mutation, replacing the heuristic reuse analysis with a type-level guarantee
+- **Effect handler linearity**: `resume` is quantity 1 (single-shot). Multi-shot handlers (if supported) would need quantity ω
 - **No explicit `self`**: instance methods don't declare a self parameter; the compiler infers it
 - **Coherence rules**: how orphan rules work when there are no concrete types
 - **Recursive capability detection**: Self in constructor parameter position
@@ -435,17 +576,18 @@ Rust implementation of the front-end.
 
 ### AST node types needed
 
-- **Items**: `CapDef`, `EffectDef`, `DataDef`, `TypeAlias`, `ImplBlock`, `FnDef`, `PropDef`, `UseDecl`, `ModDecl`
+- **Items**: `CapDef`, `EffectDef`, `DataDef`, `TypeAlias` (optionally with `ValueParams`), `ImplBlock`, `FnDef`, `PropDef`, `UseDecl`, `ModDecl`
 - **Cap members**: `InstanceMethod`, `StaticMethod` (the `Self.fn` distinction)
-- **Capability refs**: `IsCap` (anonymous), `NamedAlias` (`N is Numeric`), `OfApp` (`Folding of i64`), `SelfOf` (`Self of B`)
+- **Capability refs**: `IsCap` (anonymous), `NamedAlias` (`N is Numeric`), `OfApp` (`Folding of i64`), `SelfOf` (`Self of B`), `CapCall` (`between(10, 30)` — cap-generating function applied to args)
+- **Cap generation**: `CapReturnType` (`cap of N` as return type), `ValueParams` (definition-site `(min: N is Ord, max: N)`), `ValueArgs` (use-site `(10, 30)`)
 - **Expressions**: `Match`, `If`, `Let`, `FnCall`, `MethodCall`, `StaticCall` (`C.empty`), `Closure`, `BlockLambda`, `Do`, `Handle`, `Block`, `Literal`, `BinaryOp`, `UnaryOp`, `FieldAccess`, `ListLiteral`, `Pipe`, `Forall`, `Implies`
 - **Data**: `DataVariant` (unit variant, tuple variant with named fields), `PhantomParam`, `OfParams`
 - **Patterns**: `ConstructorPat`, `DataVariantPat` (`Expr.Lit(v)`), `WildcardPat`, `BindingPat`, `LiteralPat`, `DestructurePat`, `GuardedPat`
-- **Types**: `ArrowType` (`A -> B`), `TupleArrowType` (`(A, B) -> C`), `CapBound` (`is Cap + Cap`), `OfType` (`Cap of X`)
+- **Types**: `ArrowType` (`A -> B`), `TupleArrowType` (`(A, B) -> C`), `CapBound` (`is Cap + Cap`), `OfType` (`Cap of X`), `CapType` (`cap of N` — capability as return type)
 
 ### Milestone
 
-All 12 example programs parse successfully into AST.
+All 16 example programs parse successfully into AST.
 
 ---
 
@@ -462,7 +604,8 @@ All 12 example programs parse successfully into AST.
 | **Representation selector** (`src/types/repr.rs`) | Analyze capability sets → narrow to viable concrete representations |
 | **Effect inference** (`src/types/effects.rs`) | Infer and propagate effect rows, verify all effects handled |
 | **Exhaustiveness checker** (`src/types/exhaustive.rs`) | Verify `match` arms cover all constructors |
-| **Property verifier** (`src/types/props.rs`) | Static verification of `prop` invariants; generate property-based tests for those that can't be proven statically |
+| **Property verifier** (`src/types/props.rs`) | Static verification of `prop` invariants; generate property-based tests for those that can't be proven statically. Resolves value params in refinement capability props (e.g., `Between(lo, hi)` binds `min`/`max` to `lo`/`hi` in prop expressions) |
+| **Quantity checker** (`src/types/quantities.rs`) | Infer QTT quantities (0/1/ω) for all bindings. Verify erasure: 0-quantity bindings used only in type/prop/phantom positions. Verify linearity: 1-quantity bindings used exactly once. Feed quantities into Perceus insertion (Phase 4) |
 
 ### Capability classification rules
 
@@ -473,6 +616,7 @@ All 12 example programs parse successfully into AST.
 | **Recursive** | `Self` appears in constructor parameter types | Heap-allocated (optimizable) |
 | **Capability-only** | No constructors returning `Self` (only instance methods) | Vtable / monomorphized |
 | **Marker** | No methods at all | Zero-sized, compile-time only |
+| **Refinement** | No methods, has `prop` + value params | Zero-sized, compile-time only (subtype of Marker) |
 
 ### Capability-set representation narrowing
 
@@ -485,7 +629,7 @@ New compiler pass: given all capabilities a value must satisfy, determine which 
 
 ### Milestone
 
-All 12 example programs type-check with correct capability classifications, representation selection, and effect tracking.
+All 16 example programs type-check with correct capability classifications, representation selection, and effect tracking.
 
 ---
 
@@ -512,7 +656,7 @@ Typed AST
 | **Representation selector** (`src/codegen/repr.rs`) | Map capability sets to C layouts |
 | **Monomorphizer** (`src/codegen/mono.rs`) | Specialize generic functions for concrete type params |
 | **Match desugarer** (`src/codegen/desugar.rs`) | Convert `match` to `fold` calls, `if` to `bool.fold` |
-| **Perceus inserter** (`src/codegen/perceus.rs`) | Insert `dup`/`drop` operations, compute reuse tokens |
+| **Perceus inserter** (`src/codegen/perceus.rs`) | Insert `dup`/`drop` operations guided by QTT quantities. 0-quantity bindings: erased (no code). 1-quantity bindings: no RC, direct reuse. ω-quantity bindings: full Perceus RC (dup on share, drop on last use, reuse tokens on unique) |
 | **Evidence passer** (`src/codegen/evidence.rs`) | Compile effects to evidence vector lookups |
 | **C emitter** (`src/codegen/emit_c.rs`) | Generate readable C code |
 
@@ -533,7 +677,7 @@ Typed AST
 
 ### Milestone
 
-All 12 example programs compile to C, the C compiles with gcc/clang, and the binaries run correctly.
+All 16 example programs compile to C, the C compiles with gcc/clang, and the binaries run correctly.
 
 ---
 
@@ -609,11 +753,14 @@ Profile-guided optimization for representation selection.
 
 ## Verification Plan
 
-1. Parse all 12 example programs → AST
-2. Type-check all 12 programs (capability classification, representation selection, effect tracking)
-3. Verify pattern match exhaustiveness on sum capabilities
-4. Verify effect tracking catches unhandled effects
-5. Verify capability-set narrowing selects correct representations
-6. Compile to C → compile C → run binaries → verify output
-7. Benchmark against equivalent Koka programs
-8. Test PGO: verify representation changes improve performance on profiled workloads
+1. Parse all 16 example programs → AST
+2. Type-check all 16 programs (capability classification, representation selection, effect tracking)
+3. Verify QTT quantity inference: 0-quantity bindings in type/prop/phantom positions only, 1-quantity bindings used exactly once, ω-quantity bindings get RC
+4. Verify pattern match exhaustiveness on sum capabilities
+5. Verify effect tracking catches unhandled effects
+6. Verify capability-set narrowing selects correct representations
+7. Compile to C → compile C → run binaries → verify output
+8. Verify erasure: 0-quantity bindings produce no runtime code in generated C
+9. Verify linearity: 1-quantity bindings have no dup/drop in generated C
+10. Benchmark against equivalent Koka programs
+11. Test PGO: verify representation changes improve performance on profiled workloads

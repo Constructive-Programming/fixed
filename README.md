@@ -22,8 +22,8 @@ Capabilities *are* predicate functors over the type universe. Cropping = existen
 ### Keeping performance without explicit data
 
 - **Algebraic effect handlers** — effects are declared, tracked in types, and handled with composable handlers. No monads, no transformers, no colored functions.
-- **Perceus reference counting** — compiles to C with precise, garbage-free RC. No GC pauses, deterministic deallocation.
-- **FBIP (Functional But In-Place)** — reuse analysis lets the compiler mutate in place when a value is uniquely owned, giving functional code imperative performance.
+- **Perceus reference counting + QTT** — Quantitative Type Theory tracks how each value is used: erased (type-level only), linear (used once, no RC), or shared (full RC). This makes dependent types sound with RC and enables guaranteed in-place mutation for linear values.
+- **FBIP (Functional But In-Place)** — linear values (QTT quantity 1) are guaranteed to be uniquely owned, so the compiler mutates them in place. No heuristic — it's a type-level guarantee.
 - **Evidence passing** — effects compile to efficient evidence-vector lookups, not full delimited continuations.
 - **C emission** — clean, readable generated C. No runtime beyond the RC primitives.
 
@@ -173,6 +173,47 @@ cap Stack extends Sequencing + Sized {
 }
 ```
 
+### Dependent types — functions that generate capabilities
+
+Functions can return capabilities, making type refinement first-class:
+
+```
+// A function that generates a capability
+fn between(min: N is Ord, max: N) -> cap of N {
+    prop in_range: min <= Self && Self <= max
+}
+
+fn validate_age(age: N is Numeric + between(0, 150)) -> N { age }
+
+type Port = u16 + between(1, 65535)
+type Username = String + min_length(3) + max_length(32)
+```
+
+Cap generators are first-class — pass them as arguments, return them from functions, compose them:
+
+```
+fn validate_with(
+    value: N is Numeric,
+    constraint: fn(N, N) -> cap of N,
+    lo: N, hi: N,
+) -> N is constraint(lo, hi) with Fail of String {
+    if value < lo { Fail.fail("too low") }
+    else if value > hi { Fail.fail("too high") }
+    else { value }
+}
+```
+
+Type aliases can take value parameters too, bundling refinements into reusable names:
+
+```
+type PortRange(min: u16, max: u16) = u16 + between(min, max)
+type BoundedString(max: u64) = String + max_length(max)
+
+fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String { ... }
+```
+
+Refinement capabilities are zero-cost: compile-time only, no wrapping, the value stays its original type. `cap Name(params)` is sugar for `fn name(params) -> cap`.
+
 ## Design principles
 
 1. **`cap` is the primary abstraction** — capabilities describe what values can do, not what they are
@@ -183,7 +224,8 @@ cap Stack extends Sequencing + Sized {
 6. **Everything is an expression** — no statements, no semicolons; blocks return their last expression
 7. **Algebraic effects for all side effects** — declared with `effect`, handled with `handle`/`resume`
 8. **No mutation** — purely functional; the compiler optimizes in-place updates via FBIP
-9. **Agent friendly** — the compiler produces clear, structured output designed for humans, which also makes it ideal for AI harnesses and automated tooling
+9. **Quantities are inferred, not written** — QTT tracks erasure (0), linearity (1), and sharing (ω) for every binding. The programmer writes capabilities; the compiler infers resource usage
+10. **Agent friendly** — the compiler produces clear, structured output designed for humans, which also makes it ideal for AI harnesses and automated tooling
 
 ## Theoretical foundation
 
@@ -196,12 +238,13 @@ Quine's five predicate functor operations map directly onto Fixed's capability c
 | **Permutation** | Reorder arguments | Capability bounds are unordered — `A + B` = `B + A` |
 | **Reflection** | Identify two variables | Named aliases — `N is Numeric` constrains multiple params to share a type |
 | **Composition** | Conjoin predicates | Capability composition — `extends`, `+` bounds |
+| **Quantities** | Multiplicity of variable usage | QTT quantities — 0 (erased), 1 (linear), ω (shared). Maps Perceus RC decisions into the type system |
 
 
 ## Repository structure
 
 ```
-examples/           15 example programs exercising the language design
+examples/           16 example programs exercising the language design
 docs/plans/         Implementation plan (phases 0–6)
 spec/               (planned) Formal specification
 stdlib/             (planned) Standard library in Fixed
@@ -210,7 +253,7 @@ src/                (planned) Compiler implementation in Rust
 
 ## Status
 
-**Phase 0 (design) is under way.** The language design is explored through 15 example programs covering:
+**Phase 0 (design) is under way.** The language design is explored through 16 example programs covering:
 
 - Basic I/O, numeric polymorphism
 - Capability-driven collections (Sequencing, Functor, Folding, RandomAccess, etc.)
@@ -226,6 +269,7 @@ src/                (planned) Compiler implementation in Rust
 - Geometry with type aliases and data declarations
 - Recursion schemes (catamorphism, anamorphism, hylomorphism, paramorphism)
 - Property-based invariants (`prop`, `forall`, `implies`)
+- Dependent types: functions that generate capabilities (`fn -> cap`, first-class cap generators)
 
 Next: formal specification (Phase 1) and parser implementation (Phase 2).
 
@@ -238,6 +282,7 @@ See [`docs/plans/implementation-plan.md`](docs/plans/implementation-plan.md) for
 - [Quine's Predicate Functor Logic](https://en.wikipedia.org/wiki/Predicate_functor_logic) — variable-free predicate logic
 - [Death of Data](https://degoes.net/articles/kill-data) — De Goes on eliminating premature type commitment
 - [Tagless Final](https://okmij.org/ftp/tagless-final/) — encoding programs against abstract interfaces
+- [Quantitative Type Theory](https://bentnib.org/quantitative-type-theory.html) — Atkey, 2018. Dependent types with resource tracking via usage quantities
 
 ## License
 

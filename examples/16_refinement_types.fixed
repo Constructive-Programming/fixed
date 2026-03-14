@@ -1,0 +1,204 @@
+// 16_refinement_types.fixed
+// Dependent types: functions that generate capabilities.
+//
+// Demonstrates:
+//   - `fn -> cap`: functions that return capabilities
+//   - Refinement types that constrain without wrapping
+//   - First-class cap generators: pass, compose, return them
+//   - Bare `Self` in props as sugar for `forall (v: Self) -> ...`
+//   - Symbolic value params from function arguments
+//   - `cap Name(params)` as sugar for `fn name(params) -> cap`
+//   - `type` aliases with cap-generating functions
+//   - Contrast with `data Bounded` (wrapper vs constraint)
+
+use std.io.Console
+
+// =========================================================================
+// Functions that generate capabilities
+// =========================================================================
+
+// A function that returns a capability. The returned cap constrains
+// values of type N to lie within [min, max].
+fn between(min: N is Ord, max: N) -> cap of N {
+    prop in_range: min <= Self && Self <= max
+}
+
+// No value params needed — just return a cap with a prop.
+fn positive() -> cap of (N is Numeric + Ord) {
+    prop positive: Self > 0
+}
+
+fn non_zero() -> cap of (N is Numeric) {
+    prop non_zero: Self != 0
+}
+
+// Value param with concrete type.
+fn max_length(limit: u64) -> cap extends Sized {
+    prop bounded: size <= limit
+}
+
+fn min_length(limit: u64) -> cap extends Sized {
+    prop bounded: size >= limit
+}
+
+fn multiple_of(divisor: N is Numeric) -> cap of N {
+    prop multiple: Self % divisor == 0
+}
+
+// =========================================================================
+// Sugar form — `cap Name(params)` desugars to `fn name(params) -> cap`
+// =========================================================================
+
+// This:
+cap Between(min: N is Ord, max: N) of N {
+    prop in_range: min <= Self && Self <= max
+}
+// is equivalent to the `fn between` above.
+// Use whichever is clearer — the `cap` form for simple named refinements,
+// the `fn` form when you need first-class generation.
+
+// =========================================================================
+// Type aliases with cap-generating functions
+// =========================================================================
+
+// Plain type aliases — fixed capability sets.
+type Port = u16 + between(1, 65535)
+type Percentage = f64 + between(0.0, 100.0)
+type Username = String + min_length(3) + max_length(32)
+type EvenNumber = i64 + multiple_of(2)
+
+// Parameterized type aliases — functions from values to capability sets.
+// Same idea as `fn -> cap`, but for bundling capabilities with type aliases.
+type PortRange(min: u16, max: u16) = u16 + between(min, max)
+type BoundedString(max: u64) = String + max_length(max)
+type Clamped(lo: N is Numeric + Ord, hi: N) = N + between(lo, hi)
+
+// =========================================================================
+// Using cap generators in function signatures
+// =========================================================================
+
+// Literal args — the simplest case.
+fn validate_age(age: N is Numeric + between(0, 150)) -> N {
+    age
+}
+
+// Symbolic args — lo and hi are function parameters, not literals.
+// The compiler verifies between(lo, hi) symbolically.
+fn clamp(value: N is Numeric + Ord, lo: N, hi: N) -> N is between(lo, hi) {
+    if value < lo { lo }
+    else if value > hi { hi }
+    else { value }
+}
+
+// Multiple refinements composed with +.
+fn safe_divide(
+    numerator: N is Numeric,
+    denominator: N is non_zero(),
+) -> N {
+    numerator / denominator
+}
+
+// Refinements nested inside type params.
+fn sum_bounded(
+    numbers: C is Folding of (N is Numeric + between(0, 100)),
+) -> N {
+    numbers.fold(0, (acc, x) -> acc + x)
+}
+
+// Returning a refined type — compiler verifies the prop holds.
+fn abs(n: N is Numeric + Ord) -> N is positive() {
+    if n < 0 { 0 - n } else { n }
+}
+
+// Parameterized type aliases in signatures.
+fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String {
+    let n = parse_u16(s)
+    if n < 1024 { Fail.fail("port too low") }
+    else if n > 49151 { Fail.fail("port too high") }
+    else { n }
+}
+
+fn read_username() -> S is BoundedString(32) with Console + Fail of String {
+    let name = Console.read_line()
+    if name.size > 32 { Fail.fail("too long") }
+    else { name }
+}
+
+// =========================================================================
+// First-class cap generators
+// =========================================================================
+
+// Pass a cap generator as an argument.
+fn validate_with(
+    value: N is Numeric,
+    constraint: fn(N, N) -> cap of N,
+    lo: N,
+    hi: N,
+) -> N is constraint(lo, hi) with Fail of String {
+    if value < lo { Fail.fail("too low") }
+    else if value > hi { Fail.fail("too high") }
+    else { value }
+}
+
+// A function that returns a cap generator.
+fn strict_between(min: N is Ord, max: N) -> cap of N {
+    prop in_range: min < Self && Self < max    // strict inequality
+}
+
+// Combine props from multiple cap generators into one.
+fn bounded_positive(lo: N is Numeric + Ord, hi: N) -> cap of N {
+    prop lower: lo <= Self
+    prop upper: Self <= hi
+    prop pos: Self > 0
+}
+
+// =========================================================================
+// Contrast: fn -> cap (refinement) vs data (wrapper)
+// =========================================================================
+
+// The `data Bounded` from 15_properties.fixed wraps the value:
+//   data Bounded of (N is Numeric + Ord, Lo = 16, Hi = 24) {
+//       Bounded(value: N),
+//       prop in_range: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
+//   }
+//
+// You must construct it: Bounded.Bounded(42, 0, 100)
+// You must extract:      bounded.value
+//
+// fn -> cap refines without wrapping:
+//   fn between(min: N is Ord, max: N) -> cap of N {
+//       prop in_range: min <= Self && Self <= max
+//   }
+//
+// The value stays unwrapped — N is between(0, 100) is still just an N.
+// You can pass it anywhere expecting N is Numeric. Zero runtime cost.
+
+// =========================================================================
+// Main
+// =========================================================================
+
+fn main() -> () with Console {
+    let age = validate_age(25)
+    Console.print_line("Valid age: ".concat(age.show()))
+
+    let clamped = clamp(42, 0, 10)
+    Console.print_line("Clamped 42 to [0,10]: ".concat(clamped.show()))
+
+    let result = safe_divide(100, 7)
+    Console.print_line("100 / 7 = ".concat(result.show()))
+
+    let positive_val = abs(-5)
+    Console.print_line("abs(-5) = ".concat(positive_val.show()))
+
+    // Pass a cap generator as an argument
+    let validated = handle validate_with(42, between, 0, 100) {
+        Fail.fail(e) => Console.print_line("Error: ".concat(e)),
+        return(v) => Console.print_line("Validated: ".concat(v.show())),
+    }
+
+    // Use the strict variant
+    let validated2 = handle validate_with(50, strict_between, 0, 100) {
+        Fail.fail(e) => Console.print_line("Error: ".concat(e)),
+        return(v) => Console.print_line("Strict validated: ".concat(v.show())),
+    }
+}
