@@ -11,7 +11,7 @@
 
 use std.io.{Console, FileSystem}
 
-effect Fail<E> {
+effect Fail of E {
     fn fail(error: E) -> !
 }
 
@@ -23,14 +23,14 @@ effect Log {
 
 // Config is a product capability: single constructor + accessors.
 cap Config {
-    fn new(host: String, port: u16, debug: bool) -> Self
-    fn host(self) -> String
-    fn port(self) -> u16
-    fn debug(self) -> bool
+    Self.fn new(host: String, port: u16, debug: bool) -> Self
+    fn host -> String
+    fn port -> u16
+    fn debug -> bool
 }
 
 fn read_config(path: String) -> is Config
-    with FileSystem + Fail<String>
+    with FileSystem + Fail of String
 {
     let contents = FileSystem.read_file(path).fold(
         (v) -> v,
@@ -40,7 +40,7 @@ fn read_config(path: String) -> is Config
 }
 
 fn parse_config(text: String) -> is Config
-    with Fail<String>
+    with Fail of String
 {
     let lines = split_lines(text)
     let host = find_value(lines, "host").fold(
@@ -63,9 +63,9 @@ fn parse_config(text: String) -> is Config
 
 // Pure helper — no effects needed, no `with` clause
 fn find_value(
-    lines: is List<String>,
+    lines: is List of String,
     key: String,
-) -> is Optional<String> {
+) -> is Optional of String {
     find(lines, (line) -> starts_with(line, key))
         |> map_optional((line) -> after_char(line, '='))
         |> map_optional((value) -> trim(value))
@@ -77,12 +77,12 @@ fn run_server(config: is Config) -> () with Console + Log {
     Log.log("info", "Starting server...")
     Console.print_line(
         "Server running on "
-            .concat(config.host())
+            .concat(config.host)
             .concat(":")
-            .concat(config.port().show())
+            .concat(config.port.show())
     )
 
-    if config.debug() {
+    if config.debug {
         Log.log("debug", "Debug mode enabled")
         Console.print_line("[DEBUG] Verbose output on")
     } else {

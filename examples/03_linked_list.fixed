@@ -35,13 +35,13 @@ cap Sequencing {
 
 // --- Functor: structure-preserving transformation ---
 cap Functor {
-    fn map<B>(f: Part -> B) -> Self of B
+    fn map(f: Part -> B) -> Self of B
 }
 
 // --- Folding: structural reduction ---
 cap Folding {
-    fn fold<R>(init: R, f: (R, Part) -> R) -> R
-    fn fold_right<R>(init: R, f: (Part, R) -> R) -> R
+    fn fold(init: R, f: (R, Part) -> R) -> R
+    fn fold_right(init: R, f: (Part, R) -> R) -> R
 }
 
 // --- Filtering: selection by predicate ---

@@ -3,7 +3,7 @@
 //
 // Demonstrates:
 //   - A 6-variant sum capability (Json) — the compiler generates a tagged union
-//   - Recursive structure (Json contains List<Json> and List<Pair<String, Json>>)
+//   - Recursive structure (Json contains List of Json and List of Pair of (String, Json))
 //   - Deep/nested pattern matching
 //   - Show implementation for recursive types
 //   - Effect-based parsing errors
@@ -11,20 +11,19 @@
 use std.io.Console
 
 cap Json {
-    fn null() -> Self
-    fn bool(value: bool) -> Self
-    fn number(value: f64) -> Self
-    fn string(value: String) -> Self
-    fn array(elements: is List<Self>) -> Self
-    fn object(fields: is List<is Pair<String, Self>>) -> Self
+    Self.fn null -> Self
+    Self.fn bool(value: bool) -> Self
+    Self.fn number(value: f64) -> Self
+    Self.fn string(value: String) -> Self
+    Self.fn array(elements: is List of Self) -> Self
+    Self.fn object(fields: is List of (is Pair of (String, Self))) -> Self
     fn fold<R>(
-        self,
-        on_null: fn() -> R,
-        on_bool: fn(bool) -> R,
-        on_number: fn(f64) -> R,
-        on_string: fn(String) -> R,
-        on_array: fn(is List<R>) -> R,
-        on_object: fn(is List<is Pair<String, R>>) -> R,
+        on_null: () -> R,
+        on_bool: bool -> R,
+        on_number: f64 -> R,
+        on_string: String -> R,
+        on_array: is List of R -> R,
+        on_object: is List of (is Pair of (String, R)) -> R,
     ) -> R
 }
 
@@ -63,23 +62,23 @@ fn pretty(json: is Json, indent: u64) -> String {
 }
 
 // Look up a key in a JSON object
-fn get_field(json: is Json, key: String) -> is Optional<is Json> {
+fn get_field(json: is Json, key: String) -> is Optional of (is Json) {
     match json {
         Json.object(fields) => {
             find(fields, (pair) -> pair.first() == key)
                 |> map_optional((pair) -> pair.second())
         },
-        _ => Optional.none(),
+        _ => Optional.none,
     }
 }
 
 // Navigate a path like ["users", "0", "name"]
-fn navigate(json: is Json, path: is List<String>) -> is Optional<is Json> {
+fn navigate(json: is Json, path: is List of String) -> is Optional of (is Json) {
     match path {
         List.cons(key, rest) => {
             match get_field(json, key) {
                 Optional.some(child) => navigate(child, rest),
-                Optional.none() => Optional.none(),
+                Optional.none() => Optional.none,
             }
         },
         List.nil() => Optional.some(json),
@@ -96,7 +95,7 @@ fn main() -> () with Console {
             Json.string("admin"),
             Json.string("user"),
         ])),
-        ("address", Json.null()),
+        ("address", Json.null),
     ])
 
     Console.print_line(pretty(user, 0))

@@ -2,136 +2,108 @@
 // Higher-kinded types: Functor, Monad, do-notation, generic programming.
 //
 // Demonstrates:
-//   - HKT syntax: `F for <_>` declares a type constructor
-//   - Functor/Applicative/Monad capability hierarchy
+//   - HKT syntax: `Self of B` for type-constructor returns
+//   - Functor/Monad capability hierarchy using `extends`
 //   - `do` notation as sugar for flat_map chains
 //   - Generic functions that work over any Monad
-//   - How Optional and Result both satisfy Monad
-//   - `M is Monad for <_>` for HKT capability constraints
+//   - How Optional satisfies Monad through its structure
+//   - Capabilities are auto-derived by the compiler from structure
 
 // --- The capability hierarchy ---
 
-cap Functor<F for <_>> {
-    fn map<A, B>(self: F<A>, f: fn(A) -> B) -> F<B>
+// Functor: structure-preserving transformation.
+// `Part` is the current element type, `B` is the new one.
+// `Self of B` changes the container's element type.
+cap Functor {
+    fn map<B>(f: Part -> B) -> Self of B
 }
 
-cap Applicative<F for <_>>: Functor<F> {
-    fn pure<A>(value: A) -> F<A>
-    fn apply<A, B>(self: F<fn(A) -> B>, arg: F<A>) -> F<B>
-}
-
-cap Monad<M for <_>>: Applicative<M> {
-    fn flat_map<A, B>(self: M<A>, f: fn(A) -> M<B>) -> M<B>
+// Monad: sequencing computations that produce wrapped values.
+// `pure` wraps a value; `flat_map` chains computations.
+cap Monad extends Functor {
+    Self.fn pure(value: Part) -> Self
+    fn flat_map<B>(f: Part -> Self of B) -> Self of B
 }
 
 // --- Optional is a Monad ---
+//
+// Optional defines some/none/fold. The compiler auto-derives
+// Functor (map via fold + some/none) and Monad (flat_map via fold)
+// from the structure of the capability.
 
-cap Optional<A> {
-    fn some(value: A) -> Self
-    fn none() -> Self
-    fn fold<R>(self, on_some: fn(A) -> R, on_none: fn() -> R) -> R
-}
-
-impl Functor<Optional> {
-    fn map<A, B>(self: Optional<A>, f: fn(A) -> B) -> Optional<B> {
-        match self {
-            Optional.some(a) => Optional.some(f(a)),
-            Optional.none() => Optional.none(),
-        }
-    }
-}
-
-impl Applicative<Optional> {
-    fn pure<A>(value: A) -> Optional<A> {
-        Optional.some(value)
-    }
-
-    fn apply<A, B>(self: Optional<fn(A) -> B>, arg: Optional<A>) -> Optional<B> {
-        match self {
-            Optional.some(f) => Functor.map(arg, f),
-            Optional.none() => Optional.none(),
-        }
-    }
-}
-
-impl Monad<Optional> {
-    fn flat_map<A, B>(self: Optional<A>, f: fn(A) -> Optional<B>) -> Optional<B> {
-        match self {
-            Optional.some(a) => f(a),
-            Optional.none() => Optional.none(),
-        }
-    }
+cap Optional extends Monad {
+    Self.fn some(value: Part) -> Self
+    Self.fn none -> Self
+    fn fold<R>(on_some: Part -> R, on_none: () -> R) -> R
 }
 
 // --- Generic monadic functions ---
 
-// `M is Monad for <_>` — M is a named alias for a type constructor
-// with the Monad capability. The `for <_>` indicates it takes one
-// type parameter (it's a * -> * kind).
-fn when<M is Monad for <_>>(condition: bool, action: M<()>) -> M<()> {
+// `M is Monad` — M is a type constructor satisfying Monad.
+// `M of ()` applies M to the unit type.
+fn when(condition: bool, action: M is Monad of ()) -> M of () {
     if condition {
         action
     } else {
-        Applicative.pure(())
+        M.pure(())
     }
 }
 
-fn sequence<M is Monad for <_>, A>(list: is List<M<A>>) -> M<is List<A>> {
+fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A) {
     match list {
         List.cons(head, tail) => do {
             a <- head
             rest <- sequence(tail)
-            Applicative.pure(List.cons(a, rest))
+            M.pure(List.cons(a, rest))
         },
-        List.nil() => Applicative.pure(List.nil()),
+        List.nil() => M.pure(List.nil()),
     }
 }
 
-fn map_m<M is Monad for <_>, A, B>(list: is List<A>, f: fn(A) -> M<B>) -> M<is List<B>> {
-    sequence(map(list, f))
+fn map_m(list: is List of A, f: A -> M of B) -> (M is Monad) of (is List of B) {
+    sequence(list.map(f))
 }
 
-fn fold_m<M is Monad for <_>, A, B>(
-    list: is List<A>,
+fn fold_m(
+    list: is List of A,
     init: B,
-    f: fn(B, A) -> M<B>,
-) -> M<B> {
+    f: (B, A) -> M of B,
+) -> (M is Monad) of B {
     match list {
         List.cons(head, tail) => do {
             acc <- f(init, head)
             fold_m(tail, acc, f)
         },
-        List.nil() => Applicative.pure(init),
+        List.nil() => M.pure(init),
     }
 }
 
 // --- do notation example ---
 
-fn safe_divide(a: f64, b: f64) -> is Optional<f64> {
+fn safe_divide(a: f64, b: f64) -> is Optional of f64 {
     if b == 0.0 {
-        Optional.none()
+        Optional.none
     } else {
         Optional.some(a / b)
     }
 }
 
-fn compute() -> is Optional<f64> {
+fn compute() -> is Optional of f64 {
     // `do` desugars to flat_map chains:
     //   safe_divide(100.0, 3.0).flat_map((x) ->
     //     safe_divide(x, 2.0).flat_map((y) ->
     //       safe_divide(y, 7.0).flat_map((z) ->
-    //         Applicative.pure(z))))
+    //         Optional.pure(z))))
     do {
         x <- safe_divide(100.0, 3.0)
         y <- safe_divide(x, 2.0)
         z <- safe_divide(y, 7.0)
-        Applicative.pure(x + y + z)
+        Optional.pure(x + y + z)
     }
 }
 
-// --- Functor laws (expressed as tests) ---
+// --- Functor laws (expressed as properties) ---
 
-// These are properties, not executable tests (yet).
 // fmap id == id
 // fmap (f . g) == fmap f . fmap g
 

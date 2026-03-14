@@ -131,7 +131,7 @@ fn read_username() -> S is BoundedString(32) with Console + Fail of String {
 // Pass a cap generator as an argument.
 fn validate_with(
     value: N is Numeric,
-    constraint: fn(N, N) -> cap of N,
+    constraint: (N, N) -> cap of N,
     lo: N,
     hi: N,
 ) -> N is constraint(lo, hi) with Fail of String {

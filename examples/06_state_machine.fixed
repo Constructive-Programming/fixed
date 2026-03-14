@@ -18,40 +18,37 @@ cap Open {}
 
 // --- A door that tracks its state in the type system ---
 
-cap Door<phantom State> {
-    fn new() -> Self  // only callable as Door<Locked>.new()
-
-    // The state parameter is phantom — it exists only in the type system.
-    // The actual runtime value is just the door's data (e.g., a name).
-    fn name(self) -> String
+cap Door of (phantom State) {
+    Self.fn new -> Self  // only callable as Door of Locked .new
+    fn name -> String
 }
 
 // State transition functions — each consumes the door in one state
 // and returns it in another. Invalid transitions simply don't exist.
 
-fn unlock(door: is Door<Locked>) -> is Door<Unlocked> {
+fn unlock(door: is Door of Locked) -> is Door of Unlocked {
     // In the runtime representation, this is essentially a no-op —
     // the phantom type changes but the data is the same.
     // The compiler can optimize this to a move (or reuse in-place).
-    Door.new()  // compiler infers Door<Unlocked> from return type
+    Door.new  // compiler infers Door of Unlocked from return type
 }
 
-fn lock(door: is Door<Unlocked>) -> is Door<Locked> {
-    Door.new()
+fn lock(door: is Door of Unlocked) -> is Door of Locked {
+    Door.new
 }
 
-fn open(door: is Door<Unlocked>) -> is Door<Open> {
-    Door.new()
+fn open(door: is Door of Unlocked) -> is Door of Open {
+    Door.new
 }
 
-fn close(door: is Door<Open>) -> is Door<Unlocked> {
-    Door.new()
+fn close(door: is Door of Open) -> is Door of Unlocked {
+    Door.new
 }
 
 // This function is polymorphic over the state — it works on any door.
 // Quine's "reflection": the same type variable `S` constrains both input and output.
-fn inspect<S>(door: is Door<S>) -> String {
-    "Door: ".concat(door.name())
+fn inspect(door: is Door of S) -> String {
+    "Door: ".concat(door.name)
 }
 
 // --- A more complex example: TCP connection states ---
@@ -60,46 +57,46 @@ cap Closed {}
 cap Listening {}
 cap Established {}
 
-cap TcpSocket<phantom State> {
-    fn new(port: u16) -> Self
-    fn port(self) -> u16
+cap TcpSocket of (phantom State) {
+    Self.fn new(port: u16) -> Self
+    fn port -> u16
 }
 
-fn bind(socket: is TcpSocket<Closed>) -> is TcpSocket<Listening> {
-    TcpSocket.new(socket.port())
+fn bind(socket: is TcpSocket of Closed) -> is TcpSocket of Listening {
+    TcpSocket.new(socket.port)
 }
 
-fn accept(socket: is TcpSocket<Listening>) -> is TcpSocket<Established> {
-    TcpSocket.new(socket.port())
+fn accept(socket: is TcpSocket of Listening) -> is TcpSocket of Established {
+    TcpSocket.new(socket.port)
 }
 
-fn send(socket: is TcpSocket<Established>, data: String) -> () with Console {
-    Console.print_line("Sending on port ".concat(socket.port().show()).concat(": ").concat(data))
+fn send(socket: is TcpSocket of Established, data: String) -> () with Console {
+    Console.print_line("Sending on port ".concat(socket.port.show()).concat(": ").concat(data))
 }
 
-fn disconnect(socket: is TcpSocket<Established>) -> is TcpSocket<Closed> {
-    TcpSocket.new(socket.port())
+fn disconnect(socket: is TcpSocket of Established) -> is TcpSocket of Closed {
+    TcpSocket.new(socket.port)
 }
 
 fn main() -> () with Console {
     // Door example — these transitions are compile-time checked:
-    let door = Door.new()          // Door<Locked>
-    let door = unlock(door)         // Door<Unlocked>
-    let door = open(door)           // Door<Open>
-    let door = close(door)          // Door<Unlocked>
-    let door = lock(door)           // Door<Locked>
+    let door = Door.new              // Door of Locked
+    let door = unlock(door)           // Door of Unlocked
+    let door = open(door)             // Door of Open
+    let door = close(door)            // Door of Unlocked
+    let door = lock(door)             // Door of Locked
 
     // This would be a compile error:
-    // let door = open(door)  // ERROR: expected Door<Unlocked>, found Door<Locked>
+    // let door = open(door)  // ERROR: expected Door of Unlocked, found Door of Locked
 
     Console.print_line(inspect(door))
 
     // TCP example:
-    let socket = TcpSocket.new(8080)    // TcpSocket<Closed>
-    let listener = bind(socket)          // TcpSocket<Listening>
-    let conn = accept(listener)          // TcpSocket<Established>
+    let socket = TcpSocket.new(8080)     // TcpSocket of Closed
+    let listener = bind(socket)           // TcpSocket of Listening
+    let conn = accept(listener)           // TcpSocket of Established
     send(conn, "Hello, client!")
-    let closed = disconnect(conn)        // TcpSocket<Closed>
+    let closed = disconnect(conn)         // TcpSocket of Closed
 
-    Console.print_line("Connection on port ".concat(closed.port().show()).concat(" closed"))
+    Console.print_line("Connection on port ".concat(closed.port.show()).concat(" closed"))
 }

@@ -76,7 +76,7 @@ Because `fn -> cap` produces a regular function, cap generators compose like any
 // Pass a cap generator as an argument
 fn validate(
     value: N is Numeric,
-    constraint: fn(N, N) -> cap of N,
+    constraint: (N, N) -> cap of N,
     lo: N,
     hi: N,
 ) -> N is constraint(lo, hi) {
@@ -452,13 +452,13 @@ error[E042]: ambiguous Functor instance for Pair of (A, B)
   Pair satisfies Functor in multiple ways:
 
   Option 1 — Functor over B (right-biased, conventional):
-  │  impl Functor for Pair {
-  │      fn map<C>(f: B -> C) -> Pair of (A, C) { Pair(self.first, f(self.second)) }
+  │  cap Pair of (A, B) extends Functor {
+  │      fn map<C>(f: B -> C) -> Pair of (A, C) { Pair(first, f(second)) }
   │  }
 
   Option 2 — Functor over A (left-biased):
-  │  impl Functor for Pair {
-  │      fn map<C>(f: A -> C) -> Pair of (C, B) { Pair(f(self.first), self.second) }
+  │  cap Pair of (A, B) extends Functor {
+  │      fn map<C>(f: A -> C) -> Pair of (C, B) { Pair(f(first), second) }
   │  }
 
   hint: Option 1 is the right-biased default. Copy one of the above
@@ -576,7 +576,7 @@ Rust implementation of the front-end.
 
 ### AST node types needed
 
-- **Items**: `CapDef`, `EffectDef`, `DataDef`, `TypeAlias` (optionally with `ValueParams`), `ImplBlock`, `FnDef`, `PropDef`, `UseDecl`, `ModDecl`
+- **Items**: `CapDef`, `EffectDef`, `DataDef`, `TypeAlias` (optionally with `ValueParams`), `FnDef`, `PropDef`, `UseDecl`, `ModDecl`
 - **Cap members**: `InstanceMethod`, `StaticMethod` (the `Self.fn` distinction)
 - **Capability refs**: `IsCap` (anonymous), `NamedAlias` (`N is Numeric`), `OfApp` (`Folding of i64`), `SelfOf` (`Self of B`), `CapCall` (`between(10, 30)` — cap-generating function applied to args)
 - **Cap generation**: `CapReturnType` (`cap of N` as return type), `ValueParams` (definition-site `(min: N is Ord, max: N)`), `ValueArgs` (use-site `(10, 30)`)

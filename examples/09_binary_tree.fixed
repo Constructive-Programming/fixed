@@ -1,51 +1,50 @@
 // 09_binary_tree.fixed
-// Recursive Tree cap, fold-based traversals, Show blanket impl.
+// Recursive Tree data type, fold-based traversals, custom show function.
 //
 // Demonstrates:
-//   - Recursive sum cap with Self in two constructor positions
+//   - Recursive data type with Self in two constructor positions
 //   - Multiple traversal orders via fold
-//   - Blanket impl: Show for any Tree<A is Show>
+//   - Custom display function (compiler auto-derives Show, but we want a specific format)
 //   - Building a binary search tree (insert, search)
 //   - Named cap alias: `A is Ord` constrains A across params
 //   - The compiler handles all allocation decisions for the recursive structure
 
 use std.io.Console
 
-cap Tree<A> {
-    fn leaf(value: A) -> Self
-    fn branch(left: Self, value: A, right: Self) -> Self
-    fn empty() -> Self
-    fn fold<R>(self, on_leaf: fn(A) -> R, on_branch: fn(R, A, R) -> R, on_empty: fn() -> R) -> R
+data Tree of A {
+    Leaf(value: A),
+    Branch(left: Tree of A, value: A, right: Tree of A),
+    Empty,
 }
 
 // --- Traversals ---
 
 // In-order: left, root, right (gives sorted order for BST)
-fn in_order<A>(tree: is Tree<A>) -> is List<A> {
+fn in_order(tree: Tree of A) -> is List of A {
     match tree {
-        Tree.empty() => List.nil(),
-        Tree.leaf(v) => List.cons(v, List.nil()),
-        Tree.branch(left, v, right) =>
+        Tree.Empty => List.nil(),
+        Tree.Leaf(v) => List.cons(v, List.nil()),
+        Tree.Branch(left, v, right) =>
             concat(in_order(left), List.cons(v, in_order(right))),
     }
 }
 
 // Pre-order: root, left, right
-fn pre_order<A>(tree: is Tree<A>) -> is List<A> {
+fn pre_order(tree: Tree of A) -> is List of A {
     match tree {
-        Tree.empty() => List.nil(),
-        Tree.leaf(v) => List.cons(v, List.nil()),
-        Tree.branch(left, v, right) =>
+        Tree.Empty => List.nil(),
+        Tree.Leaf(v) => List.cons(v, List.nil()),
+        Tree.Branch(left, v, right) =>
             List.cons(v, concat(pre_order(left), pre_order(right))),
     }
 }
 
 // Depth of the tree
-fn depth<A>(tree: is Tree<A>) -> u64 {
+fn depth(tree: Tree of A) -> u64 {
     match tree {
-        Tree.empty() => 0,
-        Tree.leaf(_) => 1,
-        Tree.branch(left, _, right) => {
+        Tree.Empty => 0,
+        Tree.Leaf(_) => 1,
+        Tree.Branch(left, _, right) => {
             let ld = depth(left)
             let rd = depth(right)
             1 + if ld > rd { ld } else { rd }
@@ -54,11 +53,11 @@ fn depth<A>(tree: is Tree<A>) -> u64 {
 }
 
 // Count nodes
-fn size<A>(tree: is Tree<A>) -> u64 {
+fn size(tree: Tree of A) -> u64 {
     match tree {
-        Tree.empty() => 0,
-        Tree.leaf(_) => 1,
-        Tree.branch(left, _, right) => 1 + size(left) + size(right),
+        Tree.Empty => 0,
+        Tree.Leaf(_) => 1,
+        Tree.Branch(left, _, right) => 1 + size(left) + size(right),
     }
 }
 
@@ -67,31 +66,31 @@ fn size<A>(tree: is Tree<A>) -> u64 {
 // `A is Ord` — named alias constraining A to have the Ord capability.
 // Both `tree` and `value` share the same A, ensuring the element type
 // matches what's already in the tree.
-fn insert<A is Ord>(tree: is Tree<A>, value: A) -> is Tree<A> {
+fn insert(tree: Tree of (A is Ord), value: A) -> Tree of A {
     match tree {
-        Tree.empty() => Tree.leaf(value),
-        Tree.leaf(v) => {
+        Tree.Empty => Tree.Leaf(value),
+        Tree.Leaf(v) => {
             match value.compare(v) {
-                Ordering.less() => Tree.branch(Tree.leaf(value), v, Tree.empty()),
-                Ordering.equal() => Tree.leaf(v),  // no duplicates
-                Ordering.greater() => Tree.branch(Tree.empty(), v, Tree.leaf(value)),
+                Ordering.less() => Tree.Branch(Tree.Leaf(value), v, Tree.Empty),
+                Ordering.equal() => Tree.Leaf(v),  // no duplicates
+                Ordering.greater() => Tree.Branch(Tree.Empty, v, Tree.Leaf(value)),
             }
         },
-        Tree.branch(left, v, right) => {
+        Tree.Branch(left, v, right) => {
             match value.compare(v) {
-                Ordering.less() => Tree.branch(insert(left, value), v, right),
-                Ordering.equal() => Tree.branch(left, v, right),
-                Ordering.greater() => Tree.branch(left, v, insert(right, value)),
+                Ordering.less() => Tree.Branch(insert(left, value), v, right),
+                Ordering.equal() => Tree.Branch(left, v, right),
+                Ordering.greater() => Tree.Branch(left, v, insert(right, value)),
             }
         },
     }
 }
 
-fn search<A is Ord>(tree: is Tree<A>, target: A) -> bool {
+fn search(tree: Tree of (A is Ord), target: A) -> bool {
     match tree {
-        Tree.empty() => false,
-        Tree.leaf(v) => v == target,
-        Tree.branch(left, v, right) => {
+        Tree.Empty => false,
+        Tree.Leaf(v) => v == target,
+        Tree.Branch(left, v, right) => {
             match target.compare(v) {
                 Ordering.less() => search(left, target),
                 Ordering.equal() => true,
@@ -102,42 +101,42 @@ fn search<A is Ord>(tree: is Tree<A>, target: A) -> bool {
 }
 
 // Build a BST from a list
-fn from_list<A is Ord>(items: is List<A>) -> is Tree<A> {
-    fold_left(items, Tree.empty(), (tree, item) -> insert(tree, item))
+fn from_list(items: is List of (A is Ord)) -> Tree of A {
+    fold_left(items, Tree.Empty, (tree, item) -> insert(tree, item))
 }
 
 // --- Fold-based map (structural, not BST-preserving) ---
 
-fn map_tree<A, B>(tree: is Tree<A>, f: fn(A) -> B) -> is Tree<B> {
+fn map_tree(tree: Tree of A, f: A -> B) -> Tree of B {
     tree.fold(
-        (v) -> Tree.leaf(f(v)),
-        (left, v, right) -> Tree.branch(left, f(v), right),
-        () -> Tree.empty(),
+        (v) -> Tree.Leaf(f(v)),
+        (left, v, right) -> Tree.Branch(left, f(v), right),
+        () -> Tree.Empty,
     )
 }
 
-// --- Show blanket implementation ---
+// --- Custom show function ---
+// The compiler auto-derives Show for Tree when Part is Show,
+// but we want a specific parenthesized format.
 
-impl<A is Show> Show for is Tree<A> {
-    fn show(self) -> String {
-        match self {
-            Tree.empty() => ".",
-            Tree.leaf(v) => v.show(),
-            Tree.branch(left, v, right) =>
-                "(".concat(left.show())
-                   .concat(" ")
-                   .concat(v.show())
-                   .concat(" ")
-                   .concat(right.show())
-                   .concat(")"),
-        }
+fn show_tree(tree: Tree of (A is Show)) -> String {
+    match tree {
+        Tree.Empty => ".",
+        Tree.Leaf(v) => v.show(),
+        Tree.Branch(left, v, right) =>
+            "(".concat(show_tree(left))
+               .concat(" ")
+               .concat(v.show())
+               .concat(" ")
+               .concat(show_tree(right))
+               .concat(")"),
     }
 }
 
 fn main() -> () with Console {
     let tree = from_list([5, 3, 7, 1, 4, 6, 8, 2])
 
-    Console.print_line("Tree: ".concat(tree.show()))
+    Console.print_line("Tree: ".concat(show_tree(tree)))
     Console.print_line("In-order: ".concat(in_order(tree.clone()).show()))
     Console.print_line("Pre-order: ".concat(pre_order(tree.clone()).show()))
     Console.print_line("Depth: ".concat(depth(tree.clone()).show()))
@@ -148,5 +147,5 @@ fn main() -> () with Console {
 
     // Map: double all values (structural, not BST-preserving)
     let doubled = map_tree(tree, (x) -> x * 2)
-    Console.print_line("Doubled: ".concat(doubled.show()))
+    Console.print_line("Doubled: ".concat(show_tree(doubled)))
 }
