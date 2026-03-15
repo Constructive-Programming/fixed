@@ -1,17 +1,19 @@
-// 11_interpreter.fixed
+// 09_interpreter.fixed
 // A mini expression language interpreter.
 //
 // Demonstrates:
-//   - Deep pattern matching on a multi-variant recursive sum cap
+//   - fold-based evaluation on a capability (Expr) — no pattern matching on caps
+//   - `satisfies` mapping concrete AST nodes to abstract Expr constructors
 //   - Mutual recursion (Expr references itself)
 //   - Effects for runtime errors (EvalError)
-//   - Combining pattern matching with effects
-//   - fold-based pretty printing (no pattern matching needed)
+//   - Combining fold with effects
+//   - fold-based pretty printing
+//   - match only on data types (List), fold for capabilities (Expr, Optional)
 //   - A non-trivial program showing Fixed's expressiveness
 
 use std.io.Console
 
-// --- The expression AST ---
+// --- The expression AST (capability declares requirements) ---
 
 cap Expr {
     Self.fn lit(value: f64) -> Self
@@ -34,12 +36,44 @@ cap Expr {
     ) -> R
 }
 
+// --- Concrete AST data type satisfies Expr ---
+
+data AstNode {
+    Literal(value: f64),
+    Variable(name: String),
+    Sum(left: AstNode, right: AstNode),
+    Product(left: AstNode, right: AstNode),
+    Negate(inner: AstNode),
+    LetBinding(name: String, value: AstNode, body: AstNode),
+    Conditional(cond: AstNode, then_branch: AstNode, else_branch: AstNode),
+    FnCall(func_name: String, args: is List of AstNode),
+}
+
+AstNode satisfies Expr {
+    Literal as lit
+    Variable as var
+    Sum as add
+    Product as mul
+    Negate as neg
+    LetBinding as let_in
+    Conditional as if_then
+    FnCall as call
+}
+
 // --- The environment (variable bindings) ---
 
 cap Env {
     Self.fn empty -> Self
     fn bind(name: String, value: f64) -> Self
     fn lookup(name: String) -> is Optional of f64
+}
+
+// --- Concrete environment ---
+
+data VarMap { VarMap(bindings: is List of (is Pair of (String, f64))) }
+
+VarMap satisfies Env {
+    VarMap as empty
 }
 
 // --- Built-in function registry ---
@@ -57,18 +91,18 @@ fn default_builtins() -> is Builtins {
     fn eval_builtin(name: String, args: is List of f64) -> is Optional of f64 {
         if name == "sqrt" {
             match args {
-                List.cons(x, List.nil()) => Optional.some(builtin.sqrt(x)),
+                List.Cons(x, List.Nil()) => Optional.some(builtin.sqrt(x)),
                 _ => Optional.none,
             }
         } else if name == "abs" {
             match args {
-                List.cons(x, List.nil()) =>
+                List.Cons(x, List.Nil()) =>
                     Optional.some(if x < 0.0 { 0.0 - x } else { x }),
                 _ => Optional.none,
             }
         } else if name == "max" {
             match args {
-                List.cons(a, List.cons(b, List.nil())) =>
+                List.Cons(a, List.Cons(b, List.Nil())) =>
                     Optional.some(if a > b { a } else { b }),
                 _ => Optional.none,
             }
@@ -84,54 +118,35 @@ effect EvalError {
     fn eval_error(message: String) -> !
 }
 
+// Expr is a capability — we cannot pattern match on it.
+// Instead, fold with R = (is Env -> f64 with EvalError).
+// Each callback returns a *deferred* computation from env to value,
+// allowing lazy evaluation (e.g., if_then doesn't evaluate both branches).
 fn eval(expr: is Expr, env: is Env) -> f64 with EvalError {
-    match expr {
-        Expr.lit(value) =>
-            value,
-
-        Expr.var(name) =>
-            match env.lookup(name) {
-                Optional.some(v) => v,
-                Optional.none() => EvalError.eval_error(
-                    "undefined variable: ".concat(name)
-                ),
-            },
-
-        Expr.add(left, right) =>
-            eval(left, env) + eval(right, env),
-
-        Expr.mul(left, right) =>
-            eval(left, env) * eval(right, env),
-
-        Expr.neg(inner) =>
-            0.0 - eval(inner, env),
-
-        Expr.let_in(name, value_expr, body) => {
-            let value = eval(value_expr, env)
-            let new_env = env.clone().bind(name, value)
-            eval(body, new_env)
+    expr.fold(
+        (v) -> (env) -> v,
+        (name) -> (env) -> env.lookup(name).fold(
+            (v) -> v,
+            () -> EvalError.eval_error("undefined variable: ".concat(name)),
+        ),
+        (left_fn, right_fn) -> (env) -> left_fn(env) + right_fn(env),
+        (left_fn, right_fn) -> (env) -> left_fn(env) * right_fn(env),
+        (inner_fn) -> (env) -> 0.0 - inner_fn(env),
+        (name, val_fn, body_fn) -> (env) -> {
+            let v = val_fn(env)
+            body_fn(env.bind(name, v))
         },
-
-        Expr.if_then(cond, then_branch, else_branch) => {
-            let c = eval(cond, env)
-            // Nonzero is truthy
-            if c != 0.0 {
-                eval(then_branch, env)
-            } else {
-                eval(else_branch, env)
-            }
+        (cond_fn, then_fn, else_fn) -> (env) -> {
+            if cond_fn(env) != 0.0 { then_fn(env) } else { else_fn(env) }
         },
-
-        Expr.call(func_name, arg_exprs) => {
-            let arg_values = map(arg_exprs, (arg) -> eval(arg, env))
-            match default_builtins().eval_builtin(func_name, arg_values) {
-                Optional.some(result) => result,
-                Optional.none() => EvalError.eval_error(
-                    "unknown function: ".concat(func_name)
-                ),
-            }
+        (func_name, arg_fns) -> (env) -> {
+            let args = map(arg_fns, (f) -> f(env))
+            default_builtins().eval_builtin(func_name, args).fold(
+                (result) -> result,
+                () -> EvalError.eval_error("unknown function: ".concat(func_name)),
+            )
         },
-    }
+    )(env)
 }
 
 // --- Pretty printer (using fold — no pattern matching!) ---

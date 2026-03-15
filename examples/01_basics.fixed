@@ -1,20 +1,27 @@
-// 02_fibonacci.fixed
-// Recursion, numeric capabilities, Console output.
+// 01_basics.fixed
+// Minimal programs: entry point, Console effect, string operations, numeric
+// capabilities, and named/anonymous capability aliases.
 //
 // Demonstrates:
-//   - Recursive functions (no special syntax needed)
-//   - Capability syntax: `is Numeric` declares what a value can do
-//   - Named capability aliases: `N is Numeric` lets you reuse `N` to
-//     constrain multiple parameters to the *same* type
-//   - Anonymous capabilities: `is Numeric` when you don't need to
-//     relate parameters — the compiler infers the concrete type
+//   - Entry point convention (fn main)
+//   - The Console effect for I/O
+//   - String concatenation
+//   - Capability syntax: `N is Numeric` (named alias) and `is Numeric` (anonymous)
+//   - Named capability aliases let you constrain multiple params to the same type
 //   - Numeric literal polymorphism: `0` and `1` satisfy any `is Numeric`
-//   - Concrete types like `u64` are just capabilities the compiler
-//     already knows about — there is no distinction at the syntax level
+//   - Concrete types like `u64` are just well-known capabilities
 //   - if/else as sugar for bool.fold
 //   - Show capability for converting values to strings
 
 use std.io.Console
+
+// --- Hello, world ---
+
+fn greet(name: String) -> () with Console {
+    Console.print_line("Hello, ".concat(name).concat("!"))
+}
+
+// --- Fibonacci ---
 
 // `N is Numeric` introduces a named capability alias `N`.
 // All parameters typed `N` must share the same concrete type.
@@ -54,6 +61,11 @@ fn print_fibs(count: u64) -> () with Console {
 }
 
 fn main() -> () with Console {
+    Console.print_line("What is your name?")
+    let name = Console.read_line()
+    greet(name)
+
+    Console.print_line("")
     Console.print_line("First 20 Fibonacci numbers:")
     print_fibs(20)
 }

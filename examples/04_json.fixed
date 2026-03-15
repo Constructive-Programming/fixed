@@ -1,0 +1,103 @@
+// 04_json.fixed
+// Recursive data type for a JSON AST, deep pattern matching.
+//
+// Demonstrates:
+//   - A 6-variant data type (Json) — concrete, matchable variants
+//   - Recursive structure (Json contains List of Json)
+//   - Deep/nested pattern matching on data types
+//   - Show implementation for recursive types
+//   - Effect-based parsing errors
+//   - fold for capability destruction (Optional), match for data destruction (Json, List)
+
+use std.io.Console
+
+// --- Json is a data type: matchable, with capitalized constructors ---
+
+data Json {
+    Null,
+    Bool(value: bool),
+    Number(value: f64),
+    String(value: String),
+    Array(elements: is List of Json),
+    Object(fields: is List of (is Pair of (String, Json))),
+}
+
+// Pretty-print JSON with indentation
+fn pretty(json: Json, indent: u64) -> String {
+    let pad = repeat_str(" ", indent)
+    match json {
+        Json.Null => "null",
+        Json.Bool(b) => b.show(),
+        Json.Number(n) => n.show(),
+        Json.String(s) => "\"".concat(s).concat("\""),
+        Json.Array(elements) => {
+            if length(elements) == 0 {
+                "[]"
+            } else {
+                let inner = map(elements, (elem) -> {
+                    repeat_str(" ", indent + 2).concat(pretty(elem, indent + 2))
+                })
+                "[\n".concat(join(inner, ",\n")).concat("\n").concat(pad).concat("]")
+            }
+        },
+        Json.Object(fields) => {
+            if length(fields) == 0 {
+                "{}"
+            } else {
+                let inner = map(fields, (field) -> {
+                    let Pair { first: key, second: value } = field
+                    repeat_str(" ", indent + 2)
+                        .concat("\"").concat(key).concat("\": ")
+                        .concat(pretty(value, indent + 2))
+                })
+                "{\n".concat(join(inner, ",\n")).concat("\n").concat(pad).concat("}")
+            }
+        },
+    }
+}
+
+// Look up a key in a JSON object
+fn get_field(json: Json, key: String) -> is Optional of Json {
+    match json {
+        Json.Object(fields) => {
+            find(fields, (pair) -> pair.first() == key)
+                |> map_optional((pair) -> pair.second())
+        },
+        _ => Optional.none,
+    }
+}
+
+// Navigate a path like ["users", "0", "name"]
+fn navigate(json: Json, path: is List of String) -> is Optional of Json {
+    match path {
+        List.Cons(key, rest) => {
+            get_field(json, key).fold(
+                (child) -> navigate(child, rest),
+                () -> Optional.none,
+            )
+        },
+        List.Nil() => Optional.some(json),
+    }
+}
+
+fn main() -> () with Console {
+    // Build a JSON value
+    let user = Json.Object([
+        ("name", Json.String("Alice")),
+        ("age", Json.Number(30.0)),
+        ("active", Json.Bool(true)),
+        ("tags", Json.Array([
+            Json.String("admin"),
+            Json.String("user"),
+        ])),
+        ("address", Json.Null),
+    ])
+
+    Console.print_line(pretty(user, 0))
+
+    // Navigate into the structure
+    navigate(user, ["tags"]).fold(
+        (tags) -> Console.print_line("Tags: ".concat(pretty(tags, 0))),
+        () -> Console.print_line("No tags found"),
+    )
+}

@@ -1,11 +1,11 @@
-// 13_geometry.fixed
+// 10_geometry.fixed
 // Type aliases and data declarations for geometry operations.
 //
 // Demonstrates:
-//   - `data` for closed sets of variants (Shape, Color)
-//   - `type` aliases for naming cap bundles (Point, Transformable)
+//   - `data` for closed sets of variants (Shape)
+//   - `type` aliases for naming cap bundles (Point)
 //   - `data` with cap-constrained fields (N is Numeric)
-//   - Recursive functions over data types
+//   - Functions over data types with pattern matching
 //   - Mixing data types with caps (Show, Numeric)
 //   - Three geometry operations: area, perimeter, bounding box
 

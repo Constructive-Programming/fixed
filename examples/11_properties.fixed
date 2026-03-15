@@ -1,0 +1,302 @@
+// 11_properties.fixed
+// Properties as lightweight theorem proving, and refinement types via
+// functions that generate capabilities.
+//
+// Demonstrates:
+//   - `prop` declarations inside capabilities and data types
+//   - Invariants the compiler checks (statically or via testing)
+//   - `forall` quantification over values
+//   - `implies` for conditional properties
+//   - Properties as machine-checked documentation
+//   - Props composing through `extends`
+//   - Postconditions on functions
+//   - Partial satisfaction with `impossible`
+//   - `fn -> cap`: functions that return capabilities (refinement types)
+//   - Refinement types that constrain without wrapping (zero runtime cost)
+//   - First-class cap generators: pass, compose, return them
+//   - `cap Name(params)` as sugar for `fn name(params) -> cap`
+//   - `type` aliases with cap-generating functions
+//   - Contrast: data Bounded (wrapper) vs fn->cap (refinement)
+
+use std.io.Console
+
+// =========================================================================
+// Part 1: Properties on capabilities
+// =========================================================================
+
+// A Sorted collection carries a proof that its elements are in order.
+cap Sorted of (Part is Ord) extends Sequencing {
+    prop sorted: fold(true, (acc, prev, curr) -> acc && prev <= curr)
+}
+
+// A NonEmpty collection guarantees at least one element.
+cap NonEmpty extends Sequencing + Sized {
+    prop non_empty: size > 0
+}
+
+// A Stack with properties relating push/pop to size.
+cap Stack extends Sequencing + Sized {
+    fn push(value: Part) -> Self
+    fn pop -> Self
+
+    prop push_increments: forall (s: Self, x: Part) ->
+        s.push(x).size == s.size + 1
+
+    prop pop_decrements: forall (s: Self) ->
+        s.size > 0 implies s.pop().size == s.size - 1
+
+    prop push_pop_identity: forall (s: Self, x: Part) ->
+        s.push(x).pop == s
+}
+
+// =========================================================================
+// Part 2: Properties on data types
+// =========================================================================
+
+// A bounded integer — value is always within [Lo, Hi].
+// This is the *data wrapper* approach: the bounds are part of the structure.
+// Contrast with the *refinement* approach (fn->cap) in Part 5 below.
+data Bounded of (N is Numeric + Ord, Lo = 16, hi = 24) {
+    Bounded(value: N),
+
+    prop in_range: forall (b: Self) ->
+        b.lo <= b.value && b.value <= b.hi
+}
+
+// =========================================================================
+// Part 3: Partial satisfaction with `impossible`
+// =========================================================================
+
+// u64 is always present — it can never be "none"
+u64 satisfies Optional of Self {
+    Self as some
+    impossible as none
+}
+// Now `u64 is Optional` means: u64 is always the "some" case.
+// Any code path that would call Optional.none on a u64 is a compile error.
+
+// A non-empty list can never be empty
+data NonEmptyList of A { Cons(head: A, tail: is List of A) }
+
+NonEmptyList satisfies Sequencing {
+    Cons as cons
+    impossible as empty
+}
+
+// =========================================================================
+// Part 4: Properties as postconditions on functions
+// =========================================================================
+
+// sort returns a Sorted collection of the same size
+fn sort(collection: C is Sequencing + Sized of (A is Ord)) -> C is Sorted {
+    prop result_same_size: result.size == collection.size
+    collection.fold_right(C.empty, (x, acc) -> insert_sorted(acc, x))
+}
+
+// insert into a sorted collection preserves sortedness
+fn insert_sorted(
+    sorted: C is Sorted of (A is Ord),
+    value: A
+) -> C is Sorted {
+    prop grows_by_one: result.size == sorted.size + 1
+    sorted.head.fold(
+        (h) ->
+            if value <= h {
+                C.cons(value, sorted)
+            } else {
+                C.cons(h, insert_sorted(sorted.tail, value))
+            },
+        () -> C.cons(value, C.empty),
+    )
+}
+
+// clamp a value into a Bounded range
+fn clamp_bounded(value: N is Numeric + Ord, lo: N, hi: N) -> Bounded of N {
+    prop lo_le_hi: lo <= hi
+    if value < lo {
+        Bounded.Bounded(lo, lo, hi)
+    } else if value > hi {
+        Bounded.Bounded(hi, lo, hi)
+    } else {
+        Bounded.Bounded(value, lo, hi)
+    }
+}
+
+// =========================================================================
+// Part 5: Properties composing through `extends`
+// =========================================================================
+
+// SortedNonEmpty combines both invariants
+cap SortedNonEmpty of (Part is Ord) extends Sorted + NonEmpty {
+    // Both `sorted` and `non_empty` props are inherited
+}
+
+fn median(collection: C is SortedNonEmpty of (N is Numeric)) -> N {
+    let mid = collection.size / 2
+    collection.get(mid).fold(
+        (v) -> v,
+        () -> unreachable  // compiler knows this via `non_empty`
+    )
+}
+
+// =========================================================================
+// Part 6: Refinement types — functions that generate capabilities
+// =========================================================================
+
+// A function that returns a capability. The returned cap constrains
+// values of type N to lie within [min, max].
+fn between(min: N is Ord, max: N) -> cap of N {
+    prop in_range: min <= Self && Self <= max
+}
+
+fn positive() -> cap of (N is Numeric + Ord) {
+    prop positive: Self > 0
+}
+
+fn non_zero() -> cap of (N is Numeric) {
+    prop non_zero: Self != 0
+}
+
+fn max_length(limit: u64) -> cap extends Sized {
+    prop bounded: size <= limit
+}
+
+fn min_length(limit: u64) -> cap extends Sized {
+    prop bounded: size >= limit
+}
+
+fn multiple_of(divisor: N is Numeric) -> cap of N {
+    prop multiple: Self % divisor == 0
+}
+
+// Sugar form — `cap Name(params)` desugars to `fn name(params) -> cap`
+cap Between(min: N is Ord, max: N) of N {
+    prop in_range: min <= Self && Self <= max
+}
+
+// =========================================================================
+// Part 7: Type aliases with cap-generating functions
+// =========================================================================
+
+type Port = u16 + between(1, 65535)
+type Percentage = f64 + between(0.0, 100.0)
+type Username = String + min_length(3) + max_length(32)
+type EvenNumber = i64 + multiple_of(2)
+
+// Parameterized type aliases
+type PortRange(min: u16, max: u16) = u16 + between(min, max)
+type BoundedString(max: u64) = String + max_length(max)
+type Clamped(lo: N is Numeric + Ord, hi: N) = N + between(lo, hi)
+
+// =========================================================================
+// Part 8: Using cap generators in function signatures
+// =========================================================================
+
+fn validate_age(age: N is Numeric + between(0, 150)) -> N {
+    age
+}
+
+fn clamp(value: N is Numeric + Ord, lo: N, hi: N) -> N is between(lo, hi) {
+    if value < lo { lo }
+    else if value > hi { hi }
+    else { value }
+}
+
+fn safe_divide(
+    numerator: N is Numeric,
+    denominator: N is non_zero(),
+) -> N {
+    numerator / denominator
+}
+
+fn sum_bounded(
+    numbers: C is Folding of (N is Numeric + between(0, 100)),
+) -> N {
+    numbers.fold(0, (acc, x) -> acc + x)
+}
+
+fn abs(n: N is Numeric + Ord) -> N is positive() {
+    if n < 0 { 0 - n } else { n }
+}
+
+fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String {
+    let n = parse_u16(s)
+    if n < 1024 { Fail.fail("port too low") }
+    else if n > 49151 { Fail.fail("port too high") }
+    else { n }
+}
+
+fn read_username() -> S is BoundedString(32) with Console + Fail of String {
+    let name = Console.read_line()
+    if name.size > 32 { Fail.fail("too long") }
+    else { name }
+}
+
+// =========================================================================
+// Part 9: First-class cap generators
+// =========================================================================
+
+fn validate_with(
+    value: N is Numeric,
+    constraint: (N, N) -> cap of N,
+    lo: N,
+    hi: N,
+) -> N is constraint(lo, hi) with Fail of String {
+    if value < lo { Fail.fail("too low") }
+    else if value > hi { Fail.fail("too high") }
+    else { value }
+}
+
+fn strict_between(min: N is Ord, max: N) -> cap of N {
+    prop in_range: min < Self && Self < max    // strict inequality
+}
+
+fn bounded_positive(lo: N is Numeric + Ord, hi: N) -> cap of N {
+    prop lower: lo <= Self
+    prop upper: Self <= hi
+    prop pos: Self > 0
+}
+
+// =========================================================================
+// Main
+// =========================================================================
+
+fn main() -> () with Console {
+    // --- Properties ---
+    let numbers = [5, 2, 8, 1, 9, 3]
+    let sorted = sort(numbers)
+    Console.print_line("Sorted: ".concat(sorted.show()))
+
+    let bounded = clamp_bounded(42, 0, 10)
+    Console.print_line("Clamped 42 to [0,10]: ".concat(bounded.value.show()))
+
+    let bounded2 = clamp_bounded(-5, 0, 10)
+    Console.print_line("Clamped -5 to [0,10]: ".concat(bounded2.value.show()))
+
+    let nat5 = Nat.Succ(Nat.Succ(Nat.Succ(Nat.Succ(Nat.Succ(Nat.Zero)))))
+    Console.print_line("Nat 5 to u64: ".concat(nat5.fold(() -> 0, (n) -> n + 1).show()))
+
+    // --- Refinement types ---
+    let age = validate_age(25)
+    Console.print_line("Valid age: ".concat(age.show()))
+
+    let clamped = clamp(42, 0, 10)
+    Console.print_line("Clamped 42 to [0,10]: ".concat(clamped.show()))
+
+    let result = safe_divide(100, 7)
+    Console.print_line("100 / 7 = ".concat(result.show()))
+
+    let positive_val = abs(-5)
+    Console.print_line("abs(-5) = ".concat(positive_val.show()))
+
+    // Pass a cap generator as an argument
+    handle validate_with(42, between, 0, 100) {
+        Fail.fail(e) => Console.print_line("Error: ".concat(e)),
+        return(v) => Console.print_line("Validated: ".concat(v.show())),
+    }
+
+    handle validate_with(50, strict_between, 0, 100) {
+        Fail.fail(e) => Console.print_line("Error: ".concat(e)),
+        return(v) => Console.print_line("Strict validated: ".concat(v.show())),
+    }
+}

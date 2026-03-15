@@ -1,9 +1,9 @@
-// 03_linked_list.fixed
+// 02_collections.fixed
 // Capability-based collections: the programmer declares what they need,
 // the compiler chooses the concrete data structure.
 //
 // Demonstrates:
-//   - Fine-grained capability decomposition (Sequencing, Functor, Folding,
+//   - Fine-grained capability decomposition (Sequencing, Folding,
 //     Filtering, Optional, RandomAccess, Sized)
 //   - The "Kill Data" philosophy in action: no List, Vec, Array, or LinkedList
 //     type appears anywhere — only capabilities describing what the collection
@@ -14,6 +14,7 @@
 //   - `type` aliases for naming common capability bundles
 //   - `data` declarations for when concrete algebraic types are strictly needed
 //   - Standard library capabilities vs user-defined ones
+//   - Functor is defined canonically in 06_functor_monad.fixed; used here
 
 use std.io.Console
 
@@ -33,10 +34,9 @@ cap Sequencing {
     Self.fn cons(h: Part, t: Self) -> Self
 }
 
-// --- Functor: structure-preserving transformation ---
-cap Functor {
-    fn map(f: Part -> B) -> Self of B
-}
+// Functor is defined in 06_functor_monad.fixed as the canonical version.
+// In a real program: `use std.collections.Functor`
+// For this example, we reference it without redefining.
 
 // --- Folding: structural reduction ---
 cap Folding {
@@ -55,16 +55,18 @@ cap Empty {
 }
 
 // --- Optional: a value that may or may not exist ---
+// This is a simplified, collection-oriented Optional (extends Functor + Folding).
+// The canonical sum-type Optional (with some/none/fold) is in 03_option_result.fixed.
 cap Optional extends Functor + Folding {
     fn isDefined -> Boolean
-    fn orElse(e: Part) -> Part
+    fn orElse(e: Self) -> Self
 }
 
 // --- Sized: the collection knows its length ---
 // This is a key signal to the compiler. A collection that is Sized
 // can be backed by a contiguous array. Without Sized, the compiler
 // may prefer a linked structure that doesn't track length.
-cap Sized of (Part, Size is Numeric) extends Optional of Part {
+cap Sized of (Part, Size is Numeric) {
     fn size -> Size
 }
 
@@ -100,6 +102,8 @@ type Collection = Sequencing + Functor + Folding + Filtering + Empty
 // variants exist, what fields they carry) is programmer-defined.
 // A `data` type automatically satisfies capabilities that its shape
 // supports (e.g., a data with multiple variants gets Folding for free).
+// For capabilities with Self.fn constructors, explicit `satisfies`
+// declarations map data constructors to capability constructors by name.
 // =========================================================================
 
 // Simple enumeration — all unit variants
@@ -108,14 +112,6 @@ data Direction { North, South, East, West }
 // GADT with mixed variants — some carry data, some don't.
 // `N is Numeric` constrains all three fields to the same numeric type.
 data Color { Red, Green, Blue, RGB(red: N is Numeric, green: N, blue: N) }
-
-// Recursive data — the compiler handles allocation just like with capabilities
-data Expr {
-    Lit(value: f64),
-    Add(left: Expr, right: Expr),
-    Mul(left: Expr, right: Expr),
-    Neg(inner: Expr),
-}
 
 // Phantom-typed data — the Tag parameter exists only at compile time
 data Tagged of (phantom Tag, Value) {
@@ -185,9 +181,9 @@ fn binary_search(
             let mid = low + (high - low) / 2
             sorted.get(mid).map { value ->
                 match target.compare(value) {
-                    Ordered.equal()   => mid,
-                    Ordered.less()    => go(sorted, target, low, mid),
-                    Ordered.greater() => go(sorted, target, mid + 1, high),
+                    Ordering.Equal   => mid,
+                    Ordering.Less    => go(sorted, target, low, mid),
+                    Ordering.Greater => go(sorted, target, mid + 1, high),
                 }
             }
         }
@@ -238,17 +234,6 @@ fn color_to_rgb(c: Color) -> Color {
     }
 }
 
-// Data types automatically satisfy capabilities their shape supports.
-// Expr is recursive with multiple constructors, so it satisfies Folding.
-fn eval(expr: Expr) -> f64 {
-    match expr {
-        Expr.Lit(v)      => v,
-        Expr.Add(l, r)   => eval(l) + eval(r),
-        Expr.Mul(l, r)   => eval(l) * eval(r),
-        Expr.Neg(inner)  => 0.0 - eval(inner),
-    }
-}
-
 fn main() -> () with Console {
     // `numbers` satisfies Sequencing + Functor + Folding + Filtering + Sized
     // The compiler chooses a representation based on how `numbers` is used
@@ -276,12 +261,11 @@ fn main() -> () with Console {
 
     // Uses ArrayLike (type alias) — forces contiguous representation
     let sorted = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
-    match binary_search(sorted, 7) {
-        Optional.some(idx) =>
-            Console.print_line("Found 7 at index ".concat(idx.show())),
-        Optional.none() =>
-            Console.print_line("7 not found"),
-    }
+    let search_msg = binary_search(sorted, 7).fold(
+        "7 not found",
+        (_, idx) -> "Found 7 at index ".concat(idx.show()),
+    )
+    Console.print_line(search_msg)
 
     // Uses ArrayLike via take
     let first_three = take(sorted, 3)
@@ -299,8 +283,4 @@ fn main() -> () with Console {
         _ =>
             Console.print_line("Named color: ".concat(color_to_rgb(c).show())),
     }
-
-    // Expr data type — concrete when you need a closed set of variants
-    let expr = Expr.Add(Expr.Lit(3.0), Expr.Mul(Expr.Lit(4.0), Expr.Lit(5.0)))
-    Console.print_line("3 + 4*5 = ".concat(eval(expr).show()))
 }

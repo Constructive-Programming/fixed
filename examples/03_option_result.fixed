@@ -1,51 +1,76 @@
-// 04_option_result.fixed
-// Optional and Result capabilities, Fail effect interplay.
+// 03_option_result.fixed
+// Optional and Result capabilities, Fail effect interplay,
+// and the `satisfies` bridge from data to capabilities.
 //
 // Demonstrates:
 //   - Sum capabilities for success/failure
-//   - Explicit fold/match with the Fail effect for error propagation
+//   - `satisfies` declarations mapping data constructors to cap constructors
+//   - `use Type satisfies Cap` to bring satisfaction mappings into scope
+//   - Explicit fold with the Fail effect for error propagation
 //   - Composing Optional and Result
 //   - Effect-based error propagation as an alternative to Result chaining
+//   - match is for data types; fold is for capabilities
 
 use std.io.Console
+
+// --- Capabilities declare constructor *requirements* via Self.fn ---
 
 cap Optional {
     Self.fn some(value: Part) -> Self
     Self.fn none -> Self
-    fn fold<R>(on_some: Part -> R, on_none: () -> R) -> R
+    fn fold(on_some: Part -> R, on_none: () -> R) -> R
 }
 
 cap Result of (E, A) {
     Self.fn ok(value: A) -> Self
     Self.fn err(error: E) -> Self
-    fn fold<R>(on_ok: A -> R, on_err: E -> R) -> R
+    fn fold(on_ok: A -> R, on_err: E -> R) -> R
+}
+
+// --- Data types are concrete providers via `satisfies` ---
+
+data Maybe of A { Just(value: A), Nothing }
+
+Maybe satisfies Optional {
+    Just as some
+    Nothing as none
+}
+
+data Outcome of (E, A) { Success(value: A), Failure(error: E) }
+
+Outcome satisfies Result {
+    Success as ok
+    Failure as err
 }
 
 effect Fail of E {
     fn fail(error: E) -> !
 }
 
+// --- Bringing satisfactions into scope ---
+// In a real program, the data types and satisfactions would be in separate
+// modules. You'd import them like this:
+//
+//   use std.maybe.Maybe satisfies Optional
+//   use std.outcome.Outcome satisfies Result
+//
+// For this example, they're defined above and in scope automatically.
+
 // --- Utility functions ---
+// These use capability fold (Optional is a cap, not data — no match allowed).
+// Construction via cap constructors (Optional.some, Optional.none) is valid —
+// resolved to Maybe.Just / Maybe.Nothing via the satisfaction mapping.
 
 fn unwrap_or(opt: is Optional of A, default: A) -> A {
-    match opt {
-        Optional.some(value) => value,
-        Optional.none() => default,
-    }
+    opt.fold((value) -> value, () -> default)
 }
 
 fn map_optional(opt: is Optional of A, f: A -> B) -> is Optional of B {
-    match opt {
-        Optional.some(value) => Optional.some(f(value)),
-        Optional.none() => Optional.none,
-    }
+    opt.fold((value) -> Optional.some(f(value)), () -> Optional.none)
 }
 
 fn and_then(opt: is Optional of A, f: A -> is Optional of B) -> is Optional of B {
-    match opt {
-        Optional.some(value) => f(value),
-        Optional.none() => Optional.none,
-    }
+    opt.fold((value) -> f(value), () -> Optional.none)
 }
 
 // --- Propagating errors with fold + Fail ---
@@ -97,16 +122,16 @@ fn lookup_user_age(users: is Map of (String, u64), name: String)
 fn require_user_age(users: is Map of (String, u64), name: String)
     -> u64 with Fail of String
 {
-    match lookup_user_age(users, name) {
-        Optional.some(age) => age,
-        Optional.none() => Fail.fail("user not found: ".concat(name)),
-    }
+    lookup_user_age(users, name).fold(
+        (age) -> age,
+        () -> Fail.fail("user not found: ".concat(name)),
+    )
 }
 
 fn main() -> () with Console {
     let result = compute("42")
-    match result {
-        Result.ok(v) => Console.print_line("Result: ".concat(v.show())),
-        Result.err(e) => Console.print_line("Error: ".concat(e)),
-    }
+    result.fold(
+        (v) -> Console.print_line("Result: ".concat(v.show())),
+        (e) -> Console.print_line("Error: ".concat(e)),
+    )
 }

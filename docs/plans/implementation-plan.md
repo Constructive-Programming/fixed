@@ -185,12 +185,55 @@ cap Empty {
 
 Static methods are called via dot on the type alias: `C.empty`, `C.cons(x, acc)`.
 
+`Self.fn` constructors are **abstract** — they define what must exist, not how it's built. Concrete data types provide implementations via `satisfies` declarations that map data constructors to `Self.fn` names using `as`.
+
 ### `extends` for supertrait relationships
 
 ```
 cap Optional extends Functor + Folding {
     fn isDefined -> Boolean
     fn orElse(e: Part) -> Part
+}
+```
+
+### `satisfies` for type-provides-cap implementation
+
+`extends` is cap-to-cap (structural inheritance). `satisfies` is type-provides-cap (implementation provision):
+
+| Keyword | Relationship | Example |
+|---------|-------------|---------|
+| `extends` | Cap inherits requirements from another cap | `cap Monad extends Functor` |
+| `satisfies` | Type provides concrete implementation of a cap | `Maybe satisfies Optional { ... }` |
+
+A `satisfies` declaration maps data constructors to capability constructors by name using `as`:
+
+```
+data Maybe of A { Just(value: A), Nothing }
+
+Maybe satisfies Optional {
+    Just as some
+    Nothing as none
+}
+```
+
+Satisfactions are modular — brought into scope via `use`:
+
+```
+use std.maybe.Maybe satisfies Optional
+
+fn wrap(x: A) -> is Optional of A {
+    Optional.some(x)   // compiler resolves to Maybe.Just(x) via satisfaction
+}
+```
+
+`use Type satisfies Cap` does two things in one line: it imports the type *and* brings the satisfaction mapping into scope.
+
+Unreachable constructors are marked with `impossible`:
+
+```
+u64 satisfies Optional of Self {
+    Self as some
+    impossible as none   // u64 is always present — `none` is a compile error
 }
 ```
 
@@ -268,6 +311,7 @@ data Tagged of (phantom Tag, Value) {
 Key properties:
 - **The compiler still owns the representation** — `data` declares the shape (variants and fields), not the layout
 - **Data types automatically satisfy capabilities** their shape supports (e.g., a multi-variant data gets `Folding` for free, a data with fields gets accessors)
+- **Explicit `satisfies` declarations** map data constructors to capability constructors by name using `as`, bridging the gap between abstract `Self.fn` requirements and concrete data variants
 - **Pattern matching** uses dot syntax: `Expr.Lit(v)`, `Color.RGB(r, g, b)`, `Direction.North`
 - **`of` works on data** just like on caps: `data Tagged of (phantom Tag, Value)` introduces type parameters
 - **Capability constraints inside data fields**: `RGB(red: N is Numeric, green: N, blue: N)` — all three fields share the same numeric type
@@ -280,6 +324,29 @@ Key properties:
 | Multiple representations could work | The shape itself is the point (e.g., Red/Green/Blue) |
 | You want maximum reusability across callers | You want exhaustive pattern matching on known variants |
 | You're defining *what something can do* | You're defining *what something is* |
+
+Use `satisfies` to **bridge** between data and capabilities — mapping data constructors to capability constructor requirements. This lets functions written against capabilities (`Optional.some(x)`) resolve to concrete data constructors (`Maybe.Just(x)`) at compile time.
+
+### `match` vs `fold` — data vs capabilities
+
+**`match` only works on `data` types** (concrete, closed variants). Capabilities are abstract — they don't expose a shape, so pattern matching on capability-qualified names is not valid.
+
+**Capabilities are destructured via `fold`** — an abstract eliminator declared by the cap. Each cap that wants to be "opened" declares `fn fold<R>(...)` with one callback per constructor. This is the only way to case-split on a capability value.
+
+| Operation | Data types | Capabilities |
+|---|---|---|
+| **Destruction** (case-split) | `match json { Json.Null => ... }` | `opt.fold((v) -> ..., () -> ...)` |
+| **Construction** | `Json.Null`, `List.Cons(x, xs)` | `Optional.some(x)`, `Result.err(e)` |
+| **Constructor casing** | Capitalized: `Json.Null`, `List.Cons` | lowercase: `Optional.some`, `Expr.lit` |
+
+Rules:
+1. **`match` arms may only use data-qualified patterns** — `Json.Null`, `List.Cons(h, t)`, `Direction.North`, `Ordering.Equal`, etc.
+2. **Capability destruction uses `fold`** — `opt.fold(on_some, on_none)`, `expr.fold(on_lit, on_var, ...)`, `result.fold(on_ok, on_err)`
+3. **Construction via cap constructors is valid** — `Optional.some(x)` is resolved via `satisfies` to `Maybe.Just(x)` at compile time
+4. **Data constructors are Capitalized** — `List.Cons`, `List.Nil`, `Ordering.Less`, `Json.Null`
+5. **Cap constructors are lowercase** — `Optional.some(x)`, `Expr.lit(v)`, `Result.ok(v)` (these are `Self.fn` names)
+
+**Stdlib data types**: `List`, `Ordering`, `Pair`, `Json` are **data types**, so matching on them is valid. Their constructors are capitalized: `List.Cons`, `List.Nil`, `Ordering.Less`, `Ordering.Equal`, `Ordering.Greater`, `Pair`, `Json.Null`, `Json.Bool`, etc.
 
 ### Everything is an expression
 
@@ -336,6 +403,9 @@ fn factorial(n: u64) -> u64 {
 | Type aliases | `type ArrayLike = Seq + RA + Sized + Empty` | Repeating capability bundles everywhere |
 | Parameterized type aliases | `type PortRange(min, max) = u16 + between(min, max)` | Repeating parameterized refinements |
 | Data declarations | `data Color { Red, Green, Blue, RGB(...) }` | No prior equivalent (escape hatch) |
+| Satisfaction decl | `Maybe satisfies Optional { Just as some, Nothing as none }` | Haskell's `instance`, Rust's `impl Trait for Type` |
+| Impossible mapping | `impossible as none` | Partial satisfaction — unreachable constructor |
+| Satisfaction import | `use std.maybe.Maybe satisfies Optional` | Brings satisfaction mapping into scope |
 | No semicolons | Newlines separate expressions | `;` statement terminators |
 | Cap-generating functions | `fn between(min, max) -> cap of N { prop ... }` | Separate type-level and value-level abstractions |
 | Cap sugar | `cap Between(min, max) of N { ... }` | `fn between(min, max) -> cap of N { ... }` (equivalent) |
@@ -501,26 +571,21 @@ The **more capabilities** you request, the **fewer representations** qualify. Th
 
 ## Phase 0: Example Programs — COMPLETE
 
-16 example `.fixed` programs stress-testing the language design:
+11 example `.fixed` programs stress-testing the language design:
 
 | # | File | Exercises |
 |---|---|---|
-| 1 | `examples/01_hello.fixed` | `main`, `Console` effect, string literals |
-| 2 | `examples/02_fibonacci.fixed` | `is Numeric`, named aliases, anonymous capabilities |
-| 3 | `examples/03_linked_list.fixed` | Capability-driven collections, type aliases, `data` declarations, GADTs |
-| 4 | `examples/04_option_result.fixed` | `Optional`/`Result`, `Fail` effect, error propagation |
-| 5 | `examples/05_json_parser.fixed` | Recursive 6-variant sum capability, deep pattern matching |
-| 6 | `examples/06_state_machine.fixed` | Phantom-typed state transitions, marker capabilities |
-| 7 | `examples/07_effectful_io.fixed` | Multiple effects, handler composition, effect rows |
-| 8 | `examples/08_functor_monad.fixed` | HKTs, `Functor`/`Monad`, `do` notation |
-| 9 | `examples/09_binary_tree.fixed` | Recursive `Tree`, fold-based traversals, blanket impls |
-| 10 | `examples/10_tagged_units.fixed` | Phantom types for unit safety (Quine's padding + reflection) |
-| 11 | `examples/11_interpreter.fixed` | Mini expression language, deep matching, effects for eval errors |
-| 12 | `examples/12_concurrent_chat.fixed` | Channel-based concurrency as effects |
-| 13 | `examples/13_geometry.fixed` | `type` aliases, `data` declarations, geometry ops (area, perimeter, bounding box) |
-| 14 | `examples/14_recursion_schemes.fixed` | Catamorphism, anamorphism, hylomorphism, paramorphism — total functions |
-| 15 | `examples/15_properties.fixed` | `prop` invariants, `forall`, `implies`, postconditions, composing properties via `extends` |
-| 16 | `examples/16_refinement_types.fixed` | Dependent types: `fn -> cap`, first-class cap generators, parameterized type aliases, refinements |
+| 1 | `examples/01_basics.fixed` | `main`, `Console` effect, string literals, `is Numeric`, named/anonymous aliases |
+| 2 | `examples/02_collections.fixed` | Capability-driven collections, type aliases, `data` declarations (Direction, Color, Tagged) |
+| 3 | `examples/03_option_result.fixed` | `Optional`/`Result` caps, `Fail` effect, `satisfies`, fold for cap destruction |
+| 4 | `examples/04_json.fixed` | `data Json` (6 variants), deep pattern matching on data types |
+| 5 | `examples/05_phantom_types.fixed` | Phantom-typed state machines (Door, TcpSocket), unit-safe arithmetic (Quantity) |
+| 6 | `examples/06_functor_monad.fixed` | HKTs, `Functor`/`Monad` hierarchy, `do` notation, `Optional extends Monad` |
+| 7 | `examples/07_recursive_data.fixed` | Recursive data (Tree, Expr, Nat), BST ops, catamorphism/anamorphism/hylomorphism/paramorphism |
+| 8 | `examples/08_effects_handlers.fixed` | Multiple effects (Fail, Log, Channel, Async), handler composition, concurrency as effects |
+| 9 | `examples/09_interpreter.fixed` | `cap Expr` (8 constructors), fold-based eval, `satisfies` (AstNode), effects for eval errors |
+| 10 | `examples/10_geometry.fixed` | `type` aliases, `data` declarations, geometry ops (area, perimeter, bounding box) |
+| 11 | `examples/11_properties.fixed` | `prop` invariants, `forall`/`implies`, `impossible`, `fn -> cap` refinements, type aliases with refinements |
 
 ---
 
@@ -557,8 +622,10 @@ Formal specification documents that pin down semantics before implementation.
 - **Linearity and FBIP**: quantity-1 bindings enable guaranteed in-place mutation, replacing the heuristic reuse analysis with a type-level guarantee
 - **Effect handler linearity**: `resume` is quantity 1 (single-shot). Multi-shot handlers (if supported) would need quantity ω
 - **No explicit `self`**: instance methods don't declare a self parameter; the compiler infers it
-- **Coherence rules**: how orphan rules work when there are no concrete types
+- **Coherence rules**: how orphan rules work when there are no concrete types. Satisfaction declarations (`Type satisfies Cap`) are modular — they must be brought into scope via `use Type satisfies Cap` to be visible. No global coherence requirement.
 - **Recursive capability detection**: Self in constructor parameter position
+- **`satisfies` semantics**: How `Type satisfies Cap { Variant as constructor }` declarations map data constructors to capability constructors. How `impossible as constructor` marks unreachable constructors. How the compiler verifies soundness of partial satisfactions. How `use Type satisfies Cap` brings satisfaction mappings into scope.
+- **Constructor resolution**: How the compiler selects among in-scope `satisfies` declarations when a `Self.fn` constructor is called on a capability. Context-based resolution via return types and assignment targets. Ambiguity errors with copy-pasteable suggestions.
 
 ---
 
@@ -570,19 +637,20 @@ Rust implementation of the front-end.
 
 | Component | Description |
 |---|---|
-| **Lexer** (`src/lexer/`) | Tokenizer targeting the EBNF grammar. Keywords: `cap`, `fn`, `is`, `of`, `extends`, `effect`, `match`, `handle`, `with`, `let`, `if`, `else`, `do`, `use`, `mod`, `pub`, `phantom`, `Self`, `data`, `type`, `prop`, `forall`, `implies` |
+| **Lexer** (`src/lexer/`) | Tokenizer targeting the EBNF grammar. Keywords: `cap`, `fn`, `is`, `of`, `extends`, `satisfies`, `impossible`, `as`, `effect`, `match`, `handle`, `with`, `let`, `if`, `else`, `do`, `use`, `mod`, `pub`, `phantom`, `Self`, `data`, `type`, `prop`, `forall`, `implies` |
 | **Parser** (`src/parser/`) | Recursive descent or Pratt parser producing AST |
 | **AST** (`src/ast/`) | Type definitions for all language constructs |
 
 ### AST node types needed
 
-- **Items**: `CapDef`, `EffectDef`, `DataDef`, `TypeAlias` (optionally with `ValueParams`), `FnDef`, `PropDef`, `UseDecl`, `ModDecl`
+- **Items**: `CapDef`, `EffectDef`, `DataDef`, `TypeAlias` (optionally with `ValueParams`), `FnDef`, `PropDef`, `UseDecl`, `ModDecl`, `SatisfactionDecl`
+- **Satisfaction**: `SatisfactionDecl` (`Type satisfies Cap { mappings... }`), `ConstructorMapping` (`Variant as cap_constructor`), `ImpossibleMapping` (`impossible as cap_constructor`)
 - **Cap members**: `InstanceMethod`, `StaticMethod` (the `Self.fn` distinction)
-- **Capability refs**: `IsCap` (anonymous), `NamedAlias` (`N is Numeric`), `OfApp` (`Folding of i64`), `SelfOf` (`Self of B`), `CapCall` (`between(10, 30)` — cap-generating function applied to args)
+- **Capability refs**: `IsCap` (anonymous), `NamedAlias` (`N is Numeric`), `OfApp` (`Folding of i64`), `SelfOf` (`Self of B`), `CapCall` (`between(10, 30)` — cap-generating function applied to args), `UseSatisfaction` (`use Type satisfies Cap` — satisfaction import)
 - **Cap generation**: `CapReturnType` (`cap of N` as return type), `ValueParams` (definition-site `(min: N is Ord, max: N)`), `ValueArgs` (use-site `(10, 30)`)
 - **Expressions**: `Match`, `If`, `Let`, `FnCall`, `MethodCall`, `StaticCall` (`C.empty`), `Closure`, `BlockLambda`, `Do`, `Handle`, `Block`, `Literal`, `BinaryOp`, `UnaryOp`, `FieldAccess`, `ListLiteral`, `Pipe`, `Forall`, `Implies`
 - **Data**: `DataVariant` (unit variant, tuple variant with named fields), `PhantomParam`, `OfParams`
-- **Patterns**: `ConstructorPat`, `DataVariantPat` (`Expr.Lit(v)`), `WildcardPat`, `BindingPat`, `LiteralPat`, `DestructurePat`, `GuardedPat`
+- **Patterns**: `DataVariantPat` (`Expr.Lit(v)`, `List.Cons(h, t)`) — only data-qualified patterns allowed in `match`; no `CapConstructorPat` (capabilities are destructured via `fold`, not `match`), `WildcardPat`, `BindingPat`, `LiteralPat`, `DestructurePat`, `GuardedPat`
 - **Types**: `ArrowType` (`A -> B`), `TupleArrowType` (`(A, B) -> C`), `CapBound` (`is Cap + Cap`), `OfType` (`Cap of X`), `CapType` (`cap of N` — capability as return type)
 
 ### Milestone
@@ -599,7 +667,7 @@ All 16 example programs parse successfully into AST.
 |---|---|
 | **Capability classifier** (`src/types/classify.rs`) | Analyze capability signatures → sum/product/recursive/capability-only/marker |
 | **Type alias expander** (`src/types/alias.rs`) | Expand `type` aliases to their underlying capability sets |
-| **Data type analyzer** (`src/types/data.rs`) | Analyze `data` declarations: variant shapes, auto-derive capabilities, GADT type parameter constraints |
+| **Data type analyzer** (`src/types/data.rs`) | Analyze `data` declarations: variant shapes, auto-derive capabilities, GADT type parameter constraints. Validate `satisfies` declarations: verify constructor arity/type compatibility, check `impossible` soundness (no reachable code path invokes the marked constructor) |
 | **Type inference** (`src/types/infer.rs`) | Bidirectional inference with capability bounds, `Part` resolution, `of` application |
 | **Representation selector** (`src/types/repr.rs`) | Analyze capability sets → narrow to viable concrete representations |
 | **Effect inference** (`src/types/effects.rs`) | Infer and propagate effect rows, verify all effects handled |
@@ -618,14 +686,100 @@ All 16 example programs parse successfully into AST.
 | **Marker** | No methods at all | Zero-sized, compile-time only |
 | **Refinement** | No methods, has `prop` + value params | Zero-sized, compile-time only (subtype of Marker) |
 
+### `Self.fn` constructors and the cap-to-data bridge
+
+`Self.fn` declarations in capabilities define **constructor requirements** — abstract construction interfaces where `Self` is not yet a concrete type. Functions can summon values (`Optional.some(x)`, `C.empty`) so construction must be expressible at the capability level.
+
+**`satisfies` declarations** connect abstract constructors to concrete data types. The mapping is by name using `as`:
+
+```
+data Maybe of A { Just(value: A), Nothing }
+
+Maybe satisfies Optional {
+    Just as some
+    Nothing as none
+}
+// fold is auto-derived from the two variants
+```
+
+Key design rules:
+- **`extends` vs `satisfies`**: `extends` is cap-to-cap inheritance (`cap Monad extends Functor`). `satisfies` is type-provides-cap implementation (`Maybe satisfies Optional`).
+- **Satisfaction declarations are separate** from data definitions — they can live in the same module or a different one. Third parties can write them.
+- **Brought into scope via `use`**: `use std.maybe.Maybe satisfies Optional` makes the satisfaction mapping available at the use site.
+- **Multiple satisfactions possible**: different modules can map the same data to different caps.
+- **No orphan surprises**: satisfactions don't leak across module boundaries.
+
+### Constructor resolution
+
+When a `Self.fn` constructor is called on a capability (e.g., `Optional.some(x)`), the compiler resolves to a concrete data constructor using `satisfies` declarations in scope.
+
+**Context-based resolution** — the compiler infers the backing type from context:
+
+```
+// Return type provides context:
+fn wrap(x: A) -> is Optional of A {
+    Optional.some(x)   // resolves via in-scope satisfaction
+}
+
+// Assignment target constrains:
+let x: is Optional of u64 = Optional.some(42)
+```
+
+**Ambiguity errors** — when multiple satisfactions are in scope:
+
+```
+let y = Optional.some(42)
+// error[E051]: ambiguous constructor for Optional.some
+//
+//   Multiple types in scope satisfy Optional:
+//
+//   Option 1 — Maybe of u64:
+//   │  Maybe.Just(42)
+//
+//   Option 2 — Nullable of u64:
+//   │  Nullable.Present(42)
+//
+//   hint: Add a type annotation to disambiguate:
+//   │  let y: is Maybe of u64 = Optional.some(42)
+```
+
+**Direct data construction always works** — no resolution needed:
+
+```
+let z = Maybe.Just(42)
+```
+
+### Partial satisfaction with `impossible`
+
+Any type can satisfy a cap, marking unreachable constructors with `impossible`:
+
+```
+u64 satisfies Optional of Self {
+    Self as some
+    impossible as none
+}
+```
+
+Meaning: `u64` is always present (`some` = identity), never absent (`none` = unreachable). The compiler verifies soundness — any code path that would invoke `none` on a `u64 is Optional` is a compile error.
+
+```
+data NonEmptyList of A { Cons(head: A, tail: is List of A) }
+
+NonEmptyList satisfies Sequencing {
+    Cons as cons
+    impossible as empty
+}
+```
+
 ### Capability-set representation narrowing
 
 New compiler pass: given all capabilities a value must satisfy, determine which concrete representations are viable:
 
 1. Collect all `is` bounds on a value across its entire usage scope
-2. For each candidate representation, check if it can satisfy all bounds
-3. Rank remaining candidates by performance (PGO data if available, heuristics otherwise)
-4. Select the best candidate
+2. Collect all `satisfies` declarations in scope for each bound
+3. For each candidate representation (data types with matching `satisfies` declarations, plus compiler-known built-in representations), check if it can satisfy all bounds
+4. Rank remaining candidates by performance (PGO data if available, heuristics otherwise)
+5. Select the best candidate
 
 ### Milestone
 

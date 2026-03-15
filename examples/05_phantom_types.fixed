@@ -1,0 +1,215 @@
+// 05_phantom_types.fixed
+// Phantom-typed state transitions and unit-safe arithmetic.
+//
+// Demonstrates:
+//   - Marker capabilities (no methods) as type-level labels
+//   - Phantom type parameters for compile-time state tracking
+//   - Quine's "padding" operation: adding a vacuous type parameter
+//   - Quine's "reflection": same type variable constrains two values
+//   - State transitions enforced at compile time (Door, TcpSocket)
+//   - Zero-cost unit safety (Quantity with phantom Unit tag)
+//   - The compiler knows marker capabilities are zero-sized
+
+use std.io.Console
+
+// =========================================================================
+// Part 1: State machines via phantom types
+// =========================================================================
+
+// --- State labels (marker capabilities — zero-sized, compile-time only) ---
+
+cap Locked {}
+cap Unlocked {}
+cap Open {}
+
+// --- A door that tracks its state in the type system ---
+
+cap Door of (phantom State) {
+    Self.fn new -> Self  // only callable as Door of Locked .new
+    fn name -> String
+}
+
+// State transition functions — each consumes the door in one state
+// and returns it in another. Invalid transitions simply don't exist.
+
+fn unlock(door: is Door of Locked) -> is Door of Unlocked {
+    // In the runtime representation, this is essentially a no-op —
+    // the phantom type changes but the data is the same.
+    // The compiler can optimize this to a move (or reuse in-place).
+    Door.new  // compiler infers Door of Unlocked from return type
+}
+
+fn lock(door: is Door of Unlocked) -> is Door of Locked {
+    Door.new
+}
+
+fn open(door: is Door of Unlocked) -> is Door of Open {
+    Door.new
+}
+
+fn close(door: is Door of Open) -> is Door of Unlocked {
+    Door.new
+}
+
+// This function is polymorphic over the state — it works on any door.
+// Quine's "reflection": the same type variable `S` constrains both input and output.
+fn inspect(door: is Door of S) -> String {
+    "Door: ".concat(door.name)
+}
+
+// --- A more complex example: TCP connection states ---
+
+cap Closed {}
+cap Listening {}
+cap Established {}
+
+cap TcpSocket of (phantom State) {
+    Self.fn new(port: u16) -> Self
+    fn port -> u16
+}
+
+fn bind(socket: is TcpSocket of Closed) -> is TcpSocket of Listening {
+    TcpSocket.new(socket.port)
+}
+
+fn accept(socket: is TcpSocket of Listening) -> is TcpSocket of Established {
+    TcpSocket.new(socket.port)
+}
+
+fn send(socket: is TcpSocket of Established, data: String) -> () with Console {
+    Console.print_line("Sending on port ".concat(socket.port.show()).concat(": ").concat(data))
+}
+
+fn disconnect(socket: is TcpSocket of Established) -> is TcpSocket of Closed {
+    TcpSocket.new(socket.port)
+}
+
+// =========================================================================
+// Part 2: Unit-safe arithmetic via phantom types
+// =========================================================================
+
+// --- Unit marker caps (zero-sized, compile-time only) ---
+
+cap Meters {}
+cap Seconds {}
+cap MetersPerSecond {}
+cap MetersPerSecondSq {}
+cap Kilograms {}
+cap Newtons {}
+
+// --- A quantity tagged with its unit ---
+
+cap Quantity of (phantom Unit) {
+    Self.fn new(value: f64) -> Self
+    fn value -> f64
+}
+
+// Arithmetic on quantities — only valid when units match (Quine's "reflection").
+// `U` is a free type variable: both `a` and `b` must share it, so the compiler
+// rejects `add(meters, seconds)` at compile time.
+fn add(a: is Quantity of U, b: is Quantity of U) -> is Quantity of U {
+    Quantity.new(a.value + b.value)
+}
+
+fn sub(a: is Quantity of U, b: is Quantity of U) -> is Quantity of U {
+    Quantity.new(a.value - b.value)
+}
+
+fn scale(q: is Quantity of U, factor: f64) -> is Quantity of U {
+    Quantity.new(q.value * factor)
+}
+
+fn negate(q: is Quantity of U) -> is Quantity of U {
+    Quantity.new(0.0 - q.value)
+}
+
+// --- Unit conversions (type-changing operations) ---
+
+fn divide_units(
+    distance: is Quantity of Meters,
+    time: is Quantity of Seconds,
+) -> is Quantity of MetersPerSecond {
+    Quantity.new(distance.value / time.value)
+}
+
+fn acceleration(
+    velocity: is Quantity of MetersPerSecond,
+    time: is Quantity of Seconds,
+) -> is Quantity of MetersPerSecondSq {
+    Quantity.new(velocity.value / time.value)
+}
+
+fn force(
+    mass: is Quantity of Kilograms,
+    accel: is Quantity of MetersPerSecondSq,
+) -> is Quantity of Newtons {
+    Quantity.new(mass.value * accel.value)
+}
+
+fn show_quantity(q: is Quantity of U, unit_name: String) -> String {
+    q.value.show().concat(" ").concat(unit_name)
+}
+
+// --- Physics example ---
+
+fn kinematic_distance(
+    v0: is Quantity of MetersPerSecond,
+    a: is Quantity of MetersPerSecondSq,
+    t: is Quantity of Seconds,
+) -> is Quantity of Meters {
+    // d = v0*t + 0.5*a*t^2
+    let v0t = Quantity.new(v0.value * t.value)  // Meters
+    let at2 = Quantity.new(0.5 * a.value * t.value * t.value)  // Meters
+    add(v0t, at2)
+}
+
+fn main() -> () with Console {
+    // --- Door state machine ---
+    let door = Door.new              // Door of Locked
+    let door = unlock(door)           // Door of Unlocked
+    let door = open(door)             // Door of Open
+    let door = close(door)            // Door of Unlocked
+    let door = lock(door)             // Door of Locked
+
+    // This would be a compile error:
+    // let door = open(door)  // ERROR: expected Door of Unlocked, found Door of Locked
+
+    Console.print_line(inspect(door))
+
+    // --- TCP socket state machine ---
+    let socket = TcpSocket.new(8080)     // TcpSocket of Closed
+    let listener = bind(socket)           // TcpSocket of Listening
+    let conn = accept(listener)           // TcpSocket of Established
+    send(conn, "Hello, client!")
+    let closed = disconnect(conn)         // TcpSocket of Closed
+
+    Console.print_line("Connection on port ".concat(closed.port.show()).concat(" closed"))
+
+    // --- Unit-safe arithmetic ---
+    let distance = Quantity.new(100.0)   // 100 meters
+    let time = Quantity.new(9.58)        // 9.58 seconds (Usain Bolt!)
+
+    let speed = divide_units(distance, time)
+    Console.print_line("Speed: ".concat(show_quantity(speed, "m/s")))
+
+    // This would be a compile error — can't add meters to seconds:
+    // let nonsense = add(distance, time)
+
+    let d1 = Quantity.new(50.0)  // Meters
+    let d2 = Quantity.new(30.0)  // Meters
+    let total = add(d1, d2)
+    Console.print_line("Total distance: ".concat(show_quantity(total, "m")))
+
+    // F = ma
+    let mass = Quantity.new(70.0)   // 70 kg
+    let accel = Quantity.new(9.81)  // 9.81 m/s²
+    let weight = force(mass, accel)
+    Console.print_line("Weight: ".concat(show_quantity(weight, "N")))
+
+    // Kinematics: d = v0*t + 0.5*a*t^2
+    let v0 = Quantity.new(10.0)    // 10 m/s
+    let a = Quantity.new(2.0)      // 2 m/s²
+    let t = Quantity.new(5.0)      // 5 seconds
+    let d = kinematic_distance(v0, a, t)
+    Console.print_line("Distance traveled: ".concat(show_quantity(d, "m")))
+}

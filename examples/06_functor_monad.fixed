@@ -1,13 +1,14 @@
-// 08_functor_monad.fixed
+// 06_functor_monad.fixed
 // Higher-kinded types: Functor, Monad, do-notation, generic programming.
 //
 // Demonstrates:
 //   - HKT syntax: `Self of B` for type-constructor returns
 //   - Functor/Monad capability hierarchy using `extends`
+//   - `satisfies` connecting Maybe data type to Optional cap
 //   - `do` notation as sugar for flat_map chains
 //   - Generic functions that work over any Monad
-//   - How Optional satisfies Monad through its structure
-//   - Capabilities are auto-derived by the compiler from structure
+//   - Auto-derived fold, map, flat_map, pure from data structure
+//   - match for data types (List), fold for capabilities (Optional)
 
 // --- The capability hierarchy ---
 
@@ -27,15 +28,24 @@ cap Monad extends Functor {
 
 // --- Optional is a Monad ---
 //
-// Optional defines some/none/fold. The compiler auto-derives
-// Functor (map via fold + some/none) and Monad (flat_map via fold)
-// from the structure of the capability.
+// Optional declares some/none/fold as constructor requirements.
+// The compiler auto-derives Functor (map via fold + some/none)
+// and Monad (flat_map via fold) from the structure.
 
 cap Optional extends Monad {
     Self.fn some(value: Part) -> Self
     Self.fn none -> Self
     fn fold<R>(on_some: Part -> R, on_none: () -> R) -> R
 }
+
+// A concrete data type satisfies Optional (and thus Monad + Functor):
+data Maybe of A { Just(value: A), Nothing }
+
+Maybe satisfies Optional {
+    Just as some
+    Nothing as none
+}
+// fold, map, flat_map, pure are auto-derived from Maybe's structure
 
 // --- Generic monadic functions ---
 
@@ -51,12 +61,12 @@ fn when(condition: bool, action: M is Monad of ()) -> M of () {
 
 fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A) {
     match list {
-        List.cons(head, tail) => do {
+        List.Cons(head, tail) => do {
             a <- head
             rest <- sequence(tail)
-            M.pure(List.cons(a, rest))
+            M.pure(List.Cons(a, rest))
         },
-        List.nil() => M.pure(List.nil()),
+        List.Nil() => M.pure(List.Nil()),
     }
 }
 
@@ -70,11 +80,11 @@ fn fold_m(
     f: (B, A) -> M of B,
 ) -> (M is Monad) of B {
     match list {
-        List.cons(head, tail) => do {
+        List.Cons(head, tail) => do {
             acc <- f(init, head)
             fold_m(tail, acc, f)
         },
-        List.nil() => M.pure(init),
+        List.Nil() => M.pure(init),
     }
 }
 
@@ -108,15 +118,15 @@ fn compute() -> is Optional of f64 {
 // fmap (f . g) == fmap f . fmap g
 
 fn main() -> () with Console {
-    match compute() {
-        Optional.some(result) => Console.print_line("Result: ".concat(result.show())),
-        Optional.none() => Console.print_line("Division by zero encountered"),
-    }
+    compute().fold(
+        (result) -> Console.print_line("Result: ".concat(result.show())),
+        () -> Console.print_line("Division by zero encountered"),
+    )
 
     // sequence example: all-or-nothing
     let opts = [Optional.some(1), Optional.some(2), Optional.some(3)]
-    match sequence(opts) {
-        Optional.some(list) => Console.print_line("All present: ".concat(list.show())),
-        Optional.none() => Console.print_line("At least one was none"),
-    }
+    sequence(opts).fold(
+        (list) -> Console.print_line("All present: ".concat(list.show())),
+        () -> Console.print_line("At least one was none"),
+    )
 }

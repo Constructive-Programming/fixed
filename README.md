@@ -244,7 +244,7 @@ Quine's five predicate functor operations map directly onto Fixed's capability c
 ## Repository structure
 
 ```
-examples/           16 example programs exercising the language design
+examples/           11 example programs exercising the language design
 docs/plans/         Implementation plan (phases 0–6)
 spec/               (planned) Formal specification
 stdlib/             (planned) Standard library in Fixed
@@ -253,23 +253,19 @@ src/                (planned) Compiler implementation in Rust
 
 ## Status
 
-**Phase 0 (design) is under way.** The language design is explored through 16 example programs covering:
+**Phase 0 (design) is under way.** The language design is explored through 11 example programs covering:
 
-- Basic I/O, numeric polymorphism
+- Basic I/O, numeric polymorphism, named/anonymous capability aliases
 - Capability-driven collections (Sequencing, Functor, Folding, RandomAccess, etc.)
-- Optional/Result, error handling, the `Fail` effect
-- JSON parsing with recursive capabilities
-- Phantom-typed state machines
-- Multiple effect composition and handler nesting
+- Optional/Result, error handling, the `Fail` effect, `satisfies` bridge
+- JSON parsing with recursive data types and deep pattern matching
+- Phantom-typed state machines and unit-safe arithmetic
 - Higher-kinded types, Monad, do-notation
-- Binary search trees with fold-based traversals
-- Unit-safe physics with phantom types
-- A mini interpreter with eval effects
-- Channel-based concurrency as effects
+- Recursive data types, BST operations, recursion schemes (catamorphism, anamorphism, hylomorphism, paramorphism)
+- Multiple effect composition, handler nesting, channel-based concurrency as effects
+- A mini interpreter with fold-based eval on capabilities
 - Geometry with type aliases and data declarations
-- Recursion schemes (catamorphism, anamorphism, hylomorphism, paramorphism)
-- Property-based invariants (`prop`, `forall`, `implies`)
-- Dependent types: functions that generate capabilities (`fn -> cap`, first-class cap generators)
+- Property-based invariants (`prop`, `forall`, `implies`) and dependent types (`fn -> cap`, refinement types)
 
 Next: formal specification (Phase 1) and parser implementation (Phase 2).
 
