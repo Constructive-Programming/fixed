@@ -18,8 +18,8 @@ data Json {
     Bool(value: bool),
     Number(value: f64),
     String(value: String),
-    Array(elements: is List of Json),
-    Object(fields: is List of (is Pair of (String, Json))),
+    Array(elements: is Sequencing of Json),
+    Object(fields: is Map of (String, Json)),
 }
 
 // Pretty-print JSON with indentation

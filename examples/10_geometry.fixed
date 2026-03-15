@@ -37,9 +37,7 @@ data Shape of N {
 }
 
 // A bounding box — always axis-aligned
-data BoundingBox of N {
-    BoundingBox(min: is Point of N, max: is Point of N)
-}
+data BoundingBox of N (min: is Point of N, max: is Point of N)
 
 // =========================================================================
 // Helpers
@@ -118,19 +116,19 @@ fn perimeter(shape: Shape of (N is Numeric)) -> f64 {
 fn bounding_box(shape: Shape of (N is Numeric)) -> BoundingBox of N {
     match shape {
         Shape.Circle(center, r) =>
-            BoundingBox.BoundingBox(
+            BoundingBox(
                 point(center.x - r, center.y - r),
                 point(center.x + r, center.y + r),
             ),
 
         Shape.Rectangle(tl, w, h) =>
-            BoundingBox.BoundingBox(
+            BoundingBox(
                 tl,
                 point(tl.x + w, tl.y + h),
             ),
 
         Shape.Triangle(a, b, c) =>
-            BoundingBox.BoundingBox(
+            BoundingBox(
                 point(min3(a.x, b.x, c.x), min3(a.y, b.y, c.y)),
                 point(max3(a.x, b.x, c.x), max3(a.y, b.y, c.y)),
             ),
@@ -139,7 +137,7 @@ fn bounding_box(shape: Shape of (N is Numeric)) -> BoundingBox of N {
 
 fn show_bbox(bb: BoundingBox of (N is Numeric)) -> String {
     match bb {
-        BoundingBox.BoundingBox(mn, mx) =>
+        BoundingBox(mn, mx) =>
             "BBox[("
                 .concat(mn.x.show()).concat(", ").concat(mn.y.show())
                 .concat(") -> (")

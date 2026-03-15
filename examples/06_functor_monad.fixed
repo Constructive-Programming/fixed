@@ -16,14 +16,14 @@
 // `Part` is the current element type, `B` is the new one.
 // `Self of B` changes the container's element type.
 cap Functor {
-    fn map<B>(f: Part -> B) -> Self of B
+    fn map(f: Part -> B) -> Self of B
 }
 
 // Monad: sequencing computations that produce wrapped values.
 // `pure` wraps a value; `flat_map` chains computations.
 cap Monad extends Functor {
     Self.fn pure(value: Part) -> Self
-    fn flat_map<B>(f: Part -> Self of B) -> Self of B
+    fn flat_map(f: Part -> Self of B) -> Self of B
 }
 
 // --- Optional is a Monad ---
@@ -35,7 +35,7 @@ cap Monad extends Functor {
 cap Optional extends Monad {
     Self.fn some(value: Part) -> Self
     Self.fn none -> Self
-    fn fold<R>(on_some: Part -> R, on_none: () -> R) -> R
+    fn fold(on_some: Part -> R, on_none: () -> R) -> R
 }
 
 // A concrete data type satisfies Optional (and thus Monad + Functor):

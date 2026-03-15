@@ -70,7 +70,7 @@ cap Env {
 
 // --- Concrete environment ---
 
-data VarMap { VarMap(bindings: is List of (is Pair of (String, f64))) }
+data VarMap(bindings: is List of (is Pair of (String, f64)))
 
 VarMap satisfies Env {
     VarMap as empty

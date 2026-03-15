@@ -76,7 +76,7 @@ u64 satisfies Optional of Self {
 // Any code path that would call Optional.none on a u64 is a compile error.
 
 // A non-empty list can never be empty
-data NonEmptyList of A { Cons(head: A, tail: is List of A) }
+data NonEmptyList of A (head: A, tail: is List of A)
 
 NonEmptyList satisfies Sequencing {
     Cons as cons

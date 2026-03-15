@@ -306,6 +306,13 @@ data Expr {
 data Tagged of (phantom Tag, Value) {
     Tagged(value: Value)
 }
+
+// Single-constructor sugar — when there's only one variant,
+// the braces and repeated name are unnecessary:
+data Config(host: String, port: u16, debug: bool)
+// Equivalent to: data Config { Config(host: String, port: u16, debug: bool) }
+// Construction: Config("localhost", 8080, false)
+// Pattern match: Config(h, p, d) => ...
 ```
 
 Key properties:
@@ -403,6 +410,7 @@ fn factorial(n: u64) -> u64 {
 | Type aliases | `type ArrayLike = Seq + RA + Sized + Empty` | Repeating capability bundles everywhere |
 | Parameterized type aliases | `type PortRange(min, max) = u16 + between(min, max)` | Repeating parameterized refinements |
 | Data declarations | `data Color { Red, Green, Blue, RGB(...) }` | No prior equivalent (escape hatch) |
+| Single-constructor data sugar | `data Config(host: String, port: u16)` | `data Config { Config(host: String, port: u16) }` |
 | Satisfaction decl | `Maybe satisfies Optional { Just as some, Nothing as none }` | Haskell's `instance`, Rust's `impl Trait for Type` |
 | Impossible mapping | `impossible as none` | Partial satisfaction — unreachable constructor |
 | Satisfaction import | `use std.maybe.Maybe satisfies Optional` | Brings satisfaction mapping into scope |
@@ -649,7 +657,7 @@ Rust implementation of the front-end.
 - **Capability refs**: `IsCap` (anonymous), `NamedAlias` (`N is Numeric`), `OfApp` (`Folding of i64`), `SelfOf` (`Self of B`), `CapCall` (`between(10, 30)` — cap-generating function applied to args), `UseSatisfaction` (`use Type satisfies Cap` — satisfaction import)
 - **Cap generation**: `CapReturnType` (`cap of N` as return type), `ValueParams` (definition-site `(min: N is Ord, max: N)`), `ValueArgs` (use-site `(10, 30)`)
 - **Expressions**: `Match`, `If`, `Let`, `FnCall`, `MethodCall`, `StaticCall` (`C.empty`), `Closure`, `BlockLambda`, `Do`, `Handle`, `Block`, `Literal`, `BinaryOp`, `UnaryOp`, `FieldAccess`, `ListLiteral`, `Pipe`, `Forall`, `Implies`
-- **Data**: `DataVariant` (unit variant, tuple variant with named fields), `PhantomParam`, `OfParams`
+- **Data**: `DataDef` (multi-variant with braces, or single-constructor sugar without braces), `DataVariant` (unit variant, tuple variant with named fields), `PhantomParam`, `OfParams`
 - **Patterns**: `DataVariantPat` (`Expr.Lit(v)`, `List.Cons(h, t)`) — only data-qualified patterns allowed in `match`; no `CapConstructorPat` (capabilities are destructured via `fold`, not `match`), `WildcardPat`, `BindingPat`, `LiteralPat`, `DestructurePat`, `GuardedPat`
 - **Types**: `ArrowType` (`A -> B`), `TupleArrowType` (`(A, B) -> C`), `CapBound` (`is Cap + Cap`), `OfType` (`Cap of X`), `CapType` (`cap of N` — capability as return type)
 

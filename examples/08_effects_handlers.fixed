@@ -30,14 +30,9 @@ effect Log {
 
 // --- A config file reader ---
 
-cap Config {
-    Self.fn new(host: String, port: u16, debug: bool) -> Self
-    fn host -> String
-    fn port -> u16
-    fn debug -> bool
-}
+data Config(host: String, port: u16, debug: bool)
 
-fn read_config(path: String) -> is Config
+fn read_config(path: String) -> Config
     with FileSystem + Fail of String
 {
     let contents = FileSystem.read_file(path).fold(
@@ -47,7 +42,7 @@ fn read_config(path: String) -> is Config
     parse_config(contents)
 }
 
-fn parse_config(text: String) -> is Config
+fn parse_config(text: String) -> Config
     with Fail of String
 {
     let lines = split_lines(text)
@@ -66,7 +61,7 @@ fn parse_config(text: String) -> is Config
     let debug = find_value(lines, "debug")
         |> map_optional((v) -> v == "true")
         |> unwrap_or(false)
-    Config.new(host, port, debug)
+    Config(host, port, debug)
 }
 
 // Pure helper — no effects needed, no `with` clause
@@ -79,7 +74,7 @@ fn find_value(
         |> map_optional((value) -> trim(value))
 }
 
-fn run_server(config: is Config) -> () with Console + Log {
+fn run_server(config: Config) -> () with Console + Log {
     Log.log("info", "Starting server...")
     Console.print_line(
         "Server running on "
@@ -120,7 +115,7 @@ cap Message {
     fn body -> String
 }
 
-data ChatMessage { ChatMessage(sender: String, body: String) }
+data ChatMessage(sender: String, body: String)
 
 ChatMessage satisfies Message {
     ChatMessage as new
@@ -175,7 +170,7 @@ cap TaskQueue {
     fn is_empty -> bool
 }
 
-data SimpleQueue { SimpleQueue(tasks: is List of (() -> ())) }
+data SimpleQueue(tasks: is List of (() -> ()))
 
 SimpleQueue satisfies TaskQueue {
     SimpleQueue as empty
