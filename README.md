@@ -22,10 +22,8 @@ Capabilities *are* predicate functors over the type universe. Cropping = existen
 ### Keeping performance without explicit data
 
 - **Algebraic effect handlers** — effects are declared, tracked in types, and handled with composable handlers. No monads, no transformers, no colored functions.
-- **Perceus reference counting + QTT** — Quantitative Type Theory tracks how each value is used: erased (type-level only), linear (used once, no RC), or shared (full RC). This makes dependent types sound with RC and enables guaranteed in-place mutation for linear values.
-- **FBIP (Functional But In-Place)** — linear values (QTT quantity 1) are guaranteed to be uniquely owned, so the compiler mutates them in place. No heuristic — it's a type-level guarantee.
+- **QTT** — Quantitative Type Theory tracks how each value is used: erased (type-level only), linear (used once, no RC), or shared (full RC). This makes dependent types sound with RC and enables guaranteed in-place mutation for linear values. We can consider this a bit of the theory behind both **FBIP (Functional But In-Place)** and the Perceus reference counter.
 - **Evidence passing** — effects compile to efficient evidence-vector lookups, not full delimited continuations.
-- **C emission** — clean, readable generated C. No runtime beyond the RC primitives.
 
 You will recognize some of these features from [Koka](https://koka-lang.github.io/koka/doc/index.html). Koka is a research language that got several hard things right and Fixed adopts all of them wholesale. The compilation target is C. Memory management is Perceus. Effects are algebraic with evidence passing. FBIP optimizes functional updates.
 
@@ -112,7 +110,7 @@ When you need a specific closed set of variants, `data` lets you express the sha
 data Color { Red, Green, Blue, RGB(red: N is Numeric, green: N, blue: N) }
 
 data Expr {
-    Lit(value: Part),
+    Lit(value: V),
     Add(left: Expr, right: Expr),
     Mul(left: Expr, right: Expr),
     Neg(inner: Expr),
@@ -219,12 +217,12 @@ Refinement capabilities are zero-cost: compile-time only, no wrapping, the value
 1. **`cap` is the primary abstraction** — capabilities describe what values can do, not what they are
 2. **`data` is where structure gets planned** — `data` lets you express the shape of your data when you need a specific closed set of variants
 3. **`prop` invariants are specified in place** — properties (from property-based testing) are built into the language as a form of lightweight theorem proving
-4. **Functions are total** — only capabilities and data can be recursive; all recursion is structural via fold/unfold
-5. **No explicit layouts** — the programmer never writes references; the compiler handles borrowing/moving/cloning via Perceus
-6. **Everything is an expression** — no statements, no semicolons; blocks return their last expression
-7. **Algebraic effects for all side effects** — declared with `effect`, handled with `handle`/`resume`
+4. **Functions are total** — only capabilities and data can self-reference; all recursion is structural via fold/unfold
 8. **No mutation** — purely functional; the compiler optimizes in-place updates via FBIP
-9. **Quantities are inferred, not written** — QTT tracks erasure (0), linearity (1), and sharing (ω) for every binding. The programmer writes capabilities; the compiler infers resource usage
+6. **Everything is an expression** — no statements, no semicolons; blocks return their last expression
+5. **No explicit layouts** — the programmer never writes references; the compiler handles borrowing/moving/cloning via Perceus
+7. **Algebraic effects for all side effects** — declared with `effect`, handled with `handle`/`resume`
+9. **Quantities are inferred, not written** — the compiler tracks erasure (0), linearity (1), and sharing (ω) for every binding. The programmer writes capabilities; the compiler infers resource usage
 10. **Agent friendly** — the compiler produces clear, structured output designed for humans, which also makes it ideal for AI harnesses and automated tooling
 
 ## Theoretical foundation
@@ -273,12 +271,12 @@ See [`docs/plans/implementation-plan.md`](docs/plans/implementation-plan.md) for
 
 ## References
 
-- [Koka language](https://koka-lang.github.io/koka/doc/index.html) — algebraic effects, Perceus RC, FBIP, evidence passing
-- [Perceus: Garbage Free Reference Counting with Reuse](https://www.microsoft.com/en-us/research/publication/perceus-garbage-free-reference-counting-with-reuse/) — Reinking et al., 2021
-- [Quine's Predicate Functor Logic](https://en.wikipedia.org/wiki/Predicate_functor_logic) — variable-free predicate logic
 - [Death of Data](https://degoes.net/articles/kill-data) — De Goes on eliminating premature type commitment
+- [Quine's Predicate Functor Logic](https://en.wikipedia.org/wiki/Predicate_functor_logic) — variable-free predicate logic
 - [Tagless Final](https://okmij.org/ftp/tagless-final/) — encoding programs against abstract interfaces
+- [Koka language](https://koka-lang.github.io/koka/doc/index.html) — algebraic effects, Perceus RC, FBIP, evidence passing
 - [Quantitative Type Theory](https://bentnib.org/quantitative-type-theory.html) — Atkey, 2018. Dependent types with resource tracking via usage quantities
+- [Perceus: Garbage Free Reference Counting with Reuse](https://www.microsoft.com/en-us/research/publication/perceus-garbage-free-reference-counting-with-reuse/) — Reinking et al., 2021
 
 ## License
 
