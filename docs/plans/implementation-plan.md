@@ -54,9 +54,8 @@ A capability with value parameters is already a function from values to a constr
 #### The `fn -> cap` syntax
 
 ```
-fn between(min: N is Ord, max: N) -> cap of N {
+fn between(min: N is Ord, max: N) -> cap of N:
     prop in_range: min <= Self && Self <= max
-}
 ```
 
 At use sites, a cap-generating function is called wherever a capability name would appear:
@@ -81,27 +80,22 @@ fn validate(
     constraint: (N, N) -> cap of N,
     lo: N,
     hi: N,
-) -> N is constraint(lo, hi) {
-    if value < lo { Fail.fail("too low") }
-    else if value > hi { Fail.fail("too high") }
-    else { value }
-}
+) -> N is constraint(lo, hi):
+    if value < lo: Fail.fail("too low")
+    else if value > hi: Fail.fail("too high")
+    else: value
 
 // Compose cap generators
-fn strict_between(min: N is Ord, max: N) -> cap of N {
+fn strict_between(min: N is Ord, max: N) -> cap of N:
     prop in_range: min < Self && Self < max    // strict inequality
-}
 
 // Return a cap generator from a function
-fn range_for(unit: String) -> fn(f64, f64) -> cap of f64 {
-    match unit {
-        "celsius" => between,
-        "kelvin" => fn(lo, hi) -> cap of f64 {
+fn range_for(unit: String) -> fn(f64, f64) -> cap of f64:
+    match unit:
+        "celsius" => between
+        "kelvin" => (lo, hi) ->
             prop in_range: lo <= Self && Self <= hi
             prop absolute: Self >= 0.0
-        },
-    }
-}
 ```
 
 #### Symbolic value params
@@ -109,11 +103,10 @@ fn range_for(unit: String) -> fn(f64, f64) -> cap of f64 {
 Value arguments can be literals or in-scope bindings — the compiler verifies props symbolically:
 
 ```
-fn clamp(value: N is Numeric + Ord, lo: N, hi: N) -> N is between(lo, hi) {
-    if value < lo { lo }
-    else if value > hi { hi }
-    else { value }
-}
+fn clamp(value: N is Numeric + Ord, lo: N, hi: N) -> N is between(lo, hi):
+    if value < lo: lo
+    else if value > hi: hi
+    else: value
 ```
 
 #### `cap Name(params)` as sugar
@@ -122,13 +115,11 @@ A named capability with value params is sugar for a cap-generating function:
 
 ```
 // These are equivalent:
-cap Between(min: N is Ord, max: N) of N {
+cap Between(min: N is Ord, max: N) of N:
     prop in_range: min <= Self && Self <= max
-}
 
-fn between(min: N is Ord, max: N) -> cap of N {
+fn between(min: N is Ord, max: N) -> cap of N:
     prop in_range: min <= Self && Self <= max
-}
 ```
 
 The `cap` form is convenient for simple, named refinements. The `fn` form is the general mechanism — use it when you need first-class cap generation, composition, or conditional logic.
@@ -164,9 +155,8 @@ This replaces three ad-hoc mechanisms with one principled system:
 Inside cap definitions, `Part` refers to the element type without needing an explicit type parameter:
 
 ```
-cap Folding {
+cap Folding:
     fn fold<R>(init: R, f: (R, Part) -> R) -> R
-}
 ```
 
 This eliminates `<A>` boilerplate. When a cap has multiple type parameters, they're named explicitly in `of`.
@@ -174,15 +164,13 @@ This eliminates `<A>` boilerplate. When a cap has multiple type parameters, they
 ### `Self.fn` vs `fn` — static vs instance methods
 
 ```
-cap Sequencing {
-    fn head -> is Optional          // instance method (called on a value)
-    fn tail -> Self                  // instance method
-    Self.fn cons(h: Part, t: Self) -> Self  // static/constructor (called on the type)
-}
+cap Sequencing:
+    fn head -> is Optional                  // instance method (called on a value)
+    fn tail -> Self                          // instance method
+    Self.fn cons(h: Part, t: Self) -> Self   // static/constructor (called on the type)
 
-cap Empty {
-    Self.fn empty -> Self           // static constructor
-}
+cap Empty:
+    Self.fn empty -> Self                    // static constructor
 ```
 
 Static methods are called via dot on the type alias: `C.empty`, `C.cons(x, acc)`.
@@ -192,10 +180,9 @@ Static methods are called via dot on the type alias: `C.empty`, `C.cons(x, acc)`
 ### `extends` for supertrait relationships
 
 ```
-cap Optional extends Functor + Folding {
+cap Optional extends Functor + Folding:
     fn isDefined -> Boolean
     fn orElse(e: Part) -> Part
-}
 ```
 
 ### `satisfies` for type-provides-cap implementation
@@ -205,17 +192,18 @@ cap Optional extends Functor + Folding {
 | Keyword | Relationship | Example |
 |---------|-------------|---------|
 | `extends` | Cap inherits requirements from another cap | `cap Monad extends Functor` |
-| `satisfies` | Type provides concrete implementation of a cap | `Maybe satisfies Optional { ... }` |
+| `satisfies` | Type provides concrete implementation of a cap | `Maybe satisfies Optional: ...` |
 
 A `satisfies` declaration maps data constructors to capability constructors by name using `as`:
 
 ```
-data Maybe of A { Just(value: A), Nothing }
+data Maybe of A:
+    Just(value: A)
+    Nothing
 
-Maybe satisfies Optional {
+Maybe satisfies Optional:
     Just as some
     Nothing as none
-}
 ```
 
 Satisfactions are modular — brought into scope via `use`:
@@ -223,9 +211,8 @@ Satisfactions are modular — brought into scope via `use`:
 ```
 use std.maybe.Maybe satisfies Optional
 
-fn wrap(x: A) -> is Optional of A {
+fn wrap(x: A) -> is Optional of A:
     Optional.some(x)   // compiler resolves to Maybe.Just(x) via satisfaction
-}
 ```
 
 `use Type satisfies Cap` does two things in one line: it imports the type *and* brings the satisfaction mapping into scope.
@@ -233,18 +220,16 @@ fn wrap(x: A) -> is Optional of A {
 Unreachable constructors are marked with `impossible`:
 
 ```
-u64 satisfies Optional of Self {
+u64 satisfies Optional of Self:
     Self as some
     impossible as none   // u64 is always present — `none` is a compile error
-}
 ```
 
 ### `Self of B` for higher-kinded returns
 
 ```
-cap Functor {
+cap Functor:
     fn map<B>(f: Part -> B) -> Self of B
-}
 ```
 
 `Self` is the container shape, `of B` changes the element type. This replaces the `F for <_>` machinery with something more intuitive.
@@ -278,8 +263,8 @@ type Clamped(lo: N is Numeric + Ord, hi: N) = N + between(lo, hi)
 At use sites, they are called like cap-generating functions:
 
 ```
-fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String { ... }
-fn read_name() -> S is BoundedString(255) with Console { ... }
+fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String: ...
+fn read_name() -> S is BoundedString(255) with Console: ...
 ```
 
 This is consistent with the `fn -> cap` story: `type Name(params) = expr` is sugar for a function that returns a capability set. The compiler expands it at every use site, just like plain type aliases.
@@ -290,29 +275,37 @@ This is consistent with the `fn -> cap` story: `type Name(params) = expr` is sug
 
 ```
 // Simple enumeration — all unit variants
-data Direction { North, South, East, West }
+data Direction:
+    North
+    South
+    East
+    West
 
 // Mixed variants — some carry data, some don't.
 // Capability constraints work inside data definitions.
-data Color { Red, Green, Blue, RGB(red: N is Numeric, green: N, blue: N) }
+data Color:
+    Red
+    Green
+    Blue
+    RGB(red: N is Numeric, green: N, blue: N)
 
 // Recursive data — the compiler handles allocation
-data Expr {
-    Lit(value: f64),
-    Add(left: Expr, right: Expr),
-    Mul(left: Expr, right: Expr),
-    Neg(inner: Expr),
-}
+data Expr:
+    Lit(value: f64)
+    Add(left: Expr, right: Expr)
+    Mul(left: Expr, right: Expr)
+    Neg(inner: Expr)
 
 // Phantom-typed data
-data Tagged of (phantom Tag, Value) {
+data Tagged of (phantom Tag, Value):
     Tagged(value: Value)
-}
 
 // Single-constructor sugar — when there's only one variant,
-// the braces and repeated name are unnecessary:
+// the indented body and repeated name are unnecessary:
 data Config(host: String, port: u16, debug: bool)
-// Equivalent to: data Config { Config(host: String, port: u16, debug: bool) }
+// Equivalent to:
+//     data Config:
+//         Config(host: String, port: u16, debug: bool)
 // Construction: Config("localhost", 8080, false)
 // Pattern match: Config(h, p, d) => ...
 ```
@@ -344,7 +337,7 @@ Use `satisfies` to **bridge** between data and capabilities — mapping data con
 
 | Operation | Data types | Capabilities |
 |---|---|---|
-| **Destruction** (case-split) | `match json { Json.Null => ... }` | `opt.fold((v) -> ..., () -> ...)` |
+| **Destruction** (case-split) | `match json: Json.Null => ...` | `opt.fold((v) -> ..., () -> ...)` |
 | **Construction** | `Json.Null`, `List.Cons(x, xs)` | `Optional.some(x)`, `Result.err(e)` |
 | **Constructor casing** | Capitalized: `Json.Null`, `List.Cons` | lowercase: `Optional.some`, `Expr.lit` |
 
@@ -368,13 +361,12 @@ let y = x + 1
 y * 2              // this block evaluates to 12
 
 // `if` is an expression
-let abs_n = if n < 0 { 0 - n } else { n }
+let abs_n = if n < 0: 0 - n else: n
 
 // `match` is an expression
-let name = match direction {
+let name = match direction:
     Direction.North => "North"
     Direction.South => "South"
-}
 ```
 
 ### Functions are total — recursion lives in data
@@ -389,15 +381,14 @@ This is a deliberate design choice:
 
 ```
 // This is a compile error — functions cannot be recursive:
-// fn factorial(n: u64) -> u64 { if n == 0 { 1 } else { n * factorial(n - 1) } }
+// fn factorial(n: u64) -> u64: if n == 0: 1 else: n * factorial(n - 1)
 
 // Instead, use fold on a recursive data structure:
-fn factorial(n: u64) -> u64 {
+fn factorial(n: u64) -> u64:
     to_nat(n).fold(
         () -> 1,
         (acc) -> (acc_index + 1) * acc
     )
-}
 ```
 
 ### Additional syntax
@@ -407,35 +398,33 @@ fn factorial(n: u64) -> u64 {
 | Arrow function types | `Part -> B`, `(R, Part) -> R` | `fn(Part) -> B`, `fn(R, Part) -> R` |
 | Arrow lambdas | `(x, y) -> x + y` | Rust-style `\|x, y\| x + y` |
 | Parenthesless zero-arg methods | `fn head -> is Optional` | `fn head() -> is Optional` |
-| Block lambdas | `.map { value -> expr }` | `.map((value) -> expr)` |
+| Multi-line lambdas | `.map((x) ->` + indented body | Removed brace block lambdas in v0.3 |
 | Dot static calls | `C.empty`, `C.cons(x, acc)` | `C.empty()`, `C.cons(x, acc)` |
 | Type aliases | `type ArrayLike = Seq + RA + Sized + Empty` | Repeating capability bundles everywhere |
 | Parameterized type aliases | `type PortRange(min, max) = u16 + between(min, max)` | Repeating parameterized refinements |
-| Data declarations | `data Color { Red, Green, Blue, RGB(...) }` | No prior equivalent (escape hatch) |
-| Single-constructor data sugar | `data Config(host: String, port: u16)` | `data Config { Config(host: String, port: u16) }` |
-| Satisfaction decl | `Maybe satisfies Optional { Just as some, Nothing as none }` | Haskell's `instance`, Rust's `impl Trait for Type` |
+| Data declarations | `data Color:` + indented variants `Red`, `Green`, `Blue`, `RGB(...)` | No prior equivalent (escape hatch) |
+| Single-constructor data sugar | `data Config(host: String, port: u16)` | `data Config:` + `Config(host: String, port: u16)` |
+| Satisfaction decl | `Maybe satisfies Optional:` + `Just as some`, `Nothing as none` | Haskell's `instance`, Rust's `impl Trait for Type` |
 | Impossible mapping | `impossible as none` | Partial satisfaction — unreachable constructor |
 | Satisfaction import | `use std.maybe.Maybe satisfies Optional` | Brings satisfaction mapping into scope |
 | No semicolons | Newlines separate expressions | `;` statement terminators |
-| Cap-generating functions | `fn between(min, max) -> cap of N { prop ... }` | Separate type-level and value-level abstractions |
-| Cap sugar | `cap Between(min, max) of N { ... }` | `fn between(min, max) -> cap of N { ... }` (equivalent) |
+| Cap-generating functions | `fn between(min, max) -> cap of N:` + indented `prop ...` | Separate type-level and value-level abstractions |
+| Cap sugar | `cap Between(min, max) of N:` + indented `prop ...` | `fn between(min, max) -> cap of N:` + indented prop (equivalent) |
 
 ### `prop` — invariants specified in place
 
 Properties from property-based testing are built into the language as a form of **lightweight theorem proving**. The `prop` keyword declares invariants directly inside capability or data definitions. The compiler checks them — statically where possible, via property-based testing otherwise.
 
 ```
-cap Sorted extends Sequencing {
+cap Sorted extends Sequencing:
     prop sorted: fold(true, (acc, prev, curr) -> acc && prev <= curr)
-}
 
-cap Stack extends Sequencing + Sized {
+cap Stack extends Sequencing + Sized:
     prop push_increments: forall (s: Self, x: Part) ->
         s.push(x).size == s.size + 1
 
     prop pop_decrements: forall (s: Self) ->
         s.size > 0 implies s.pop().size == s.size - 1
-}
 ```
 
 Key properties of `prop`:
@@ -448,21 +437,19 @@ Key properties of `prop`:
 Properties can also appear on `data` types:
 
 ```
-data Nat {
-    Zero,
-    Succ(pred: Nat),
+data Nat:
+    Zero
+    Succ(pred: Nat)
 
     prop non_negative: fold(() -> true, (inner) -> inner)
-}
 ```
 
 And on functions, as postconditions:
 
 ```
-fn sort(collection: C is Sequencing) -> C is Sorted {
+fn sort(collection: C is Sequencing) -> C is Sorted:
     prop result_same_size: result.size == collection.size
     ...
-}
 ```
 
 ---
@@ -634,7 +621,7 @@ Formal specification documents that pin down semantics before implementation.
 - **No explicit `self`**: instance methods don't declare a self parameter; the compiler infers it
 - **Coherence rules**: how orphan rules work when there are no concrete types. Satisfaction declarations (`Type satisfies Cap`) are modular — they must be brought into scope via `use Type satisfies Cap` to be visible. No global coherence requirement.
 - **Recursive capability detection**: Self in constructor parameter position
-- **`satisfies` semantics**: How `Type satisfies Cap { Variant as constructor }` declarations map data constructors to capability constructors. How `impossible as constructor` marks unreachable constructors. How the compiler verifies soundness of partial satisfactions. How `use Type satisfies Cap` brings satisfaction mappings into scope.
+- **`satisfies` semantics**: How `Type satisfies Cap:` + indented `Variant as constructor` declarations map data constructors to capability constructors. How `impossible as constructor` marks unreachable constructors. How the compiler verifies soundness of partial satisfactions. How `use Type satisfies Cap` brings satisfaction mappings into scope.
 - **Constructor resolution**: How the compiler selects among in-scope `satisfies` declarations when a `Self.fn` constructor is called on a capability. Context-based resolution via return types and assignment targets. Ambiguity errors with copy-pasteable suggestions.
 
 ---
@@ -684,12 +671,12 @@ spec/                      — Phase 1 deliverables
 ### AST node types needed
 
 - **Items**: `CapDef`, `EffectDef`, `DataDef`, `TypeAlias` (optionally with `ValueParams`), `FnDef`, `PropDef`, `UseDecl`, `ModDecl`, `SatisfactionDecl`
-- **Satisfaction**: `SatisfactionDecl` (`Type satisfies Cap { mappings... }`), `ConstructorMapping` (`Variant as cap_constructor`), `ImpossibleMapping` (`impossible as cap_constructor`)
+- **Satisfaction**: `SatisfactionDecl` (`Type satisfies Cap:` followed by indented mappings), `ConstructorMapping` (`Variant as cap_constructor`), `ImpossibleMapping` (`impossible as cap_constructor`)
 - **Cap members**: `InstanceMethod`, `StaticMethod` (the `Self.fn` distinction)
 - **Capability refs**: `IsCap` (anonymous), `NamedAlias` (`N is Numeric`), `OfApp` (`Folding of i64`), `SelfOf` (`Self of B`), `CapCall` (`between(10, 30)` — cap-generating function applied to args), `UseSatisfaction` (`use Type satisfies Cap` — satisfaction import)
 - **Cap generation**: `CapReturnType` (`cap of N` as return type), `ValueParams` (definition-site `(min: N is Ord, max: N)`), `ValueArgs` (use-site `(10, 30)`)
 - **Expressions**: `Match`, `If`, `Let`, `FnCall`, `MethodCall`, `StaticCall` (`C.empty`), `Closure`, `BlockLambda`, `Do`, `Handle`, `Block`, `Literal`, `BinaryOp`, `UnaryOp`, `FieldAccess`, `ListLiteral`, `Pipe`, `Forall`, `Implies`
-- **Data**: `DataDef` (multi-variant with braces, or single-constructor sugar without braces), `DataVariant` (unit variant, tuple variant with named fields), `PhantomParam`, `OfParams`
+- **Data**: `DataDef` (multi-variant with `:` + indented variants, or single-constructor sugar with paren-form fields), `DataVariant` (unit variant, tuple variant with named fields), `PhantomParam`, `OfParams`
 - **Patterns**: `DataVariantPat` (`Expr.Lit(v)`, `List.Cons(h, t)`) — only data-qualified patterns allowed in `match`; no `CapConstructorPat` (capabilities are destructured via `fold`, not `match`), `WildcardPat`, `BindingPat`, `LiteralPat`, `DestructurePat`, `GuardedPat`
 - **Types**: `ArrowType` (`A -> B`), `TupleArrowType` (`(A, B) -> C`), `CapBound` (`is Cap + Cap`), `OfType` (`Cap of X`), `CapType` (`cap of N` — capability as return type)
 
@@ -737,12 +724,13 @@ Implementation note: capability closure, prop verification, quantity checking, a
 **`satisfies` declarations** connect abstract constructors to concrete data types. The mapping is by name using `as`:
 
 ```
-data Maybe of A { Just(value: A), Nothing }
+data Maybe of A:
+    Just(value: A)
+    Nothing
 
-Maybe satisfies Optional {
+Maybe satisfies Optional:
     Just as some
     Nothing as none
-}
 // fold is auto-derived from the two variants
 ```
 
@@ -761,9 +749,8 @@ When a `Self.fn` constructor is called on a capability (e.g., `Optional.some(x)`
 
 ```
 // Return type provides context:
-fn wrap(x: A) -> is Optional of A {
+fn wrap(x: A) -> is Optional of A:
     Optional.some(x)   // resolves via in-scope satisfaction
-}
 
 // Assignment target constrains:
 let x: is Optional of u64 = Optional.some(42)
@@ -798,21 +785,19 @@ let z = Maybe.Just(42)
 Any type can satisfy a cap, marking unreachable constructors with `impossible`:
 
 ```
-u64 satisfies Optional of Self {
+u64 satisfies Optional of Self:
     Self as some
     impossible as none
-}
 ```
 
 Meaning: `u64` is always present (`some` = identity), never absent (`none` = unreachable). The compiler verifies soundness — any code path that would invoke `none` on a `u64 is Optional` is a compile error.
 
 ```
-data NonEmptyList of A { Cons(head: A, tail: is List of A) }
+data NonEmptyList of A (head: A, tail: is List of A)
 
-NonEmptyList satisfies Sequencing {
+NonEmptyList satisfies Sequencing:
     Cons as cons
     impossible as empty
-}
 ```
 
 ### Capability-set representation narrowing
@@ -938,7 +923,7 @@ Profile-guided optimization for representation selection.
 
 7. **`Self of B` vs `F for <_>`**: The new `Self of B` syntax is more intuitive for single-param HKTs. Does `F for <_>` survive for cases where you need to abstract over the container itself (e.g., `fn sequence<M is Monad for <_>>`)?
 
-8. **Block lambda vs closure syntax**: When does `{ x -> expr }` apply vs `(x) -> expr`? Are both supported, or does block lambda replace closures entirely?
+8. ~~Block lambda vs closure syntax~~: **Resolved in v0.3.** Block lambdas (`{ x -> body }`) removed. Single-line: `(x) -> expr`. Multi-line: `(x) ->` followed by an indented body.
 
 9. **Data auto-deriving capabilities**: Which capabilities does a `data` type automatically satisfy? Multi-variant → `Folding`? With accessors → `Functor`? Recursive → auto-heap-allocation? Right-bias determines which parameter `Functor` maps over. Need clear rules for the full derivation matrix.
 
