@@ -1,8 +1,10 @@
 # Fixed Quantities (QTT)
 
-**Status:** Draft v0.1
-**Specifies:** quantity inference for Fixed v0.4.1 source.
+**Status:** Draft v0.2
+**Specifies:** quantity inference for Fixed v0.4.4 source.
 **Last revised:** 2026-04-30
+
+**Changes from v0.1.** Rule Q5.5 reframed: prop bodies are not "checked at quantity 0" — they are *excluded from the compiled artifact*. References inside prop bodies do not contribute to a binding's runtime quantity in the artifact, but PBT (`spec/properties.md` §7) may run prop bodies as code in a separate test build; that build computes its own quantities independently. The semantic effect on the compiled binary is the same as before; the framing now distinguishes *artifact* (program binary) from *test build* (PBT driver).
 
 ## 1. Scope
 
@@ -138,9 +140,13 @@ A type parameter inferred phantom per type_system.md §5.9 is **always quantity 
 
 ### 5.5 `prop` bodies (Rule Q5.5)
 
-The body of a `prop name: expr` declaration is checked at **quantity 0**. All free occurrences of bindings inside a prop body contribute their usage at quantity 0 — i.e., they do not count for the binding's runtime quantity.
+Prop bodies are **excluded from the compiled artifact** (the program binary). References to bindings inside a prop body therefore do **not contribute to the binding's runtime quantity** in the compiled artifact. If a binding is used only inside prop bodies, it has runtime quantity 0 in the artifact and is erased.
 
-This makes the compile-time verification (or PBT generation per `spec/properties.md`) sound: no runtime code is generated for a prop, and references to runtime values inside a prop do not force those values into the runtime usage count.
+Property verification (`spec/properties.md` §7) may compile prop bodies separately into a **test build** — for example, a PBT driver that runs the prop body on generated inputs. Inside that test build, bindings have their normal quantities determined by all uses (including the prop body itself); the test build genuinely runs the body and is subject to standard quantity arithmetic. The test build is **not** part of the program binary.
+
+Operationally: when computing a binding's runtime quantity in the compiled artifact, the typer ignores uses inside prop bodies. Property verification is then handled separately, with its own compilation pipeline.
+
+The earlier framing ("prop bodies are checked at quantity 0") was a shorthand for this artifact-exclusion rule; the v0.2 wording makes the distinction explicit because PBT involves real runtime evaluation and benefits from the clarification.
 
 ### 5.6 Lambda parameters (Rule Q5.6)
 

@@ -3,9 +3,16 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4.3
+   Status:        DRAFT v0.4.4
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
    Last revised:  2026-04-30
+
+   Refinements in v0.4.4
+   ---------------------
+   - **`suchThat` clause** in `forall` quantifiers — a generator-side
+     filter for property-based testing: `forall (s: Self) suchThat
+     s.size > 0 -> ...`. See spec/properties.md §5.4. `suchThat` is a
+     reserved word.
 
    Refinements in v0.4.3
    ---------------------
@@ -216,10 +223,11 @@ DEDENT          = (* synthetic token: closing of an indented block *) ;
      extends false       fn          forall      handle      if
      implies impossible  in          is          let         linear
      match   mod         of          prop        pub         resume
-     return  Self        satisfies   true        type        unreachable
-     use     with                                                          *)
+     return  Self        satisfies   suchThat    true        type
+     unreachable         use         with                                  *)
 (* `phantom` removed in v0.4.1 — phantom-ness is now inferred from usage.
-   `linear` added in v0.4.2 — modifier on `effect` declarations. *)
+   `linear` added in v0.4.2 — modifier on `effect` declarations.
+   `suchThat` added in v0.4.4 — filter clause in `forall` quantifiers. *)
 
 
 (* ============================================================
@@ -687,8 +695,18 @@ LetExpr                                (* returns () *)
     = "let" Pattern "=" PipeExpr
     ;
 
+(* ForallExpr is reachable only inside PropExpr (Q5/N2). The optional
+   `suchThat Expr` clause (v0.4.4) filters generated values in PBT —
+   only values satisfying the clause count toward the iteration budget.
+   In static proof, `forall (xs) suchThat C -> body` is logically
+   equivalent to `forall (xs) -> C implies body`. See
+   spec/properties.md §5.4. *)
 ForallExpr
-    = "forall" "(" Binder ( "," Binder )* ","? ")" "->" PropExpr
+    = "forall" "(" Binder ( "," Binder )* ","? ")" SuchThatClause? "->" PropExpr
+    ;
+
+SuchThatClause
+    = "suchThat" Expr
     ;
 
 Binder

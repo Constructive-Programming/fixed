@@ -1,8 +1,16 @@
 # Fixed Properties
 
-**Status:** Draft v0.1
-**Specifies:** `prop` declarations, `forall` / `implies` quantifiers, the verification strategy (static-then-PBT), property-based test generation, and how verified properties feed compiler optimization for Fixed v0.4.3 source.
+**Status:** Draft v0.2
+**Specifies:** `prop` declarations, `forall` / `implies` / `suchThat` constructs, the verification strategy (static-then-PBT), property-based test generation, and how verified properties feed compiler optimization for Fixed v0.4.4 source.
 **Last revised:** 2026-04-30
+
+**Changes from v0.1.**
+- `implies` is now **eager** (no automatic vacuous-truth discard in PBT) — it is plain propositional implication in both static and PBT contexts.
+- New `suchThat` clause on `forall` (§5.4) is the dedicated **filter** for PBT: only values satisfying the `suchThat` expression count toward the iteration budget. This separates *logic* (`implies`) from *generator filtering* (`suchThat`) and makes test intent more explicit.
+- §4.1 reframed: prop bodies are **excluded from the compiled artifact** rather than "checked at quantity 0". The semantic effect is the same; the framing accommodates PBT, which genuinely runs the prop body in a separate test build with normal quantity arithmetic.
+- New §7.4 specifies a verification cache (deferred implementation) keyed on prop-body hash + obligation set.
+- New Rule P7.6 specifies compiler flags for disabling PBT, treating PBT failure/timeout as errors, and overriding iteration count and time budget.
+- All open questions (OQ-P1..P6) remain open.
 
 ## 1. Scope
 
@@ -126,9 +134,13 @@ The body of a `fn -> cap` is the *only* fn body in which a non-prop expression a
 
 ## 4. Prop body expressions
 
-### 4.1 Quantity 0 (recap)
+### 4.1 Prop bodies are excluded from the compiled artifact (recap)
 
-Per `spec/quantities.md` Rule Q5.5, a prop body is checked at **quantity 0**: every binding referenced contributes its usage at quantity 0, which does not count toward the binding's runtime quantity. This is what makes prop verification compile-time-only and free at runtime — verified props generate no runtime code.
+Per `spec/quantities.md` Rule Q5.5 (v0.2), prop bodies are **not included in the compiled artifact** (the program binary). References to bindings inside a prop body therefore do not contribute to the binding's runtime quantity in the artifact — if a binding is used only inside props, it has quantity 0 in the artifact and is erased.
+
+Property verification, when it requires running the body (§7's PBT path), compiles the body separately into a **test build** — a distinct compilation context from the program binary. Inside the test build, bindings have their normal quantities determined by all uses (the body genuinely runs at test time). The test build is not part of the production binary; it is the artifact a `fixed verify` invocation produces, separate from `fixed compile`.
+
+The earlier draft's wording "checked at quantity 0" was a shorthand. The v0.2 framing makes the artifact distinction explicit because PBT-driven verification involves actual runtime evaluation.
 
 ### 4.2 No effects (Rule P4.2)
 
@@ -191,6 +203,32 @@ Refinement caps (Marker class) restrict an underlying generator. `between(0, 10)
 
 **Rule P5.3 (Generator availability).** If a `forall` binder's type has no generator and the prop body cannot be statically proven, the typer halts: `error[E101]: cannot verify <prop> — no generator for <type>`. The user resolves by providing a custom generator (mechanism deferred — see OQ-P2) or by restricting the binder's domain via a refinement cap.
 
+### 5.4 `suchThat` (Rule P5.4)
+
+A `forall` quantifier may carry an optional `suchThat` clause that filters generated values:
+
+```
+ForallExpr = "forall" "(" Binders ")" ( "suchThat" Expr )? "->" PropExpr
+```
+
+```
+prop pop_decrements: forall (s: Self) suchThat s.size > 0 ->
+    s.pop().size == s.size - 1
+```
+
+**Rule P5.4.a (Type and scope).** A `suchThat` expression must be a `bool`-typed expression in the binders' scope. It is checked under the same rules as the prop body: artifact-excluded per §4.1, no effects per §4.2.
+
+**Rule P5.4.b (Static-proof semantics).** In static proof, `forall (xs) suchThat C -> body` is **logically equivalent** to `forall (xs) -> C implies body`. The static prover sees the same proof obligation either way.
+
+**Rule P5.4.c (PBT semantics).** In PBT, `suchThat` is a **generator-side filter**: the test driver generates a value, evaluates the `suchThat` expression, and:
+
+- If the expression is `true`: the value is used to test `body`. The case counts toward the iteration budget.
+- If the expression is `false`: the value is **discarded** and a fresh value is generated. The case does *not* count toward the iteration budget.
+
+This makes `suchThat` a precise tool for narrowing the test domain to inputs that actually exercise the property's interesting case. Compare with `implies` (§6.2), which evaluates eagerly and counts every generated case toward the budget.
+
+**Rule P5.4.d (Discard-rate guard).** If the PBT driver discards more than 90% of generated values (default; configurable via `--prop-discard-threshold`), the test halts with a warning: `warning[W106]: prop <name> — high discard rate (<rate>%); consider widening generators or relaxing suchThat`. This catches `suchThat` clauses too restrictive to make practical PBT progress; the user typically responds by tightening the generator (via a more specific refinement cap on the binder type) or by switching to a static-only verification mode (see Rule P7.6).
+
 ## 6. The `implies` connective
 
 ### 6.1 Syntax recap
@@ -199,22 +237,38 @@ Refinement caps (Marker class) restrict an underlying generator. `between(0, 10)
 ImpliesExpr = OrExpr "implies" PropExpr
 ```
 
-`implies` is **right-associative**: `A implies B implies C` ≡ `A implies (B implies C)`. It is a `bool`-valued binary connective: `A implies B` is true iff `A` is false or `B` is true (classical propositional implication).
+`implies` is **right-associative**: `A implies B implies C` ≡ `A implies (B implies C)`. It is a `bool`-valued binary connective.
 
-### 6.2 Lazy semantics and vacuous truth (Rule P6.2)
+### 6.2 Eager semantics (Rule P6.2)
 
-In **PBT**, when `A` evaluates to `false`, the test case is **vacuously satisfied** and discarded — the body of `implies` is not evaluated, and the iteration counter does not increment. The PBT engine continues generating until enough non-discarded cases have been observed (default: 100; configurable, see §8.3).
+`implies` is **eager** in both static proof and PBT contexts: `A implies B` evaluates both `A` and `B` and yields `(not A) or B`. There is no automatic vacuous-truth discard.
 
-This avoids spurious "passes" from arbitrary inputs that don't engage the property's interesting case. Example:
+In **static proof**, this is standard propositional implication.
+
+In **PBT**, every generated input contributes one case to the iteration counter — there is no implicit input filtering by `implies`. If most generated inputs satisfy `A` only rarely, the prop body is testing the implication on mostly-vacuous cases. To filter at the generator level (and use the iteration budget on inputs that actually exercise the property's interesting case), use `suchThat` (§5.4) instead.
+
+### 6.3 When to use `implies` vs `suchThat`
+
+| Goal | Use |
+|---|---|
+| State a logical relationship between two propositions, without filtering inputs | `implies` |
+| Generate only inputs that satisfy a predicate, focusing the PBT iteration budget | `suchThat` (in `forall`) |
+
+Example contrasting the two:
 
 ```
-prop pop_decrements: forall (s: Self) ->
+// `implies` — every generated stack tested; empty stacks pass vacuously
+//             (they make the antecedent false, but PBT still counts the case).
+prop pop_decrements_implies: forall (s: Self) ->
     s.size > 0 implies s.pop().size == s.size - 1
+
+// `suchThat` — only non-empty stacks generated; PBT spends iterations on
+//              the interesting case.
+prop pop_decrements_filter: forall (s: Self) suchThat s.size > 0 ->
+    s.pop().size == s.size - 1
 ```
 
-A randomly generated empty stack has `s.size > 0` false; the implication is vacuously satisfied; PBT discards the case and tries again. After 100 *non-discarded* iterations, the prop is accepted (or a counterexample is found).
-
-In **static proof**, `implies` is the standard propositional implication — no laziness concern.
+Static proof of either form is equivalent — the prover sees `s.size > 0 → s.pop().size == s.size - 1` in both cases. The difference is purely in PBT iteration accounting.
 
 ## 7. Verification strategy
 
@@ -244,9 +298,43 @@ The prover does **not** see effect operations, runtime values, or the body of fn
 
 See §8 for generator/shrinking/iteration mechanics. Key invariant: PBT failure is a hard error; PBT non-failure-after-iteration is acceptance (with the understanding that PBT is incomplete — false positives are possible, false negatives are not).
 
-### 7.4 Failure mode interaction with `unreachable`
+### 7.4 Verification caching (Rule P7.4 — implementation guidance)
+
+Property verification can be expensive — SMT calls and PBT iterations scale with prop count and complexity. The compiler **should cache** per-prop verification results across invocations.
+
+The cache key for each prop is the tuple of:
+
+- The canonical hash (Blake3 or equivalent) of the prop body's typed AST.
+- The relevant in-scope obligations: refinement caps applied to binder types, `satisfies` declarations referenced, inherited props (via `extends`).
+- The configured PBT iteration count and time budget (Rule P7.6 below).
+- The prover version / SMT solver version (so prover upgrades invalidate cache).
+
+A cache hit skips both static proof and PBT entirely. A cache miss runs the full verification. Cache invalidation occurs when any key component changes.
+
+This rule is **implementation guidance**, not a normative requirement: a conformant compiler may run verification fresh every time. Caching is strongly recommended for development ergonomics — without it, every full build re-runs PBT iterations on every prop, which is unacceptably slow at scale.
+
+Implementation deferred. A reasonable v1 cache is a per-project file-system store at `.fixed/cache/props/`, with one entry per (key, result) pair.
+
+### 7.5 Failure mode interaction with `unreachable`
 
 If a prop is statically proven, the typer may use the prop to discharge `unreachable` calls in code paths that the prop excludes. See §9.
+
+### 7.6 Compiler flags (Rule P7.6)
+
+The user controls verification behavior via the following flags on `fixed verify`, `fixed compile`, and `fixed ship`:
+
+| Flag | Effect |
+|---|---|
+| `--no-pbt` | **Disable PBT entirely.** Props that the static prover reports `unknown` are accepted with `warning[W107]: prop <name> not statically verified; PBT disabled`. Useful when CI time is constrained or when PBT is known to be flaky for a given prop set. |
+| `--strict-pbt` | Treat PBT *failure* AND *timeout* as errors (the default treats timeout as `warning[W103]`). Useful for release builds where any unverified prop should block. |
+| `--prop-iterations=N` | Override default PBT iteration count (default: 100 non-discarded cases per prop). |
+| `--prop-timeout=Ts` | Override default total time budget per prop (default: 30s). |
+| `--prop-discard-threshold=R` | Override the discard-rate guard (Rule P5.4.d, default 0.9 — i.e., 90%). |
+| `--no-prop-cache` | Disable the verification cache (Rule P7.4). Forces fresh verification on every invocation. Useful for debugging cache invalidation issues. |
+
+`--no-pbt` is mutually exclusive with `--strict-pbt`; combining them is a CLI usage error.
+
+When `--no-pbt` is set, props requiring PBT are not verified. The compiler emits W107 warnings for each. The compiled artifact still excludes prop bodies (per §4.1) — the only effect is that the *verification step* is skipped.
 
 ## 8. Property-based test generation
 
@@ -386,8 +474,8 @@ cap Stack extends Sequencing + Sized:
     prop push_increments: forall (s: Self, x: Part) ->
         s.push(x).size == s.size + 1
 
-    prop pop_decrements: forall (s: Self) ->
-        s.size > 0 implies s.pop().size == s.size - 1
+    prop pop_decrements: forall (s: Self) suchThat s.size > 0 ->
+        s.pop().size == s.size - 1
 
     prop push_pop_identity: forall (s: Self, x: Part) ->
         s.push(x).pop == s
@@ -396,7 +484,7 @@ cap Stack extends Sequencing + Sized:
 Verification walk:
 
 - `push_increments` — static prover: with `s` and `x` quantified, `s.push(x)` is a function call whose body is opaque to the prover. Likely `unknown`; PBT runs. Generator: pick a `Self` from a satisfying type's generator (e.g., a `List` or `Vec` that provides `push`); pick a `Part`; check the equality.
-- `pop_decrements` — `implies` makes this conditional. PBT discards `s.size == 0` cases; only non-empty stacks count toward the iteration budget. Same opaque-call pattern; PBT verifies.
+- `pop_decrements` — `suchThat s.size > 0` filters generated stacks at the PBT generator level. Empty stacks are discarded by the driver and never counted toward the iteration budget. The body is then evaluated only on non-empty stacks. Compare to a hypothetical `implies` formulation, where every generated stack would count toward the budget but only non-empty ones would actually exercise the property.
 - `push_pop_identity` — the strongest invariant. PBT with the same generators verifies. If it passes, the optimiser may use this as a peephole: `s.push(x).pop()` ⇒ `s` (eliminating the round-trip).
 
 ### 11.2 `Bounded` data type
