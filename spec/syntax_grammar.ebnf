@@ -3,9 +3,15 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4.1
+   Status:        DRAFT v0.4.2
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
    Last revised:  2026-04-30
+
+   Refinements in v0.4.2
+   ---------------------
+   - **`linear` modifier on `effect` declarations** added. `linear effect E:`
+     declares a linear effect whose ops are used at most once per code path
+     (see spec/effects.md §3.5). `linear` is now a reserved word.
 
    Refinements in v0.4.1
    ---------------------
@@ -196,13 +202,12 @@ DEDENT          = (* synthetic token: closing of an indented block *) ;
 (* KEYWORDS:
      as      cap         data        do          effect      else
      extends false       fn          forall      handle      if
-     implies impossible  in          is          let         match
-     mod     of          prop        pub         resume      return
-     Self    satisfies   true        type        unreachable use
-     with                                                                 *)
-(* `phantom` removed in v0.4.1 — phantom-ness is now inferred from usage
-   (a type parameter is phantom iff it does not appear in any field,
-   method signature, inherited member, or prop expression). *)
+     implies impossible  in          is          let         linear
+     match   mod         of          prop        pub         resume
+     return  Self        satisfies   true        type        unreachable
+     use     with                                                          *)
+(* `phantom` removed in v0.4.1 — phantom-ness is now inferred from usage.
+   `linear` added in v0.4.2 — modifier on `effect` declarations. *)
 
 
 (* ============================================================
@@ -302,8 +307,11 @@ TypeParamsHint
    5. Effect declarations
    ============================================================ *)
 
+(* Effects may carry an optional `linear` modifier (v0.4.2). A linear
+   effect's ops contribute quantity 1 to the row; total usage across
+   all reachable paths must be ≤ 1. See spec/effects.md §3.5. *)
 EffectDecl
-    = "effect" UPPER_IDENT CapOfParams? EffectBody?
+    = "linear"? "effect" UPPER_IDENT CapOfParams? EffectBody?
     ;
 
 EffectBody

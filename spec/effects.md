@@ -1,8 +1,10 @@
 # Fixed Effects
 
-**Status:** Draft v0.1
-**Specifies:** algebraic effect declarations, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.1 source.
+**Status:** Draft v0.2
+**Specifies:** algebraic effect declarations, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.2 source.
 **Last revised:** 2026-04-30
+
+**Changes from v0.1.** Resolves OQ-E5 (linear effects → §3.5) and OQ-E6 (effect aliasing → §4.5). Removes Rule E6.5 (wildcard handler arms) per OQ-E2 decision. OQ-E1, OQ-E3, OQ-E4 marked as deferred decisions.
 
 ## 1. Scope
 
@@ -92,6 +94,44 @@ effect Channel of A:
 
 `Fail of String` and `Fail of i64` are **distinct effects** for inference and handling purposes. Identity is by name × `of` arguments (§4.2).
 
+### 3.5 Linear effects (Rule E3.5)
+
+An effect declared with the `linear` modifier is a **linear effect** — its operations are subject to a usage constraint enforced by the typer:
+
+```
+linear effect FileHandle:
+    fn read_all -> Bytes
+
+linear effect Lock:
+    fn release -> ()
+```
+
+A linear effect's row entry carries quantity 1 (per `spec/quantities.md` §3 semiring). In any function body where a linear effect E appears in the inferred row, the total usage of E across all reachable code paths is constrained to ≤ 1, computed using QTT's join (`⊔`, Rule Q5.9) across mutually exclusive branches and sum (`+`, Rule Q5.10) across sequenced expressions.
+
+**Rule E3.5.a (Linearity check).** For each linear effect E in a function's inferred row (after handler subtraction per Rule E5.3), the typer verifies:
+
+- Sequential ops on E in the same code path → usage `1 + 1 = ω` → **error[E083]: linear effect used multiple times in <fn>** with location of each call.
+- Ops on E in mutually exclusive branches → usage `1 ⊔ 1 = 1` → OK.
+- A function call whose body uses E propagates that callee's usage; if the caller is already at usage 1 for E, the call is rejected.
+
+**Rule E3.5.b (Handler scoping).** Each `handle` block for a linear effect installs **one** usage permission for E within its SUBJECT. Nested handlers provide fresh permissions. After a `handle` block subtracts E from its scope (Rule E5.3), E is no longer in the row and the linearity counter resets for any outer scope that re-installs E.
+
+**Rule E3.5.c (Semantics — at-most-once).** Fixed's `linear effect` is **at-most-once** in the standard linear-typing sense (technically *affine* — zero usage is also allowed). A function whose inferred row contains a linear effect E but whose body never calls any operation of E is valid (usage 0). This matches the common pattern where a linear capability is acquired but conditionally not exercised.
+
+**Use case.** Linear effects encode resource lifecycles where double-use is a bug. For multi-step lifecycles (acquire + use* + release), use multiple linear effects, or wait for the planned per-op linearity refinement (see §9 OQ-E7). Examples:
+
+```
+// One-shot lock release:
+linear effect Lock:
+    fn release -> ()
+
+// Resource handle that must be closed exactly along one path:
+linear effect Handle of R:
+    fn close(resource: R) -> ()
+```
+
+**Compatibility.** A non-linear handler does not satisfy a linear-effect contract; declaring `linear effect E` requires every handler that handles E to be a `handle` block (handlers do not need to be marked `linear` — linearity is a property of the effect, not the handler).
+
 ## 4. Effect rows
 
 An **effect row** is an unordered, duplicate-free **set** of `EffectBound`s, written `with E1 + E2 + ...`.
@@ -124,6 +164,64 @@ The empty row `with `(written by omitting the `with` clause entirely) is the ide
 `E_1 ≤ E_2` (E_1 is a sub-row of E_2) iff `E_1 ⊆ E_2` as sets of effect bounds. A function expected to perform `with E_2` may be supplied a function with `with E_1` if `E_1 ≤ E_2` — the caller "promises more than is delivered," which is safe.
 
 Combined with §3.3: `with !` (a row containing `!` alone, conceptually) is a sub-row of every other row, since `!` indicates the function does not return.
+
+### 4.5 Effect aliasing (Rule E4.5)
+
+The `type` syntax (per `spec/syntax_grammar.ebnf` §7) extends to effect rows. The typer determines whether a given `type X = R` is a **cap alias** or an **effect-row alias** by inspecting `R`:
+
+- If every `+` chain element resolves to an `effect` declaration → effect-row alias, usable in `with` clauses.
+- If every element resolves to a `cap` → cap alias, usable in `is` bounds.
+- Mixed kinds are a compile error: `error[E084]: type alias mixes capabilities and effects`.
+
+**Rule E4.5.a (Effect-alias expansion).** An effect alias `type X = E1 + E2 + ...` is expanded at every use site to its constituent effects:
+
+```
+effect Console:
+    fn print_line(msg: String) -> ()
+effect FileSystem:
+    fn read_file(path: String) -> is Result of (String, String)
+effect Clock:
+    fn now -> u64
+
+type IO = Console + FileSystem + Clock
+
+fn run() -> () with IO = ...
+// equivalent to:
+// fn run() -> () with Console + FileSystem + Clock = ...
+```
+
+**Rule E4.5.b (Parameterised effect aliases).** Effect aliases may take value parameters using the existing parameterised-alias syntax:
+
+```
+type AppEffect(E) = Console + Fail of E + Log
+
+fn run() -> () with AppEffect(String) = ...
+// expands to: with Console + Fail of String + Log
+```
+
+**Rule E4.5.c (Aliases in handlers).** When a `handle` block subtracts effects from a row containing an alias, the alias is first expanded and then individual effects are subtracted per Rule E5.3:
+
+```
+type IO = Console + FileSystem
+
+fn run() -> () with IO = ...
+
+handle run():
+    Console.print_line(s) => ...
+    FileSystem.read_file(p) => ...
+    return(v) => v
+// SUBJECT row expands to Console + FileSystem; arms cover both → outer row is empty
+```
+
+**Rule E4.5.d (Composition).** Aliases compose freely:
+
+```
+type IO = Console + FileSystem
+type RuntimeEffects = IO + Clock + Log
+// expanded RuntimeEffects: Console + FileSystem + Clock + Log
+```
+
+A linear effect appearing inside an alias retains its linearity (Rule E3.5) when the alias is expanded — `type IO = Console + FileSystem` containing a linear `FileSystem` would propagate the linearity check to every use site of `IO`.
 
 ## 5. Effect inference
 
@@ -221,11 +319,7 @@ Per Rule Q5.11 in `spec/quantities.md`, `resume` is **always quantity 1** in v0.
 
 For abortive operations (`-> !`), `resume` is never present in the arm — the typer rejects it as a compile error.
 
-### 6.5 Wildcard arms (Rule E6.5, TENTATIVE)
-
-A wildcard arm `_ => body` would catch any unhandled operation of an effect. This is useful for sandboxes and testing harnesses but not exercised by any v0.4 example. Marked TENTATIVE; revisit when an example needs it.
-
-### 6.6 Nested handlers (Rule E6.6)
+### 6.5 Nested handlers (Rule E6.5)
 
 `handle` blocks nest. Inner handlers run first; an effect bubbles outward until a handler claims it. Arms in an inner handler do not see outer handlers' arms — each `handle` has its own arm scope.
 
@@ -236,7 +330,7 @@ handle outer_subject:
 
 If `outer_subject` is itself `handle inner_subject: InnerEff.op() => ...`, then `InnerEff` is removed inside the inner handle and the outer handle sees only what `outer_subject` produces externally.
 
-### 6.7 Handler types and rows (Rule E6.7)
+### 6.6 Handler types and rows (Rule E6.6)
 
 **Result type.** The result type of a `handle` block is the join of:
 
@@ -344,12 +438,24 @@ fn each<E>(list: is List of A, f: A -> () with E) -> () with E =
 
 ## 9. Open questions
 
-- **OQ-E1 — Multi-shot handlers.** Linked to `spec/quantities.md` OQ-Q1. Multi-shot resume requires continuation copying or persistent continuation representation, both with significant memory overhead. Targeted v0.5+.
-- **OQ-E2 — Wildcard handler arms.** Rule E6.5 marks this TENTATIVE. Decide once a sandbox/proxy use case lands.
-- **OQ-E3 — Effect inheritance / extension.** Effects are flat in v0.4.1 (no `extends` for effects). Whether to allow `effect MyConsole extends Console: ...` for refinement is open. Likely add when stdlib needs it.
-- **OQ-E4 — Higher-rank effect polymorphism.** A function whose argument is itself effect-polymorphic (`fn higher(g: forall E. (A -> B with E) -> ...)`) would be needed for very generic combinator libraries. Defer until the bootstrap compiler exists and we can measure.
-- **OQ-E5 — Linear effects.** An effect that may be performed at most once (e.g., a one-shot resource acquisition). Would integrate with QTT linearity. Defer; no v0.4 example needs it.
-- **OQ-E6 — Effect aliasing.** `type IO = Console + FileSystem + Clock` would mirror type aliases but for effect rows. Currently a function must enumerate the row. Add when stdlib bootstraps and idioms emerge.
+**Resolved in v0.2:**
+
+- **OQ-E5 — Linear effects.** Resolved → §3.5. `linear effect E:` declares an effect whose ops are quantity 1 in the row; usage check enforces ≤ 1 per code path. Useful for resource management.
+- **OQ-E6 — Effect aliasing.** Resolved → §4.5. `type X = E1 + E2 + ...` introduces an effect-row alias; the typer detects effect-vs-cap kind from RHS contents.
+
+**Deferred decisions (revisit when motivated by examples):**
+
+- **OQ-E1 — Multi-shot handlers (deferred to v0.5+).** Linked to `spec/quantities.md` OQ-Q1. v0.4.2 keeps `resume` at quantity 1 per Rule Q5.11 and Rule E6.4. Multi-shot would require continuation copying or persistent continuation representation, both with significant memory overhead.
+- **OQ-E3 — Effect inheritance (deferred).** No `extends` for effects in v0.4.2. Adding `effect MyConsole extends Console: ...` is straightforward if stdlib needs it.
+- **OQ-E4 — Higher-rank effect polymorphism (deferred).** A function whose argument is itself effect-polymorphic (`fn higher(g: forall E. (A -> B with E) -> ...)`) is not in v0.4.2. Defer until benchmark code reveals the need.
+
+**New in v0.2:**
+
+- **OQ-E7 — Per-op linearity within an effect.** Rule E3.5 makes the entire effect linear — *all* ops count toward the same usage budget. For multi-step resource lifecycles (e.g., a single `Connection` effect with `read`, `write`, and `close`, where `close` must be exactly-once but `read` and `write` may repeat), per-op linearity would be more ergonomic. v0.4.2 workaround: split into multiple linear effects, one per linear op. Revisit once stdlib resource patterns emerge.
+
+**Closed (decided not to add):**
+
+- **OQ-E2 — Wildcard handler arms.** v0.4 specs no `_ => body` arm in `HandlerArm`. Decision: explicit per-op coverage is required; sandboxes/proxies that need wildcard catch-all should be expressed via effect aliasing (§4.5) or by an explicit list of arms. Closed in v0.2.
 
 ## 10. Worked examples
 
