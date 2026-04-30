@@ -1,8 +1,10 @@
 # Fixed Pattern Matching
 
-**Status:** Draft v0.1
-**Specifies:** pattern syntax, type rules, exhaustiveness/redundancy checking, and match-expression semantics for Fixed v0.4.2 source.
+**Status:** Draft v0.2
+**Specifies:** pattern syntax, type rules, exhaustiveness/redundancy checking, and match-expression semantics for Fixed v0.4.3 source.
 **Last revised:** 2026-04-30
+
+**Changes from v0.1.** Resolves OQ-M1 (`..` field elision in struct-destructure patterns → §3.6), OQ-M3 (or-patterns → §5.5), OQ-M4 (guards → §5.6); strengthens Rule M6.2 from "may use refinement caps" to "must use refinement caps". Closes OQ-M2 (refutable handler arm parameters), OQ-M5 (view patterns), OQ-M6 (range patterns — subsumed by guards).
 
 ## 1. Scope
 
@@ -114,7 +116,7 @@ let Pair { first: x, second: y } = p
 let Config { host, port, debug: d } = cfg     // shorthand: `host` ≡ `host: host`
 ```
 
-**Rule M3.6.a (Coverage):** every field of the data type's single variant must appear in the pattern, **or** the pattern must end with `..` (TENTATIVE — see §11 OQ-M1). For v0.4.2 every field must be named.
+**Rule M3.6.a (Coverage):** every field of the data type's single variant must appear in the pattern, **or** the pattern must end with `..` to ignore unmentioned fields. The `..` may appear alone (`Foo { .. }` matches without binding any field) or after named patterns (`Foo { x, y, .. }` binds `x` and `y`, ignores the rest). Per the grammar `StructFieldList`, `..` always appears last. (v0.4.3.)
 
 **Rule M3.6.b (Type restriction):** struct-destructure patterns apply only to single-variant `data` types (declared either as `data T(field1, field2, ...)` or as `data T:` followed by a single-variant body with the same name as the type). Multi-variant data types require variant patterns (§3.4).
 
@@ -178,9 +180,70 @@ match x:
     Maybe.Nothing => v          // ERROR: v not in scope (different arm)
 ```
 
-### 5.5 Arms must be ordered by specificity (informational, not normative)
+### 5.5 Or-patterns (Rule M5.5)
 
-Arms are matched **in declaration order**. The first arm whose pattern matches the scrutinee fires; subsequent arms are not tried for this match. This means an earlier wildcard arm can shadow later specific arms (which then become unreachable per §7).
+A match arm's pattern position is an `OrPattern`: one or more `Pattern` alternatives separated by `|`. The arm fires when the scrutinee matches **any** alternative.
+
+```
+match pair:
+    (0, 1) | (1, 0) => "swap pair"
+    (a, b) => a + b
+
+match status:
+    "ok" | "OK" | "Ok" => true
+    _ => false
+```
+
+**Rule M5.5.a (Binder agreement).** Every alternative in an or-pattern must bind exactly the same set of names at exactly the same types. Otherwise: `error[E093]: or-pattern alternatives bind different names`. Bodies may reference any of the common binders.
+
+```
+// VALID — both bind `r: f64`:
+match shape:
+    Shape.Circle(_, r) | Shape.Sphere(r) => r * r
+
+// ERROR — `Just` binds `x`, `Nothing` binds nothing:
+match opt:
+    Maybe.Just(x) | Maybe.Nothing => x       // E093: x not bound by all alternatives
+```
+
+**Rule M5.5.b (Quantity composition).** Each binder's quantity in an or-pattern is the **join** (`⊔`, per `spec/quantities.md` §3.3) over the binder's quantities in each alternative. Since alternatives are mutually exclusive (only one matches per evaluation), the join is the correct combinator — same rule as for `if`/`match` branches (Q5.9).
+
+**Rule M5.5.c (Arity).** Or-patterns are not patterns (they cannot appear in `let`, struct-destructure field positions, or handler arms). They appear only at the top level of a `MatchArm` per the grammar.
+
+### 5.6 Guards (Rule M5.6)
+
+A match arm may carry an optional **guard** — an `if`-suffixed boolean expression that the arm requires to be true after the pattern matches:
+
+```
+match value:
+    n if n > 0 => "positive"
+    0 => "zero"
+    n if n < 0 => "negative"
+```
+
+**Rule M5.6.a (Type).** A guard's expression has type `bool`. Any other type is `error[E094]: guard expression must be of type bool`.
+
+**Rule M5.6.b (Scoping).** A guard sees the binders introduced by its arm's pattern (and outer-scope bindings); it does not see binders from other arms. The guard is evaluated **after** the pattern matches and **before** the arm body runs.
+
+**Rule M5.6.c (Fall-through).** If the pattern matches but the guard evaluates `false`, control falls through to the next arm — the same scrutinee is tried against subsequent patterns.
+
+**Rule M5.6.d (Effects in guards).** Guards may perform effects, contributing them to the match expression's effect row (per Rule M5.3). However, guards run during pattern dispatch, before the arm body — implementations should keep guards inexpensive. There is no compiler restriction on guard effects in v0.4.3, but stylistic guidance is to use guards for pure boolean conditions.
+
+**Rule M5.6.e (Exhaustiveness interaction).** A guarded arm does **not** fully cover its pattern for exhaustiveness purposes — some values matching the pattern might fail the guard. The exhaustiveness check (§6) treats guarded arms conservatively: a guarded arm contributes nothing to the covered space; the residual uncovered space must be covered by subsequent arms (typically a wildcard or unguarded fallback).
+
+### 5.7 Or-pattern + guard composition
+
+When a match arm has both an or-pattern and a guard, the guard sees the common binders of the or-pattern's alternatives and is evaluated once for whichever alternative matched:
+
+```
+match pair:
+    (a, 0) | (0, a) if a > 0 => a       // a is the common binder; guard fires after either alt matches
+    (a, b) => a + b
+```
+
+### 5.8 Arms match in declaration order (informational)
+
+Arms are matched **in declaration order**. The first arm whose pattern matches the scrutinee — and whose guard, if any, is true — fires; subsequent arms are not tried for this match. This means an earlier wildcard arm can shadow later specific arms (which then become unreachable per §7).
 
 ## 6. Exhaustiveness checking
 
@@ -201,7 +264,9 @@ The typer uses a standard *pattern-matrix algorithm* (Maranget 2008): the residu
 
 ### 6.2 Exhaustiveness with refinement caps
 
-When the scrutinee's type carries a refinement cap (e.g., `N is between(1, 3)`), the static value-set is narrowed. The typer **may** use refinement information to prove exhaustiveness with literal patterns alone:
+**Rule M6.2 (Refinement-aided exhaustiveness, required).** The typer **must** apply in-scope refinement caps to compute the *reachable value-domain* of the scrutinee. Patterns are matched against this domain rather than the unrefined type. Exhaustiveness is satisfied iff the union of arm patterns covers the reachable domain.
+
+When a refinement cap (per type_system.md §6.4 Marker class — e.g., `between(1, 3)`, `multiple_of(2)`, `between(0, 10) + multiple_of(2)`) restricts the scrutinee's domain to a finite set, exhaustiveness checks against that narrowed set. Literal patterns covering the narrowed set certify exhaustiveness without a wildcard:
 
 ```
 fn name(d: u8 is between(1, 3)) -> String =
@@ -209,10 +274,12 @@ fn name(d: u8 is between(1, 3)) -> String =
         1 => "one"
         2 => "two"
         3 => "three"
-    // exhaustive — the refinement cap proves d ∈ {1, 2, 3}
+    // exhaustive — refinement cap proves d ∈ {1, 2, 3}; no wildcard needed
 ```
 
-**Rule M6.2 (Refinement-aided exhaustiveness):** the typer may, but is not required to, use refinement-cap evidence to certify exhaustiveness. Implementations should at minimum support compile-time-known finite literal sets.
+For open-ended refinements (e.g., `n is positive()` allowing infinitely many positive values), the reachable domain is still infinite — a wildcard or binder arm is still required for exhaustive coverage. The benefit shows up in **redundancy** checks: an arm matching `0` (per Rule M7.1) is redundant when the refinement excludes `0`, and the typer is required to detect that.
+
+The check is required (not optional): an implementation that ignores refinement-cap evidence and demands wildcards even when the reachable domain is fully covered by literals is non-conformant.
 
 ### 6.3 Counterexamples
 
@@ -330,14 +397,17 @@ The `return(Pat) => ...` arm's `Pat` is similarly irrefutable, matching the SUBJ
 
 ## 11. Open questions
 
-**Open (no decision):**
+**Resolved in v0.2:**
 
-- **OQ-M1 — Field elision via `..`.** Struct-destructure patterns currently require every field to be named (Rule M3.6.a). A trailing `..` to ignore unmentioned fields (`let Pair { first: x, .. } = p`) is a common convenience in Rust/Haskell-family languages. Add when stdlib data types reveal a need; defer until then.
-- **OQ-M2 — Refutable handler arm parameters.** Rule §10 forbids refutable patterns in handler arms. A pattern like `Eff.op(Just(v)) => ...` to handle only specific argument shapes would require a fall-through to a default arm. Useful for protocol/state-machine handlers; defer until a use case appears.
-- **OQ-M3 — Or-patterns.** `Pat1 | Pat2 => body` (matching either pattern, with the same body) reduces duplication in match arms. Pure syntactic sugar; binder names must agree across alternatives. Add when an example shows redundancy that or-patterns would clean up.
-- **OQ-M4 — Guards.** `Pat if cond => body` — Pat matches and `cond` evaluates true. Useful when the value's type alone is insufficient to discriminate. Common in ML-family languages. Defer until needed.
-- **OQ-M5 — View patterns / smart constructors.** A pattern that runs a user-defined function (`is_even(x)` matches when `x` is even). Powerful but interacts non-trivially with exhaustiveness checking (the compiler can't reason about arbitrary user code). Out of scope for v0.4.2.
-- **OQ-M6 — Range patterns for literals.** `1..=10 => ...` matching integer ranges. Useful for character-class dispatch (parsers, lexers). Defer.
+- **OQ-M1 — Field elision via `..`.** Resolved → §3.6 Rule M3.6.a. Struct-destructure patterns may end with `..` to ignore unmentioned fields.
+- **OQ-M3 — Or-patterns.** Resolved → §5.5. `Pat1 | Pat2 => body` with binder-agreement (M5.5.a) and quantity-by-join (M5.5.b).
+- **OQ-M4 — Guards.** Resolved → §5.6. `Pat if cond => body` with bool-typed guard (M5.6.a), arm-scoped binders (M5.6.b), fall-through on false (M5.6.c), exhaustiveness-conservative treatment (M5.6.e).
+
+**Closed (decided not to add):**
+
+- **OQ-M2 — Refutable handler arm parameters.** Decision: handler arm parameters remain irrefutable. Handlers intercept *every* call to the operation; refutable arm parameters would silently leave some calls unhandled (or require a fall-through that complicates the dispatch model). Closed in v0.2 — handler arms continue to use only irrefutable patterns per §10.
+- **OQ-M5 — View patterns / smart constructors.** Decision: not added. View patterns interact non-trivially with exhaustiveness checking — the compiler cannot reason about arbitrary user code, so guarded arms (§5.6) cover the same use cases without breaking exhaustiveness analysis. Use guards instead. Closed in v0.2.
+- **OQ-M6 — Range patterns for literals.** Decision: not added. Guards (§5.6) provide range-matching cleanly: `n if n >= 1 && n <= 10 => "low"`. The cost of dedicated range syntax is not justified when guards cover the use case with no special parser support. Closed in v0.2.
 
 **Resolved by reference (cross-document):**
 

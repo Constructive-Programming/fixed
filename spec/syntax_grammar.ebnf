@@ -3,9 +3,21 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4.2
+   Status:        DRAFT v0.4.3
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
    Last revised:  2026-04-30
+
+   Refinements in v0.4.3
+   ---------------------
+   - **Or-patterns** in match arms: `Pat1 | Pat2 => body`. Alternatives
+     must bind identical sets of names at identical types. (See
+     spec/pattern_matching.md §5.5.)
+   - **Guards** in match arms: `Pat if cond => body`. The guard is a
+     `bool` expression evaluated after the pattern matches; if false,
+     control falls through to the next arm. (See §5.6.)
+   - **`..` field elision** in struct-destructure patterns:
+     `let Pair { first: x, .. } = p` ignores unmentioned fields.
+     (See §3.6.)
 
    Refinements in v0.4.2
    ---------------------
@@ -625,8 +637,16 @@ TuplePattern
     = "(" Pattern "," ( Pattern ( "," Pattern )* ","? )? ")"
     ;
 
+(* StructDestructurePattern (v0.4.3): may end with `..` to ignore
+   unmentioned fields. The `..` may appear alone (`Foo { .. }`) or
+   after named field patterns (`Foo { x, y, .. }`). *)
 StructDestructurePattern
-    = UPPER_IDENT "{" FieldPattern ( "," FieldPattern )* ","? "}"
+    = UPPER_IDENT "{" StructFieldList? "}"
+    ;
+
+StructFieldList
+    = ".."
+    | FieldPattern ( "," FieldPattern )* ( "," ".." )? ","?
     ;
 
 FieldPattern
@@ -806,8 +826,20 @@ MatchArmList
     | NEWLINE INDENT MatchArm ( NEWLINE MatchArm )* NEWLINE? DEDENT
     ;
 
+(* MatchArm (v0.4.3): supports or-patterns and guards. Or-pattern
+   alternatives must bind identical names at identical types — checked
+   in pattern_matching.md §5.5. The guard is a bool expression; if
+   false, control falls through to the next arm. *)
 MatchArm
-    = Pattern "=>" BlockTail                                       (* inline expr or indented block *)
+    = OrPattern MatchGuard? "=>" BlockTail
+    ;
+
+OrPattern
+    = Pattern ( "|" Pattern )*
+    ;
+
+MatchGuard
+    = "if" Expr
     ;
 
 (* HandleExpr: `handle SUBJECT: arms`. SUBJECT is a single Expr; for
