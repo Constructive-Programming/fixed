@@ -49,13 +49,13 @@ Maybe satisfies Optional:
 
 // `M is Monad` — M is a type constructor satisfying Monad.
 // `M of ()` applies M to the unit type.
-fn when(condition: bool, action: M is Monad of ()) -> M of ():
+fn when(condition: bool, action: M is Monad of ()) -> M of () =
     if condition:
         action
     else:
         M.pure(())
 
-fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A):
+fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A) =
     match list:
         List.Cons(head, tail) =>
             do:
@@ -64,14 +64,14 @@ fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A):
                 M.pure(List.Cons(a, rest))
         List.Nil() => M.pure(List.Nil())
 
-fn map_m(list: is List of A, f: A -> M of B) -> (M is Monad) of (is List of B):
+fn map_m(list: is List of A, f: A -> M of B) -> (M is Monad) of (is List of B) =
     sequence(list.map(f))
 
 fn fold_m(
     list: is List of A,
     init: B,
     f: (B, A) -> M of B,
-) -> (M is Monad) of B:
+) -> (M is Monad) of B =
     match list:
         List.Cons(head, tail) =>
             do:
@@ -81,13 +81,13 @@ fn fold_m(
 
 // --- do notation example ---
 
-fn safe_divide(a: f64, b: f64) -> is Optional of f64:
+fn safe_divide(a: f64, b: f64) -> is Optional of f64 =
     if b == 0.0:
         Optional.none
     else:
         Optional.some(a / b)
 
-fn compute() -> is Optional of f64:
+fn compute() -> is Optional of f64 =
     // `do` desugars to flat_map chains:
     //   safe_divide(100.0, 3.0).flat_map((x) ->
     //     safe_divide(x, 2.0).flat_map((y) ->
@@ -104,7 +104,7 @@ fn compute() -> is Optional of f64:
 // fmap id == id
 // fmap (f . g) == fmap f . fmap g
 
-fn main() -> () with Console:
+fn main() -> () with Console =
     compute().fold(
         (result) -> Console.print_line("Result: ".concat(result.show())),
         () -> Console.print_line("Division by zero encountered"),

@@ -1,8 +1,10 @@
 # Fixed Type System
 
-**Status:** Draft v0.3
-**Specifies:** typing of Fixed v0.3 source.
+**Status:** Draft v0.4
+**Specifies:** typing of Fixed v0.4 source.
 **Last revised:** 2026-04-30
+
+**Changes from v0.3.** Body introducer for fn/method definitions changed from `:` to `=` (block introducers `:` reserved for cap/data/effect/satisfies bodies and control-flow branches; definitions use `=`). Cap instance and static methods may carry default bodies (Rule 6.1). Lambda parameters gain optional types and defaults. EffectMember gains `WithClause?` and `TypeParamsHint?`. TupleExpr/TuplePattern simplified. Code examples updated.
 
 **Changes from v0.2.** Code examples updated to the v0.3 indentation-based syntax (no block braces; `:` introduces blocks). No semantic rules changed.
 
@@ -75,7 +77,7 @@ fn sum(numbers: is Folding of (N is Numeric)) -> N: ...
 **Non-example.** The following is rejected:
 
 ```
-fn bad(x: N is Numeric) -> N:
+fn bad(x: N is Numeric) -> N =
     fn inner(x: N is Numeric) -> N: ...      // ERROR: N already in scope
 ```
 
@@ -182,7 +184,7 @@ effect Fail of E:
     fn fail(error: E) -> !
 
 // examples/11_properties.fixed:138  —  `unreachable` used where `N` is expected
-fn median(...) -> N:
+fn median(...) -> N =
     collection.get(mid).fold((v) -> v, () -> unreachable)
 ```
 
@@ -231,6 +233,21 @@ A `cap` declaration may contain three kinds of members (see grammar §4):
 - **Static methods** (`Self.fn name(...) -> Self`): called on the cap or a satisfying type. Used to declare *constructor requirements*: any type satisfying the cap must provide these.
 - **Properties** (`prop name: expr`): invariants the type must uphold (see `spec/properties.md`).
 
+Instance and static methods may carry an optional body (v0.4):
+
+```
+cap Optional:
+    Self.fn some(value: Part) -> Self
+    Self.fn none -> Self
+    fn fold<R>(on_some: Part -> R, on_none: () -> R) -> R
+
+    // Default implementations — types satisfying Optional may override.
+    fn isDefined -> bool = Self.fold((_) -> true, () -> false)
+    fn or_else(default: Part) -> Part = Self.fold((v) -> v, () -> default)
+```
+
+**Rule 6.1 (Default method bodies / extension methods).** A cap method's optional body acts as both a *default implementation* — used when the satisfying type does not provide its own — and an *extension method*: every type satisfying the cap automatically gets the method as a callable, even without writing one in `satisfies`. Bodies may use `Self`, `Part`, and other in-scope cap members (including the cap's `Self.fn` constructors and abstract methods, which are guaranteed to be provided by the satisfying type).
+
 ### 6.2 `extends` inheritance
 
 `cap A extends B + C` declares that any type satisfying `A` must also satisfy `B` and `C`. All members of `B` and `C` are inherited by `A`.
@@ -251,7 +268,7 @@ cap Between(min: N is Ord, max: N) of N:
 
 // is equivalent to
 
-fn between(min: N is Ord, max: N) -> cap of N:
+fn between(min: N is Ord, max: N) -> cap of N =
     prop in_range: min <= Self && Self <= max
 ```
 
@@ -622,7 +639,7 @@ Subtyping in Fixed is intentionally narrow:
 - **OQ7 → spec/properties.md.** In a function-body postcondition `prop` (i.e., a `prop` declaration appearing inside a `fn` block, not inside a `cap` or `data` body), the identifier `result` is **implicitly bound** to the function's return value at the function's declared return type. The binding is in scope only inside that prop body. In other prop contexts (cap-member or data-member props), `result` carries no special meaning and is parsed as a regular identifier.
 
   ```
-  fn sort(collection: ...) -> C is Sorted:
+  fn sort(collection: ...) -> C is Sorted =
       prop result_same_size: result.size == collection.size
       //                     ^^^^^^ implicitly bound to the fn's return value
       collection.fold_right(...)

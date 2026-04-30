@@ -31,8 +31,7 @@ effect Log:
 data Config(host: String, port: u16, debug: bool)
 
 fn read_config(path: String) -> Config
-    with FileSystem + Fail of String
-:
+    with FileSystem + Fail of String =
     let contents = FileSystem.read_file(path).fold(
         (v) -> v,
         (e) -> Fail.fail(e),
@@ -40,8 +39,7 @@ fn read_config(path: String) -> Config
     parse_config(contents)
 
 fn parse_config(text: String) -> Config
-    with Fail of String
-:
+    with Fail of String =
     let lines = split_lines(text)
     let host = find_value(lines, "host").fold(
         (v) -> v,
@@ -64,12 +62,12 @@ fn parse_config(text: String) -> Config
 fn find_value(
     lines: is List of String,
     key: String,
-) -> is Optional of String:
+) -> is Optional of String =
     find(lines, (line) -> starts_with(line, key))
         |> map_optional((line) -> after_char(line, '='))
         |> map_optional((value) -> trim(value))
 
-fn run_server(config: Config) -> () with Console + Log:
+fn run_server(config: Config) -> () with Console + Log =
     Log.log("info", "Starting server...")
     Console.print_line(
         "Server running on "
@@ -113,13 +111,11 @@ ChatMessage satisfies Message:
 // --- Chat room logic ---
 
 fn participant(name: String) -> ()
-    with Console + Channel of (is Message) + Async
-:
+    with Console + Channel of (is Message) + Async =
     Console.print_line(name.concat(" joined the chat"))
 
     fn chat_loop(name: String) -> ()
-        with Console + Channel of (is Message) + Async
-    :
+        with Console + Channel of (is Message) + Async =
         Console.print_line(name.concat("> "))
         let input = Console.read_line()
 
@@ -132,8 +128,8 @@ fn participant(name: String) -> ()
 
     chat_loop(name)
 
-fn listener() -> () with Console + Channel of (is Message) + Async:
-    fn listen_loop() -> () with Console + Channel of (is Message) + Async:
+fn listener() -> () with Console + Channel of (is Message) + Async =
+    fn listen_loop() -> () with Console + Channel of (is Message) + Async =
         let msg = Channel.receive
         Console.print_line(
             "[".concat(msg.sender).concat("]: ").concat(msg.body)
@@ -158,8 +154,8 @@ data SimpleQueue(tasks: is List of (() -> ()))
 SimpleQueue satisfies TaskQueue:
     SimpleQueue as empty
 
-fn run_scheduler(task: () -> () with Async) -> ():
-    fn schedule(queue: is TaskQueue) -> ():
+fn run_scheduler(task: () -> () with Async) -> () =
+    fn schedule(queue: is TaskQueue) -> () =
         queue.pop.fold(
             (pair) ->
                 let Pair { first: next_task, second: remaining } = pair
@@ -181,8 +177,8 @@ fn run_scheduler(task: () -> () with Async) -> ():
     )
     schedule(initial_queue)
 
-fn run_with_channel(task: () -> () with Channel of A) -> ():
-    fn go(buffer: is List of A, task: () -> () with Channel of A) -> ():
+fn run_with_channel(task: () -> () with Channel of A) -> () =
+    fn go(buffer: is List of A, task: () -> () with Channel of A) -> () =
         handle task():
             Channel.send(value) =>
                 go(List.Cons(value, buffer), () -> resume(()))
@@ -199,7 +195,7 @@ fn run_with_channel(task: () -> () with Channel of A) -> ():
 // Part 4: Nested handlers — putting it all together
 // =========================================================================
 
-fn main() -> ():
+fn main() -> () =
     // Example 1: I/O effects with nested handlers
     // Each `handle` removes one effect from the row.
     handle (do:

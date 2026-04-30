@@ -3,9 +3,41 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.3.1
+   Status:        DRAFT v0.4
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
    Last revised:  2026-04-30
+
+   Major changes in v0.4 — fn/method/lambda consistency
+   ----------------------------------------------------
+   Goal: consistent shape for every "function-like" declaration. Two
+   markers do separate jobs without overlap inside a single context:
+
+     `=`  — *definitions*: introduces the right-hand side of a fn/method
+            body (`fn f(x) -> T = body`), a let binding, a type alias,
+            a parameter default. Definitions: this thing IS that.
+     `:`  — *blocks of declarations or branches*: cap/data/effect/
+            satisfies bodies, match/handle/do/if/else branches.
+
+   Concrete changes:
+   - **fn / method body introducer changed from `:` to `=`**
+     (`fn name(...) -> T = body` instead of `... -> T: body`).
+   - **Cap instance and static methods may carry optional bodies**.
+     A method declared with a body acts as a *default implementation* /
+     *extension method* on every type satisfying the cap; the satisfying
+     type can override it via an explicit `satisfies`-block method.
+   - **EffectMember gains `WithClause?` and `TypeParamsHint?`**, matching
+     `InstanceMethodDecl` exactly.
+   - **LambdaParam gains optional type annotation and default value**:
+     `(x: i64 = 0) -> body`. The lambda body is still introduced by `->`.
+   - **`InstanceMethodDef`** (in satisfies blocks) gains
+     `TypeParamsHint?` and `WithClause?`, and accepts a multi-line
+     `BlockTail` after `=` (was a single `Expr`).
+   - **TupleExpr / TuplePattern** simplified to one alternative each
+     using the same shape as `ListLiteralExpr`.
+
+   The continuation-token list now treats `=` as a dual-mode token
+   (trailing continuation OR block introducer for indented multi-line
+   fn bodies) symmetric to `->` and `=>`.
 
    Refinements in v0.3.1
    ---------------------
@@ -88,10 +120,11 @@
 
    **Re-enabling the off-side rule inside brackets.** The off-side rule
    is re-enabled within the body of:
+     - a fn/method definition following `=` (fn body);
      - a lambda following `->` (lambda body);
      - a match/handler arm following `=>` (arm body); or
-     - a function/cap/data/effect/satisfies/match/handle/do/if/else
-       following `:` (block body).
+     - a cap/data/effect/satisfies/match/handle/do/if/else following `:`
+       (block body).
    After the matching DEDENT closes the body, the surrounding bracket
    suppression resumes.
 
@@ -103,10 +136,16 @@
      `+`, `-`, `*`, `/`, `%`, `&&`, `||`, `==`, `!=`, `<`, `>`, `<=`,
      `>=`, `|>`, `->`, `=>`, `=`, `<-`, `.`, `is`, `extends`, `implies`.
 
+   The dual-mode tokens `=`, `->`, `=>` are both trailing-continuation
+   *and* block-introducers. After one of them, the scanner peeks at the
+   next physical line: if it is indented more than the line containing
+   the dual-mode token, INDENT is emitted and the off-side rule applies
+   to the body. Otherwise the line continues normally.
+
    **Leading continuation.** If the next physical line begins with one
    of the following tokens (at any indent), it continues the previous
    logical line:
-     `with`, `extends`.
+     `with`, `extends`, `->`.
 
    The continuation rules apply when the next physical line is *not*
    indented more than the current line — that case engages the off-side
@@ -229,12 +268,16 @@ CapMember
     | PropDecl
     ;
 
+(* InstanceMethodDecl and StaticMethodDecl may carry an optional body
+   (v0.4). When present, the body acts as a *default implementation* /
+   *extension method* on every type satisfying the cap; satisfying
+   types may override it via an explicit `satisfies`-block method. *)
 InstanceMethodDecl
-    = "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" TypeExpr WithClause?
+    = "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" TypeExpr WithClause? ( "=" BlockTail )?
     ;
 
 StaticMethodDecl
-    = "Self" "." "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" TypeExpr WithClause?
+    = "Self" "." "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" TypeExpr WithClause? ( "=" BlockTail )?
     ;
 
 TypeParamsHint
@@ -260,8 +303,8 @@ EffectMemberList
     ;
 
 EffectMember
-    = "fn" LOWER_IDENT FnParamList? "->" TypeExpr     (* return type may be `!` *)
-    ;
+    = "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" TypeExpr WithClause?
+    ;     (* return type may be `!` *)
 
 
 (* ============================================================
@@ -360,9 +403,9 @@ EffectBound
     = UPPER_IDENT ( "of" OfArg )?
     ;
 
-(* Function body is a colon-introduced block. *)
+(* Function body is `=`-introduced (v0.4). *)
 FnBody
-    = ":" BlockTail
+    = "=" BlockTail
     ;
 
 
@@ -403,8 +446,11 @@ SatisfiesLhs
     | "impossible"
     ;
 
+(* Satisfies-block method definition. Same shape as FnDecl modulo the
+   `fn` keyword position; return type is optional (inferred from the
+   cap method declaration when omitted). *)
 InstanceMethodDef
-    = "fn" LOWER_IDENT FnParamList? ( "->" TypeExpr )? "=" Expr
+    = "fn" LOWER_IDENT TypeParamsHint? FnParamList? ( "->" TypeExpr )? WithClause? "=" BlockTail
     ;
 
 
@@ -540,9 +586,11 @@ DataVariantPattern
     | UPPER_IDENT ( "(" PatternList? ")" )?
     ;
 
+(* TuplePattern (v0.4) — single production matching TupleExpr's shape.
+   Mandatory first comma disambiguates `(p,)` from a parenthesised
+   pattern. *)
 TuplePattern
-    = "(" Pattern "," ")"
-    | "(" Pattern "," Pattern ( "," Pattern )* ","? ")"
+    = "(" Pattern "," ( Pattern ( "," Pattern )* ","? )? ")"
     ;
 
 StructDestructurePattern
@@ -667,9 +715,11 @@ LiteralExpr
     = INT_LITERAL | FLOAT_LITERAL | STRING_LITERAL | CHAR_LITERAL | BOOL_LITERAL
     ;
 
+(* TupleExpr (v0.4): single production parallel to ListLiteralExpr.
+   The mandatory first comma disambiguates `(x,)` (1-tuple) from `(x)`
+   (parenthesised expression). *)
 TupleExpr
-    = "(" Expr "," ")"
-    | "(" Expr "," Expr ( "," Expr )* ","? ")"
+    = "(" Expr "," ( Expr ( "," Expr )* ","? )? ")"
     ;
 
 ListLiteralExpr
@@ -677,7 +727,14 @@ ListLiteralExpr
     ;
 
 LambdaExpr
-    = "(" ( LOWER_IDENT ( "," LOWER_IDENT )* ","? )? ")" "->" LambdaBody
+    = "(" ( LambdaParam ( "," LambdaParam )* ","? )? ")" "->" LambdaBody
+    ;
+
+(* LambdaParam (v0.4): same shape as FnParam — name plus optional type
+   annotation and optional default value. Most callbacks omit both;
+   types are useful for documentation / overload disambiguation. *)
+LambdaParam
+    = LOWER_IDENT ( ":" TypeExpr )? ( "=" Expr )?
     ;
 
 (* LambdaBody mirrors BlockTail. After `->`, the parser checks whether

@@ -66,30 +66,30 @@ effect Fail of E:
 // Construction via cap constructors (Optional.some, Optional.none) is valid —
 // resolved to Maybe.Just / Maybe.Nothing via the satisfaction mapping.
 
-fn unwrap_or(opt: is Optional of A, default: A) -> A:
+fn unwrap_or(opt: is Optional of A, default: A) -> A =
     opt.fold((value) -> value, () -> default)
 
-fn map_optional(opt: is Optional of A, f: A -> B) -> is Optional of B:
+fn map_optional(opt: is Optional of A, f: A -> B) -> is Optional of B =
     opt.fold((value) -> Optional.some(f(value)), () -> Optional.none)
 
-fn and_then(opt: is Optional of A, f: A -> is Optional of B) -> is Optional of B:
+fn and_then(opt: is Optional of A, f: A -> is Optional of B) -> is Optional of B =
     opt.fold((value) -> f(value), () -> Optional.none)
 
 // --- Propagating errors with fold + Fail ---
 
-fn parse_u64(s: String) -> is Result of (String, u64):
+fn parse_u64(s: String) -> is Result of (String, u64) =
     // (builtin parsing — placeholder)
     builtin.parse_u64(s)
 
-fn divide(a: u64, b: u64) -> is Result of (String, u64):
+fn divide(a: u64, b: u64) -> is Result of (String, u64) =
     if b == 0:
         Result.err("division by zero")
     else:
         Result.ok(a / b)
 
 // Chain multiple fallible operations using fold + Fail
-fn compute(input: String) -> is Result of (String, u64):
-    fn inner(input: String) -> u64 with Fail of String:
+fn compute(input: String) -> is Result of (String, u64) =
+    fn inner(input: String) -> u64 with Fail of String =
         let n = parse_u64(input).fold((v) -> v, (e) -> Fail.fail(e))
         let doubled = n * 2
         let result = divide(doubled, 3).fold((v) -> v, (e) -> Fail.fail(e))
@@ -108,20 +108,18 @@ cap Map of (K, V):
     fn get(key: K) -> is Optional of V
 
 fn lookup_user_age(users: is Map of (String, u64), name: String)
-    -> is Optional of u64
-:
+    -> is Optional of u64 =
     users.get(name)
 
 // Combine Optional and Fail: convert "not found" to an error
 fn require_user_age(users: is Map of (String, u64), name: String)
-    -> u64 with Fail of String
-:
+    -> u64 with Fail of String =
     lookup_user_age(users, name).fold(
         (age) -> age,
         () -> Fail.fail("user not found: ".concat(name)),
     )
 
-fn main() -> () with Console:
+fn main() -> () with Console =
     let result = compute("42")
     result.fold(
         (v) -> Console.print_line("Result: ".concat(v.show())),

@@ -54,7 +54,7 @@ A capability with value parameters is already a function from values to a constr
 #### The `fn -> cap` syntax
 
 ```
-fn between(min: N is Ord, max: N) -> cap of N:
+fn between(min: N is Ord, max: N) -> cap of N =
     prop in_range: min <= Self && Self <= max
 ```
 
@@ -80,17 +80,17 @@ fn validate(
     constraint: (N, N) -> cap of N,
     lo: N,
     hi: N,
-) -> N is constraint(lo, hi):
+) -> N is constraint(lo, hi) =
     if value < lo: Fail.fail("too low")
     else if value > hi: Fail.fail("too high")
     else: value
 
 // Compose cap generators
-fn strict_between(min: N is Ord, max: N) -> cap of N:
+fn strict_between(min: N is Ord, max: N) -> cap of N =
     prop in_range: min < Self && Self < max    // strict inequality
 
 // Return a cap generator from a function
-fn range_for(unit: String) -> fn(f64, f64) -> cap of f64:
+fn range_for(unit: String) -> fn(f64, f64) -> cap of f64 =
     match unit:
         "celsius" => between
         "kelvin" => (lo, hi) ->
@@ -103,7 +103,7 @@ fn range_for(unit: String) -> fn(f64, f64) -> cap of f64:
 Value arguments can be literals or in-scope bindings — the compiler verifies props symbolically:
 
 ```
-fn clamp(value: N is Numeric + Ord, lo: N, hi: N) -> N is between(lo, hi):
+fn clamp(value: N is Numeric + Ord, lo: N, hi: N) -> N is between(lo, hi) =
     if value < lo: lo
     else if value > hi: hi
     else: value
@@ -118,7 +118,7 @@ A named capability with value params is sugar for a cap-generating function:
 cap Between(min: N is Ord, max: N) of N:
     prop in_range: min <= Self && Self <= max
 
-fn between(min: N is Ord, max: N) -> cap of N:
+fn between(min: N is Ord, max: N) -> cap of N =
     prop in_range: min <= Self && Self <= max
 ```
 
@@ -211,7 +211,7 @@ Satisfactions are modular — brought into scope via `use`:
 ```
 use std.maybe.Maybe satisfies Optional
 
-fn wrap(x: A) -> is Optional of A:
+fn wrap(x: A) -> is Optional of A =
     Optional.some(x)   // compiler resolves to Maybe.Just(x) via satisfaction
 ```
 
@@ -384,7 +384,7 @@ This is a deliberate design choice:
 // fn factorial(n: u64) -> u64: if n == 0: 1 else: n * factorial(n - 1)
 
 // Instead, use fold on a recursive data structure:
-fn factorial(n: u64) -> u64:
+fn factorial(n: u64) -> u64 =
     to_nat(n).fold(
         () -> 1,
         (acc) -> (acc_index + 1) * acc
@@ -447,7 +447,7 @@ data Nat:
 And on functions, as postconditions:
 
 ```
-fn sort(collection: C is Sequencing) -> C is Sorted:
+fn sort(collection: C is Sequencing) -> C is Sorted =
     prop result_same_size: result.size == collection.size
     ...
 ```
@@ -749,7 +749,7 @@ When a `Self.fn` constructor is called on a capability (e.g., `Optional.some(x)`
 
 ```
 // Return type provides context:
-fn wrap(x: A) -> is Optional of A:
+fn wrap(x: A) -> is Optional of A =
     Optional.some(x)   // resolves via in-scope satisfaction
 
 // Assignment target constrains:

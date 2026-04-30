@@ -124,17 +124,17 @@ data Tagged of (phantom Tag, Value):
 // =========================================================================
 
 // --- Only needs Folding: works on ANY collection ---
-fn sum(numbers: is Folding of (N is Numeric)) -> N:
+fn sum(numbers: is Folding of (N is Numeric)) -> N =
     numbers.fold(0, (acc, x) -> acc + x)
 
-fn product(numbers: is Folding of i64) -> i64:
+fn product(numbers: is Folding of i64) -> i64 =
     numbers.fold(1, (acc, x) -> acc * x)
 
-fn count(collection: is Folding) -> u64:
+fn count(collection: is Folding) -> u64 =
     collection.fold(0, (acc, _) -> acc + 1)
 
 // --- Needs Functor: transform elements ---
-fn double(numbers: is Functor of (N is Numeric)) -> is Functor:
+fn double(numbers: is Functor of (N is Numeric)) -> is Functor =
     numbers.map((x) -> x * 2)
 
 // --- Needs Functor: transform elements ---
@@ -145,14 +145,14 @@ fn double(numbers: is Functor of (N is Numeric)) -> is Functor:
 
 // --- Needs Filtering + Functor: transform and select ---
 // notice N is reused in the Functor part specification and is known to be Numeric for the map call
-fn even_doubled(numbers: C is Filtering of (N is Numeric) + Functor of N) -> C:
+fn even_doubled(numbers: C is Filtering of (N is Numeric) + Functor of N) -> C =
     numbers.filter((x) -> x % 2 == 0).map((x) -> x * 2)
 
 // --- Needs Sequencing + Folding: build and reduce ---
-fn reverse(collection: C is Sequencing + Folding + Empty) -> C:
+fn reverse(collection: C is Sequencing + Folding + Empty) -> C =
     collection.fold(C.empty, (acc, x) -> C.cons(x, acc))
 
-fn concat(left: C is Sequencing + Folding, right: C) -> C:
+fn concat(left: C is Sequencing + Folding, right: C) -> C =
     // fold_right preserves order: [1,2,3] ++ [4,5] → cons each from right
     left.fold_right(right, (x, acc) -> C.cons(x, acc))
 
@@ -160,13 +160,13 @@ fn concat(left: C is Sequencing + Folding, right: C) -> C:
 fn binary_search(
     sorted: C is ArrayLike of (A is Ordered),
     target: A,
-) -> R is Optional of u64 + Empty:
+) -> R is Optional of u64 + Empty =
     fn go(
         sorted: C,
         target: A,
         low: u64,
         high: u64,
-    ) -> R:
+    ) -> R =
         if low >= high:
             R.empty
         else:
@@ -180,8 +180,8 @@ fn binary_search(
     go(sorted, target, 0, sorted.size)
 
 // --- Uses type alias for cleaner signatures ---
-fn take(collection: C is ArrayLike, n: u64) -> C:
-    fn go(source: C, i: u64, n: u64) -> C:
+fn take(collection: C is ArrayLike, n: u64) -> C =
+    fn go(source: C, i: u64, n: u64) -> C =
         if i >= n:
             C.empty
         else:
@@ -191,7 +191,7 @@ fn take(collection: C is ArrayLike, n: u64) -> C:
     go(collection, 0, n)
 
 // --- Build a range: needs Sequencing ---
-fn range(start: u64, end: u64) -> R is Sequencing + Empty:
+fn range(start: u64, end: u64) -> R is Sequencing + Empty =
     if start >= end:
         R.empty
     else:
@@ -199,21 +199,21 @@ fn range(start: u64, end: u64) -> R is Sequencing + Empty:
 
 // --- Using data types: pattern matching on concrete variants ---
 
-fn direction_name(d: Direction) -> String:
+fn direction_name(d: Direction) -> String =
     match d:
         Direction.North => "North"
         Direction.South => "South"
         Direction.East  => "East"
         Direction.West  => "West"
 
-fn color_to_rgb(c: Color) -> Color:
+fn color_to_rgb(c: Color) -> Color =
     match c:
         Color.Red   => Color.RGB(255, 0, 0)
         Color.Green => Color.RGB(0, 255, 0)
         Color.Blue  => Color.RGB(0, 0, 255)
         Color.RGB(r, g, b) => Color.RGB(r, g, b)
 
-fn main() -> () with Console:
+fn main() -> () with Console =
     // `numbers` satisfies Sequencing + Functor + Folding + Filtering + Sized
     // The compiler chooses a representation based on how `numbers` is used
     // below. Since we call binary_search (which needs RandomAccess), the

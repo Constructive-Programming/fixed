@@ -45,32 +45,32 @@ data BoundingBox of N (min: is Point of N, max: is Point of N)
 // Helpers
 // =========================================================================
 
-fn point(x: N, y: N) -> is Point of N:
+fn point(x: N, y: N) -> is Point of N =
     // The compiler generates a value satisfying HasX + HasY
     Point { x: x, y: y }
 
-fn distance(p1: is Point of (N is Numeric), p2: is Point of N) -> f64:
+fn distance(p1: is Point of (N is Numeric), p2: is Point of N) -> f64 =
     let dx = p1.x - p2.x
     let dy = p1.y - p2.y
     builtin.sqrt(dx * dx + dy * dy)
 
-fn min(a: N is Numeric, b: N) -> N:
+fn min(a: N is Numeric, b: N) -> N =
     if a < b: a else: b
 
-fn max(a: N is Numeric, b: N) -> N:
+fn max(a: N is Numeric, b: N) -> N =
     if a > b: a else: b
 
-fn min3(a: N is Numeric, b: N, c: N) -> N:
+fn min3(a: N is Numeric, b: N, c: N) -> N =
     min(a, min(b, c))
 
-fn max3(a: N is Numeric, b: N, c: N) -> N:
+fn max3(a: N is Numeric, b: N, c: N) -> N =
     max(a, max(b, c))
 
 // =========================================================================
 // Operation 1: Area
 // =========================================================================
 
-fn area(shape: Shape of (N is Numeric)) -> f64:
+fn area(shape: Shape of (N is Numeric)) -> f64 =
     match shape:
         Shape.Circle(_, r) =>
             builtin.pi * r * r
@@ -87,7 +87,7 @@ fn area(shape: Shape of (N is Numeric)) -> f64:
 // Operation 2: Perimeter
 // =========================================================================
 
-fn perimeter(shape: Shape of (N is Numeric)) -> f64:
+fn perimeter(shape: Shape of (N is Numeric)) -> f64 =
     match shape:
         Shape.Circle(_, r) =>
             2.0 * builtin.pi * r
@@ -100,7 +100,7 @@ fn perimeter(shape: Shape of (N is Numeric)) -> f64:
 // Operation 3: Bounding box
 // =========================================================================
 
-fn bounding_box(shape: Shape of (N is Numeric)) -> BoundingBox of N:
+fn bounding_box(shape: Shape of (N is Numeric)) -> BoundingBox of N =
     match shape:
         Shape.Circle(center, r) =>
             BoundingBox(
@@ -118,7 +118,7 @@ fn bounding_box(shape: Shape of (N is Numeric)) -> BoundingBox of N:
                 point(max3(a.x, b.x, c.x), max3(a.y, b.y, c.y)),
             )
 
-fn show_bbox(bb: BoundingBox of (N is Numeric)) -> String:
+fn show_bbox(bb: BoundingBox of (N is Numeric)) -> String =
     match bb:
         BoundingBox(mn, mx) =>
             "BBox[("
@@ -131,7 +131,7 @@ fn show_bbox(bb: BoundingBox of (N is Numeric)) -> String:
 // Main
 // =========================================================================
 
-fn main() -> () with Console:
+fn main() -> () with Console =
     let circle    = Shape.Circle(point(0.0, 0.0), 5.0)
     let rectangle = Shape.Rectangle(point(1.0, 1.0), 4.0, 3.0)
     let triangle  = Shape.Triangle(
@@ -143,7 +143,7 @@ fn main() -> () with Console:
     let shapes = [circle, rectangle, triangle]
     let names  = ["Circle", "Rectangle", "Triangle"]
 
-    fn print_shape(name: String, shape: Shape of f64) -> () with Console:
+    fn print_shape(name: String, shape: Shape of f64) -> () with Console =
         Console.print_line(name.concat(":"))
         Console.print_line("  Area:      ".concat(area(shape).show()))
         Console.print_line("  Perimeter: ".concat(perimeter(shape).show()))

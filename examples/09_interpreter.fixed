@@ -79,10 +79,10 @@ cap Builtins:
         args: is List of f64,
     ) -> is Optional of f64
 
-fn default_builtins() -> is Builtins:
+fn default_builtins() -> is Builtins =
     // The compiler generates a concrete implementation.
     // In practice this would use a Map internally.
-    fn eval_builtin(name: String, args: is List of f64) -> is Optional of f64:
+    fn eval_builtin(name: String, args: is List of f64) -> is Optional of f64 =
         if name == "sqrt":
             match args:
                 List.Cons(x, List.Nil()) => Optional.some(builtin.sqrt(x))
@@ -109,7 +109,7 @@ effect EvalError:
 // Instead, fold with R = (is Env -> f64 with EvalError).
 // Each callback returns a *deferred* computation from env to value,
 // allowing lazy evaluation (e.g., if_then doesn't evaluate both branches).
-fn eval(expr: is Expr, env: is Env) -> f64 with EvalError:
+fn eval(expr: is Expr, env: is Env) -> f64 with EvalError =
     expr.fold(
         (v) -> (env) -> v,
         (name) -> (env) -> env.lookup(name).fold(
@@ -134,7 +134,7 @@ fn eval(expr: is Expr, env: is Env) -> f64 with EvalError:
 
 // --- Pretty printer (using fold — no pattern matching!) ---
 
-fn pretty(expr: is Expr) -> String:
+fn pretty(expr: is Expr) -> String =
     expr.fold(
         (v) -> v.show(),
         (name) -> name,
@@ -151,7 +151,7 @@ fn pretty(expr: is Expr) -> String:
             name.concat("(").concat(join(args, ", ")).concat(")"),
     )
 
-fn main() -> () with Console:
+fn main() -> () with Console =
     // Build: let x = 3.0 in let y = 4.0 in sqrt(x*x + y*y)
     let expr = Expr.let_in("x", Expr.lit(3.0),
         Expr.let_in("y", Expr.lit(4.0),

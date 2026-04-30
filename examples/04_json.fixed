@@ -22,7 +22,7 @@ data Json:
     Object(fields: is Map of (String, Json))
 
 // Pretty-print JSON with indentation
-fn pretty(json: Json, indent: u64) -> String:
+fn pretty(json: Json, indent: u64) -> String =
     let pad = repeat_str(" ", indent)
     match json:
         Json.Null => "null"
@@ -50,7 +50,7 @@ fn pretty(json: Json, indent: u64) -> String:
                 "{\n".concat(join(inner, ",\n")).concat("\n").concat(pad).concat("}")
 
 // Look up a key in a JSON object
-fn get_field(json: Json, key: String) -> is Optional of Json:
+fn get_field(json: Json, key: String) -> is Optional of Json =
     match json:
         Json.Object(fields) =>
             find(fields, (pair) -> pair.first() == key)
@@ -58,7 +58,7 @@ fn get_field(json: Json, key: String) -> is Optional of Json:
         _ => Optional.none
 
 // Navigate a path like ["users", "0", "name"]
-fn navigate(json: Json, path: is List of String) -> is Optional of Json:
+fn navigate(json: Json, path: is List of String) -> is Optional of Json =
     match path:
         List.Cons(key, rest) =>
             get_field(json, key).fold(
@@ -67,7 +67,7 @@ fn navigate(json: Json, path: is List of String) -> is Optional of Json:
             )
         List.Nil() => Optional.some(json)
 
-fn main() -> () with Console:
+fn main() -> () with Console =
     // Build a JSON value
     let user = Json.Object([
         ("name", Json.String("Alice")),
