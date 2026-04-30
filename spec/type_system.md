@@ -320,7 +320,7 @@ The illustrative set for v0.2:
 | Auto-tagged-union for a sum cap | The sum cap's full method set (auto-implemented from the cap's `Self.fn` constructors) |
 | Auto-flat-struct for a product cap | The product cap's full method set |
 
-**Rule 6.6 (priority).** During representation selection, built-in candidates have **lower priority** than user-`satisfies`-mapped data types: if a user-defined data type can satisfy the same bound set, the user's choice wins. Among built-in candidates, the compiler picks by performance heuristics (with PGO refinement when profile data is available).
+**Rule 6.6 (priority).** During representation selection, built-in candidates have **equal priority** to user-`satisfies`-mapped data types. If a user-defined data type can satisfy the same bound set, it competes alongside the built-in candidates; the compiler picks among them by **allocation and performance heuristics**, with PGO refinement when profile data is available.
 
 The full list of built-ins is implementation-defined and may grow with the compiler's capability-recognition library; the table above is normative only for the categories listed.
 
