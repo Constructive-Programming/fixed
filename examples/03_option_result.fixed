@@ -15,10 +15,9 @@ use std.io.Console
 
 // --- Capabilities declare constructor *requirements* via Self.fn ---
 
-cap Optional {
-    Self.fn some(value: Part) -> Self
-    Self.fn none -> Self
-    fn fold(on_some: Part -> R, on_none: () -> R) -> R
+cap Optional extends Functor + Folding {
+    fn isDefined -> Boolean
+    fn orElse(e: Self) -> Self
 }
 
 cap Result of (E, A) {
@@ -32,8 +31,18 @@ cap Result of (E, A) {
 data Maybe of A { Just(value: A), Nothing }
 
 Maybe satisfies Optional {
-    Just as some
-    Nothing as none
+    fn isDefined = match Self {
+        Maybe.Nothing => false,
+        Maybe.Just(_) => true,
+    }
+    fn map(f: Part -> B) = match Self {
+        Maybe.Nothing => Maybe.Nothing,
+        Maybe.Just(a) => Maybe.Just(f(a)),
+    }
+    fn orElse(other: Maybe of Self) = match Self {
+        Maybe.Nothing => other,
+        _ => Self,
+    }
 }
 
 data Outcome of (E, A) { Success(value: A), Failure(error: E) }
@@ -98,7 +107,7 @@ fn compute(input: String) -> is Result of (String, u64) {
     }
 
     // Handle the Fail effect, converting it back to Result
-    handle inner(input) {
+    handle { inner(input) } {
         Fail.fail(e) => Result.err(e),
         return(v) => Result.ok(v),
     }

@@ -27,10 +27,10 @@ use std.io.Console
 // Any collection that can be built element-by-element and taken apart.
 // The compiler provides cons to all types implementing Sequencing
 cap Sequencing {
-    fn head -> is Optional
+    fn head -> is Optional of Part
     fn init -> Self
     fn tail -> Self
-    fn last -> is Optional
+    fn last -> is Optional of Part
     Self.fn cons(h: Part, t: Self) -> Self
 }
 

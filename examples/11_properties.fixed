@@ -53,10 +53,10 @@ cap Stack extends Sequencing + Sized {
 // Part 2: Properties on data types
 // =========================================================================
 
-// A bounded integer — value is always within [Lo, Hi].
+// A bounded integer — value is always within [lo, hi].
 // This is the *data wrapper* approach: the bounds are part of the structure.
 // Contrast with the *refinement* approach (fn->cap) in Part 5 below.
-data Bounded of (N is Numeric + Ord, Lo = 16, hi = 24) {
+data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24) {
     Bounded(value: N),
 
     prop in_range: forall (b: Self) ->
@@ -110,17 +110,29 @@ fn insert_sorted(
     )
 }
 
-// clamp a value into a Bounded range
-fn clamp_bounded(value: N is Numeric + Ord, lo: N, hi: N) -> Bounded of N {
-    prop lo_le_hi: lo <= hi
-    if value < lo {
-        Bounded.Bounded(lo, lo, hi)
-    } else if value > hi {
-        Bounded.Bounded(hi, lo, hi)
-    } else {
-        Bounded.Bounded(value, lo, hi)
-    }
+// `Bounded`'s `of` value-params (lo, hi) are *type-level indices* — different
+// bounds give different types (`Bounded of (i64, 0, 10)` is not the same type as
+// `Bounded of (i64, 0, 100)`). Construction passes only the variant's runtime
+// fields; the bounds are fixed at the type-application site.
+//
+// `clamp_default` uses the data type's default bounds [16, 24].
+fn clamp_default(value: N is Numeric + Ord) -> Bounded of N {
+    if value < 16 { Bounded.Bounded(16) }
+    else if value > 24 { Bounded.Bounded(24) }
+    else { Bounded.Bounded(value) }
 }
+
+// `clamp_unit` uses non-default compile-time bounds [0, 10] — a different
+// `Bounded` type.
+fn clamp_unit(value: N is Numeric + Ord) -> Bounded of (N, 0, 10) {
+    if value < 0 { Bounded.Bounded(0) }
+    else if value > 10 { Bounded.Bounded(10) }
+    else { Bounded.Bounded(value) }
+}
+
+// For *runtime-supplied* bounds, use the refinement-cap form below (`fn clamp`
+// in Part 8). Refinement caps via `between(lo, hi)` are the right tool when
+// the bounds are values you compute, not constants you declare.
 
 // =========================================================================
 // Part 5: Properties composing through `extends`
@@ -267,11 +279,11 @@ fn main() -> () with Console {
     let sorted = sort(numbers)
     Console.print_line("Sorted: ".concat(sorted.show()))
 
-    let bounded = clamp_bounded(42, 0, 10)
-    Console.print_line("Clamped 42 to [0,10]: ".concat(bounded.value.show()))
+    let bounded = clamp_default(42)
+    Console.print_line("Clamped 42 to default [16,24]: ".concat(bounded.value.show()))
 
-    let bounded2 = clamp_bounded(-5, 0, 10)
-    Console.print_line("Clamped -5 to [0,10]: ".concat(bounded2.value.show()))
+    let bounded2 = clamp_unit(15)
+    Console.print_line("Clamped 15 to [0,10]: ".concat(bounded2.value.show()))
 
     let nat5 = Nat.Succ(Nat.Succ(Nat.Succ(Nat.Succ(Nat.Succ(Nat.Zero)))))
     Console.print_line("Nat 5 to u64: ".concat(nat5.fold(() -> 0, (n) -> n + 1).show()))
@@ -290,12 +302,12 @@ fn main() -> () with Console {
     Console.print_line("abs(-5) = ".concat(positive_val.show()))
 
     // Pass a cap generator as an argument
-    handle validate_with(42, between, 0, 100) {
+    handle { validate_with(42, between, 0, 100) } {
         Fail.fail(e) => Console.print_line("Error: ".concat(e)),
         return(v) => Console.print_line("Validated: ".concat(v.show())),
     }
 
-    handle validate_with(50, strict_between, 0, 100) {
+    handle { validate_with(50, strict_between, 0, 100) } {
         Fail.fail(e) => Console.print_line("Error: ".concat(e)),
         return(v) => Console.print_line("Strict validated: ".concat(v.show())),
     }

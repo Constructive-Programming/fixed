@@ -181,7 +181,7 @@ fn run_scheduler(task: () -> () with Async) -> () {
         queue.pop.fold(
             (pair) -> {
                 let Pair { first: next_task, second: remaining } = pair
-                handle next_task() {
+                handle { next_task() } {
                     Async.spawn(new_task) => {
                         let q = remaining.push(new_task)
                         resume(())
@@ -198,7 +198,7 @@ fn run_scheduler(task: () -> () with Async) -> () {
     }
 
     let initial_queue = TaskQueue.empty.push(() -> {
-        handle task() {
+        handle { task() } {
             Async.spawn(t) => { resume(()) },
             Async.yield_now() => { resume(()) },
         }
@@ -208,7 +208,7 @@ fn run_scheduler(task: () -> () with Async) -> () {
 
 fn run_with_channel(task: () -> () with Channel of A) -> () {
     fn go(buffer: is List of A, task: () -> () with Channel of A) -> () {
-        handle task() {
+        handle { task() } {
             Channel.send(value) => {
                 go(List.Cons(value, buffer), () -> resume(()))
             },

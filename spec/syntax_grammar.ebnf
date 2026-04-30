@@ -1,0 +1,797 @@
+(* ============================================================
+   Fixed Programming Language — Syntax Grammar v0.2
+   spec/syntax_grammar.ebnf
+   ============================================================
+
+   Status:        DRAFT v0.2.3
+   Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
+   Last revised:  2026-04-30
+
+   Changes in v0.2.3
+   -----------------
+     Documentation-only: Q8, Q10, Q11, Q16, N1(a), N1(b) recorded as
+     pre-resolved. No grammar changes. Resolutions to be lifted into
+     spec/type_system.md and spec/quantities.md when those are drafted.
+
+   Changes in v0.2.2
+   -----------------
+     N1 (resolved)   : `of` value-params are *type-level indices*
+                       (interpretation B): different bound values
+                       give different types. `Bounded of (i64, 5, 10)`
+                       and `Bounded of (i64, 0, 100)` are distinct types.
+                       OfArg extended to accept LiteralExpr at
+                       application sites (so `Bounded of (N, 5, 10)`
+                       parses). Variant constructors take only their
+                       declared fields, not `of`-level params.
+
+   Changes in v0.2.1
+   -----------------
+     N2 (resolved)   : `forall` tightened to PropExpr — only reachable
+                       inside `prop` bodies. Mirrors `implies`.
+     N3 (resolved)   : `Self` confirmed as a keyword (not a generic
+                       UPPER_IDENT). Already reflected in the grammar.
+
+   Changes from v0.1
+   -----------------
+     Q1  (resolved)  : `case` keyword removed; match arms use bare `Pattern => Expr`.
+     Q2  (resolved)  : `handle` always takes a `{block}` subject and a `{handlers}` block.
+     Q3  (resolved)  : Default values supported on `of` value-params and on variant fields.
+     Q4  (resolved)  : Bare variant patterns retained; both `Type.Variant(...)` and
+                       `Variant(...)` are accepted. `Self.Variant(...)` also accepted.
+     Q5  (resolved)  : `implies` restricted to `prop` bodies via new `PropExpr` nonterminal.
+     Q7  (resolved)  : Single-element tuples `(Expr,)` and `(Pattern,)` accepted.
+     Q9  (resolved)  : `do` blocks must end in a non-bind expression.
+     Q12 (resolved)  : `UPPER_IDENT.field` and `Type.Variant(args)` parse cleanly.
+     Q13 (resolved)  : Free-call trailing block lambda `f { x -> ... }` accepted.
+     Q14 (resolved)  : `data X of A (...)` single-ctor + `of` confirmed.
+     Q15 (resolved)  : Everything is an expression — `let` and `prop` return `()`.
+                       No `BlockItem` / `Expr` split; `Block` body is just `Expr*`.
+     Q16 (resolved)  : `unreachable` is a keyword atom; typing deferred to type_system.md.
+     Q6  (deferred)  : The relationship between `of` value-params and variant constructor
+                       calls (override-as-positional) is a typing-level concern; see N1.
+     Q8  (deferred)  : Type-variable introduction rule deferred to type_system.md.
+     Q10 (deferred)  : Numeric literal polymorphism deferred to type_system.md.
+     Q11 (deferred)  : `mod`, `pub`, `in` reserved; module-system spec defers.
+
+   New open questions for v0.2 are listed at the bottom (N-prefixed).
+
+   Scope
+   -----
+   Defines the *syntactic* surface of Fixed — what the parser must
+   accept. Semantic well-formedness lives in the sibling spec docs
+   (type_system.md, quantities.md, properties.md, etc.).
+
+   Dependencies
+   ------------
+   None. All other Phase 1 spec documents depend on this one.
+
+   Conventions
+   -----------
+     =       definition
+     |       alternation
+     ?       optional (zero or one)
+     *       zero or more
+     +       one or more
+     ( )     grouping
+     " "     literal terminal
+     UPPER   token class (produced by the scanner)
+     Pascal  parser-level nonterminal
+     (* ... *)   comment
+
+   Newlines (NL) are significant: they separate items in compilation
+   units, members in cap/data/effect bodies, expressions in blocks,
+   and arms in match/handle. Where commas are also accepted, we write
+   SEP for the choice.
+   ============================================================ *)
+
+
+(* ============================================================
+   1. Lexical (token) classes
+   ============================================================ *)
+
+LOWER_IDENT     = (* [a-z_][a-zA-Z0-9_]* *) ;
+UPPER_IDENT     = (* [A-Z][a-zA-Z0-9_]*   *) ;
+
+INT_LITERAL     = (* digits, optional `_` as visual separator;
+                     sign is handled by the parser, not the lexer *) ;
+FLOAT_LITERAL   = (* digits "." digits ( ("e"|"E") ("+"|"-")? digits )? *) ;
+STRING_LITERAL  = (* '"' { strchar | escape } '"' ; escapes: \" \\ \n \t \r \0 *) ;
+CHAR_LITERAL    = (* "'" ( char | escape ) "'"  *) ;
+BOOL_LITERAL    = "true" | "false" ;
+UNIT_LITERAL    = "(" ")" ;
+
+NL              = (* one or more line terminators, possibly with surrounding
+                     whitespace and line comments; comments are discarded *) ;
+SEP             = NL | "," ;
+
+(* KEYWORDS:
+     as      cap         data        do          effect      else
+     extends false       fn          forall      handle      if
+     implies impossible  in          is          let         match
+     mod     of          phantom     prop        pub         resume
+     return  Self        satisfies   true        type        unreachable
+     use     with                                                          *)
+(* `case` removed in v0.2 (Q1).
+   `mod`, `pub`, `in` reserved for future module-system spec (Q11).
+   `resume`, `return`, `unreachable` reserved for handler bodies and
+   the never-typed atom. *)
+
+
+(* ============================================================
+   2. Compilation unit
+   ============================================================ *)
+
+CompilationUnit
+    = ( NL | TopItem )*
+    ;
+
+TopItem
+    = UseDecl
+    | CapDecl
+    | EffectDecl
+    | DataDecl
+    | TypeAlias
+    | FnDecl
+    | SatisfiesDecl
+    ;
+
+
+(* ============================================================
+   3. Use declarations (imports)
+   ============================================================ *)
+
+UseDecl
+    = "use" UsePath UseTail?
+    ;
+
+UsePath
+    = LOWER_IDENT ( "." LOWER_IDENT )* ( "." UPPER_IDENT )?    (* e.g. std.io.Console *)
+    ;
+
+UseTail
+    = "." "{" UseSel ( SEP UseSel )* SEP? "}"                  (* use a.b.{X, Y, Z}      *)
+    | "satisfies" CapRef                                       (* use a.b.T satisfies C  *)
+    ;
+
+UseSel  = UPPER_IDENT | LOWER_IDENT ;
+
+
+(* ============================================================
+   4. Capability declarations
+   ============================================================ *)
+
+CapDecl
+    = "cap" UPPER_IDENT CapValueParams? CapOfParams? CapExtends? CapBody?
+    ;
+
+CapValueParams                                  (* for `cap Name(params) of T { ... }` sugar *)
+    = "(" ValueParam ( SEP ValueParam )* SEP? ")"
+    ;
+
+CapOfParams
+    = "of" OfArgList
+    ;
+
+CapExtends
+    = "extends" CapBound ( "+" CapBound )*
+    ;
+
+CapBody
+    = "{" ( NL | CapMember )* "}"
+    ;
+
+CapMember
+    = InstanceMethodDecl
+    | StaticMethodDecl
+    | PropDecl
+    ;
+
+InstanceMethodDecl
+    = "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" TypeExpr WithClause?
+    ;
+
+StaticMethodDecl
+    = "Self" "." "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" TypeExpr WithClause?
+    ;
+
+(* `fn fold<R>(...) -> R` — angle-bracket type-param hints accepted
+   syntactically; semantics deferred to type_system.md. *)
+TypeParamsHint
+    = "<" UPPER_IDENT ( SEP UPPER_IDENT )* SEP? ">"
+    ;
+
+
+(* ============================================================
+   5. Effect declarations
+   ============================================================ *)
+
+EffectDecl
+    = "effect" UPPER_IDENT CapOfParams? "{" ( NL | EffectMember )* "}"
+    ;
+
+EffectMember
+    = "fn" LOWER_IDENT FnParamList? "->" TypeExpr     (* return type may be `!` *)
+    ;
+
+
+(* ============================================================
+   6. Data declarations
+   ============================================================ *)
+
+DataDecl
+    = "data" UPPER_IDENT DataParams? DataBody
+    ;
+
+DataParams
+    = "of" OfArgList                                  (* type and/or value params *)
+    ;
+
+(* Body is one of:
+     "{" Variant ( SEP Variant )* SEP? PropDecl* "}"   — explicit variants
+     "(" FieldDecl ( SEP FieldDecl )* SEP? ")"         — single-constructor sugar *)
+DataBody
+    = "{" ( NL | DataBodyItem )* "}"
+    | "(" FieldDecl ( SEP FieldDecl )* SEP? ")"
+    ;
+
+DataBodyItem
+    = Variant
+    | PropDecl
+    ;
+
+Variant
+    = UPPER_IDENT ( "(" FieldDecl ( SEP FieldDecl )* SEP? ")" )?
+    ;
+
+(* FieldDecl supports default values for variant fields (v0.2, Q3). *)
+FieldDecl
+    = LOWER_IDENT ":" TypeExpr ( "=" Expr )?
+    ;
+
+
+(* ============================================================
+   7. Type aliases
+   ============================================================ *)
+
+TypeAlias
+    = "type" UPPER_IDENT TypeAliasParams? "=" TypeAliasRhs
+    ;
+
+TypeAliasParams                                 (* parameterised aliases *)
+    = "(" ValueParam ( SEP ValueParam )* SEP? ")"
+    ;
+
+(* RHS is a "+ chain" of capability bounds. *)
+TypeAliasRhs
+    = CapBound ( "+" CapBound )*
+    ;
+
+
+(* ============================================================
+   8. Function declarations
+   ============================================================ *)
+
+FnDecl
+    = "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" FnReturnType WithClause? FnBody
+    ;
+
+FnParamList
+    = "(" ( FnParam ( SEP FnParam )* SEP? )? ")"
+    ;
+
+FnParam
+    = LOWER_IDENT ":" TypeExpr ( "=" Expr )?       (* defaults supported on fn params (v0.2) *)
+    ;
+
+(* Return type may be `cap of T`, `cap extends C`, `!`, `()`, or any TypeExpr *)
+FnReturnType
+    = "cap" CapReturnSpec?
+    | TypeExpr
+    ;
+
+CapReturnSpec
+    = "of" OfArg
+    | "extends" CapBound ( "+" CapBound )*
+    ;
+
+WithClause
+    = "with" EffectRow
+    ;
+
+EffectRow
+    = EffectBound ( "+" EffectBound )*
+    ;
+
+EffectBound
+    = UPPER_IDENT ( "of" OfArg )?
+    ;
+
+FnBody
+    = Block
+    ;
+
+
+(* ============================================================
+   9. Satisfies declarations
+   ============================================================ *)
+
+SatisfiesDecl
+    = SatisfiesSubject "satisfies" CapRef SatisfiesBody
+    ;
+
+(* Subject can be a data type name (with optional `of Self`) or a
+   primitive like `u64`. *)
+SatisfiesSubject
+    = UPPER_IDENT ( "of" "Self" )?
+    | LOWER_IDENT                     (* primitives: u64, f64, ... *)
+    ;
+
+SatisfiesBody
+    = "{" ( NL | SatisfiesItem )* "}"
+    ;
+
+SatisfiesItem
+    = SatisfiesMap
+    | InstanceMethodDef                  (* alternative form: full method bodies *)
+    ;
+
+SatisfiesMap
+    = SatisfiesLhs "as" LOWER_IDENT
+    ;
+
+SatisfiesLhs
+    = UPPER_IDENT                        (* a data variant name        *)
+    | "Self"                             (* the satisfying type itself *)
+    | "impossible"                       (* unreachable mapping        *)
+    ;
+
+InstanceMethodDef
+    = "fn" LOWER_IDENT FnParamList? ( "->" TypeExpr )? "=" Expr
+    ;
+
+
+(* ============================================================
+   10. Type expressions
+   ============================================================
+   A TypeExpr can be:
+     - a primitive (u64, String, ()): bare LOWER_IDENT or unit
+     - a concrete cap/data name: UPPER_IDENT, optionally with `of`
+     - an `is` bound (anonymous or named alias)
+     - an arrow type: A -> B  or  (A, B) -> C  — also `() -> R`
+     - the never type: !
+
+   Type-level expressions and value-level expressions overlap (e.g.
+   `between(0, 100)` works in either). The parser resolves which
+   based on context.
+   ============================================================ *)
+
+TypeExpr
+    = ArrowType
+    ;
+
+ArrowType
+    = ArrowLhs ( "->" ArrowType WithClause? )?
+    ;
+
+ArrowLhs
+    = "(" ArrowLhsList? ")"            (* tuple-arg form: (A, B) -> C, or () *)
+    | TypeAtom
+    ;
+
+ArrowLhsList
+    = TypeExpr ( "," TypeExpr )* ","?
+    ;
+
+TypeAtom
+    = "!"                              (* never type *)
+    | "Self" SelfOf?
+    | IsBound
+    | NamedAlias
+    | TypeRef
+    ;
+
+SelfOf
+    = "of" OfArg                       (* HKT return: Self of B *)
+    ;
+
+NamedAlias                             (* `N is Cap`, `R is Cap of X`, etc. *)
+    = UPPER_IDENT "is" CapBoundChain
+    ;
+
+IsBound                                (* anonymous `is Cap (+ Cap)*` *)
+    = "is" CapBoundChain
+    ;
+
+CapBoundChain
+    = CapBound ( "+" CapBound )*
+    ;
+
+(* A cap bound is a cap reference (possibly with `of` args), a refinement
+   call (cap-generating function applied to value args), or a primitive. *)
+CapBound
+    = CapRef
+    | RefinementCall
+    | PrimitiveType
+    ;
+
+CapRef
+    = UPPER_IDENT ( "of" OfArg )?
+    ;
+
+RefinementCall                         (* between(0, 100), max_length(32), etc. *)
+    = LOWER_IDENT "(" ArgList? ")"
+    ;
+
+PrimitiveType
+    = LOWER_IDENT                      (* u8..u128, i8..i128, f32, f64, bool, char, String *)
+    | UNIT_LITERAL                     (* ()  *)
+    ;
+
+TypeRef
+    = UPPER_IDENT ( "of" OfArg )?
+    | PrimitiveType
+    ;
+
+OfArgList
+    = "(" OfArg ( SEP OfArg )* SEP? ")"
+    | OfArg
+    ;
+
+(* OfArg admits, at the same syntactic position:
+     - phantom type-param declarations
+     - value-param declarations with optional type and default
+       (v0.2, Q3)
+     - bare type expressions (declaration or application)
+     - literal value expressions (application sites — v0.2.2, N1)
+   The parser disambiguates on the next token after the leading IDENT:
+     - `phantom IDENT`      → phantom type param
+     - `IDENT : ...`        → OfValueParam with type
+     - `IDENT = ...`        → OfValueParam with default but no type
+     - LITERAL              → LiteralExpr (application: 5, 10, "foo")
+     - otherwise            → TypeExpr
+   The typer interprets each OfArg as either a type or a value
+   depending on whether the OfArg position is a declaration or an
+   application of an `of` clause. *)
+OfArg
+    = "phantom" UPPER_IDENT
+    | OfValueParam
+    | LiteralExpr                  (* application-time literal value *)
+    | TypeExpr
+    ;
+
+OfValueParam
+    = ( LOWER_IDENT | UPPER_IDENT ) ":" TypeExpr ( "=" Expr )?
+    | ( LOWER_IDENT | UPPER_IDENT ) "=" Expr
+    ;
+
+ValueParam                             (* used in CapValueParams and TypeAliasParams *)
+    = ( LOWER_IDENT | UPPER_IDENT ) ( ":" TypeExpr )? ( "=" Expr )?
+    ;
+
+
+(* ============================================================
+   11. Property declarations
+   ============================================================ *)
+
+PropDecl
+    = "prop" LOWER_IDENT ":" PropExpr
+    ;
+
+(* PropExpr extends the regular Expr grammar with `implies` and
+   `forall`, both reachable only inside prop bodies (v0.2 Q5; v0.2.1 N2). *)
+PropExpr
+    = ImpliesExpr
+    | ForallExpr
+    | Expr
+    ;
+
+ImpliesExpr                            (* right-associative; lower than `||` *)
+    = OrExpr "implies" PropExpr
+    ;
+
+
+(* ============================================================
+   12. Patterns (used in `match`, `let`, and handler arms)
+   ============================================================ *)
+
+Pattern
+    = "_"                                                        (* wildcard *)
+    | LOWER_IDENT                                                (* binder   *)
+    | LiteralPattern
+    | DataVariantPattern
+    | TuplePattern
+    | StructDestructurePattern
+    ;
+
+LiteralPattern
+    = INT_LITERAL | FLOAT_LITERAL | STRING_LITERAL | CHAR_LITERAL | BOOL_LITERAL | UNIT_LITERAL
+    ;
+
+(* DataVariantPattern (v0.2, Q4):
+     - qualified: `Direction.North`, `List.Cons(h, t)`, `Self.Just(x)`
+     - bare:      `North`, `Cons(h, t)`, `Just(x)` — typer disambiguates via scrutinee type *)
+DataVariantPattern
+    = ( UPPER_IDENT | "Self" ) "." UPPER_IDENT ( "(" PatternList? ")" )?
+    | UPPER_IDENT ( "(" PatternList? ")" )?
+    ;
+
+(* TuplePattern (v0.2, Q7) accepts 1-element form with mandatory trailing comma. *)
+TuplePattern
+    = "(" Pattern "," ")"
+    | "(" Pattern "," Pattern ( "," Pattern )* ","? ")"
+    ;
+
+StructDestructurePattern                   (* `Pair { first: x, second: y }` *)
+    = UPPER_IDENT "{" FieldPattern ( SEP FieldPattern )* SEP? "}"
+    ;
+
+FieldPattern
+    = LOWER_IDENT ( ":" Pattern )?
+    ;
+
+PatternList
+    = Pattern ( "," Pattern )* ","?
+    ;
+
+
+(* ============================================================
+   13. Expressions
+   ============================================================
+   Per Q15: everything is an expression. `let` and `prop` are
+   expressions that return `()` and have side effects (binding /
+   declaring a postcondition). A block is a sequence of expressions;
+   the block's value is the value of its final expression.
+
+   Operator precedence, low → high:
+     pipe          |>
+     logical or    ||
+     logical and   &&
+     comparison    == != < > <= >=
+     additive      + -
+     multiplicative * / %
+     application/method  f(args)  e.m(args)  e.field
+     atom
+
+   `if`, `match`, `handle`, `do`, lambdas, blocks, struct literals,
+   list literals, tuples, and `unreachable` all act as atoms.
+
+   `forall` introduces a quantifier expression; permitted anywhere
+   syntactically but only meaningful in prop bodies (see N2).
+   `implies` is reachable only via PropExpr (Q5).
+   ============================================================ *)
+
+Expr
+    = LetExpr
+    | PropDecl
+    | PipeExpr
+    ;
+
+LetExpr                                (* returns () *)
+    = "let" Pattern "=" PipeExpr
+    ;
+
+(* ForallExpr lives only inside prop bodies — see PropExpr (v0.2.1, N2). *)
+ForallExpr
+    = "forall" "(" Binder ( "," Binder )* ","? ")" "->" PropExpr
+    ;
+
+Binder
+    = LOWER_IDENT ":" TypeExpr
+    ;
+
+PipeExpr
+    = OrExpr ( "|>" OrExpr )*
+    ;
+
+OrExpr
+    = AndExpr ( "||" AndExpr )*
+    ;
+
+AndExpr
+    = CmpExpr ( "&&" CmpExpr )*
+    ;
+
+CmpExpr
+    = AddExpr ( CmpOp AddExpr )?         (* non-associative *)
+    ;
+
+CmpOp
+    = "==" | "!=" | "<" | ">" | "<=" | ">="
+    ;
+
+AddExpr
+    = MulExpr ( ( "+" | "-" ) MulExpr )*
+    ;
+
+MulExpr
+    = AppExpr ( ( "*" | "/" | "%" ) AppExpr )*
+    ;
+
+AppExpr
+    = AtomExpr AppSuffix*
+    ;
+
+AppSuffix
+    = "(" ArgList? ")"                       (* function application *)
+    | "." LOWER_IDENT ApplyTail?             (* method call or field access *)
+    | "." UPPER_IDENT ApplyTail?             (* static-method/static-ctor call *)
+    | BlockLambda                            (* trailing block lambda *)
+    ;
+
+ApplyTail
+    = "(" ArgList? ")"
+    ;
+
+ArgList
+    = Expr ( "," Expr )* ","?
+    ;
+
+AtomExpr
+    = LiteralExpr
+    | UNIT_LITERAL
+    | "Self"
+    | "unreachable"
+    | "resume" "(" Expr? ")"                 (* in handler bodies *)
+    | LOWER_IDENT                            (* identifier — fn name, var, builtin.* *)
+    | UPPER_IDENT                            (* type/cap/data name as receiver *)
+    | "(" Expr ")"                           (* parenthesised *)
+    | TupleExpr
+    | ListLiteralExpr
+    | LambdaExpr
+    | Block
+    | IfExpr
+    | MatchExpr
+    | HandleExpr
+    | DoExpr
+    | StructLiteralExpr
+    ;
+
+LiteralExpr
+    = INT_LITERAL | FLOAT_LITERAL | STRING_LITERAL | CHAR_LITERAL | BOOL_LITERAL
+    ;
+
+(* TupleExpr (v0.2, Q7): 1-element form needs trailing comma to disambiguate
+   from a parenthesised expression. *)
+TupleExpr
+    = "(" Expr "," ")"
+    | "(" Expr "," Expr ( "," Expr )* ","? ")"
+    ;
+
+ListLiteralExpr
+    = "[" ( Expr ( "," Expr )* ","? )? "]"
+    ;
+
+LambdaExpr                                   (* (x) -> e, () -> e, (x, y) -> e *)
+    = "(" ( LOWER_IDENT ( "," LOWER_IDENT )* ","? )? ")" "->" Expr
+    ;
+
+BlockLambda                                  (* { x -> e } or { (x, y) -> e } *)
+    = "{" LambdaBlockHead "->" BlockBody "}"
+    ;
+
+LambdaBlockHead
+    = LOWER_IDENT
+    | "(" LOWER_IDENT ( "," LOWER_IDENT )* ","? ")"
+    ;
+
+(* A block: zero or more expressions; the block's value is the value
+   of its final expression. A block whose final expression is a
+   LetExpr or PropDecl evaluates to `()`. *)
+Block
+    = "{" BlockBody "}"
+    ;
+
+BlockBody
+    = ( NL | Expr )*
+    ;
+
+IfExpr
+    = "if" Expr Block ( "else" ( IfExpr | Block ) )?
+    ;
+
+MatchExpr
+    = "match" Expr "{" MatchArm ( SEP MatchArm )* SEP? "}"
+    ;
+
+MatchArm
+    = Pattern "=>" Expr
+    ;
+
+(* HandleExpr (v0.2, Q2): subject is always a Block. Use
+     handle { expr } { handlers }
+   when the subject is a single expression. *)
+HandleExpr
+    = "handle" Block "{" HandlerArm ( SEP HandlerArm )* SEP? "}"
+    ;
+
+HandlerArm
+    = UPPER_IDENT "." LOWER_IDENT "(" PatternList? ")" "=>" Expr
+    | "return" "(" Pattern ")" "=>" Expr
+    ;
+
+(* DoExpr (v0.2, Q9): final form must be a non-bind expression. *)
+DoExpr
+    = "do" "{" ( DoBindStmt NL )* DoFinalExpr NL? "}"
+    ;
+
+DoBindStmt
+    = LOWER_IDENT "<-" Expr
+    ;
+
+DoFinalExpr
+    = Expr
+    ;
+
+StructLiteralExpr                                 (* `Pair { first: x, second: y }` *)
+    = UPPER_IDENT "{" FieldInit ( SEP FieldInit )* SEP? "}"
+    ;
+
+FieldInit
+    = LOWER_IDENT ( ":" Expr )?                   (* `field: expr` or shorthand `field` *)
+    ;
+
+
+(* ============================================================
+   14. Comments and whitespace (lexer-level)
+   ============================================================ *)
+
+LineComment      = "//" (* up to end of line — discarded by lexer *) ;
+Whitespace       = (* space, tab — discarded *) ;
+
+(* Block comments are not part of v0.2. *)
+
+
+(* ============================================================
+   15. Open questions (remaining in v0.2)
+   ============================================================
+
+   Pre-resolved deferrals (lift into the indicated spec doc when drafted):
+
+   Q8 — Type-variable introduction → spec/type_system.md
+        An UPPER_IDENT in a type-binding position (`IDENT is Bound`,
+        `phantom IDENT`, or free in a signature) introduces a fresh
+        type variable iff that name is not already bound in the
+        enclosing scope. Subsequent occurrences in the same signature
+        refer to the same variable. Intra-signature shadowing is a
+        compile error. Scope: the whole signature for `fn`; the whole
+        body for `cap`/`data`/`effect`.
+
+   Q10 — Numeric literal polymorphism → spec/type_system.md
+        INT_LITERAL and FLOAT_LITERAL carry polymorphic type
+        `is Numeric`. The typer resolves the concrete representation
+        from context (parameter type, assignment LHS, operand types,
+        return type). When context cannot resolve, defaults apply:
+        INT → i64, FLOAT → f64.
+
+   Q11 — `mod`, `pub`, `in` keywords (closed)
+        Reserved without productions. `mod` and `pub` are reserved for
+        a future module/visibility spec. `in` is reserved for plausible
+        future use (range-based forms, let-in if reintroduced).
+
+   Q16 — `unreachable` → spec/type_system.md
+        Keyword expression of type `!` (the never type). Reaching it
+        at runtime is a panic. The typer treats `!` as a subtype of
+        every type, so `unreachable` is valid in any expression
+        position.
+
+   N1(a) — Defaults at type-application sites → spec/type_system.md
+        When applying a data type with `of` value-params, missing
+        trailing args take their declared defaults. Args are strictly
+        positional. Example: `Bounded of N` ≡ `Bounded of (N, 16, 24)`;
+        `Bounded of (N, 5)` ≡ `Bounded of (N, 5, 24)`. Omitting an arg
+        with no declared default is a compile error. Positional-skip
+        (`Bounded of (N, _, 30)`) and named application
+        (`Bounded of (N, hi=10)`) are not supported in v0.2.
+
+   N1(b) — QTT quantity for `of` value-args → spec/quantities.md
+        Non-phantom `of` value-args are quantity 0 by default —
+        type-level, erased at runtime. The compiler materialises them
+        to runtime values automatically at access sites (e.g. `b.lo`
+        in arithmetic context becomes the statically-known constant).
+        `prop` bodies consume them at quantity 0. Variant field
+        accesses (`b.value`) remain at the value's own quantity
+        (typically ω).
+
+   Q6 — subsumed by N1; closed.
+
+   ============================================================ *)

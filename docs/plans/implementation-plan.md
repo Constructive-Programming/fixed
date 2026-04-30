@@ -2,7 +2,9 @@
 
 ## Overview
 
-Fixed is a purely functional, capability-only programming language inspired by Quine's predicate functor logic and De Goes' "Kill Data" philosophy, compiling to C via Perceus-style reference counting.
+Fixed is a purely functional, capability-only programming language inspired by Quine's predicate functor logic and De Goes' "Kill Data" philosophy, compiling to LLVM IR via Perceus-style reference counting.
+
+The compiler is bootstrapped in **Scala 3**, using `dotc` (the Scala 3 compiler) as its structural reference. See `docs/references/scala3-compiler-reference.md` for the pattern map — phase architecture, parser organization, typer pipeline, and the `cc/` capture checker as the closest analog to Fixed's capability checker.
 
 The programmer never defines concrete data types. All abstraction flows through **capabilities** (what other languages call traits/typeclasses). The compiler owns all representation decisions — it analyzes the set of capabilities a value must satisfy and selects the optimal concrete representation.
 
@@ -475,10 +477,10 @@ Everything starts from the CLI. Four commands, composable:
 
 | Command | What it does |
 |---|---|
-| `fixed compile` | Compiles Fixed source to C |
+| `fixed compile` | Compiles Fixed source to LLVM IR |
 | `fixed verify` | Validates all `prop` invariants — static proofs where possible, property-based tests otherwise |
-| `fixed ship` | Builds a static executable (compile → C compiler → binary) |
-| `fixed verify + ship` | Incrementally does all three: verify props, compile to C, build static binary |
+| `fixed ship` | Builds a static executable (compile → `llc`/`clang` → binary) |
+| `fixed verify + ship` | Incrementally does all three: verify props, compile to LLVM IR, build static binary |
 
 The `+` operator composes commands. Each stage is incremental — if source hasn't changed since the last run, that stage is skipped. `fixed verify + ship` is the standard development loop: prove your properties, then produce a binary.
 
@@ -639,15 +641,45 @@ Formal specification documents that pin down semantics before implementation.
 
 ## Phase 2: Parser + AST
 
-Rust implementation of the front-end.
+Scala 3 implementation of the front-end. Structural model: `dotc` at `compiler/src/dotty/tools/dotc/`. See `docs/references/scala3-compiler-reference.md` §3 for parser patterns and §3.5 for the single-`Tree[T <: Untyped]` hierarchy we adopt directly.
+
+### Project layout (sbt)
+
+```
+build.sbt
+project/
+compiler/src/main/scala/fixed/
+  ast/                 — Trees, untpd, tpd, Desugar
+  core/                — Names, Symbols, Phases, Contexts, Types, Denotations
+  parsing/             — Tokens, Scanners, Parsers, ParserPhase
+  typer/               — Namer, Typer, ProtoTypes, Inferencing  (Phase 3)
+  caps/                — Capability closure, satisfies resolution, prop verifier  (Phase 3)
+  qtt/                 — Quantity inference  (Phase 3)
+  repr/                — Representation selection  (Phase 3 / 4)
+  transform/           — MiniPhase + concrete phases (match→fold, etc.)  (Phase 4)
+  perceus/             — Dup/drop/reuse insertion  (Phase 4)
+  effects/             — Effect inference, evidence passing  (Phase 3 / 4)
+  backend/             — LLVM IR emission  (Phase 4)
+  Compiler.scala       — phase plan: List[List[Phase]]
+  Driver.scala         — argv parsing, settings
+  Main.scala           — entry point
+  Run.scala            — one execution of the phase plan
+  CompilationUnit.scala
+compiler/src/test/scala/fixed/
+library/src/main/fixed/   — stdlib in .fixed (Phase 5)
+examples/                  — already exists
+spec/                      — Phase 1 deliverables
+```
 
 ### Deliverables
 
 | Component | Description |
 |---|---|
-| **Lexer** (`src/lexer/`) | Tokenizer targeting the EBNF grammar. Keywords: `cap`, `fn`, `is`, `of`, `extends`, `satisfies`, `impossible`, `as`, `effect`, `match`, `handle`, `with`, `let`, `if`, `else`, `do`, `use`, `mod`, `pub`, `phantom`, `Self`, `data`, `type`, `prop`, `forall`, `implies` |
-| **Parser** (`src/parser/`) | Recursive descent or Pratt parser producing AST |
-| **AST** (`src/ast/`) | Type definitions for all language constructs |
+| **Tokens & Scanner** (`parsing/Tokens.scala`, `parsing/Scanners.scala`) | Token enum + lexer. Keywords: `cap`, `fn`, `is`, `of`, `extends`, `satisfies`, `impossible`, `as`, `effect`, `match`, `handle`, `with`, `let`, `if`, `else`, `do`, `use`, `mod`, `pub`, `phantom`, `Self`, `data`, `type`, `prop`, `forall`, `implies` |
+| **Parser** (`parsing/Parsers.scala`) | Hand-written recursive descent producing untyped trees. Mirrors `dotc`'s `Location`/`ParamOwner`/`ParseKind` enums for context tracking |
+| **ParserPhase** (`parsing/ParserPhase.scala`) | Wraps the parser as a `Phase`; per-unit `runOn` populates `unit.untpdTree` |
+| **AST** (`ast/Trees.scala`, `ast/untpd.scala`, `ast/tpd.scala`) | Single `Tree[T <: Untyped]` hierarchy split into untpd (parser-output) and tpd (post-typer) |
+| **Phase plan** (`Compiler.scala`) | `phases: List[List[Phase]]` with `frontendPhases` initially containing only `Parser` and a stub `TyperPhase` |
 
 ### AST node types needed
 
@@ -663,7 +695,7 @@ Rust implementation of the front-end.
 
 ### Milestone
 
-All 16 example programs parse successfully into AST.
+All 11 example programs parse successfully into AST.
 
 ---
 
@@ -673,15 +705,19 @@ All 16 example programs parse successfully into AST.
 
 | Component | Description |
 |---|---|
-| **Capability classifier** (`src/types/classify.rs`) | Analyze capability signatures → sum/product/recursive/capability-only/marker |
-| **Type alias expander** (`src/types/alias.rs`) | Expand `type` aliases to their underlying capability sets |
-| **Data type analyzer** (`src/types/data.rs`) | Analyze `data` declarations: variant shapes, auto-derive capabilities, GADT type parameter constraints. Validate `satisfies` declarations: verify constructor arity/type compatibility, check `impossible` soundness (no reachable code path invokes the marked constructor) |
-| **Type inference** (`src/types/infer.rs`) | Bidirectional inference with capability bounds, `Part` resolution, `of` application |
-| **Representation selector** (`src/types/repr.rs`) | Analyze capability sets → narrow to viable concrete representations |
-| **Effect inference** (`src/types/effects.rs`) | Infer and propagate effect rows, verify all effects handled |
-| **Exhaustiveness checker** (`src/types/exhaustive.rs`) | Verify `match` arms cover all constructors |
-| **Property verifier** (`src/types/props.rs`) | Static verification of `prop` invariants; generate property-based tests for those that can't be proven statically. Resolves value params in refinement capability props (e.g., `Between(lo, hi)` binds `min`/`max` to `lo`/`hi` in prop expressions) |
-| **Quantity checker** (`src/types/quantities.rs`) | Infer QTT quantities (0/1/ω) for all bindings. Verify erasure: 0-quantity bindings used only in type/prop/phantom positions. Verify linearity: 1-quantity bindings used exactly once. Feed quantities into Perceus insertion (Phase 4) |
+| **Namer** (`typer/Namer.scala`) | Index pass: enter symbols for every top-level definition with lazy completers (mirrors `dotc/typer/Namer.scala`). Enables mutual recursion across `cap` / `data` / `fn`. |
+| **Typer** (`typer/Typer.scala`, `typer/ProtoTypes.scala`, `typer/Inferencing.scala`) | Bidirectional base typing via prototypes — `is` bounds at parameter sites, `fn -> cap` symbolic args, and `satisfies` resolution all flow through `pt: Type` |
+| **Capability classifier** (`caps/Classifier.scala`) | Analyze capability signatures → sum/product/recursive/capability-only/marker |
+| **Type alias expander** (`typer/TypeAliasExpander.scala`) | Expand `type` aliases to their underlying capability sets |
+| **Data type analyzer** (`typer/DataAnalyzer.scala`) | Analyze `data` declarations: variant shapes, auto-derive capabilities, GADT type parameter constraints. Validate `satisfies` declarations: verify constructor arity/type compatibility, check `impossible` soundness (no reachable code path invokes the marked constructor) |
+| **Capability closure** (`caps/CapClosure.scala`) | Recheck phase: close capability sets under `extends`, resolve `satisfies` mappings in scope, verify coherence |
+| **Effect inference** (`effects/EffectChecker.scala`) | Infer and propagate effect rows, verify all effects handled |
+| **Exhaustiveness checker** (`typer/Exhaustiveness.scala`) | Verify `match` arms cover all constructors of the matched data type |
+| **Property verifier** (`caps/PropVerifier.scala`) | Static verification of `prop` invariants; generate property-based tests for those that can't be proven statically. Resolves value params in refinement capability props (e.g., `Between(lo, hi)` binds `min`/`max` to `lo`/`hi` in prop expressions) |
+| **Quantity checker** (`qtt/QuantityChecker.scala`) | Recheck phase: infer QTT quantities (0/1/ω) for all bindings. Verify erasure: 0-quantity bindings used only in type/prop/phantom positions. Verify linearity: 1-quantity bindings used exactly once. Feed quantities into Perceus insertion (Phase 4) |
+| **Representation selector** (`repr/RepresentationSelector.scala`) | Recheck phase: analyze capability sets → narrow to viable concrete representations |
+
+Implementation note: capability closure, prop verification, quantity checking, and representation selection are layered as separate **Recheck phases** (the pattern from `dotc/transform/Recheck.scala` + `dotc/cc/CheckCaptures.scala`). Each re-traverses the typed tree and refines node types without re-running the base typer. See `docs/references/scala3-compiler-reference.md` §5.4.
 
 ### Capability classification rules
 
@@ -791,55 +827,54 @@ New compiler pass: given all capabilities a value must satisfy, determine which 
 
 ### Milestone
 
-All 16 example programs type-check with correct capability classifications, representation selection, and effect tracking.
+All 11 example programs type-check with correct capability classifications, representation selection, and effect tracking.
 
 ---
 
-## Phase 4: Code Generation (to C)
+## Phase 4: Code Generation (to LLVM IR)
 
 ### Compilation pipeline
 
 ```
-Typed AST
-  → Capability-set analysis (collect all bounds per value)
-  → Representation selection (capability set → concrete layout)
-  → Monomorphization (specialize generic functions)
+Typed + capability-closed + quantity-checked + representation-selected AST
+  → Monomorphization (specialize generic functions per concrete representation)
   → Match desugaring (match → fold calls)
-  → Perceus insertion (dup/drop/reuse token placement)
+  → Perceus insertion (dup/drop/reuse token placement, guided by QTT quantities)
   → Evidence passing (effect operations → evidence vector lookups)
-  → C emission (structs, tagged unions, function pointers, refcount ops)
+  → LLVM IR emission (textual .ll for the prototype; in-process bindings later if needed)
+  → llc / clang → native binary
 ```
+
+Phase 4 strictly follows Phase 3's recheck phases. Capability sets, quantities, and representations are already pinned by the time codegen starts; this phase consumes them.
 
 ### Deliverables
 
 | Component | Description |
 |---|---|
-| **Capability analyzer** (`src/codegen/caps.rs`) | Collect and resolve capability sets per value |
-| **Representation selector** (`src/codegen/repr.rs`) | Map capability sets to C layouts |
-| **Monomorphizer** (`src/codegen/mono.rs`) | Specialize generic functions for concrete type params |
-| **Match desugarer** (`src/codegen/desugar.rs`) | Convert `match` to `fold` calls, `if` to `bool.fold` |
-| **Perceus inserter** (`src/codegen/perceus.rs`) | Insert `dup`/`drop` operations guided by QTT quantities. 0-quantity bindings: erased (no code). 1-quantity bindings: no RC, direct reuse. ω-quantity bindings: full Perceus RC (dup on share, drop on last use, reuse tokens on unique) |
-| **Evidence passer** (`src/codegen/evidence.rs`) | Compile effects to evidence vector lookups |
-| **C emitter** (`src/codegen/emit_c.rs`) | Generate readable C code |
+| **Monomorphizer** (`backend/Monomorphizer.scala`) | Specialize generic functions for concrete representations chosen in Phase 3 |
+| **Match desugarer** (`transform/MatchDesugar.scala`) | Convert `match` to `fold` calls, `if` to `bool.fold`. Implemented as a `MiniPhase` |
+| **Perceus inserter** (`perceus/PerceusInserter.scala`) | Insert `dup`/`drop` operations guided by QTT quantities. 0-quantity bindings: erased (no code). 1-quantity bindings: no RC, direct reuse. ω-quantity bindings: full Perceus RC (dup on share, drop on last use, reuse tokens on unique) |
+| **Evidence passer** (`effects/EvidencePasser.scala`) | Compile effects to evidence vector lookups |
+| **LLVM IR emitter** (`backend/EmitLLVM.scala`) | Emit textual LLVM IR (.ll). Prototype strategy: shell out to `llc` / `clang` for native code generation. |
 
-### C representation mapping
+### LLVM IR representation mapping
 
-| Fixed concept | C representation |
+| Fixed concept | LLVM IR representation |
 |---|---|
-| Sum capability (e.g., `Optional`) | `struct { uint8_t tag; union { ... } data; }` |
-| Data type (e.g., `Color`, `Expr`) | `struct { uint8_t tag; union { ... } data; }` (same as sum, but shape is programmer-defined) |
-| Product capability (e.g., `Config`) | `struct { field1_t field1; field2_t field2; ... }` |
-| Recursive capability (e.g., `Sequencing` backed by linked list) | Heap-allocated node with refcount header |
-| Capability satisfied by contiguous array (e.g., `RandomAccess + Sized`) | `struct { size_t len; size_t cap; T* data; }` |
-| Closure | `struct { fn_ptr code; env_ptr env; }` |
+| Sum capability (e.g., `Optional`) | `{ i8, [N x i8] }` — tag + payload bytes; payload accessed via `bitcast` to the variant's struct type |
+| Data type (e.g., `Color`, `Expr`) | Same shape as sum capability; `data` declarations name the variants |
+| Product capability (e.g., `Config`) | LLVM literal struct: `{ field1_t, field2_t, ... }` |
+| Recursive capability (e.g., `Sequencing` backed by linked list) | Heap-allocated `ptr` (LLVM opaque pointer) to `{ rc_header, payload }` |
+| Capability satisfied by contiguous array (e.g., `RandomAccess + Sized`) | `{ i64 len, i64 cap, ptr data }` |
+| Closure | `{ ptr code, ptr env }` (opaque pointers, LLVM 15+) |
 | Block lambda | Same as closure (syntactic difference only) |
-| Effect operation | Evidence vector lookup + indirect call |
-| `resume` | Direct function call (single-shot) |
-| Refcount | `struct { atomic_int rc; ... }` header on heap objects |
+| Effect operation | Evidence vector load (`getelementptr` + `load`) + `call ptr` indirect call |
+| `resume` | Direct `call` (single-shot) |
+| Refcount | `{ i64 rc, ... }` header on heap allocations; ops via `atomicrmw` |
 
 ### Milestone
 
-All 16 example programs compile to C, the C compiles with gcc/clang, and the binaries run correctly.
+All example programs compile to LLVM IR (`.ll`), `llc` / `clang` produce a native binary, and the binaries run correctly.
 
 ---
 
@@ -872,7 +907,7 @@ Profile-guided optimization for representation selection.
 
 | Component | Description |
 |---|---|
-| **Instrumented mode** | Compiler flag that inserts profiling counters into generated C |
+| **Instrumented mode** | Compiler flag that inserts profiling counters into generated LLVM IR (or delegates to LLVM's built-in PGO instrumentation pass) |
 | **Profile reader** | Reads profile data and feeds it back into compilation |
 | **Representation optimizer** | Narrows representation choices further based on profile data |
 | **Hot-path specializer** | Inline frequently-called closures, eliminate dynamic dispatch on hot paths |
@@ -911,18 +946,20 @@ Profile-guided optimization for representation selection.
 
 11. **Type alias `of` interaction**: `is ArrayLike of (A is Ordered)` — how does `of` distribute across the expanded capabilities? Does it apply to all of them, or only those that accept `of`?
 
+12. **Codata**: Fixed has `data` (inductive types defined by constructors) and `cap` (capability interfaces). Neither covers **codata** — coinductive types defined by observations/destructors rather than constructors. Codata could fill the gap for infinite streams, processes, and lazy structures that are concrete types (unlike `cap`) but defined by what you can observe (unlike `data`). See [Rethinking Data and Codata through Matrix Transposition](https://hackernoon.com/rethinking-data-and-codata-through-matrix-transposition) for the theoretical framing.
+
 ---
 
 ## Verification Plan
 
-1. Parse all 16 example programs → AST
+1. Parse all 11 example programs → AST
 2. Type-check all 16 programs (capability classification, representation selection, effect tracking)
 3. Verify QTT quantity inference: 0-quantity bindings in type/prop/phantom positions only, 1-quantity bindings used exactly once, ω-quantity bindings get RC
 4. Verify pattern match exhaustiveness on sum capabilities
 5. Verify effect tracking catches unhandled effects
 6. Verify capability-set narrowing selects correct representations
-7. Compile to C → compile C → run binaries → verify output
-8. Verify erasure: 0-quantity bindings produce no runtime code in generated C
-9. Verify linearity: 1-quantity bindings have no dup/drop in generated C
+7. Compile to LLVM IR → `llc` / `clang` produce native binary → run binaries → verify output
+8. Verify erasure: 0-quantity bindings produce no runtime code in generated LLVM IR
+9. Verify linearity: 1-quantity bindings have no dup/drop in generated LLVM IR
 10. Benchmark against equivalent Koka programs
 11. Test PGO: verify representation changes improve performance on profiled workloads

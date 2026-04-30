@@ -277,6 +277,7 @@ See [`docs/plans/implementation-plan.md`](docs/plans/implementation-plan.md) for
 - [Koka language](https://koka-lang.github.io/koka/doc/index.html) — algebraic effects, Perceus RC, FBIP, evidence passing
 - [Quantitative Type Theory](https://bentnib.org/quantitative-type-theory.html) — Atkey, 2018. Dependent types with resource tracking via usage quantities
 - [Perceus: Garbage Free Reference Counting with Reuse](https://www.microsoft.com/en-us/research/publication/perceus-garbage-free-reference-counting-with-reuse/) — Reinking et al., 2021
+- [Rethinking Data and Codata through Matrix Transposition](https://hackernoon.com/rethinking-data-and-codata-through-matrix-transposition) — data/codata duality and its implications for language design
 
 ## License
 
