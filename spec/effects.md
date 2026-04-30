@@ -118,7 +118,7 @@ A linear effect's row entry carries quantity 1 (per `spec/quantities.md` §3 sem
 
 **Rule E3.5.c (Semantics — at-most-once).** Fixed's `linear effect` is **at-most-once** in the standard linear-typing sense (technically *affine* — zero usage is also allowed). A function whose inferred row contains a linear effect E but whose body never calls any operation of E is valid (usage 0). This matches the common pattern where a linear capability is acquired but conditionally not exercised.
 
-**Use case.** Linear effects encode resource lifecycles where double-use is a bug. For multi-step lifecycles (acquire + use* + release), use multiple linear effects, or wait for the planned per-op linearity refinement (see §9 OQ-E7). Examples:
+**Use case.** Linear effects encode resource lifecycles where double-use is a bug. For multi-step lifecycles (acquire + use* + release), the canonical approach is to **split each linear operation into its own `linear effect`**: each effect carries its own usage budget, tracked independently. This is intentional — keeping linearity at the *effect* granularity (not per-op within a multi-op effect) preserves the simplicity of Rule E3.5 and the QTT-row semantics of §4.1. Examples:
 
 ```
 // One-shot lock release:
@@ -449,13 +449,10 @@ fn each<E>(list: is List of A, f: A -> () with E) -> () with E =
 - **OQ-E3 — Effect inheritance (deferred).** No `extends` for effects in v0.4.2. Adding `effect MyConsole extends Console: ...` is straightforward if stdlib needs it.
 - **OQ-E4 — Higher-rank effect polymorphism (deferred).** A function whose argument is itself effect-polymorphic (`fn higher(g: forall E. (A -> B with E) -> ...)`) is not in v0.4.2. Defer until benchmark code reveals the need.
 
-**New in v0.2:**
-
-- **OQ-E7 — Per-op linearity within an effect.** Rule E3.5 makes the entire effect linear — *all* ops count toward the same usage budget. For multi-step resource lifecycles (e.g., a single `Connection` effect with `read`, `write`, and `close`, where `close` must be exactly-once but `read` and `write` may repeat), per-op linearity would be more ergonomic. v0.4.2 workaround: split into multiple linear effects, one per linear op. Revisit once stdlib resource patterns emerge.
-
 **Closed (decided not to add):**
 
 - **OQ-E2 — Wildcard handler arms.** v0.4 specs no `_ => body` arm in `HandlerArm`. Decision: explicit per-op coverage is required; sandboxes/proxies that need wildcard catch-all should be expressed via effect aliasing (§4.5) or by an explicit list of arms. Closed in v0.2.
+- **OQ-E7 — Per-op linearity within a multi-op effect.** Decision: linearity stays at *effect* granularity. Multi-step resource lifecycles are expressed by splitting each linear operation into its own `linear effect`, each with its own usage budget. This keeps Rule E3.5 simple, preserves QTT-row semantics (§4.1), and makes the linearity contract visible in every signature that uses the resource. Closed in v0.2 — see §3.5's Use case for examples.
 
 ## 10. Worked examples
 
