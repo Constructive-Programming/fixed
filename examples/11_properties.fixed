@@ -40,8 +40,8 @@ cap Stack extends Sequencing + Sized:
     prop push_increments: forall (s: Self, x: Part) ->
         s.push(x).size == s.size + 1
 
-    prop pop_decrements: forall (s: Self) ->
-        s.size > 0 implies s.pop().size == s.size - 1
+    prop pop_decrements: forall (s: Self) suchThat s.size > 0 ->
+        s.pop().size == s.size - 1
 
     prop push_pop_identity: forall (s: Self, x: Part) ->
         s.push(x).pop == s
