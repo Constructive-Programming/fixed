@@ -134,7 +134,7 @@ Fixed uses Quantitative Type Theory (QTT) to track how each binding is used. Thi
 
 | Quantity | Meaning | Fixed example |
 |----------|---------|---------------|
-| **0** | Erased — type-level only, no runtime code | `fn -> cap` value params, `prop` expressions, `phantom` |
+| **0** | Erased — type-level only, no runtime code | `fn -> cap` value params, `prop` expressions, inferred-phantom type params |
 | **1** | Linear — used exactly once, no RC overhead | FBIP reuse, single-shot `resume`, unique handles |
 | **ω** | Unrestricted — freely shared, Perceus RC | General values, captured closures |
 
@@ -296,8 +296,9 @@ data Expr:
     Mul(left: Expr, right: Expr)
     Neg(inner: Expr)
 
-// Phantom-typed data
-data Tagged of (phantom Tag, Value):
+// Phantom-typed data — Tag is inferred phantom because it doesn't appear
+// in any field (see spec/type_system.md §5.9).
+data Tagged of (Tag, Value):
     Tagged(value: Value)
 
 // Single-constructor sugar — when there's only one variant,
@@ -315,7 +316,7 @@ Key properties:
 - **Data types automatically satisfy capabilities** their shape supports (e.g., a multi-variant data gets `Folding` for free, a data with fields gets accessors)
 - **Explicit `satisfies` declarations** map data constructors to capability constructors by name using `as`, bridging the gap between abstract `Self.fn` requirements and concrete data variants
 - **Pattern matching** uses dot syntax: `Expr.Lit(v)`, `Color.RGB(r, g, b)`, `Direction.North`
-- **`of` works on data** just like on caps: `data Tagged of (phantom Tag, Value)` introduces type parameters
+- **`of` works on data** just like on caps: `data Tagged of (Tag, Value)` introduces type parameters (Tag is inferred phantom; see type_system.md §5.9)
 - **Capability constraints inside data fields**: `RGB(red: N is Numeric, green: N, blue: N)` — all three fields share the same numeric type
 
 ### When to use `data` vs `cap`
@@ -614,8 +615,8 @@ Formal specification documents that pin down semantics before implementation.
 - **No explicit layouts**: the programmer never writes references; the compiler handles all borrowing/moving/cloning via Perceus
 - **`prop` semantics**: how properties are checked (static analysis vs property-based testing), what expressions are allowed inside `prop`, how `forall` quantification works, how properties on capabilities compose with `extends`
 - **Dependent types via `fn -> cap`**: how cap-generating functions are type-checked, how symbolic value params are tracked through prop verification, equivalence between `cap Name(params)` sugar and `fn name(params) -> cap`, how first-class cap generators compose and are passed as arguments
-- **QTT quantity inference**: how the compiler determines 0/1/ω for each binding. Type-level positions (cap params, props, phantoms) force 0. Single-use patterns yield 1. Everything else is ω. Interaction with Perceus: 0 → erased, 1 → no RC (direct reuse), ω → full RC
-- **Erasure soundness**: 0-quantity bindings generate no runtime code. The compiler must verify they are never used at runtime — only in types, props, and phantom positions. This is what makes `fn -> cap` sound with RC.
+- **QTT quantity inference**: how the compiler determines 0/1/ω for each binding. Type-level positions (cap params, props, inferred-phantom type params) force 0. Single-use patterns yield 1. Everything else is ω. Interaction with Perceus: 0 → erased, 1 → no RC (direct reuse), ω → full RC
+- **Erasure soundness**: 0-quantity bindings generate no runtime code. The compiler must verify they are never used at runtime — only in types, props, and inferred-phantom positions. This is what makes `fn -> cap` sound with RC.
 - **Linearity and FBIP**: quantity-1 bindings enable guaranteed in-place mutation, replacing the heuristic reuse analysis with a type-level guarantee
 - **Effect handler linearity**: `resume` is quantity 1 (single-shot). Multi-shot handlers (if supported) would need quantity ω
 - **No explicit `self`**: instance methods don't declare a self parameter; the compiler infers it
@@ -662,7 +663,7 @@ spec/                      — Phase 1 deliverables
 
 | Component | Description |
 |---|---|
-| **Tokens & Scanner** (`parsing/Tokens.scala`, `parsing/Scanners.scala`) | Token enum + lexer. Keywords: `cap`, `fn`, `is`, `of`, `extends`, `satisfies`, `impossible`, `as`, `effect`, `match`, `handle`, `with`, `let`, `if`, `else`, `do`, `use`, `mod`, `pub`, `phantom`, `Self`, `data`, `type`, `prop`, `forall`, `implies` |
+| **Tokens & Scanner** (`parsing/Tokens.scala`, `parsing/Scanners.scala`) | Token enum + lexer. Keywords: `cap`, `fn`, `is`, `of`, `extends`, `satisfies`, `impossible`, `as`, `effect`, `match`, `handle`, `with`, `let`, `if`, `else`, `do`, `use`, `mod`, `pub`, `Self`, `data`, `type`, `prop`, `forall`, `implies` (`phantom` removed in v0.4.1 — inferred from usage) |
 | **Parser** (`parsing/Parsers.scala`) | Hand-written recursive descent producing untyped trees. Mirrors `dotc`'s `Location`/`ParamOwner`/`ParseKind` enums for context tracking |
 | **ParserPhase** (`parsing/ParserPhase.scala`) | Wraps the parser as a `Phase`; per-unit `runOn` populates `unit.untpdTree` |
 | **AST** (`ast/Trees.scala`, `ast/untpd.scala`, `ast/tpd.scala`) | Single `Tree[T <: Untyped]` hierarchy split into untpd (parser-output) and tpd (post-typer) |
@@ -701,7 +702,7 @@ All 11 example programs parse successfully into AST.
 | **Effect inference** (`effects/EffectChecker.scala`) | Infer and propagate effect rows, verify all effects handled |
 | **Exhaustiveness checker** (`typer/Exhaustiveness.scala`) | Verify `match` arms cover all constructors of the matched data type |
 | **Property verifier** (`caps/PropVerifier.scala`) | Static verification of `prop` invariants; generate property-based tests for those that can't be proven statically. Resolves value params in refinement capability props (e.g., `Between(lo, hi)` binds `min`/`max` to `lo`/`hi` in prop expressions) |
-| **Quantity checker** (`qtt/QuantityChecker.scala`) | Recheck phase: infer QTT quantities (0/1/ω) for all bindings. Verify erasure: 0-quantity bindings used only in type/prop/phantom positions. Verify linearity: 1-quantity bindings used exactly once. Feed quantities into Perceus insertion (Phase 4) |
+| **Quantity checker** (`qtt/QuantityChecker.scala`) | Recheck phase: infer QTT quantities (0/1/ω) for all bindings. Verify erasure: 0-quantity bindings used only in type/prop/inferred-phantom positions. Verify linearity: 1-quantity bindings used exactly once. Feed quantities into Perceus insertion (Phase 4) |
 | **Representation selector** (`repr/RepresentationSelector.scala`) | Recheck phase: analyze capability sets → narrow to viable concrete representations |
 
 Implementation note: capability closure, prop verification, quantity checking, and representation selection are layered as separate **Recheck phases** (the pattern from `dotc/transform/Recheck.scala` + `dotc/cc/CheckCaptures.scala`). Each re-traverses the typed tree and refines node types without re-running the base typer. See `docs/references/scala3-compiler-reference.md` §5.4.
@@ -939,7 +940,7 @@ Profile-guided optimization for representation selection.
 
 1. Parse all 11 example programs → AST
 2. Type-check all 16 programs (capability classification, representation selection, effect tracking)
-3. Verify QTT quantity inference: 0-quantity bindings in type/prop/phantom positions only, 1-quantity bindings used exactly once, ω-quantity bindings get RC
+3. Verify QTT quantity inference: 0-quantity bindings in type/prop/inferred-phantom positions only, 1-quantity bindings used exactly once, ω-quantity bindings get RC
 4. Verify pattern match exhaustiveness on sum capabilities
 5. Verify effect tracking catches unhandled effects
 6. Verify capability-set narrowing selects correct representations

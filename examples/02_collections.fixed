@@ -114,8 +114,10 @@ data Color:
     Blue
     RGB(red: N is Numeric, green: N, blue: N)
 
-// Phantom-typed data — the Tag parameter exists only at compile time
-data Tagged of (phantom Tag, Value):
+// Phantom-typed data — the Tag parameter exists only at compile time.
+// (The typer infers Tag is phantom because it doesn't appear in any field;
+// see spec/type_system.md §5.9.)
+data Tagged of (Tag, Value):
     Tagged(value: Value)
 
 // =========================================================================

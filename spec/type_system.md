@@ -1,8 +1,10 @@
 # Fixed Type System
 
-**Status:** Draft v0.4
-**Specifies:** typing of Fixed v0.4 source.
+**Status:** Draft v0.4.1
+**Specifies:** typing of Fixed v0.4.1 source.
 **Last revised:** 2026-04-30
+
+**Changes from v0.4.** `phantom` is no longer a keyword; phantom-ness of type parameters is inferred from usage (new §5.9). §6.5 representation-selection algorithm expanded from a one-paragraph sketch to a normative procedure with inputs, candidate pool, viability filter, scoring, ambiguity handling, phase placement, and caching. Rule 6.6 (priority) updated previously to put built-ins on equal footing with user-`satisfies` types — see §6.5.4 / 6.5.5 for how the equal priority resolves through scoring.
 
 **Changes from v0.3.** Body introducer for fn/method definitions changed from `:` to `=` (block introducers `:` reserved for cap/data/effect/satisfies bodies and control-flow branches; definitions use `=`). Cap instance and static methods may carry default bodies (Rule 6.1). Lambda parameters gain optional types and defaults. EffectMember gains `WithClause?` and `TypeParamsHint?`. TupleExpr/TuplePattern simplified. Code examples updated.
 
@@ -48,7 +50,7 @@ A user never names "the type" in the conventional sense. The compiler computes a
 **Rule 4.1.** An `UPPER_IDENT` in a type-binding position introduces a fresh type variable iff that name is not already bound in the enclosing scope. A **type-binding position** is any of:
 
 - `IDENT is Bound` (named alias) — anywhere in a function signature, cap method signature, data variant field, or `of` argument list.
-- `phantom IDENT` in an `of` argument list.
+- A bare `UPPER_IDENT` in an `of` argument list (declares a type parameter; phantom-ness is inferred per §5.9).
 - A free occurrence of `UPPER_IDENT` that does not refer to a globally-declared cap, data, type, or effect.
 
 Subsequent occurrences of the same `UPPER_IDENT` within the same signature **refer to the same type variable**. Intra-signature shadowing is a **compile error**.
@@ -120,8 +122,7 @@ fn size_of(c: is Sized of (i64, u64)) -> u64    // applies both
 
 `of` arguments may be:
 
-- Type expressions (`i64`, `String`, `Cap of A`, `N is Numeric`, …).
-- `phantom IDENT` declarations (only at `of`-declaration sites).
+- Type expressions (`i64`, `String`, `Cap of A`, `N is Numeric`, …). A bare `UPPER_IDENT` at a declaration site introduces a type parameter, whose phantom-ness is inferred per §5.9.
 - Value expressions when the corresponding parameter is a value-param (see §6.3 for data, §5.4 for `Self of B`).
 - Literal values at type-application sites (so `Bounded of (i64, 5, 10)` parses).
 
@@ -223,6 +224,47 @@ If a constituent `Ci` declares more type parameters than the alias receives, the
 
 `of`-distribution applies before `extends`-flattening: an alias's `of` arguments are propagated to its constituent caps before those caps' inherited members are inlined into the obligation set.
 
+### 5.9 Phantom type parameters (inferred)
+
+A type parameter declared in the `of` clause of a `data`, `cap`, or `effect` declaration is **phantom** if it is unused at runtime — that is, if it does not appear in:
+
+1. Any constructor field type (for `data`).
+2. Any method-signature parameter or return type (for `cap` / `effect`).
+3. The signature of any inherited member (transitively via `extends`).
+4. Any `prop` expression in the declaration.
+5. The signature of any default-bodied method's body (for `cap`'s default implementations per Rule 6.1).
+
+Phantom type parameters are erased at runtime (quantity 0). They serve only to distinguish instances at the type level — e.g., `Door of Locked` vs `Door of Unlocked`.
+
+**Rule 5.9 (Phantom inference).** Phantom-ness is **inferred by the typer**, not declared via syntax. The grammar carries no `phantom` keyword (removed in v0.4.1). A type parameter `X` is phantom iff none of (1)–(5) above transitively reference `X`.
+
+**Distinction from quantity-0 `of` value-params (§7.3.b).** Both phantom type parameters and `of` value-params are quantity 0 (erased at runtime), but they live at different levels:
+
+| | Phantom type parameter | `of` value parameter |
+|---|---|---|
+| What it is | A *type* | A *value* (of some type) |
+| What you supply at the use site | A type: `Door of Locked` | A value: `Bounded of (i64, 5, 10)` |
+| What you can extract | Nothing — the parameter has no associated value | A compile-time constant via `b.lo` |
+| Runtime presence | None — purely a type-level discriminator | None — materialised on access as a static constant |
+
+Both are erased; only the value-param has an extractable value.
+
+**Examples.**
+
+```
+// State, Tag are phantom (unused at runtime); Value is non-phantom (used in Tagged's field).
+data Tagged of (Tag, Value):
+    Tagged(value: Value)
+
+cap Door of (State):                            // State is phantom
+    Self.fn new -> Self
+    fn name -> String
+
+cap Sized of (Part, Size is Numeric):           // both Part and Size are non-phantom
+    fn size -> Size                              //   (Size appears in fn signature; Part is referenced
+                                                 //    by `Part`-using inheritors via §5.3)
+```
+
 ## 6. Capability declarations
 
 ### 6.1 Members
@@ -290,21 +332,89 @@ A cap may belong to multiple of these categories transitively via `extends` (e.g
 
 **Note.** Refinement caps generated by `fn name(...) -> cap of T` are always **Marker** caps. They add `prop` obligations but no methods, and impose no representation constraints. A value `N is between(0, 100)` is still represented as `N`.
 
-### 6.5 Representation selection (sketch)
+### 6.5 Representation selection
 
-Given the union of all capabilities a value must satisfy across its lifetime, the compiler picks the most specific viable concrete representation.
+The representation-selection pass determines, for each value (binding, parameter, return), the concrete representation the compiler will use to lay out that value at runtime. It runs as a **Recheck-style phase** (see `docs/references/scala3-compiler-reference.md` §5.4 for the pattern) after capability closure and quantity inference, and before code generation.
 
-The algorithm narrows from a set of candidates:
+#### 6.5.1 Inputs
 
-1. Collect all `is`-bounds on the value.
-2. For each in-scope `satisfies` declaration, check whether the providing data type can satisfy the entire bound set.
-3. Built-in types (e.g., `i64`, contiguous arrays) are also candidates, governed by compiler-internal rules:
-   - `is RandomAccess + Sized` → contiguous array preferred (linked list cannot satisfy `RandomAccess` efficiently).
-   - `is Folding` only → any container, default to whatever PGO suggests.
-   - `is Sequencing + Folding` without `RandomAccess` → linked list is acceptable; PGO may upgrade.
-4. Ambiguity halts compilation with the suggestion list described in `docs/plans/implementation-plan.md` §"Ambiguity resolution via compiler suggestions."
+For each value, the pass collects:
 
-A normative algorithm and its complexity bounds will be specified separately when the representation-selection compiler pass is implemented.
+- **Bound set** — the union of all `is`-bounds the value must satisfy across its lifetime: declaration site, assignment LHS, parameter positions, return positions. Closed under `extends` (§6.2) and alias distribution (§5.8).
+- **Quantity context** — the QTT quantity assigned to the value (§7.3.b, `spec/quantities.md`). Quantity 1 (linear) opens stack-allocation possibilities; quantity ω requires representations compatible with Perceus reference counting.
+- **PGO data** — when available, profile observations from prior runs of the program or its predecessors.
+
+#### 6.5.2 Candidate pool
+
+The pool aggregates two sources:
+
+- **User-defined data types.** For every `T satisfies C` declaration in scope, `T` is a candidate when C ∈ bound set. (Or transitively, when C is inherited by some C' ∈ bound set.)
+- **Built-in candidates** — the §6.6 pool: linked list, contiguous array, hash map, auto-tagged-union, auto-flat-struct. Each carries a precondition expressing which bound sets it can satisfy.
+
+Per Rule 6.6, built-in and user-`satisfies` candidates are at **equal priority** at this stage; the choice is made by the scoring function in §6.5.4.
+
+#### 6.5.3 Viability filter
+
+A candidate is **viable** for the bound set iff every C ∈ bound set is satisfied by:
+
+- (a) An in-scope `satisfies` declaration on the candidate (data types), or
+- (b) The candidate's inherent structural properties (built-ins), or
+- (c) An auto-derivation rule of §7.4 (`Folding`, `Functor`, accessors, …, for data types), or
+- (d) A default body declared on the cap method itself (Rule 6.1 — extension methods).
+
+Refinement caps (Marker class, §6.4) are viable iff their `prop` obligations verify under the candidate's representation. Verification follows `spec/properties.md`'s static-then-PBT pipeline; a failed prop disqualifies the candidate.
+
+If zero candidates are viable, emit `error[E060]: no representation satisfies <bound set>`, listing each cap and the candidate(s) that came closest.
+
+#### 6.5.4 Scoring
+
+For each viable candidate, compute a **performance score** as a weighted linear combination over these dimensions:
+
+- **Allocation cost** — bytes per instance and allocator pressure. Stack > arena > heap-with-RC-header.
+- **Access fit** — how well the candidate's strengths match the operations actually invoked on the value: `RandomAccess + Sized` ⇒ array beats list; sequential-fold ⇒ either acceptable; key-lookup ⇒ hash-map beats list.
+- **Memory footprint** — total bytes including headers, padding, and discriminator tags, per typical instance.
+- **Locality** — contiguous layouts score higher for fold-heavy use; pointer-chased layouts lose cache lines and amortise across allocator slabs.
+- **PGO hit rate** — when profile data is present, weight the operations the profile shows dominate.
+
+Default weights are platform-defined and stable across builds. PGO data may override per-call-site, never globally — this keeps representation choices deterministic across PGO refinements (small profile changes shouldn't flip representations across the whole codebase).
+
+#### 6.5.5 Pick or halt
+
+- If exactly one candidate has the maximum score (within an implementation-defined ε > 0), select it.
+- If two or more candidates tie within ε, halt compilation with an ambiguity error per `docs/plans/implementation-plan.md` §"Ambiguity resolution via compiler suggestions": list every tied candidate with its score and a copy-pasteable disambiguation suggestion. The user resolves via explicit type annotation (per §8.5 — type annotation forces a specific candidate).
+
+#### 6.5.6 Commit
+
+The selected representation is recorded on the symbol's denotation as a phase-indexed view (`docs/references/scala3-compiler-reference.md` §4.4). Subsequent passes — match-to-fold desugaring, Perceus insertion, code generation — see only the concrete representation.
+
+#### 6.5.7 Phase placement
+
+| Runs after | Provides input to selection |
+|---|---|
+| Namer (§10.1) | Symbol table |
+| Base typer | Bound sets per value |
+| Capability closure (§6.2) | `extends`-flattened bound sets |
+| Alias distribution (§5.8) | Alias-expanded bound sets |
+| QTT quantity inference (§7.3.b) | Quantity context |
+| Property verification | Refinement-cap viability |
+
+| Runs before | Consumes selection output |
+|---|---|
+| Match-to-fold desugaring | Emits auto-derived `fold` per chosen rep |
+| Perceus insertion | Knows heap-vs-stack from chosen rep |
+| Code generation | Emits LLVM IR per chosen rep |
+
+#### 6.5.8 Caching and SCC unification
+
+Bound sets are **canonicalised** (sorted, deduplicated, alias-expanded, `extends`-flattened) and hashed. Two values with the same canonical bound set and quantity context share their selection result — selection is computed once per canonical key.
+
+Mutually recursive `data` types (§7.5) form a strongly-connected component on the data-dependency graph. Selection runs **once per SCC**, not once per member; all members of a recursive group adopt a unified representation strategy (heap-allocated co-recursive group with shared refcount header). A future relaxation may allow per-member rep within an SCC when the inter-member references are tail-position only.
+
+#### 6.5.9 Open questions
+
+- **Cross-function rep flow.** A generic function's representation is determined by its signature; concrete reps are monomorphised at each instantiation. Whether two call sites share a monomorphisation is an implementation detail; this spec promises only that selection is consistent within a single function instantiation.
+- **Heuristic stability.** The scoring function should be Lipschitz under bound-set extension: `bound_set ⊂ bound_set'` ⇒ score difference is bounded. Without this, PGO results become brittle and small program changes flip representations across the codebase. The exact stability constant is implementation-defined for v0.4.1.
+- **Stack-allocated recursive data** (deferred). Recursive `data` declarations whose `of` value-params are concrete and bound the recursion depth could be added as a sixth built-in candidate (stack-flat struct), competing alongside the heap-allocated co-recursive group. Targeted for v0.5+ once the pass is implemented and the win is measured against a representative workload.
 
 ### 6.6 Built-in representation candidates (resolves OQ4)
 
@@ -393,7 +503,7 @@ Bounded of (N, hi=30)       — INVALID: no named application in v0.2
 
 Omitting an arg with no declared default is a compile error.
 
-**Rule 7.3.b (QTT for of value-params).** Non-phantom `of` value-params are quantity 0 by default — type-level, erased at runtime. The compiler materialises them as compile-time constants at access sites (so `b.lo` in `b.lo <= b.value` becomes the statically known constant for `b`'s type). See `spec/quantities.md` for the full rule.
+**Rule 7.3.b (QTT for of value-params).** `of` value-params are quantity 0 by default — type-level, erased at runtime. The compiler materialises them as compile-time constants at access sites (so `b.lo` in `b.lo <= b.value` becomes the statically known constant for `b`'s type). See `spec/quantities.md` for the full rule. Note that the "non-phantom" qualifier present in earlier drafts was redundant — `phantom` only ever applied to type parameters; all `of` value-params are erased uniformly.
 
 **Rule 7.3.c (Constructor calls).** A variant constructor call passes only the variant's **declared fields** positionally. The values of the data type's `of` value-params come from the type at which the variant is being constructed:
 

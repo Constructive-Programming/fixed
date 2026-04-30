@@ -3,9 +3,19 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4
+   Status:        DRAFT v0.4.1
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
    Last revised:  2026-04-30
+
+   Refinements in v0.4.1
+   ---------------------
+   - **`phantom` keyword removed.** A type parameter is *phantom* iff
+     it does not appear in any constructor field, method signature,
+     inherited member, or prop expression — this property is inferred
+     by the typer rather than declared at the source level. See
+     spec/type_system.md §5.9 for the inference rule. The grammar
+     `OfArg` no longer has a `"phantom" UPPER_IDENT` alternative;
+     `phantom` is no longer a reserved word.
 
    Major changes in v0.4 — fn/method/lambda consistency
    ----------------------------------------------------
@@ -187,9 +197,12 @@ DEDENT          = (* synthetic token: closing of an indented block *) ;
      as      cap         data        do          effect      else
      extends false       fn          forall      handle      if
      implies impossible  in          is          let         match
-     mod     of          phantom     prop        pub         resume
-     return  Self        satisfies   true        type        unreachable
-     use     with                                                          *)
+     mod     of          prop        pub         resume      return
+     Self    satisfies   true        type        unreachable use
+     with                                                                 *)
+(* `phantom` removed in v0.4.1 — phantom-ness is now inferred from usage
+   (a type parameter is phantom iff it does not appear in any field,
+   method signature, inherited member, or prop expression). *)
 
 
 (* ============================================================
@@ -528,9 +541,20 @@ OfArgList
     | OfArg
     ;
 
+(* OfArg admits, at the same syntactic position:
+     - value-param declarations with optional type and default;
+     - literal value expressions at application sites
+       (`Bounded of (i64, 5, 10)`);
+     - bare type expressions (declaration or application).
+   The parser disambiguates on the next token after the leading IDENT:
+     - `IDENT : ...`        → OfValueParam with type
+     - `IDENT = ...`        → OfValueParam with default but no type
+     - LITERAL              → LiteralExpr
+     - otherwise            → TypeExpr.
+   Phantom-ness of type parameters is inferred from usage (see
+   spec/type_system.md §5.9), not declared via syntax. *)
 OfArg
-    = "phantom" UPPER_IDENT
-    | OfValueParam
+    = OfValueParam
     | LiteralExpr
     | TypeExpr
     ;

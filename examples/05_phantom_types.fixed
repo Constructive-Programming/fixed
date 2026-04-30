@@ -23,8 +23,11 @@ cap Unlocked
 cap Open
 
 // --- A door that tracks its state in the type system ---
+//
+// `State` is inferred as phantom: it appears in `Door`'s `of` clause
+// but never as a field or method-signature type. See type_system.md §5.9.
 
-cap Door of (phantom State):
+cap Door of (State):
     Self.fn new -> Self  // only callable as Door of Locked .new
     fn name -> String
 
@@ -57,7 +60,7 @@ cap Closed
 cap Listening
 cap Established
 
-cap TcpSocket of (phantom State):
+cap TcpSocket of (State):                  // State inferred phantom (unused in fields/methods)
     Self.fn new(port: u16) -> Self
     fn port -> u16
 
@@ -88,7 +91,7 @@ cap Newtons
 
 // --- A quantity tagged with its unit ---
 
-cap Quantity of (phantom Unit):
+cap Quantity of (Unit):                    // Unit inferred phantom (unused in fields/methods)
     Self.fn new(value: f64) -> Self
     fn value -> f64
 
