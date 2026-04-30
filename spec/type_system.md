@@ -520,13 +520,19 @@ Maybe satisfies Optional:
 
 **Rule 8.1.a (Variant-to-constructor).** Each `Variant as ctor` line maps a data variant to one of the cap's `Self.fn` constructors. The variant's field types must match (or be a refinement of) the corresponding `Self.fn`'s parameter types.
 
-**Rule 8.1.b (Coverage).** A complete `satisfies` declaration must map every `Self.fn` constructor of the cap to either a data variant or `impossible`:
+**Rule 8.1.b (Coverage).** A complete `satisfies` declaration must map every `Self.fn` constructor of the cap to a data variant (or, in the partial-satisfaction case below, to `impossible`):
 
 ```
-NonEmptyList satisfies Sequencing:
-    Cons as cons
-    impossible as empty       // NonEmptyList has no empty case
+data Outcome of (E, A):
+    Success(value: A)
+    Failure(error: E)
+
+Outcome satisfies Result:
+    Success as ok
+    Failure as err
 ```
+
+Both of `Result`'s `Self.fn` constructors (`ok` and `err`) are mapped; the satisfaction is total. Missing or duplicate mappings are compile errors.
 
 ### 8.2 `impossible`
 
