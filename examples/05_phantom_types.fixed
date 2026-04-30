@@ -18,71 +18,60 @@ use std.io.Console
 
 // --- State labels (marker capabilities — zero-sized, compile-time only) ---
 
-cap Locked {}
-cap Unlocked {}
-cap Open {}
+cap Locked
+cap Unlocked
+cap Open
 
 // --- A door that tracks its state in the type system ---
 
-cap Door of (phantom State) {
+cap Door of (phantom State):
     Self.fn new -> Self  // only callable as Door of Locked .new
     fn name -> String
-}
 
 // State transition functions — each consumes the door in one state
 // and returns it in another. Invalid transitions simply don't exist.
 
-fn unlock(door: is Door of Locked) -> is Door of Unlocked {
+fn unlock(door: is Door of Locked) -> is Door of Unlocked:
     // In the runtime representation, this is essentially a no-op —
     // the phantom type changes but the data is the same.
     // The compiler can optimize this to a move (or reuse in-place).
     Door.new  // compiler infers Door of Unlocked from return type
-}
 
-fn lock(door: is Door of Unlocked) -> is Door of Locked {
+fn lock(door: is Door of Unlocked) -> is Door of Locked:
     Door.new
-}
 
-fn open(door: is Door of Unlocked) -> is Door of Open {
+fn open(door: is Door of Unlocked) -> is Door of Open:
     Door.new
-}
 
-fn close(door: is Door of Open) -> is Door of Unlocked {
+fn close(door: is Door of Open) -> is Door of Unlocked:
     Door.new
-}
 
 // This function is polymorphic over the state — it works on any door.
 // Quine's "reflection": the same type variable `S` constrains both input and output.
-fn inspect(door: is Door of S) -> String {
+fn inspect(door: is Door of S) -> String:
     "Door: ".concat(door.name)
-}
 
 // --- A more complex example: TCP connection states ---
 
-cap Closed {}
-cap Listening {}
-cap Established {}
+cap Closed
+cap Listening
+cap Established
 
-cap TcpSocket of (phantom State) {
+cap TcpSocket of (phantom State):
     Self.fn new(port: u16) -> Self
     fn port -> u16
-}
 
-fn bind(socket: is TcpSocket of Closed) -> is TcpSocket of Listening {
+fn bind(socket: is TcpSocket of Closed) -> is TcpSocket of Listening:
     TcpSocket.new(socket.port)
-}
 
-fn accept(socket: is TcpSocket of Listening) -> is TcpSocket of Established {
+fn accept(socket: is TcpSocket of Listening) -> is TcpSocket of Established:
     TcpSocket.new(socket.port)
-}
 
-fn send(socket: is TcpSocket of Established, data: String) -> () with Console {
+fn send(socket: is TcpSocket of Established, data: String) -> () with Console:
     Console.print_line("Sending on port ".concat(socket.port.show()).concat(": ").concat(data))
-}
 
-fn disconnect(socket: is TcpSocket of Established) -> is TcpSocket of Closed {
+fn disconnect(socket: is TcpSocket of Established) -> is TcpSocket of Closed:
     TcpSocket.new(socket.port)
-}
 
 // =========================================================================
 // Part 2: Unit-safe arithmetic via phantom types
@@ -90,65 +79,56 @@ fn disconnect(socket: is TcpSocket of Established) -> is TcpSocket of Closed {
 
 // --- Unit marker caps (zero-sized, compile-time only) ---
 
-cap Meters {}
-cap Seconds {}
-cap MetersPerSecond {}
-cap MetersPerSecondSq {}
-cap Kilograms {}
-cap Newtons {}
+cap Meters
+cap Seconds
+cap MetersPerSecond
+cap MetersPerSecondSq
+cap Kilograms
+cap Newtons
 
 // --- A quantity tagged with its unit ---
 
-cap Quantity of (phantom Unit) {
+cap Quantity of (phantom Unit):
     Self.fn new(value: f64) -> Self
     fn value -> f64
-}
 
 // Arithmetic on quantities — only valid when units match (Quine's "reflection").
 // `U` is a free type variable: both `a` and `b` must share it, so the compiler
 // rejects `add(meters, seconds)` at compile time.
-fn add(a: is Quantity of U, b: is Quantity of U) -> is Quantity of U {
+fn add(a: is Quantity of U, b: is Quantity of U) -> is Quantity of U:
     Quantity.new(a.value + b.value)
-}
 
-fn sub(a: is Quantity of U, b: is Quantity of U) -> is Quantity of U {
+fn sub(a: is Quantity of U, b: is Quantity of U) -> is Quantity of U:
     Quantity.new(a.value - b.value)
-}
 
-fn scale(q: is Quantity of U, factor: f64) -> is Quantity of U {
+fn scale(q: is Quantity of U, factor: f64) -> is Quantity of U:
     Quantity.new(q.value * factor)
-}
 
-fn negate(q: is Quantity of U) -> is Quantity of U {
+fn negate(q: is Quantity of U) -> is Quantity of U:
     Quantity.new(0.0 - q.value)
-}
 
 // --- Unit conversions (type-changing operations) ---
 
 fn divide_units(
     distance: is Quantity of Meters,
     time: is Quantity of Seconds,
-) -> is Quantity of MetersPerSecond {
+) -> is Quantity of MetersPerSecond:
     Quantity.new(distance.value / time.value)
-}
 
 fn acceleration(
     velocity: is Quantity of MetersPerSecond,
     time: is Quantity of Seconds,
-) -> is Quantity of MetersPerSecondSq {
+) -> is Quantity of MetersPerSecondSq:
     Quantity.new(velocity.value / time.value)
-}
 
 fn force(
     mass: is Quantity of Kilograms,
     accel: is Quantity of MetersPerSecondSq,
-) -> is Quantity of Newtons {
+) -> is Quantity of Newtons:
     Quantity.new(mass.value * accel.value)
-}
 
-fn show_quantity(q: is Quantity of U, unit_name: String) -> String {
+fn show_quantity(q: is Quantity of U, unit_name: String) -> String:
     q.value.show().concat(" ").concat(unit_name)
-}
 
 // --- Physics example ---
 
@@ -156,14 +136,13 @@ fn kinematic_distance(
     v0: is Quantity of MetersPerSecond,
     a: is Quantity of MetersPerSecondSq,
     t: is Quantity of Seconds,
-) -> is Quantity of Meters {
+) -> is Quantity of Meters:
     // d = v0*t + 0.5*a*t^2
     let v0t = Quantity.new(v0.value * t.value)  // Meters
     let at2 = Quantity.new(0.5 * a.value * t.value * t.value)  // Meters
     add(v0t, at2)
-}
 
-fn main() -> () with Console {
+fn main() -> () with Console:
     // --- Door state machine ---
     let door = Door.new              // Door of Locked
     let door = unlock(door)           // Door of Unlocked
@@ -212,4 +191,3 @@ fn main() -> () with Console {
     let t = Quantity.new(5.0)      // 5 seconds
     let d = kinematic_distance(v0, a, t)
     Console.print_line("Distance traveled: ".concat(show_quantity(d, "m")))
-}

@@ -15,7 +15,7 @@ use std.io.Console
 
 // --- The expression AST (capability declares requirements) ---
 
-cap Expr {
+cap Expr:
     Self.fn lit(value: f64) -> Self
     Self.fn var(name: String) -> Self
     Self.fn add(left: Self, right: Self) -> Self
@@ -34,22 +34,20 @@ cap Expr {
         on_if: (R, R, R) -> R,
         on_call: (String, is List of R) -> R,
     ) -> R
-}
 
 // --- Concrete AST data type satisfies Expr ---
 
-data AstNode {
-    Literal(value: f64),
-    Variable(name: String),
-    Sum(left: AstNode, right: AstNode),
-    Product(left: AstNode, right: AstNode),
-    Negate(inner: AstNode),
-    LetBinding(name: String, value: AstNode, body: AstNode),
-    Conditional(cond: AstNode, then_branch: AstNode, else_branch: AstNode),
-    FnCall(func_name: String, args: is List of AstNode),
-}
+data AstNode:
+    Literal(value: f64)
+    Variable(name: String)
+    Sum(left: AstNode, right: AstNode)
+    Product(left: AstNode, right: AstNode)
+    Negate(inner: AstNode)
+    LetBinding(name: String, value: AstNode, body: AstNode)
+    Conditional(cond: AstNode, then_branch: AstNode, else_branch: AstNode)
+    FnCall(func_name: String, args: is List of AstNode)
 
-AstNode satisfies Expr {
+AstNode satisfies Expr:
     Literal as lit
     Variable as var
     Sum as add
@@ -58,71 +56,60 @@ AstNode satisfies Expr {
     LetBinding as let_in
     Conditional as if_then
     FnCall as call
-}
 
 // --- The environment (variable bindings) ---
 
-cap Env {
+cap Env:
     Self.fn empty -> Self
     fn bind(name: String, value: f64) -> Self
     fn lookup(name: String) -> is Optional of f64
-}
 
 // --- Concrete environment ---
 
 data VarMap(bindings: is List of (is Pair of (String, f64)))
 
-VarMap satisfies Env {
+VarMap satisfies Env:
     VarMap as empty
-}
 
 // --- Built-in function registry ---
 
-cap Builtins {
+cap Builtins:
     fn eval_builtin(
         name: String,
         args: is List of f64,
     ) -> is Optional of f64
-}
 
-fn default_builtins() -> is Builtins {
+fn default_builtins() -> is Builtins:
     // The compiler generates a concrete implementation.
     // In practice this would use a Map internally.
-    fn eval_builtin(name: String, args: is List of f64) -> is Optional of f64 {
-        if name == "sqrt" {
-            match args {
-                List.Cons(x, List.Nil()) => Optional.some(builtin.sqrt(x)),
-                _ => Optional.none,
-            }
-        } else if name == "abs" {
-            match args {
+    fn eval_builtin(name: String, args: is List of f64) -> is Optional of f64:
+        if name == "sqrt":
+            match args:
+                List.Cons(x, List.Nil()) => Optional.some(builtin.sqrt(x))
+                _ => Optional.none
+        else if name == "abs":
+            match args:
                 List.Cons(x, List.Nil()) =>
-                    Optional.some(if x < 0.0 { 0.0 - x } else { x }),
-                _ => Optional.none,
-            }
-        } else if name == "max" {
-            match args {
+                    Optional.some(if x < 0.0: 0.0 - x else: x)
+                _ => Optional.none
+        else if name == "max":
+            match args:
                 List.Cons(a, List.Cons(b, List.Nil())) =>
-                    Optional.some(if a > b { a } else { b }),
-                _ => Optional.none,
-            }
-        } else {
+                    Optional.some(if a > b: a else: b)
+                _ => Optional.none
+        else:
             Optional.none
-        }
-    }
-}
 
 // --- The evaluator ---
 
-effect EvalError {
+effect EvalError:
     fn eval_error(message: String) -> !
-}
 
 // Expr is a capability — we cannot pattern match on it.
 // Instead, fold with R = (is Env -> f64 with EvalError).
 // Each callback returns a *deferred* computation from env to value,
 // allowing lazy evaluation (e.g., if_then doesn't evaluate both branches).
-fn eval(expr: is Expr, env: is Env) -> f64 with EvalError {
+fn eval(expr: is Expr, env: is Env) -> f64 with EvalError:
     expr.fold(
         (v) -> (env) -> v,
         (name) -> (env) -> env.lookup(name).fold(
@@ -132,26 +119,22 @@ fn eval(expr: is Expr, env: is Env) -> f64 with EvalError {
         (left_fn, right_fn) -> (env) -> left_fn(env) + right_fn(env),
         (left_fn, right_fn) -> (env) -> left_fn(env) * right_fn(env),
         (inner_fn) -> (env) -> 0.0 - inner_fn(env),
-        (name, val_fn, body_fn) -> (env) -> {
+        (name, val_fn, body_fn) -> (env) ->
             let v = val_fn(env)
-            body_fn(env.bind(name, v))
-        },
-        (cond_fn, then_fn, else_fn) -> (env) -> {
-            if cond_fn(env) != 0.0 { then_fn(env) } else { else_fn(env) }
-        },
-        (func_name, arg_fns) -> (env) -> {
+            body_fn(env.bind(name, v)),
+        (cond_fn, then_fn, else_fn) -> (env) ->
+            if cond_fn(env) != 0.0: then_fn(env) else: else_fn(env),
+        (func_name, arg_fns) -> (env) ->
             let args = map(arg_fns, (f) -> f(env))
             default_builtins().eval_builtin(func_name, args).fold(
                 (result) -> result,
                 () -> EvalError.eval_error("unknown function: ".concat(func_name)),
-            )
-        },
+            ),
     )(env)
-}
 
 // --- Pretty printer (using fold — no pattern matching!) ---
 
-fn pretty(expr: is Expr) -> String {
+fn pretty(expr: is Expr) -> String:
     expr.fold(
         (v) -> v.show(),
         (name) -> name,
@@ -167,9 +150,8 @@ fn pretty(expr: is Expr) -> String {
         (name, args) ->
             name.concat("(").concat(join(args, ", ")).concat(")"),
     )
-}
 
-fn main() -> () with Console {
+fn main() -> () with Console:
     // Build: let x = 3.0 in let y = 4.0 in sqrt(x*x + y*y)
     let expr = Expr.let_in("x", Expr.lit(3.0),
         Expr.let_in("y", Expr.lit(4.0),
@@ -185,14 +167,12 @@ fn main() -> () with Console {
     Console.print_line("Expression: ".concat(pretty(expr)))
 
     let env = Env.empty
-    handle {
+    handle (do:
         let result = eval(expr, env)
         Console.print_line("Result: ".concat(result.show()))
-    } {
-        EvalError.eval_error(msg) => {
+    ):
+        EvalError.eval_error(msg) =>
             Console.print_line("Eval error: ".concat(msg))
-        },
-    }
 
     // Build: if (x - 5) then x * 2 else 0
     let expr2 = Expr.if_then(
@@ -204,12 +184,9 @@ fn main() -> () with Console {
     Console.print_line("Expression: ".concat(pretty(expr2)))
 
     let env2 = Env.empty.bind("x", 10.0)
-    handle {
+    handle (do:
         let result = eval(expr2, env2)
         Console.print_line("Result: ".concat(result.show()))
-    } {
-        EvalError.eval_error(msg) => {
+    ):
+        EvalError.eval_error(msg) =>
             Console.print_line("Eval error: ".concat(msg))
-        },
-    }
-}

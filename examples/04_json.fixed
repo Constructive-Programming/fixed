@@ -13,74 +13,61 @@ use std.io.Console
 
 // --- Json is a data type: matchable, with capitalized constructors ---
 
-data Json {
-    Null,
-    Bool(value: bool),
-    Number(value: f64),
-    String(value: String),
-    Array(elements: is Sequencing of Json),
-    Object(fields: is Map of (String, Json)),
-}
+data Json:
+    Null
+    Bool(value: bool)
+    Number(value: f64)
+    String(value: String)
+    Array(elements: is Sequencing of Json)
+    Object(fields: is Map of (String, Json))
 
 // Pretty-print JSON with indentation
-fn pretty(json: Json, indent: u64) -> String {
+fn pretty(json: Json, indent: u64) -> String:
     let pad = repeat_str(" ", indent)
-    match json {
-        Json.Null => "null",
-        Json.Bool(b) => b.show(),
-        Json.Number(n) => n.show(),
-        Json.String(s) => "\"".concat(s).concat("\""),
-        Json.Array(elements) => {
-            if length(elements) == 0 {
+    match json:
+        Json.Null => "null"
+        Json.Bool(b) => b.show()
+        Json.Number(n) => n.show()
+        Json.String(s) => "\"".concat(s).concat("\"")
+        Json.Array(elements) =>
+            if length(elements) == 0:
                 "[]"
-            } else {
-                let inner = map(elements, (elem) -> {
+            else:
+                let inner = map(elements, (elem) ->
                     repeat_str(" ", indent + 2).concat(pretty(elem, indent + 2))
-                })
+                )
                 "[\n".concat(join(inner, ",\n")).concat("\n").concat(pad).concat("]")
-            }
-        },
-        Json.Object(fields) => {
-            if length(fields) == 0 {
+        Json.Object(fields) =>
+            if length(fields) == 0:
                 "{}"
-            } else {
-                let inner = map(fields, (field) -> {
+            else:
+                let inner = map(fields, (field) ->
                     let Pair { first: key, second: value } = field
                     repeat_str(" ", indent + 2)
                         .concat("\"").concat(key).concat("\": ")
                         .concat(pretty(value, indent + 2))
-                })
+                )
                 "{\n".concat(join(inner, ",\n")).concat("\n").concat(pad).concat("}")
-            }
-        },
-    }
-}
 
 // Look up a key in a JSON object
-fn get_field(json: Json, key: String) -> is Optional of Json {
-    match json {
-        Json.Object(fields) => {
+fn get_field(json: Json, key: String) -> is Optional of Json:
+    match json:
+        Json.Object(fields) =>
             find(fields, (pair) -> pair.first() == key)
                 |> map_optional((pair) -> pair.second())
-        },
-        _ => Optional.none,
-    }
-}
+        _ => Optional.none
 
 // Navigate a path like ["users", "0", "name"]
-fn navigate(json: Json, path: is List of String) -> is Optional of Json {
-    match path {
-        List.Cons(key, rest) => {
+fn navigate(json: Json, path: is List of String) -> is Optional of Json:
+    match path:
+        List.Cons(key, rest) =>
             get_field(json, key).fold(
                 (child) -> navigate(child, rest),
                 () -> Optional.none,
             )
-        },
-        List.Nil() => Optional.some(json),
-    }
-}
+        List.Nil() => Optional.some(json)
 
-fn main() -> () with Console {
+fn main() -> () with Console:
     // Build a JSON value
     let user = Json.Object([
         ("name", Json.String("Alice")),
@@ -100,4 +87,3 @@ fn main() -> () with Console {
         (tags) -> Console.print_line("Tags: ".concat(pretty(tags, 0))),
         () -> Console.print_line("No tags found"),
     )
-}

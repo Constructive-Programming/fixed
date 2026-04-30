@@ -1,69 +1,60 @@
 (* ============================================================
-   Fixed Programming Language — Syntax Grammar v0.2
+   Fixed Programming Language — Syntax Grammar v0.3
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.2.3
+   Status:        DRAFT v0.3.1
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
    Last revised:  2026-04-30
 
-   Changes in v0.2.3
-   -----------------
-     Documentation-only: Q8, Q10, Q11, Q16, N1(a), N1(b) recorded as
-     pre-resolved. No grammar changes. Resolutions to be lifted into
-     spec/type_system.md and spec/quantities.md when those are drafted.
+   Refinements in v0.3.1
+   ---------------------
+   - `.` added to line-continuation operators: chained method calls
+     (`.concat(…).concat(…)` over multiple physical lines) parse as a
+     single logical line.
+   - Multi-line lambda bodies use `->` as a block introducer. The
+     canonical multi-line form is `(x) ->` followed by an indented
+     body, replacing `(x) -> do: …`.
+   - Multi-line arm bodies use `=>` as a block introducer (match arms
+     and handler arms). Replaces the previous brace-block form.
+   - Bracket-suppression rule clarified: inside `(…)`/`[…]`/`{…}` the
+     off-side rule is suppressed by default, but is re-enabled within
+     a lambda body (after `->`), an arm body (after `=>`), or a
+     declaration/control-flow body (after `:`).
 
-   Changes in v0.2.2
-   -----------------
-     N1 (resolved)   : `of` value-params are *type-level indices*
-                       (interpretation B): different bound values
-                       give different types. `Bounded of (i64, 5, 10)`
-                       and `Bounded of (i64, 0, 100)` are distinct types.
-                       OfArg extended to accept LiteralExpr at
-                       application sites (so `Bounded of (N, 5, 10)`
-                       parses). Variant constructors take only their
-                       declared fields, not `of`-level params.
+   Major change in v0.3
+   --------------------
+   **Meaningful whitespace.** Blocks are introduced by `:` and delimited
+   by INDENT / DEDENT tokens emitted by the lexer (Python-style off-side
+   rule). All `{ … }` block forms are removed. Braces are now reserved
+   exclusively for **struct literals** (`Pair { first: x, second: y }`)
+   and **use-group imports** (`use a.b.{X, Y}`).
 
-   Changes in v0.2.1
-   -----------------
-     N2 (resolved)   : `forall` tightened to PropExpr — only reachable
-                       inside `prop` bodies. Mirrors `implies`.
-     N3 (resolved)   : `Self` confirmed as a keyword (not a generic
-                       UPPER_IDENT). Already reflected in the grammar.
+   Block lambdas (`{ x -> body }`) are removed. Use arrow lambdas
+   `(x) -> expr` (single-line) or `(x) ->` followed by an indented
+   block (multi-line).
 
-   Changes from v0.1
-   -----------------
-     Q1  (resolved)  : `case` keyword removed; match arms use bare `Pattern => Expr`.
-     Q2  (resolved)  : `handle` always takes a `{block}` subject and a `{handlers}` block.
-     Q3  (resolved)  : Default values supported on `of` value-params and on variant fields.
-     Q4  (resolved)  : Bare variant patterns retained; both `Type.Variant(...)` and
-                       `Variant(...)` are accepted. `Self.Variant(...)` also accepted.
-     Q5  (resolved)  : `implies` restricted to `prop` bodies via new `PropExpr` nonterminal.
-     Q7  (resolved)  : Single-element tuples `(Expr,)` and `(Pattern,)` accepted.
-     Q9  (resolved)  : `do` blocks must end in a non-bind expression.
-     Q12 (resolved)  : `UPPER_IDENT.field` and `Type.Variant(args)` parse cleanly.
-     Q13 (resolved)  : Free-call trailing block lambda `f { x -> ... }` accepted.
-     Q14 (resolved)  : `data X of A (...)` single-ctor + `of` confirmed.
-     Q15 (resolved)  : Everything is an expression — `let` and `prop` return `()`.
-                       No `BlockItem` / `Expr` split; `Block` body is just `Expr*`.
-     Q16 (resolved)  : `unreachable` is a keyword atom; typing deferred to type_system.md.
-     Q6  (deferred)  : The relationship between `of` value-params and variant constructor
-                       calls (override-as-positional) is a typing-level concern; see N1.
-     Q8  (deferred)  : Type-variable introduction rule deferred to type_system.md.
-     Q10 (deferred)  : Numeric literal polymorphism deferred to type_system.md.
-     Q11 (deferred)  : `mod`, `pub`, `in` reserved; module-system spec defers.
+   Handle subjects are single expressions. For multi-line subjects, use
+   a parenthesised do-block: `handle (do: …): …`.
 
-   New open questions for v0.2 are listed at the bottom (N-prefixed).
+   Empty cap / data / satisfies bodies omit the `:` entirely:
+       cap Locked
+       cap Open
+
+   Changes from v0.2.4 (history retained for context)
+   --------------------------------------------------
+     v0.2.4: UseSel tightened to UPPER_IDENT (no LOWER_IDENT).
+     v0.2.3: Documentation-only resolutions for Q8/Q10/Q11/Q16/N1(a)/N1(b).
+     v0.2.2: N1 resolved as interpretation B (of value-params are
+             type-level indices); OfArg accepts LiteralExpr.
+     v0.2.1: N2 resolved (`forall` to PropExpr); N3 resolved (`Self` is
+             a keyword).
+     v0.2.0: Q1/Q2/Q3/Q4/Q5/Q7/Q9/Q12/Q13/Q14/Q15/Q16 resolved.
 
    Scope
    -----
-   Defines the *syntactic* surface of Fixed — what the parser must
-   accept. Semantic well-formedness lives in the sibling spec docs
-   (type_system.md, quantities.md, properties.md, etc.).
-
-   Dependencies
-   ------------
-   None. All other Phase 1 spec documents depend on this one.
+   Defines the *syntactic* surface of Fixed. Semantic well-formedness
+   lives in sibling spec docs (type_system.md, quantities.md, …).
 
    Conventions
    -----------
@@ -74,14 +65,64 @@
      +       one or more
      ( )     grouping
      " "     literal terminal
-     UPPER   token class (produced by the scanner)
+     UPPER   token class (produced by the scanner / indent-tracker)
      Pascal  parser-level nonterminal
      (* ... *)   comment
 
-   Newlines (NL) are significant: they separate items in compilation
-   units, members in cap/data/effect bodies, expressions in blocks,
-   and arms in match/handle. Where commas are also accepted, we write
-   SEP for the choice.
+   Indentation, NEWLINE, INDENT, DEDENT
+   ------------------------------------
+   The scanner tracks an indent stack that begins with [0]. At the start
+   of each logical line, the leading whitespace is measured (in spaces;
+   tabs are an error in v0.3).
+
+     - leading whitespace == stack top  → emit NEWLINE
+     - leading whitespace >  stack top  → push, emit INDENT
+     - leading whitespace <  stack top  → pop until match, emit one
+                                          DEDENT per pop
+
+   Inside parentheses `(...)`, brackets `[...]`, or struct-literal
+   braces `{...}`, indentation is **suppressed by default** — the
+   scanner emits no NEWLINE / INDENT / DEDENT until the bracketing
+   closes. This permits wrapped argument lists, list literals, and
+   struct literals.
+
+   **Re-enabling the off-side rule inside brackets.** The off-side rule
+   is re-enabled within the body of:
+     - a lambda following `->` (lambda body);
+     - a match/handler arm following `=>` (arm body); or
+     - a function/cap/data/effect/satisfies/match/handle/do/if/else
+       following `:` (block body).
+   After the matching DEDENT closes the body, the surrounding bracket
+   suppression resumes.
+
+   A logical line may also continue across a physical newline via one
+   of two rules:
+
+   **Trailing continuation.** If the line ends with one of the following
+   tokens, the next physical line continues the same logical line:
+     `+`, `-`, `*`, `/`, `%`, `&&`, `||`, `==`, `!=`, `<`, `>`, `<=`,
+     `>=`, `|>`, `->`, `=>`, `=`, `<-`, `.`, `is`, `extends`, `implies`.
+
+   **Leading continuation.** If the next physical line begins with one
+   of the following tokens (at any indent), it continues the previous
+   logical line:
+     `with`, `extends`.
+
+   The continuation rules apply when the next physical line is *not*
+   indented more than the current line — that case engages the off-side
+   rule and emits INDENT instead. So `(x) ->` followed by a more-
+   indented next line opens a multi-line lambda body, while `a +` or
+   `e.foo` followed by an equally- or less-indented next line continues
+   the same logical line. Multi-line function signatures are written:
+
+       fn participant(name: String) -> ()
+           with Console + Channel of (is Message) + Async:
+           ...body...
+
+   Comments
+   --------
+   `//` to end-of-line. Comments are discarded by the scanner before
+   indent measurement.
    ============================================================ *)
 
 
@@ -92,17 +133,16 @@
 LOWER_IDENT     = (* [a-z_][a-zA-Z0-9_]* *) ;
 UPPER_IDENT     = (* [A-Z][a-zA-Z0-9_]*   *) ;
 
-INT_LITERAL     = (* digits, optional `_` as visual separator;
-                     sign is handled by the parser, not the lexer *) ;
+INT_LITERAL     = (* digits, optional `_` as visual separator *) ;
 FLOAT_LITERAL   = (* digits "." digits ( ("e"|"E") ("+"|"-")? digits )? *) ;
-STRING_LITERAL  = (* '"' { strchar | escape } '"' ; escapes: \" \\ \n \t \r \0 *) ;
+STRING_LITERAL  = (* '"' { strchar | escape } '"' *) ;
 CHAR_LITERAL    = (* "'" ( char | escape ) "'"  *) ;
 BOOL_LITERAL    = "true" | "false" ;
 UNIT_LITERAL    = "(" ")" ;
 
-NL              = (* one or more line terminators, possibly with surrounding
-                     whitespace and line comments; comments are discarded *) ;
-SEP             = NL | "," ;
+NEWLINE         = (* end of a logical line; see indentation rules above *) ;
+INDENT          = (* synthetic token: opening of a more-indented block *) ;
+DEDENT          = (* synthetic token: closing of an indented block *) ;
 
 (* KEYWORDS:
      as      cap         data        do          effect      else
@@ -111,10 +151,6 @@ SEP             = NL | "," ;
      mod     of          phantom     prop        pub         resume
      return  Self        satisfies   true        type        unreachable
      use     with                                                          *)
-(* `case` removed in v0.2 (Q1).
-   `mod`, `pub`, `in` reserved for future module-system spec (Q11).
-   `resume`, `return`, `unreachable` reserved for handler bodies and
-   the never-typed atom. *)
 
 
 (* ============================================================
@@ -122,7 +158,7 @@ SEP             = NL | "," ;
    ============================================================ *)
 
 CompilationUnit
-    = ( NL | TopItem )*
+    = ( NEWLINE | TopItem )*
     ;
 
 TopItem
@@ -145,15 +181,15 @@ UseDecl
     ;
 
 UsePath
-    = LOWER_IDENT ( "." LOWER_IDENT )* ( "." UPPER_IDENT )?    (* e.g. std.io.Console *)
+    = LOWER_IDENT ( "." LOWER_IDENT )* ( "." UPPER_IDENT )?
     ;
 
 UseTail
-    = "." "{" UseSel ( SEP UseSel )* SEP? "}"                  (* use a.b.{X, Y, Z}      *)
-    | "satisfies" CapRef                                       (* use a.b.T satisfies C  *)
+    = "." "{" UseSel ( "," UseSel )* ","? "}"      (* use-group: not a block, brace-grouped *)
+    | "satisfies" CapRef                            (* use a.b.T satisfies C *)
     ;
 
-UseSel  = UPPER_IDENT | LOWER_IDENT ;
+UseSel  = UPPER_IDENT ;
 
 
 (* ============================================================
@@ -164,8 +200,8 @@ CapDecl
     = "cap" UPPER_IDENT CapValueParams? CapOfParams? CapExtends? CapBody?
     ;
 
-CapValueParams                                  (* for `cap Name(params) of T { ... }` sugar *)
-    = "(" ValueParam ( SEP ValueParam )* SEP? ")"
+CapValueParams
+    = "(" ValueParam ( "," ValueParam )* ","? ")"
     ;
 
 CapOfParams
@@ -176,8 +212,15 @@ CapExtends
     = "extends" CapBound ( "+" CapBound )*
     ;
 
+(* `cap Foo:` introduces an indented body of members. Empty caps omit
+   the `:` entirely (`cap Locked`, `cap Meters`). *)
 CapBody
-    = "{" ( NL | CapMember )* "}"
+    = ":" CapMemberList
+    ;
+
+CapMemberList
+    = CapMember                                              (* inline single member *)
+    | NEWLINE INDENT CapMember ( NEWLINE CapMember )* NEWLINE? DEDENT
     ;
 
 CapMember
@@ -194,10 +237,8 @@ StaticMethodDecl
     = "Self" "." "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" TypeExpr WithClause?
     ;
 
-(* `fn fold<R>(...) -> R` — angle-bracket type-param hints accepted
-   syntactically; semantics deferred to type_system.md. *)
 TypeParamsHint
-    = "<" UPPER_IDENT ( SEP UPPER_IDENT )* SEP? ">"
+    = "<" UPPER_IDENT ( "," UPPER_IDENT )* ","? ">"
     ;
 
 
@@ -206,7 +247,16 @@ TypeParamsHint
    ============================================================ *)
 
 EffectDecl
-    = "effect" UPPER_IDENT CapOfParams? "{" ( NL | EffectMember )* "}"
+    = "effect" UPPER_IDENT CapOfParams? EffectBody?
+    ;
+
+EffectBody
+    = ":" EffectMemberList
+    ;
+
+EffectMemberList
+    = EffectMember
+    | NEWLINE INDENT EffectMember ( NEWLINE EffectMember )* NEWLINE? DEDENT
     ;
 
 EffectMember
@@ -219,19 +269,26 @@ EffectMember
    ============================================================ *)
 
 DataDecl
-    = "data" UPPER_IDENT DataParams? DataBody
+    = "data" UPPER_IDENT DataParams? DataBody?
     ;
 
 DataParams
-    = "of" OfArgList                                  (* type and/or value params *)
+    = "of" OfArgList
     ;
 
-(* Body is one of:
-     "{" Variant ( SEP Variant )* SEP? PropDecl* "}"   — explicit variants
-     "(" FieldDecl ( SEP FieldDecl )* SEP? ")"         — single-constructor sugar *)
+(* DataBody has two forms:
+     - colon-introduced: `data Color:` followed by an indented block of
+       variants and prop decls.
+     - paren-form (single-ctor sugar): `data Config(host: String, ...)`
+*)
 DataBody
-    = "{" ( NL | DataBodyItem )* "}"
-    | "(" FieldDecl ( SEP FieldDecl )* SEP? ")"
+    = ":" DataBodyItemList
+    | "(" FieldDecl ( "," FieldDecl )* ","? ")"
+    ;
+
+DataBodyItemList
+    = DataBodyItem
+    | NEWLINE INDENT DataBodyItem ( NEWLINE DataBodyItem )* NEWLINE? DEDENT
     ;
 
 DataBodyItem
@@ -240,10 +297,9 @@ DataBodyItem
     ;
 
 Variant
-    = UPPER_IDENT ( "(" FieldDecl ( SEP FieldDecl )* SEP? ")" )?
+    = UPPER_IDENT ( "(" FieldDecl ( "," FieldDecl )* ","? ")" )?
     ;
 
-(* FieldDecl supports default values for variant fields (v0.2, Q3). *)
 FieldDecl
     = LOWER_IDENT ":" TypeExpr ( "=" Expr )?
     ;
@@ -257,11 +313,10 @@ TypeAlias
     = "type" UPPER_IDENT TypeAliasParams? "=" TypeAliasRhs
     ;
 
-TypeAliasParams                                 (* parameterised aliases *)
-    = "(" ValueParam ( SEP ValueParam )* SEP? ")"
+TypeAliasParams
+    = "(" ValueParam ( "," ValueParam )* ","? ")"
     ;
 
-(* RHS is a "+ chain" of capability bounds. *)
 TypeAliasRhs
     = CapBound ( "+" CapBound )*
     ;
@@ -276,14 +331,13 @@ FnDecl
     ;
 
 FnParamList
-    = "(" ( FnParam ( SEP FnParam )* SEP? )? ")"
+    = "(" ( FnParam ( "," FnParam )* ","? )? ")"
     ;
 
 FnParam
-    = LOWER_IDENT ":" TypeExpr ( "=" Expr )?       (* defaults supported on fn params (v0.2) *)
+    = LOWER_IDENT ":" TypeExpr ( "=" Expr )?
     ;
 
-(* Return type may be `cap of T`, `cap extends C`, `!`, `()`, or any TypeExpr *)
 FnReturnType
     = "cap" CapReturnSpec?
     | TypeExpr
@@ -306,8 +360,9 @@ EffectBound
     = UPPER_IDENT ( "of" OfArg )?
     ;
 
+(* Function body is a colon-introduced block. *)
 FnBody
-    = Block
+    = ":" BlockTail
     ;
 
 
@@ -316,23 +371,26 @@ FnBody
    ============================================================ *)
 
 SatisfiesDecl
-    = SatisfiesSubject "satisfies" CapRef SatisfiesBody
+    = SatisfiesSubject "satisfies" CapRef SatisfiesBody?
     ;
 
-(* Subject can be a data type name (with optional `of Self`) or a
-   primitive like `u64`. *)
 SatisfiesSubject
     = UPPER_IDENT ( "of" "Self" )?
     | LOWER_IDENT                     (* primitives: u64, f64, ... *)
     ;
 
 SatisfiesBody
-    = "{" ( NL | SatisfiesItem )* "}"
+    = ":" SatisfiesItemList
+    ;
+
+SatisfiesItemList
+    = SatisfiesItem
+    | NEWLINE INDENT SatisfiesItem ( NEWLINE SatisfiesItem )* NEWLINE? DEDENT
     ;
 
 SatisfiesItem
     = SatisfiesMap
-    | InstanceMethodDef                  (* alternative form: full method bodies *)
+    | InstanceMethodDef
     ;
 
 SatisfiesMap
@@ -340,9 +398,9 @@ SatisfiesMap
     ;
 
 SatisfiesLhs
-    = UPPER_IDENT                        (* a data variant name        *)
-    | "Self"                             (* the satisfying type itself *)
-    | "impossible"                       (* unreachable mapping        *)
+    = UPPER_IDENT
+    | "Self"
+    | "impossible"
     ;
 
 InstanceMethodDef
@@ -352,17 +410,6 @@ InstanceMethodDef
 
 (* ============================================================
    10. Type expressions
-   ============================================================
-   A TypeExpr can be:
-     - a primitive (u64, String, ()): bare LOWER_IDENT or unit
-     - a concrete cap/data name: UPPER_IDENT, optionally with `of`
-     - an `is` bound (anonymous or named alias)
-     - an arrow type: A -> B  or  (A, B) -> C  — also `() -> R`
-     - the never type: !
-
-   Type-level expressions and value-level expressions overlap (e.g.
-   `between(0, 100)` works in either). The parser resolves which
-   based on context.
    ============================================================ *)
 
 TypeExpr
@@ -374,7 +421,7 @@ ArrowType
     ;
 
 ArrowLhs
-    = "(" ArrowLhsList? ")"            (* tuple-arg form: (A, B) -> C, or () *)
+    = "(" ArrowLhsList? ")"
     | TypeAtom
     ;
 
@@ -383,7 +430,7 @@ ArrowLhsList
     ;
 
 TypeAtom
-    = "!"                              (* never type *)
+    = "!"
     | "Self" SelfOf?
     | IsBound
     | NamedAlias
@@ -391,14 +438,14 @@ TypeAtom
     ;
 
 SelfOf
-    = "of" OfArg                       (* HKT return: Self of B *)
+    = "of" OfArg
     ;
 
-NamedAlias                             (* `N is Cap`, `R is Cap of X`, etc. *)
+NamedAlias
     = UPPER_IDENT "is" CapBoundChain
     ;
 
-IsBound                                (* anonymous `is Cap (+ Cap)*` *)
+IsBound
     = "is" CapBoundChain
     ;
 
@@ -406,8 +453,6 @@ CapBoundChain
     = CapBound ( "+" CapBound )*
     ;
 
-(* A cap bound is a cap reference (possibly with `of` args), a refinement
-   call (cap-generating function applied to value args), or a primitive. *)
 CapBound
     = CapRef
     | RefinementCall
@@ -418,13 +463,13 @@ CapRef
     = UPPER_IDENT ( "of" OfArg )?
     ;
 
-RefinementCall                         (* between(0, 100), max_length(32), etc. *)
+RefinementCall
     = LOWER_IDENT "(" ArgList? ")"
     ;
 
 PrimitiveType
-    = LOWER_IDENT                      (* u8..u128, i8..i128, f32, f64, bool, char, String *)
-    | UNIT_LITERAL                     (* ()  *)
+    = LOWER_IDENT
+    | UNIT_LITERAL
     ;
 
 TypeRef
@@ -433,29 +478,14 @@ TypeRef
     ;
 
 OfArgList
-    = "(" OfArg ( SEP OfArg )* SEP? ")"
+    = "(" OfArg ( "," OfArg )* ","? ")"
     | OfArg
     ;
 
-(* OfArg admits, at the same syntactic position:
-     - phantom type-param declarations
-     - value-param declarations with optional type and default
-       (v0.2, Q3)
-     - bare type expressions (declaration or application)
-     - literal value expressions (application sites — v0.2.2, N1)
-   The parser disambiguates on the next token after the leading IDENT:
-     - `phantom IDENT`      → phantom type param
-     - `IDENT : ...`        → OfValueParam with type
-     - `IDENT = ...`        → OfValueParam with default but no type
-     - LITERAL              → LiteralExpr (application: 5, 10, "foo")
-     - otherwise            → TypeExpr
-   The typer interprets each OfArg as either a type or a value
-   depending on whether the OfArg position is a declaration or an
-   application of an `of` clause. *)
 OfArg
     = "phantom" UPPER_IDENT
     | OfValueParam
-    | LiteralExpr                  (* application-time literal value *)
+    | LiteralExpr
     | TypeExpr
     ;
 
@@ -464,7 +494,7 @@ OfValueParam
     | ( LOWER_IDENT | UPPER_IDENT ) "=" Expr
     ;
 
-ValueParam                             (* used in CapValueParams and TypeAliasParams *)
+ValueParam
     = ( LOWER_IDENT | UPPER_IDENT ) ( ":" TypeExpr )? ( "=" Expr )?
     ;
 
@@ -477,26 +507,24 @@ PropDecl
     = "prop" LOWER_IDENT ":" PropExpr
     ;
 
-(* PropExpr extends the regular Expr grammar with `implies` and
-   `forall`, both reachable only inside prop bodies (v0.2 Q5; v0.2.1 N2). *)
 PropExpr
     = ImpliesExpr
     | ForallExpr
     | Expr
     ;
 
-ImpliesExpr                            (* right-associative; lower than `||` *)
+ImpliesExpr
     = OrExpr "implies" PropExpr
     ;
 
 
 (* ============================================================
-   12. Patterns (used in `match`, `let`, and handler arms)
+   12. Patterns
    ============================================================ *)
 
 Pattern
-    = "_"                                                        (* wildcard *)
-    | LOWER_IDENT                                                (* binder   *)
+    = "_"
+    | LOWER_IDENT
     | LiteralPattern
     | DataVariantPattern
     | TuplePattern
@@ -507,22 +535,18 @@ LiteralPattern
     = INT_LITERAL | FLOAT_LITERAL | STRING_LITERAL | CHAR_LITERAL | BOOL_LITERAL | UNIT_LITERAL
     ;
 
-(* DataVariantPattern (v0.2, Q4):
-     - qualified: `Direction.North`, `List.Cons(h, t)`, `Self.Just(x)`
-     - bare:      `North`, `Cons(h, t)`, `Just(x)` — typer disambiguates via scrutinee type *)
 DataVariantPattern
     = ( UPPER_IDENT | "Self" ) "." UPPER_IDENT ( "(" PatternList? ")" )?
     | UPPER_IDENT ( "(" PatternList? ")" )?
     ;
 
-(* TuplePattern (v0.2, Q7) accepts 1-element form with mandatory trailing comma. *)
 TuplePattern
     = "(" Pattern "," ")"
     | "(" Pattern "," Pattern ( "," Pattern )* ","? ")"
     ;
 
-StructDestructurePattern                   (* `Pair { first: x, second: y }` *)
-    = UPPER_IDENT "{" FieldPattern ( SEP FieldPattern )* SEP? "}"
+StructDestructurePattern
+    = UPPER_IDENT "{" FieldPattern ( "," FieldPattern )* ","? "}"
     ;
 
 FieldPattern
@@ -537,12 +561,7 @@ PatternList
 (* ============================================================
    13. Expressions
    ============================================================
-   Per Q15: everything is an expression. `let` and `prop` are
-   expressions that return `()` and have side effects (binding /
-   declaring a postcondition). A block is a sequence of expressions;
-   the block's value is the value of its final expression.
-
-   Operator precedence, low → high:
+   Operator precedence (low → high):
      pipe          |>
      logical or    ||
      logical and   &&
@@ -552,12 +571,10 @@ PatternList
      application/method  f(args)  e.m(args)  e.field
      atom
 
-   `if`, `match`, `handle`, `do`, lambdas, blocks, struct literals,
-   list literals, tuples, and `unreachable` all act as atoms.
+   `if`, `match`, `handle`, `do`, lambdas, struct literals, list
+   literals, tuples, and `unreachable` all act as atoms.
 
-   `forall` introduces a quantifier expression; permitted anywhere
-   syntactically but only meaningful in prop bodies (see N2).
-   `implies` is reachable only via PropExpr (Q5).
+   `forall` and `implies` are reachable only via PropExpr (Q5 / N2).
    ============================================================ *)
 
 Expr
@@ -570,7 +587,6 @@ LetExpr                                (* returns () *)
     = "let" Pattern "=" PipeExpr
     ;
 
-(* ForallExpr lives only inside prop bodies — see PropExpr (v0.2.1, N2). *)
 ForallExpr
     = "forall" "(" Binder ( "," Binder )* ","? ")" "->" PropExpr
     ;
@@ -592,7 +608,7 @@ AndExpr
     ;
 
 CmpExpr
-    = AddExpr ( CmpOp AddExpr )?         (* non-associative *)
+    = AddExpr ( CmpOp AddExpr )?
     ;
 
 CmpOp
@@ -611,11 +627,13 @@ AppExpr
     = AtomExpr AppSuffix*
     ;
 
+(* Block lambdas removed in v0.3. Trailing-block style replaced by
+   single-expression arrow lambdas; for multi-line bodies, use
+   `(x) -> do: …` or a named helper. *)
 AppSuffix
-    = "(" ArgList? ")"                       (* function application *)
-    | "." LOWER_IDENT ApplyTail?             (* method call or field access *)
-    | "." UPPER_IDENT ApplyTail?             (* static-method/static-ctor call *)
-    | BlockLambda                            (* trailing block lambda *)
+    = "(" ArgList? ")"
+    | "." LOWER_IDENT ApplyTail?
+    | "." UPPER_IDENT ApplyTail?
     ;
 
 ApplyTail
@@ -631,14 +649,13 @@ AtomExpr
     | UNIT_LITERAL
     | "Self"
     | "unreachable"
-    | "resume" "(" Expr? ")"                 (* in handler bodies *)
-    | LOWER_IDENT                            (* identifier — fn name, var, builtin.* *)
-    | UPPER_IDENT                            (* type/cap/data name as receiver *)
-    | "(" Expr ")"                           (* parenthesised *)
+    | "resume" "(" Expr? ")"
+    | LOWER_IDENT
+    | UPPER_IDENT
+    | "(" Expr ")"
     | TupleExpr
     | ListLiteralExpr
     | LambdaExpr
-    | Block
     | IfExpr
     | MatchExpr
     | HandleExpr
@@ -650,8 +667,6 @@ LiteralExpr
     = INT_LITERAL | FLOAT_LITERAL | STRING_LITERAL | CHAR_LITERAL | BOOL_LITERAL
     ;
 
-(* TupleExpr (v0.2, Q7): 1-element form needs trailing comma to disambiguate
-   from a parenthesised expression. *)
 TupleExpr
     = "(" Expr "," ")"
     | "(" Expr "," Expr ( "," Expr )* ","? ")"
@@ -661,57 +676,75 @@ ListLiteralExpr
     = "[" ( Expr ( "," Expr )* ","? )? "]"
     ;
 
-LambdaExpr                                   (* (x) -> e, () -> e, (x, y) -> e *)
-    = "(" ( LOWER_IDENT ( "," LOWER_IDENT )* ","? )? ")" "->" Expr
+LambdaExpr
+    = "(" ( LOWER_IDENT ( "," LOWER_IDENT )* ","? )? ")" "->" LambdaBody
     ;
 
-BlockLambda                                  (* { x -> e } or { (x, y) -> e } *)
-    = "{" LambdaBlockHead "->" BlockBody "}"
+(* LambdaBody mirrors BlockTail. After `->`, the parser checks whether
+   the next physical line is indented more than the line containing the
+   `->`: if yes, the body is the indented block; if no, it is a single
+   expression continuation. See the bracket-suppression note in §1. *)
+LambdaBody
+    = Expr                                                         (* inline single-expr *)
+    | NEWLINE INDENT Expr ( NEWLINE Expr )* NEWLINE? DEDENT        (* multi-line block *)
     ;
 
-LambdaBlockHead
-    = LOWER_IDENT
-    | "(" LOWER_IDENT ( "," LOWER_IDENT )* ","? ")"
+(* Block tail used by every colon-introduced block: function bodies,
+   if/else branches, match arm RHS, do-block, lambda do-bodies. May be
+   inline (single Expr on same line) or indented (NEWLINE then INDENT
+   block). *)
+BlockTail
+    = Expr                                                         (* inline *)
+    | NEWLINE INDENT Expr ( NEWLINE Expr )* NEWLINE? DEDENT        (* indented block *)
     ;
 
-(* A block: zero or more expressions; the block's value is the value
-   of its final expression. A block whose final expression is a
-   LetExpr or PropDecl evaluates to `()`. *)
-Block
-    = "{" BlockBody "}"
-    ;
-
-BlockBody
-    = ( NL | Expr )*
-    ;
-
+(* IfExpr: `if cond: BODY ( else: BODY | else IfExpr )?`
+   Inline form: `if cond: a else: b`
+   Multi-line form: indented branches at the if/else's column. *)
 IfExpr
-    = "if" Expr Block ( "else" ( IfExpr | Block ) )?
+    = "if" Expr ":" BlockTail ( "else" ( IfExpr | ":" BlockTail ) )?
     ;
 
+(* MatchExpr: `match SCRUTINEE: arms`. Arms are newline-separated in
+   the indented form; comma-separated arms are not accepted in v0.3.
+   Inline single-arm form is permitted but rarely useful. *)
 MatchExpr
-    = "match" Expr "{" MatchArm ( SEP MatchArm )* SEP? "}"
+    = "match" Expr ":" MatchArmList
+    ;
+
+MatchArmList
+    = MatchArm                                                     (* inline single arm *)
+    | NEWLINE INDENT MatchArm ( NEWLINE MatchArm )* NEWLINE? DEDENT
     ;
 
 MatchArm
-    = Pattern "=>" Expr
+    = Pattern "=>" BlockTail                                       (* inline expr or indented block *)
     ;
 
-(* HandleExpr (v0.2, Q2): subject is always a Block. Use
-     handle { expr } { handlers }
-   when the subject is a single expression. *)
+(* HandleExpr: `handle SUBJECT: arms`. SUBJECT is a single Expr; for
+   multi-line subjects, wrap a do-block: `handle (do: …): …`. *)
 HandleExpr
-    = "handle" Block "{" HandlerArm ( SEP HandlerArm )* SEP? "}"
+    = "handle" Expr ":" HandlerArmList
+    ;
+
+HandlerArmList
+    = HandlerArm
+    | NEWLINE INDENT HandlerArm ( NEWLINE HandlerArm )* NEWLINE? DEDENT
     ;
 
 HandlerArm
-    = UPPER_IDENT "." LOWER_IDENT "(" PatternList? ")" "=>" Expr
-    | "return" "(" Pattern ")" "=>" Expr
+    = UPPER_IDENT "." LOWER_IDENT "(" PatternList? ")" "=>" BlockTail
+    | "return" "(" Pattern ")" "=>" BlockTail
     ;
 
-(* DoExpr (v0.2, Q9): final form must be a non-bind expression. *)
+(* DoExpr: `do: BIND* FINAL`. Final form must be a non-bind expression. *)
 DoExpr
-    = "do" "{" ( DoBindStmt NL )* DoFinalExpr NL? "}"
+    = "do" ":" DoBody
+    ;
+
+DoBody
+    = DoFinalExpr                                                  (* inline single-expr *)
+    | NEWLINE INDENT ( DoBindStmt NEWLINE )* DoFinalExpr NEWLINE? DEDENT
     ;
 
 DoBindStmt
@@ -722,12 +755,15 @@ DoFinalExpr
     = Expr
     ;
 
-StructLiteralExpr                                 (* `Pair { first: x, second: y }` *)
-    = UPPER_IDENT "{" FieldInit ( SEP FieldInit )* SEP? "}"
+(* StructLiteralExpr keeps brace syntax — it is a record/struct
+   literal, not a block. The braces here are the only remaining
+   non-grouping braces in the language. *)
+StructLiteralExpr
+    = UPPER_IDENT "{" FieldInit ( "," FieldInit )* ","? "}"
     ;
 
 FieldInit
-    = LOWER_IDENT ( ":" Expr )?                   (* `field: expr` or shorthand `field` *)
+    = LOWER_IDENT ( ":" Expr )?
     ;
 
 
@@ -736,62 +772,45 @@ FieldInit
    ============================================================ *)
 
 LineComment      = "//" (* up to end of line — discarded by lexer *) ;
-Whitespace       = (* space, tab — discarded *) ;
-
-(* Block comments are not part of v0.2. *)
+Whitespace       = (* space; tab is a v0.3 error *) ;
 
 
 (* ============================================================
-   15. Open questions (remaining in v0.2)
+   15. Open questions (carried forward)
    ============================================================
 
    Pre-resolved deferrals (lift into the indicated spec doc when drafted):
 
    Q8 — Type-variable introduction → spec/type_system.md
-        An UPPER_IDENT in a type-binding position (`IDENT is Bound`,
-        `phantom IDENT`, or free in a signature) introduces a fresh
-        type variable iff that name is not already bound in the
-        enclosing scope. Subsequent occurrences in the same signature
-        refer to the same variable. Intra-signature shadowing is a
-        compile error. Scope: the whole signature for `fn`; the whole
-        body for `cap`/`data`/`effect`.
+        See type_system.md §4.1 (Rule 4.1).
 
    Q10 — Numeric literal polymorphism → spec/type_system.md
-        INT_LITERAL and FLOAT_LITERAL carry polymorphic type
-        `is Numeric`. The typer resolves the concrete representation
-        from context (parameter type, assignment LHS, operand types,
-        return type). When context cannot resolve, defaults apply:
-        INT → i64, FLOAT → f64.
+        See type_system.md §5.7.
 
    Q11 — `mod`, `pub`, `in` keywords (closed)
-        Reserved without productions. `mod` and `pub` are reserved for
-        a future module/visibility spec. `in` is reserved for plausible
-        future use (range-based forms, let-in if reintroduced).
+        Reserved without productions.
 
-   Q16 — `unreachable` → spec/type_system.md
-        Keyword expression of type `!` (the never type). Reaching it
-        at runtime is a panic. The typer treats `!` as a subtype of
-        every type, so `unreachable` is valid in any expression
-        position.
+   Q16 — `unreachable` → spec/type_system.md §5.6.
 
-   N1(a) — Defaults at type-application sites → spec/type_system.md
-        When applying a data type with `of` value-params, missing
-        trailing args take their declared defaults. Args are strictly
-        positional. Example: `Bounded of N` ≡ `Bounded of (N, 16, 24)`;
-        `Bounded of (N, 5)` ≡ `Bounded of (N, 5, 24)`. Omitting an arg
-        with no declared default is a compile error. Positional-skip
-        (`Bounded of (N, _, 30)`) and named application
-        (`Bounded of (N, hi=10)`) are not supported in v0.2.
-
-   N1(b) — QTT quantity for `of` value-args → spec/quantities.md
-        Non-phantom `of` value-args are quantity 0 by default —
-        type-level, erased at runtime. The compiler materialises them
-        to runtime values automatically at access sites (e.g. `b.lo`
-        in arithmetic context becomes the statically-known constant).
-        `prop` bodies consume them at quantity 0. Variant field
-        accesses (`b.value`) remain at the value's own quantity
-        (typically ω).
+   N1(a) — Defaults at type-application sites → spec/type_system.md §7.3.
+   N1(b) — QTT for `of` value-args → spec/quantities.md (TBD).
 
    Q6 — subsumed by N1; closed.
+
+   New in v0.3 (status updated for v0.3.1):
+
+   N4 — Multi-line lambda bodies (resolved in v0.3.1)
+        Canonical form: `(x) ->` followed by an indented body. The
+        off-side rule is re-enabled within the body even inside
+        brackets.
+
+   N5 — Multi-line handle subjects (accepted)
+        The canonical form is `handle (do: …): …`. If the parens-
+        around-do pattern proves verbose at scale, revisit with a two-
+        block syntax such as `handle: SUBJECT  with: ARMS`.
+
+   N6 — Tab handling (accepted)
+        v0.3 errors on tab indentation. Revisit before bootstrap if
+        community use shows this is too strict.
 
    ============================================================ *)

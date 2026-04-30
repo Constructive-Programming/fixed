@@ -15,46 +15,42 @@ use std.io.Console
 
 // --- Capabilities declare constructor *requirements* via Self.fn ---
 
-cap Optional extends Functor + Folding {
+cap Optional extends Functor + Folding:
     fn isDefined -> Boolean
     fn orElse(e: Self) -> Self
-}
 
-cap Result of (E, A) {
+cap Result of (E, A):
     Self.fn ok(value: A) -> Self
     Self.fn err(error: E) -> Self
     fn fold(on_ok: A -> R, on_err: E -> R) -> R
-}
 
 // --- Data types are concrete providers via `satisfies` ---
 
-data Maybe of A { Just(value: A), Nothing }
+data Maybe of A:
+    Just(value: A)
+    Nothing
 
-Maybe satisfies Optional {
-    fn isDefined = match Self {
-        Maybe.Nothing => false,
-        Maybe.Just(_) => true,
-    }
-    fn map(f: Part -> B) = match Self {
-        Maybe.Nothing => Maybe.Nothing,
-        Maybe.Just(a) => Maybe.Just(f(a)),
-    }
-    fn orElse(other: Maybe of Self) = match Self {
-        Maybe.Nothing => other,
-        _ => Self,
-    }
-}
+Maybe satisfies Optional:
+    fn isDefined = match Self:
+        Maybe.Nothing => false
+        Maybe.Just(_) => true
+    fn map(f: Part -> B) = match Self:
+        Maybe.Nothing => Maybe.Nothing
+        Maybe.Just(a) => Maybe.Just(f(a))
+    fn orElse(other: Maybe of Self) = match Self:
+        Maybe.Nothing => other
+        _ => Self
 
-data Outcome of (E, A) { Success(value: A), Failure(error: E) }
+data Outcome of (E, A):
+    Success(value: A)
+    Failure(error: E)
 
-Outcome satisfies Result {
+Outcome satisfies Result:
     Success as ok
     Failure as err
-}
 
-effect Fail of E {
+effect Fail of E:
     fn fail(error: E) -> !
-}
 
 // --- Bringing satisfactions into scope ---
 // In a real program, the data types and satisfactions would be in separate
@@ -70,77 +66,64 @@ effect Fail of E {
 // Construction via cap constructors (Optional.some, Optional.none) is valid —
 // resolved to Maybe.Just / Maybe.Nothing via the satisfaction mapping.
 
-fn unwrap_or(opt: is Optional of A, default: A) -> A {
+fn unwrap_or(opt: is Optional of A, default: A) -> A:
     opt.fold((value) -> value, () -> default)
-}
 
-fn map_optional(opt: is Optional of A, f: A -> B) -> is Optional of B {
+fn map_optional(opt: is Optional of A, f: A -> B) -> is Optional of B:
     opt.fold((value) -> Optional.some(f(value)), () -> Optional.none)
-}
 
-fn and_then(opt: is Optional of A, f: A -> is Optional of B) -> is Optional of B {
+fn and_then(opt: is Optional of A, f: A -> is Optional of B) -> is Optional of B:
     opt.fold((value) -> f(value), () -> Optional.none)
-}
 
 // --- Propagating errors with fold + Fail ---
 
-fn parse_u64(s: String) -> is Result of (String, u64) {
+fn parse_u64(s: String) -> is Result of (String, u64):
     // (builtin parsing — placeholder)
     builtin.parse_u64(s)
-}
 
-fn divide(a: u64, b: u64) -> is Result of (String, u64) {
-    if b == 0 {
+fn divide(a: u64, b: u64) -> is Result of (String, u64):
+    if b == 0:
         Result.err("division by zero")
-    } else {
+    else:
         Result.ok(a / b)
-    }
-}
 
 // Chain multiple fallible operations using fold + Fail
-fn compute(input: String) -> is Result of (String, u64) {
-    fn inner(input: String) -> u64 with Fail of String {
+fn compute(input: String) -> is Result of (String, u64):
+    fn inner(input: String) -> u64 with Fail of String:
         let n = parse_u64(input).fold((v) -> v, (e) -> Fail.fail(e))
         let doubled = n * 2
         let result = divide(doubled, 3).fold((v) -> v, (e) -> Fail.fail(e))
         result
-    }
 
     // Handle the Fail effect, converting it back to Result
-    handle { inner(input) } {
-        Fail.fail(e) => Result.err(e),
-        return(v) => Result.ok(v),
-    }
-}
+    handle inner(input):
+        Fail.fail(e) => Result.err(e)
+        return(v) => Result.ok(v)
 
 // --- Optional as a "soft" failure ---
 
-cap Map of (K, V) {
+cap Map of (K, V):
     Self.fn empty -> Self
     fn insert(key: K, value: V) -> Self
     fn get(key: K) -> is Optional of V
-}
 
 fn lookup_user_age(users: is Map of (String, u64), name: String)
     -> is Optional of u64
-{
+:
     users.get(name)
-}
 
 // Combine Optional and Fail: convert "not found" to an error
 fn require_user_age(users: is Map of (String, u64), name: String)
     -> u64 with Fail of String
-{
+:
     lookup_user_age(users, name).fold(
         (age) -> age,
         () -> Fail.fail("user not found: ".concat(name)),
     )
-}
 
-fn main() -> () with Console {
+fn main() -> () with Console:
     let result = compute("42")
     result.fold(
         (v) -> Console.print_line("Result: ".concat(v.show())),
         (e) -> Console.print_line("Error: ".concat(e)),
     )
-}

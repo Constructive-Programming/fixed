@@ -17,9 +17,8 @@ use std.io.Console
 
 // --- Hello, world ---
 
-fn greet(name: String) -> () with Console {
+fn greet(name: String) -> () with Console:
     Console.print_line("Hello, ".concat(name).concat("!"))
-}
 
 // --- Fibonacci ---
 
@@ -27,40 +26,34 @@ fn greet(name: String) -> () with Console {
 // All parameters typed `N` must share the same concrete type.
 // The return type `N` is also constrained — the caller gets back
 // whatever numeric type they passed in.
-fn fib_iter(n: N is Numeric) -> N {
+fn fib_iter(n: N is Numeric) -> N:
     // Inner function reuses `N` — all four values (i, a, b, return)
     // must be the same numeric type.
-    fn go(i: N, a: N, b: N) -> N {
-        if i == 0 {
+    fn go(i: N, a: N, b: N) -> N:
+        if i == 0:
             a
-        } else {
+        else:
             go(i - 1, b, a + b)
-        }
-    }
     go(n, 0, 1)
-}
 
 // Print the first `count` Fibonacci numbers.
 // `count` is a concrete `u64` — concrete types are just well-known capabilities.
-fn print_fibs(count: u64) -> () with Console {
+fn print_fibs(count: u64) -> () with Console:
     // `is Numeric` without a name: anonymous capability.
     // Each parameter independently satisfies Numeric — the compiler
     // is free to choose different concrete types for `i` and `count`
     // (though in practice they'll unify here because `i < count`
     // requires them to be comparable, i.e., the same type).
-    fn go(i: is Numeric, count: is Numeric) -> () with Console {
-        if i < count {
+    fn go(i: is Numeric, count: is Numeric) -> () with Console:
+        if i < count:
             let val = fib_iter(i)
             Console.print_line("fib(".concat(i.show()).concat(") = ").concat(val.show()))
             go(i + 1, count)
-        } else {
+        else:
             ()
-        }
-    }
     go(0, count)
-}
 
-fn main() -> () with Console {
+fn main() -> () with Console:
     Console.print_line("What is your name?")
     let name = Console.read_line()
     greet(name)
@@ -68,4 +61,3 @@ fn main() -> () with Console {
     Console.print_line("")
     Console.print_line("First 20 Fibonacci numbers:")
     print_fibs(20)
-}

@@ -21,8 +21,11 @@ use std.io.Console
 // type satisfies `is Point`.
 type Point = HasX + HasY
 
-cap HasX { fn x -> Part }
-cap HasY { fn y -> Part }
+cap HasX:
+    fn x -> Part
+
+cap HasY:
+    fn y -> Part
 
 // =========================================================================
 // Data declarations — concrete shapes with known variants
@@ -30,11 +33,10 @@ cap HasY { fn y -> Part }
 
 // A Shape is a closed set of geometric primitives.
 // N is Numeric constrains all coordinates/dimensions to the same type.
-data Shape of N {
-    Circle(center: is Point of N, radius: N),
-    Rectangle(top_left: is Point of N, width: N, height: N),
-    Triangle(a: is Point of N, b: is Point of N, c: is Point of N),
-}
+data Shape of N:
+    Circle(center: is Point of N, radius: N)
+    Rectangle(top_left: is Point of N, width: N, height: N)
+    Triangle(a: is Point of N, b: is Point of N, c: is Point of N)
 
 // A bounding box — always axis-aligned
 data BoundingBox of N (min: is Point of N, max: is Point of N)
@@ -43,114 +45,93 @@ data BoundingBox of N (min: is Point of N, max: is Point of N)
 // Helpers
 // =========================================================================
 
-fn point(x: N, y: N) -> is Point of N {
+fn point(x: N, y: N) -> is Point of N:
     // The compiler generates a value satisfying HasX + HasY
     Point { x: x, y: y }
-}
 
-fn distance(p1: is Point of (N is Numeric), p2: is Point of N) -> f64 {
+fn distance(p1: is Point of (N is Numeric), p2: is Point of N) -> f64:
     let dx = p1.x - p2.x
     let dy = p1.y - p2.y
     builtin.sqrt(dx * dx + dy * dy)
-}
 
-fn min(a: N is Numeric, b: N) -> N {
-    if a < b { a } else { b }
-}
+fn min(a: N is Numeric, b: N) -> N:
+    if a < b: a else: b
 
-fn max(a: N is Numeric, b: N) -> N {
-    if a > b { a } else { b }
-}
+fn max(a: N is Numeric, b: N) -> N:
+    if a > b: a else: b
 
-fn min3(a: N is Numeric, b: N, c: N) -> N {
+fn min3(a: N is Numeric, b: N, c: N) -> N:
     min(a, min(b, c))
-}
 
-fn max3(a: N is Numeric, b: N, c: N) -> N {
+fn max3(a: N is Numeric, b: N, c: N) -> N:
     max(a, max(b, c))
-}
 
 // =========================================================================
 // Operation 1: Area
 // =========================================================================
 
-fn area(shape: Shape of (N is Numeric)) -> f64 {
-    match shape {
+fn area(shape: Shape of (N is Numeric)) -> f64:
+    match shape:
         Shape.Circle(_, r) =>
-            builtin.pi * r * r,
-
+            builtin.pi * r * r
         Shape.Rectangle(_, w, h) =>
-            w * h,
-
-        Shape.Triangle(a, b, c) => {
+            w * h
+        Shape.Triangle(a, b, c) =>
             // Shoelace formula: |x_a(y_b - y_c) + x_b(y_c - y_a) + x_c(y_a - y_b)| / 2
             let double_area = a.x * (b.y - c.y)
                             + b.x * (c.y - a.y)
                             + c.x * (a.y - b.y)
             builtin.abs(double_area) / 2.0
-        },
-    }
-}
 
 // =========================================================================
 // Operation 2: Perimeter
 // =========================================================================
 
-fn perimeter(shape: Shape of (N is Numeric)) -> f64 {
-    match shape {
+fn perimeter(shape: Shape of (N is Numeric)) -> f64:
+    match shape:
         Shape.Circle(_, r) =>
-            2.0 * builtin.pi * r,
-
+            2.0 * builtin.pi * r
         Shape.Rectangle(_, w, h) =>
-            2.0 * (w + h),
-
+            2.0 * (w + h)
         Shape.Triangle(a, b, c) =>
-            distance(a, b) + distance(b, c) + distance(c, a),
-    }
-}
+            distance(a, b) + distance(b, c) + distance(c, a)
 
 // =========================================================================
 // Operation 3: Bounding box
 // =========================================================================
 
-fn bounding_box(shape: Shape of (N is Numeric)) -> BoundingBox of N {
-    match shape {
+fn bounding_box(shape: Shape of (N is Numeric)) -> BoundingBox of N:
+    match shape:
         Shape.Circle(center, r) =>
             BoundingBox(
                 point(center.x - r, center.y - r),
                 point(center.x + r, center.y + r),
-            ),
-
+            )
         Shape.Rectangle(tl, w, h) =>
             BoundingBox(
                 tl,
                 point(tl.x + w, tl.y + h),
-            ),
-
+            )
         Shape.Triangle(a, b, c) =>
             BoundingBox(
                 point(min3(a.x, b.x, c.x), min3(a.y, b.y, c.y)),
                 point(max3(a.x, b.x, c.x), max3(a.y, b.y, c.y)),
-            ),
-    }
-}
+            )
 
-fn show_bbox(bb: BoundingBox of (N is Numeric)) -> String {
-    match bb {
+fn show_bbox(bb: BoundingBox of (N is Numeric)) -> String:
+    match bb:
         BoundingBox(mn, mx) =>
             "BBox[("
                 .concat(mn.x.show()).concat(", ").concat(mn.y.show())
                 .concat(") -> (")
                 .concat(mx.x.show()).concat(", ").concat(mx.y.show())
-                .concat(")]"),
-    }
-}
+                .concat(")]")
 
 // =========================================================================
 // Main
 // =========================================================================
 
-fn main() -> () with Console {
+fn main() -> () with Console:
     let circle    = Shape.Circle(point(0.0, 0.0), 5.0)
     let rectangle = Shape.Rectangle(point(1.0, 1.0), 4.0, 3.0)
     let triangle  = Shape.Triangle(
@@ -162,14 +143,12 @@ fn main() -> () with Console {
     let shapes = [circle, rectangle, triangle]
     let names  = ["Circle", "Rectangle", "Triangle"]
 
-    fn print_shape(name: String, shape: Shape of f64) -> () with Console {
+    fn print_shape(name: String, shape: Shape of f64) -> () with Console:
         Console.print_line(name.concat(":"))
         Console.print_line("  Area:      ".concat(area(shape).show()))
         Console.print_line("  Perimeter: ".concat(perimeter(shape).show()))
         Console.print_line("  ".concat(show_bbox(bounding_box(shape))))
-    }
 
     print_shape("Circle",    circle)
     print_shape("Rectangle", rectangle)
     print_shape("Triangle",  triangle)
-}

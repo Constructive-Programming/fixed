@@ -20,13 +20,11 @@ use std.io.{Console, FileSystem}
 
 // Fail is defined in 03_option_result.fixed; redefined here for
 // self-containment. In a real program: `use std.fail.Fail`
-effect Fail of E {
+effect Fail of E:
     fn fail(error: E) -> !
-}
 
-effect Log {
+effect Log:
     fn log(level: String, message: String) -> ()
-}
 
 // --- A config file reader ---
 
@@ -34,17 +32,16 @@ data Config(host: String, port: u16, debug: bool)
 
 fn read_config(path: String) -> Config
     with FileSystem + Fail of String
-{
+:
     let contents = FileSystem.read_file(path).fold(
         (v) -> v,
         (e) -> Fail.fail(e),
     )
     parse_config(contents)
-}
 
 fn parse_config(text: String) -> Config
     with Fail of String
-{
+:
     let lines = split_lines(text)
     let host = find_value(lines, "host").fold(
         (v) -> v,
@@ -62,19 +59,17 @@ fn parse_config(text: String) -> Config
         |> map_optional((v) -> v == "true")
         |> unwrap_or(false)
     Config(host, port, debug)
-}
 
 // Pure helper — no effects needed, no `with` clause
 fn find_value(
     lines: is List of String,
     key: String,
-) -> is Optional of String {
+) -> is Optional of String:
     find(lines, (line) -> starts_with(line, key))
         |> map_optional((line) -> after_char(line, '='))
         |> map_optional((value) -> trim(value))
-}
 
-fn run_server(config: Config) -> () with Console + Log {
+fn run_server(config: Config) -> () with Console + Log:
     Log.log("info", "Starting server...")
     Console.print_line(
         "Server running on "
@@ -83,201 +78,162 @@ fn run_server(config: Config) -> () with Console + Log {
             .concat(config.port.show())
     )
 
-    if config.debug {
+    if config.debug:
         Log.log("debug", "Debug mode enabled")
         Console.print_line("[DEBUG] Verbose output on")
-    } else {
+    else:
         ()
-    }
-}
 
 // =========================================================================
 // Part 2: Concurrency as algebraic effects
 // =========================================================================
 
 // A typed channel for sending/receiving messages
-effect Channel of A {
+effect Channel of A:
     fn send(value: A) -> ()
     fn receive -> A
-}
 
 // Spawning concurrent tasks
-effect Async {
+effect Async:
     fn spawn(task: () -> () with Async) -> ()
     fn yield_now -> ()
-}
 
 // --- A chat message ---
 
-cap Message {
+cap Message:
     Self.fn new(sender: String, body: String) -> Self
     fn sender -> String
     fn body -> String
-}
 
 data ChatMessage(sender: String, body: String)
 
-ChatMessage satisfies Message {
+ChatMessage satisfies Message:
     ChatMessage as new
-}
 
 // --- Chat room logic ---
 
 fn participant(name: String) -> ()
     with Console + Channel of (is Message) + Async
-{
+:
     Console.print_line(name.concat(" joined the chat"))
 
     fn chat_loop(name: String) -> ()
         with Console + Channel of (is Message) + Async
-    {
+    :
         Console.print_line(name.concat("> "))
         let input = Console.read_line()
 
-        if input == "quit" {
+        if input == "quit":
             Console.print_line(name.concat(" left the chat"))
-        } else {
+        else:
             Channel.send(Message.new(name.clone(), input))
             Async.yield_now
             chat_loop(name)
-        }
-    }
 
     chat_loop(name)
-}
 
-fn listener() -> () with Console + Channel of (is Message) + Async {
-    fn listen_loop() -> () with Console + Channel of (is Message) + Async {
+fn listener() -> () with Console + Channel of (is Message) + Async:
+    fn listen_loop() -> () with Console + Channel of (is Message) + Async:
         let msg = Channel.receive
         Console.print_line(
             "[".concat(msg.sender).concat("]: ").concat(msg.body)
         )
         Async.yield_now
         listen_loop()
-    }
 
     listen_loop()
-}
 
 // =========================================================================
 // Part 3: Handler composition — schedulers and channels
 // =========================================================================
 
-cap TaskQueue {
+cap TaskQueue:
     Self.fn empty -> Self
     fn push(task: () -> ()) -> Self
     fn pop -> is Optional of (is Pair of (() -> (), Self))
     fn is_empty -> bool
-}
 
 data SimpleQueue(tasks: is List of (() -> ()))
 
-SimpleQueue satisfies TaskQueue {
+SimpleQueue satisfies TaskQueue:
     SimpleQueue as empty
-}
 
-fn run_scheduler(task: () -> () with Async) -> () {
-    fn schedule(queue: is TaskQueue) -> () {
+fn run_scheduler(task: () -> () with Async) -> ():
+    fn schedule(queue: is TaskQueue) -> ():
         queue.pop.fold(
-            (pair) -> {
+            (pair) ->
                 let Pair { first: next_task, second: remaining } = pair
-                handle { next_task() } {
-                    Async.spawn(new_task) => {
+                handle next_task():
+                    Async.spawn(new_task) =>
                         let q = remaining.push(new_task)
                         resume(())
                         schedule(q)
-                    },
-                    Async.yield_now() => {
+                    Async.yield_now() =>
                         let q = remaining.push(() -> resume(()))
-                        schedule(q)
-                    },
-                }
-            },
+                        schedule(q),
             () -> (),  // all tasks done
         )
-    }
 
-    let initial_queue = TaskQueue.empty.push(() -> {
-        handle { task() } {
-            Async.spawn(t) => { resume(()) },
-            Async.yield_now() => { resume(()) },
-        }
-    })
+    let initial_queue = TaskQueue.empty.push(() ->
+        handle task():
+            Async.spawn(t) => resume(())
+            Async.yield_now() => resume(())
+    )
     schedule(initial_queue)
-}
 
-fn run_with_channel(task: () -> () with Channel of A) -> () {
-    fn go(buffer: is List of A, task: () -> () with Channel of A) -> () {
-        handle { task() } {
-            Channel.send(value) => {
+fn run_with_channel(task: () -> () with Channel of A) -> ():
+    fn go(buffer: is List of A, task: () -> () with Channel of A) -> ():
+        handle task():
+            Channel.send(value) =>
                 go(List.Cons(value, buffer), () -> resume(()))
-            },
-            Channel.receive() => {
-                match buffer {
-                    List.Cons(head, tail) => {
+            Channel.receive() =>
+                match buffer:
+                    List.Cons(head, tail) =>
                         go(tail, () -> resume(head))
-                    },
-                    List.Nil() => {
+                    List.Nil() =>
                         ()
-                    },
-                }
-            },
-        }
-    }
 
     go(List.Nil(), task)
-}
 
 // =========================================================================
 // Part 4: Nested handlers — putting it all together
 // =========================================================================
 
-fn main() -> () {
+fn main() -> ():
     // Example 1: I/O effects with nested handlers
     // Each `handle` removes one effect from the row.
-    handle {
-        handle {
-            handle {
+    handle (do:
+        handle (do:
+            handle (do:
                 let config = read_config("server.conf")
                 run_server(config)
-            } {
-                Fail.fail(e) => {
+            ):
+                Fail.fail(e) =>
                     builtin.stderr_write("Fatal: ".concat(e))
                     builtin.exit(1)
-                },
-            }
-        } {
-            Log.log(level, msg) => {
+        ):
+            Log.log(level, msg) =>
                 builtin.stderr_write("[".concat(level).concat("] ").concat(msg).concat("\n"))
                 resume(())
-            },
-        }
-    } {
-        Console.print_line(msg) => {
+    ):
+        Console.print_line(msg) =>
             builtin.stdout_write(msg.concat("\n"))
             resume(())
-        },
-        Console.read_line() => {
+        Console.read_line() =>
             resume(builtin.stdin_read_line())
-        },
-    }
 
     // Example 2: Concurrency effects with nested handlers
-    handle {
-        run_scheduler(() -> {
-            run_with_channel(() -> {
+    handle (do:
+        run_scheduler(() ->
+            run_with_channel(() ->
                 Async.spawn(() -> participant("Alice"))
                 Async.spawn(() -> participant("Bob"))
                 Async.spawn(() -> listener())
-            })
-        })
-    } {
-        Console.print_line(msg) => {
+            )
+        )
+    ):
+        Console.print_line(msg) =>
             builtin.stdout_write(msg.concat("\n"))
             resume(())
-        },
-        Console.read_line() => {
+        Console.read_line() =>
             resume(builtin.stdin_read_line())
-        },
-    }
-}

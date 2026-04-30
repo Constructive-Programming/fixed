@@ -15,16 +15,14 @@
 // Functor: structure-preserving transformation.
 // `Part` is the current element type, `B` is the new one.
 // `Self of B` changes the container's element type.
-cap Functor {
+cap Functor:
     fn map(f: Part -> B) -> Self of B
-}
 
 // Monad: sequencing computations that produce wrapped values.
 // `pure` wraps a value; `flat_map` chains computations.
-cap Monad extends Functor {
+cap Monad extends Functor:
     Self.fn pure(value: Part) -> Self
     fn flat_map(f: Part -> Self of B) -> Self of B
-}
 
 // --- Optional is a Monad ---
 //
@@ -32,92 +30,81 @@ cap Monad extends Functor {
 // The compiler auto-derives Functor (map via fold + some/none)
 // and Monad (flat_map via fold) from the structure.
 
-cap Optional extends Monad {
+cap Optional extends Monad:
     Self.fn some(value: Part) -> Self
     Self.fn none -> Self
     fn fold(on_some: Part -> R, on_none: () -> R) -> R
-}
 
 // A concrete data type satisfies Optional (and thus Monad + Functor):
-data Maybe of A { Just(value: A), Nothing }
+data Maybe of A:
+    Just(value: A)
+    Nothing
 
-Maybe satisfies Optional {
+Maybe satisfies Optional:
     Just as some
     Nothing as none
-}
 // fold, map, flat_map, pure are auto-derived from Maybe's structure
 
 // --- Generic monadic functions ---
 
 // `M is Monad` — M is a type constructor satisfying Monad.
 // `M of ()` applies M to the unit type.
-fn when(condition: bool, action: M is Monad of ()) -> M of () {
-    if condition {
+fn when(condition: bool, action: M is Monad of ()) -> M of ():
+    if condition:
         action
-    } else {
+    else:
         M.pure(())
-    }
-}
 
-fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A) {
-    match list {
-        List.Cons(head, tail) => do {
-            a <- head
-            rest <- sequence(tail)
-            M.pure(List.Cons(a, rest))
-        },
-        List.Nil() => M.pure(List.Nil()),
-    }
-}
+fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A):
+    match list:
+        List.Cons(head, tail) =>
+            do:
+                a <- head
+                rest <- sequence(tail)
+                M.pure(List.Cons(a, rest))
+        List.Nil() => M.pure(List.Nil())
 
-fn map_m(list: is List of A, f: A -> M of B) -> (M is Monad) of (is List of B) {
+fn map_m(list: is List of A, f: A -> M of B) -> (M is Monad) of (is List of B):
     sequence(list.map(f))
-}
 
 fn fold_m(
     list: is List of A,
     init: B,
     f: (B, A) -> M of B,
-) -> (M is Monad) of B {
-    match list {
-        List.Cons(head, tail) => do {
-            acc <- f(init, head)
-            fold_m(tail, acc, f)
-        },
-        List.Nil() => M.pure(init),
-    }
-}
+) -> (M is Monad) of B:
+    match list:
+        List.Cons(head, tail) =>
+            do:
+                acc <- f(init, head)
+                fold_m(tail, acc, f)
+        List.Nil() => M.pure(init)
 
 // --- do notation example ---
 
-fn safe_divide(a: f64, b: f64) -> is Optional of f64 {
-    if b == 0.0 {
+fn safe_divide(a: f64, b: f64) -> is Optional of f64:
+    if b == 0.0:
         Optional.none
-    } else {
+    else:
         Optional.some(a / b)
-    }
-}
 
-fn compute() -> is Optional of f64 {
+fn compute() -> is Optional of f64:
     // `do` desugars to flat_map chains:
     //   safe_divide(100.0, 3.0).flat_map((x) ->
     //     safe_divide(x, 2.0).flat_map((y) ->
     //       safe_divide(y, 7.0).flat_map((z) ->
     //         Optional.pure(z))))
-    do {
+    do:
         x <- safe_divide(100.0, 3.0)
         y <- safe_divide(x, 2.0)
         z <- safe_divide(y, 7.0)
         Optional.pure(x + y + z)
-    }
-}
 
 // --- Functor laws (expressed as properties) ---
 
 // fmap id == id
 // fmap (f . g) == fmap f . fmap g
 
-fn main() -> () with Console {
+fn main() -> () with Console:
     compute().fold(
         (result) -> Console.print_line("Result: ".concat(result.show())),
         () -> Console.print_line("Division by zero encountered"),
@@ -129,4 +116,3 @@ fn main() -> () with Console {
         (list) -> Console.print_line("All present: ".concat(list.show())),
         () -> Console.print_line("At least one was none"),
     )
-}
