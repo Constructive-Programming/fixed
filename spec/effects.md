@@ -236,15 +236,23 @@ handle outer_subject:
 
 If `outer_subject` is itself `handle inner_subject: InnerEff.op() => ...`, then `InnerEff` is removed inside the inner handle and the outer handle sees only what `outer_subject` produces externally.
 
-### 6.7 Handler types (Rule E6.7)
+### 6.7 Handler types and rows (Rule E6.7)
 
-The result type of a `handle` block is the join of:
+**Result type.** The result type of a `handle` block is the join of:
 
 - The `return` arm's body type (if present), or SUBJECT's value type (if absent).
 - Each non-abortive arm's body type (after `resume`'s flow through the captured continuation).
 - Each abortive arm's body type (which becomes a direct `handle` result).
 
-All of these must be the same type (or unifiable). The handler's effect row is SUBJECT's row minus the handled effects (Rule E5.3) plus any effects performed by the arm bodies themselves.
+All of these must be the same type (or unifiable).
+
+**Result effect row.** The effect row of a `handle` block is the union of three sources, parallel to the type rule:
+
+- The `return` arm's body row (if present), or SUBJECT's value type's row (if absent) — the *happy-path* row contributed when SUBJECT completes normally.
+- Each arm body's row — effects performed by arm bodies running in the outer scope.
+- SUBJECT's declared row **minus the effects handled here** (Rule E5.3) — SUBJECT's unhandled effects that pass through to the outer scope.
+
+The first source mirrors the type rule's first bullet. The third source ensures effects performed *during* SUBJECT's evaluation that aren't intercepted by any arm still appear in the outer row.
 
 ## 7. Evidence-passing compilation
 
