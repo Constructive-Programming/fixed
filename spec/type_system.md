@@ -1,0 +1,650 @@
+# Fixed Type System
+
+**Status:** Draft v0.2
+**Specifies:** typing of Fixed v0.2 source.
+**Last revised:** 2026-04-30
+
+**Changes from v0.1.** OQ1 resolved (multi-arg `Self of B`, Rule 5.4.b); OQ2 resolved (mutual data recursion, §7.5); OQ3 resolved (auto-derivation matrix, §7.4 expanded); OQ4 resolved (built-in representation candidates, §6.6); OQ5 resolved as deferred-to-v0.3 (§7.6); OQ6 resolved (type-alias `of`-distribution, §5.8); OQ7 pre-resolved and deferred to `spec/properties.md`.
+
+## 1. Scope
+
+This document defines the **typing rules** for Fixed: how the parser's untyped trees become typed trees, how capabilities and data types relate, how `of` application works, and how constructor calls resolve to concrete representations.
+
+It does **not** define:
+
+- QTT quantity inference (0/1/ω, erasure, linearity) — see `spec/quantities.md`.
+- Effect-row inference and evidence-passing compilation — see `spec/effects.md`.
+- `prop` static verification and PBT fallback — see `spec/properties.md`.
+- `match → fold` desugaring and exhaustiveness checking — see `spec/pattern_matching.md`.
+- Perceus reference-counting insertion — see `spec/perceus.md`.
+- Capability-set narrowing into concrete representations (the algorithm) — touched in §4.5; full treatment lives with the compiler implementation, with PGO-driven decisions documented separately.
+
+## 2. Dependencies
+
+- `spec/syntax_grammar.ebnf` v0.2.3 — every syntactic form referenced here is defined there.
+- `examples/01_basics.fixed` … `examples/11_properties.fixed` — every rule in this document is anchored to at least one example.
+
+## 3. Two worlds: types and capabilities
+
+Fixed makes a hard distinction between what the **programmer writes** and what the **compiler tracks internally**:
+
+| Surface (programmer) | Internal (compiler) |
+|---|---|
+| **Capabilities** — what a value can *do* (`Sequencing`, `Numeric`, `Folding`) | **Types** — concrete representations the compiler chose |
+| Capability bounds: `is Cap`, `N is Cap` | Type variables, type-class dictionaries |
+| `data` declarations: closed sets of variants | Tagged unions / structs |
+| `of` application | Type application |
+
+A user never names "the type" in the conventional sense. The compiler computes a concrete representation from the union of capability bounds collected across a value's lifetime (see §4.5). For the rest of this document, "type" refers to the compiler's internal view; "capability" is the user-facing thing.
+
+## 4. Identifier scoping
+
+### 4.1 Type-variable introduction (resolves Q8)
+
+**Rule 4.1.** An `UPPER_IDENT` in a type-binding position introduces a fresh type variable iff that name is not already bound in the enclosing scope. A **type-binding position** is any of:
+
+- `IDENT is Bound` (named alias) — anywhere in a function signature, cap method signature, data variant field, or `of` argument list.
+- `phantom IDENT` in an `of` argument list.
+- A free occurrence of `UPPER_IDENT` that does not refer to a globally-declared cap, data, type, or effect.
+
+Subsequent occurrences of the same `UPPER_IDENT` within the same signature **refer to the same type variable**. Intra-signature shadowing is a **compile error**.
+
+**Scope.**
+
+- For `fn`: the entire signature (parameters + return type + `with`-clause).
+- For `cap` / `data` / `effect`: the entire body (including `extends` clauses).
+- For nested `fn`: each inner function has its own scope; type variables introduced in the outer signature are still visible.
+
+**Examples.**
+
+```
+// `examples/01_basics.fixed:30`  —  N introduced once, referenced twice
+fn fib_iter(n: N is Numeric) -> N { ... }
+//          ^introduces      ^refers
+
+// `examples/05_phantom_types.fixed:110-112`  —  U introduced once, referenced 3x
+fn add(a: is Quantity of U, b: is Quantity of U) -> is Quantity of U { ... }
+//                       ^introduces, then 2 refs
+
+// `examples/02_collections.fixed:127-129`  —  N introduced inside the `of`
+fn sum(numbers: is Folding of (N is Numeric)) -> N { ... }
+```
+
+**Non-example.** The following is rejected:
+
+```
+fn bad(x: N is Numeric) -> N {
+    fn inner(x: N is Numeric) -> N { ... }   // ERROR: N already in scope
+}
+```
+
+### 4.2 Term-variable scoping
+
+`let pat = expr` binds the names in `pat` for the rest of its enclosing block. There is no `let-in`; bindings flow through the block sequentially. A function parameter is in scope for the entire function body (and for nested `fn` definitions, since nested functions can capture).
+
+## 5. Type expressions
+
+The grammar of type expressions is defined in `spec/syntax_grammar.ebnf` §10. This section defines their meaning.
+
+### 5.1 Capability bounds (`is`)
+
+`is Cap` denotes "satisfies the capability `Cap`."
+
+Two forms:
+
+| Form | Meaning |
+|---|---|
+| `is Cap` | Anonymous bound: each occurrence in a signature is a *fresh* type variable. |
+| `IDENT is Cap` | Named alias: every occurrence of `IDENT` in the signature refers to the *same* type variable, all of which must satisfy `Cap`. |
+
+**Composition (§10 grammar `CapBoundChain`):** `is C1 + C2` means "satisfies both `C1` and `C2`." `+` is associative and commutative; `is C1 + C2` ≡ `is C2 + C1`.
+
+```
+fn count(c: is Folding) -> u64                          // anonymous: any Folding
+fn fib_iter(n: N is Numeric) -> N                       // named: input and output share type
+fn even_doubled(numbers: C is Filtering of (N is Numeric) + Functor of N) -> C
+//              ^reused C    ^reused N as element type
+```
+
+### 5.2 `of` application
+
+`Cap of A` applies `A` to `Cap`'s first type parameter. Multi-parameter caps use a tuple: `Cap of (A, B)`.
+
+```
+cap Sized of (Part, Size is Numeric)           // declares two params
+fn size_of(c: is Sized of (i64, u64)) -> u64    // applies both
+```
+
+`of` arguments may be:
+
+- Type expressions (`i64`, `String`, `Cap of A`, `N is Numeric`, …).
+- `phantom IDENT` declarations (only at `of`-declaration sites).
+- Value expressions when the corresponding parameter is a value-param (see §6.3 for data, §5.4 for `Self of B`).
+- Literal values at type-application sites (so `Bounded of (i64, 5, 10)` parses).
+
+### 5.3 The `Part` pseudo-parameter
+
+Inside a `cap` body, the bare identifier `Part` refers to the cap's element-type parameter — the *first* parameter of the cap's `of` clause. If the cap declares no `of` clause, `Part` is the cap's single implicit element-type parameter.
+
+```
+cap Folding {                                  // no `of` — Part is the implicit element type
+    fn fold(init: R, f: (R, Part) -> R) -> R
+}
+
+cap Sized of (Part, Size is Numeric) {         // Part named explicitly in `of`
+    fn size -> Size
+}
+```
+
+**Rule 5.3.** For a `cap` declaration, `Part` resolves to the **first non-phantom type parameter** in the cap's `of` clause. If no such parameter exists, the cap is **`Part`-less**: using `Part` inside its body is a compile error.
+
+### 5.4 `Self` and `Self of B`
+
+Inside a `cap` body, `Self` refers to the type implementing this capability. Inside a `data` declaration, `Self` refers to the data type itself (with all its `of` arguments fixed). Inside a `satisfies` block, `Self` refers to the satisfying type.
+
+`Self of B` denotes "the same container shape as `Self`, but with element type `B`" — used for higher-kinded returns:
+
+```
+cap Functor {
+    fn map(f: Part -> B) -> Self of B          // B introduces a fresh type variable
+}
+```
+
+**Rule 5.4.a (single-arg).** `Self of B` is well-formed only when `Self` has at least one non-phantom type parameter. The application substitutes `B` for `Self`'s **first non-phantom type parameter**; other parameters are preserved.
+
+**Rule 5.4.b (multi-arg, resolves OQ1).** `Self of (B1, B2, ..., Bk)` substitutes `B1..Bk` positionally over the first `k` non-phantom type parameters of `Self`. The arity `k` must be at most the number of non-phantom parameters of `Self`; supplying more is a compile error.
+
+```
+cap BiFunctor of (A, B) {
+    fn bimap<A2, B2>(f: A -> A2, g: B -> B2) -> Self of (A2, B2)
+}
+```
+
+### 5.5 Arrow types and the unit type
+
+| Syntax | Meaning |
+|---|---|
+| `A -> B` | Function from `A` to `B` |
+| `(A, B) -> C` | Function from a 2-tuple `(A, B)` to `C` (curried by the typer if the call site curries) |
+| `() -> R` | Function from unit to `R` (zero-arg function) |
+| `A -> B with E` | Arrow type carrying effect row `E` (defined in `spec/effects.md`) |
+| `()` | The unit type. The unit value is also written `()`. Single-element type and value. |
+
+### 5.6 The never type `!` and `unreachable` (resolves Q16)
+
+`!` is the **never type** — the type of expressions that do not return. It is a **subtype of every type**: an expression of type `!` is valid wherever an expression of any other type is expected.
+
+Two ways to obtain `!`:
+
+- `unreachable` — keyword expression. Reaching it at runtime is a panic.
+- A function returning `!` — by convention, an effect operation that does not return (e.g., `Fail.fail`).
+
+```
+// examples/03_option_result.fixed:56  —  `Fail.fail` returns `!`
+effect Fail of E {
+    fn fail(error: E) -> !
+}
+
+// examples/11_properties.fixed:138  —  `unreachable` used where `N` is expected
+fn median(...) -> N {
+    collection.get(mid).fold((v) -> v, () -> unreachable)
+}
+```
+
+### 5.7 Numeric literal polymorphism (resolves Q10)
+
+`INT_LITERAL` carries the polymorphic type `is Numeric`. `FLOAT_LITERAL` likewise (further constrainable to a floating-point sub-cap if/when the standard library declares one).
+
+The typer resolves the concrete representation from context:
+
+1. The expected type at the literal's position (function parameter, return position, assignment LHS, comparison operand).
+2. Operand-unification: in `a + 1`, `1` resolves to whatever `a`'s type is.
+
+If still unresolved, **defaults** apply:
+
+- `INT_LITERAL → i64`
+- `FLOAT_LITERAL → f64`
+
+### 5.8 Type-alias `of`-distribution (resolves OQ6)
+
+A type alias `type T = C1 + C2 + ... + Cn` is a bag of capabilities. When applied with `of` arguments, the application **distributes** over each constituent.
+
+**Rule 5.8.** `is T of (X1, X2, ..., Xk)` where `type T = C1 + ... + Cn` is equivalent to:
+
+- For each `Ci` that has at least one non-phantom type parameter: `Ci of (X1, ..., Xk)` (positional substitution per Rule 5.4.b, capped at `Ci`'s declared arity).
+- For each `Ci` that has no type parameters: `Ci` unchanged.
+
+```
+type ArrayLike = Sequencing + RandomAccess + Sized + Empty
+
+// `is ArrayLike of A` distributes to:
+//   Sequencing of A + RandomAccess of A + Sized of A + Empty
+// (Empty has no type parameters; passes through unchanged.)
+```
+
+If a constituent `Ci` declares more type parameters than the alias receives, the unspecified parameters remain **abstract** (fresh type variables introduced at the use site, scoped to the same signature).
+
+`of`-distribution applies before `extends`-flattening: an alias's `of` arguments are propagated to its constituent caps before those caps' inherited members are inlined into the obligation set.
+
+## 6. Capability declarations
+
+### 6.1 Members
+
+A `cap` declaration may contain three kinds of members (see grammar §4):
+
+- **Instance methods** (`fn name(...) -> T`): called on a value satisfying the cap.
+- **Static methods** (`Self.fn name(...) -> Self`): called on the cap or a satisfying type. Used to declare *constructor requirements*: any type satisfying the cap must provide these.
+- **Properties** (`prop name: expr`): invariants the type must uphold (see `spec/properties.md`).
+
+### 6.2 `extends` inheritance
+
+`cap A extends B + C` declares that any type satisfying `A` must also satisfy `B` and `C`. All members of `B` and `C` are inherited by `A`.
+
+```
+cap Optional extends Functor + Folding { ... }  // examples/02_collections.fixed:60
+```
+
+**Rule 6.2 (Diamond resolution).** If `A` inherits the same member name from two different parents `B` and `C`, the inherited member's signatures must be compatible (one must be a subtype of the other under §7's subtyping). If they are not compatible, `A` must declare an explicit member of that name with a fresh signature.
+
+### 6.3 Sugar: `cap Name(params)`
+
+A capability with value parameters is sugar for a function returning a capability:
+
+```
+cap Between(min: N is Ord, max: N) of N {
+    prop in_range: min <= Self && Self <= max
+}
+// is equivalent to
+fn between(min: N is Ord, max: N) -> cap of N {
+    prop in_range: min <= Self && Self <= max
+}
+```
+
+Both forms produce a *cap-generating function* (see `spec/properties.md` for the prop semantics; this document treats `fn -> cap` as a regular function whose return type happens to be a refinement capability).
+
+### 6.4 Capability classification
+
+Every cap declaration is assigned exactly one **classification** based on its member shape. The classification drives representation selection (§4.5) and the legal operations on values bounded by the cap.
+
+| Classification | Detection rule | Examples |
+|---|---|---|
+| **Sum** | At least one `Self.fn ctor(...) -> Self` plus one `fn fold<R>(...)` member | `Optional`, `Result`, `Expr` |
+| **Product** | Exactly one `Self.fn ctor(...) -> Self`, plus accessor methods (`fn field -> T`) and no `fold` | `Config` (when expressed as a cap), `Message` |
+| **Recursive** | Any `Self.fn` ctor whose parameter list contains `Self` | `Sequencing` (via `cons(h, t: Self) -> Self`) |
+| **Capability-only** | No `Self.fn` constructors; only instance methods | `Folding`, `Functor`, `Filtering`, `Sized`, `RandomAccess` |
+| **Marker** | No methods at all (possibly with `prop` declarations) | `Locked`, `Open`, `Meters`, `Seconds`; refinement caps `between(lo, hi)` |
+
+A cap may belong to multiple of these categories transitively via `extends` (e.g., `Sequencing` is recursive *and* capability-only via the inherited members of `Folding`). The classification of the **declaring** cap is the union: the compiler treats it as "having sum/product/recursive shape" exactly when its own declared members trigger the rule.
+
+**Note.** Refinement caps generated by `fn name(...) -> cap of T` are always **Marker** caps. They add `prop` obligations but no methods, and impose no representation constraints. A value `N is between(0, 100)` is still represented as `N`.
+
+### 6.5 Representation selection (sketch)
+
+Given the union of all capabilities a value must satisfy across its lifetime, the compiler picks the most specific viable concrete representation.
+
+The algorithm narrows from a set of candidates:
+
+1. Collect all `is`-bounds on the value.
+2. For each in-scope `satisfies` declaration, check whether the providing data type can satisfy the entire bound set.
+3. Built-in types (e.g., `i64`, contiguous arrays) are also candidates, governed by compiler-internal rules:
+   - `is RandomAccess + Sized` → contiguous array preferred (linked list cannot satisfy `RandomAccess` efficiently).
+   - `is Folding` only → any container, default to whatever PGO suggests.
+   - `is Sequencing + Folding` without `RandomAccess` → linked list is acceptable; PGO may upgrade.
+4. Ambiguity halts compilation with the suggestion list described in `docs/plans/implementation-plan.md` §"Ambiguity resolution via compiler suggestions."
+
+A normative algorithm and its complexity bounds will be specified separately when the representation-selection compiler pass is implemented.
+
+### 6.6 Built-in representation candidates (resolves OQ4)
+
+The compiler maintains a set of **built-in representation candidates** — concrete types known to the compiler that satisfy specific capability combinations without any user-written `satisfies` declaration. These are part of the candidate pool during representation selection (§6.5).
+
+The illustrative set for v0.2:
+
+| Built-in representation | Satisfies (when type parameters are filled) |
+|---|---|
+| Linked list of `T` | `Sequencing of T + Folding of T + Empty + Filtering + Functor` |
+| Contiguous array of `T` | `Sequencing of T + Folding of T + RandomAccess of (T, u64) + Sized of (T, u64) + Empty + Filtering + Functor` |
+| Hash map of `K × V` | `Map of (K, V)` (when `K` satisfies `Hash + Eq`) |
+| Auto-tagged-union for a sum cap | The sum cap's full method set (auto-implemented from the cap's `Self.fn` constructors) |
+| Auto-flat-struct for a product cap | The product cap's full method set |
+
+**Rule 6.6 (priority).** During representation selection, built-in candidates have **lower priority** than user-`satisfies`-mapped data types: if a user-defined data type can satisfy the same bound set, the user's choice wins. Among built-in candidates, the compiler picks by performance heuristics (with PGO refinement when profile data is available).
+
+The full list of built-ins is implementation-defined and may grow with the compiler's capability-recognition library; the table above is normative only for the categories listed.
+
+## 7. Data declarations
+
+### 7.1 Variants and fields
+
+A `data` declaration introduces a closed set of named variants. Two forms (grammar §6):
+
+```
+data Direction { North, South, East, West }                        // unit variants
+data Color { Red, Green, Blue, RGB(red: N is Numeric, green: N, blue: N) }  // mixed
+data Config(host: String, port: u16, debug: bool)                  // single-ctor sugar
+```
+
+Fields may have **default values**:
+
+```
+data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24) {
+    Bounded(value: N),
+    ...
+}
+```
+
+A variant constructor call passes arguments **positionally**, with trailing arguments using their declared defaults if omitted.
+
+### 7.2 Recursive data
+
+A `data` declaration is recursive iff at least one variant has a field whose type mentions the data type itself (transitively). Recursive data is heap-allocated by default (see `spec/perceus.md`).
+
+```
+data Tree of A {
+    Leaf(value: A),
+    Branch(left: Tree of A, value: A, right: Tree of A),
+    Empty,
+}
+```
+
+### 7.3 `of` value-params at the type level (resolves N1)
+
+Non-`phantom` `of` parameters with a type annotation (e.g., `lo: N = 16`) are **type-level indices**: different supplied values produce **distinct types**.
+
+```
+data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24) {
+    Bounded(value: N),
+    prop in_range: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
+}
+
+// Two distinct types — values are not assignable across them:
+//   Bounded of (i64, 0, 10)
+//   Bounded of (i64, 5, 100)
+```
+
+**Rule 7.3.a (Defaults at type-application sites).** Missing trailing args at a type-application site take their declared defaults; positional only.
+
+```
+Bounded of N                ≡  Bounded of (N, 16, 24)       // both defaults
+Bounded of (N, 5)           ≡  Bounded of (N, 5, 24)        // hi default
+Bounded of (N, 5, 30)       — exact application
+Bounded of (N, , 30)        — INVALID: no positional skip in v0.2
+Bounded of (N, hi=30)       — INVALID: no named application in v0.2
+```
+
+Omitting an arg with no declared default is a compile error.
+
+**Rule 7.3.b (QTT for of value-params).** Non-phantom `of` value-params are quantity 0 by default — type-level, erased at runtime. The compiler materialises them as compile-time constants at access sites (so `b.lo` in `b.lo <= b.value` becomes the statically known constant for `b`'s type). See `spec/quantities.md` for the full rule.
+
+**Rule 7.3.c (Constructor calls).** A variant constructor call passes only the variant's **declared fields** positionally. The values of the data type's `of` value-params come from the type at which the variant is being constructed:
+
+```
+let x: Bounded of (i64, 0, 10) = Bounded.Bounded(5)
+//                                ^value=5, lo=0, hi=10 from type
+```
+
+### 7.4 Auto-derived capabilities (resolves OQ3)
+
+A `data` declaration automatically satisfies certain capabilities based on its variant shape and field types. Auto-derivation requires no `satisfies` declaration; the compiler synthesises the implementation.
+
+**Rule 7.4.a (Folding).** Every `data` declaration with at least one variant gets an auto-derived `fold<R>` method. The fold takes one callback per variant, in declaration order, with parameter list mirroring the variant's field list. Recursive `Self`-typed fields are pre-folded to `R` before the callback runs.
+
+```
+data Expr {
+    Lit(value: f64),
+    Add(left: Expr, right: Expr),
+    Mul(left: Expr, right: Expr),
+    Neg(inner: Expr),
+}
+// Auto-derived:
+//   fn fold<R>(
+//       on_lit: f64 -> R,
+//       on_add: (R, R) -> R,
+//       on_mul: (R, R) -> R,
+//       on_neg: R -> R,
+//   ) -> R
+```
+
+Auto-derived `fold` is the canonical eliminator and the destructuring path for any `is`-bounded view of the data. `match` works directly on `data` values too (per `spec/pattern_matching.md`); `fold` is what the typer emits for capability-bounded views.
+
+**Rule 7.4.b (Unfolding).** A recursive `data` declaration (any variant has at least one field of type `Self`, transitively) gets an auto-derived `unfold<S>` method (anamorphism). Given a seed `s: S` and a step function returning one variant of `Self` with seeds in recursive positions, `unfold` builds the structure:
+
+```
+fn unfold<S>(seed: S, step: S -> Self) -> Self
+```
+
+The compiler iterates `step` until no recursive seeds remain. The combination of `fold` (Rule 7.4.a) and `unfold` enables hylomorphism (`unfold` then `fold`) and the compiler is permitted to fuse the intermediate structure away.
+
+**Rule 7.4.c (Functor over the rightmost type parameter).** A `data T of (X1, ..., Xn)` declaration is auto-derived as `Functor of Xn` (the **rightmost type parameter** — right-bias convention) iff:
+
+1. `Xn` is non-phantom and is a type parameter (not a value parameter).
+2. `Xn` appears in **covariant** position in at least one variant field.
+3. `Xn` does **not** appear in contravariant position (e.g., as a function-parameter type) in any variant field.
+
+The auto-derived `map` is implemented as a `fold` that re-builds each variant with the function applied to fields of type `Xn`, leaving fields of other types untouched. The map's range type substitutes `Xn` with the supplied target type:
+
+```
+data Maybe of A { Just(value: A), Nothing }
+// Auto-derived:
+//   fn map<B>(f: A -> B) -> Maybe of B   (= Self of B)
+```
+
+**Rule 7.4.d (Accessors for product-shaped data).** A single-variant `data T(field1: T1, ..., fieldn: Tn)` (or equivalently `data T { T(field1: T1, ..., fieldn: Tn) }`) automatically gets accessor methods:
+
+```
+fn field1 -> T1
+fn field2 -> T2
+...
+```
+
+These accessors are auto-implemented and require no `satisfies` declaration.
+
+**Rule 7.4.e (Marker / refinement caps are never auto-derived).** Marker caps (no methods) and refinement caps generated by `fn -> cap` impose `prop` obligations only; they are never auto-derived. Satisfaction is by static verification (see `spec/properties.md`), not by code synthesis.
+
+**Rule 7.4.f (Caps with `Self.fn` constructors require explicit `satisfies`).** A cap declaring any `Self.fn` constructor (sum or product classification, §6.4) is **never** auto-derived. An explicit `satisfies` mapping is required to bind data variants to cap constructors:
+
+```
+data Maybe of A { Just(value: A), Nothing }
+// `Functor of A` is auto-derived (Rule 7.4.c).
+// `Optional` requires an explicit mapping because it declares Self.fn some / Self.fn none:
+Maybe satisfies Optional {
+    Just as some
+    Nothing as none
+}
+```
+
+**Right-bias and ambiguity.** When right-bias does not uniquely determine the active type parameter (e.g., a cap declares no preferred parameter, or the data type has equally-positioned candidates), the compiler halts with the standard ambiguity error and copy-pasteable disambiguation suggestions per `docs/plans/implementation-plan.md` §"Right-bias and ambiguity resolution."
+
+### 7.5 Mutual recursion across data declarations (resolves OQ2)
+
+Two or more `data` declarations may recursively reference each other:
+
+```
+data Tree {
+    Branch(node: Node),
+    Leaf,
+}
+
+data Node {
+    N(tree: Tree, value: i64),
+}
+```
+
+**Rule 7.5.** Mutual recursion across `data` declarations is supported. The Namer pass enters all data symbols with lazy completers; the Typer pass forces them as needed, breaking cycles via fixed-point iteration on the data dependency graph (the same mechanism used for mutual `cap` declarations).
+
+Representation: data types in a strongly-connected component of the data dependency graph are co-allocated. The compiler treats them as a single recursive group requiring heap allocation; refcount headers are shared per-node, and the compiler may emit a unified tag space across the group when this enables better packing. See `spec/perceus.md` for refcount details.
+
+Self-recursion (a single data type referencing itself) is the trivial 1-element SCC and is handled by the same rule.
+
+### 7.6 GADT-style equality constraints (deferred to v0.3, resolves OQ5)
+
+Fixed v0.2 `data` declarations are **strictly parametric**: every variant of a `data T of (params)` declaration produces values of the same `T of (params)` instantiation.
+
+If a variant field's type uses a non-parametric `of` argument (e.g., `data Expr of A { Add(left: Expr of i64, right: Expr of i64) }`), the field's type is interpreted **literally** — the variant constructs `Expr of A` containing an `Expr of i64` child, regardless of `A`. The typer does **not** narrow `A` to `i64` when matching the `Add` variant.
+
+Per-variant type narrowing in pattern arms (the GADT feature in Haskell, OCaml, and similar languages) is queued for v0.3. When introduced, it will require explicit syntax distinguishing parametric from existentially-narrowed parameters (proposed direction: `data Expr where { LitInt :: Int -> Expr Int; ... }`-style or equivalent Fixed-flavoured syntax).
+
+## 8. `satisfies`
+
+### 8.1 Mapping form
+
+```
+data Maybe of A { Just(value: A), Nothing }
+
+Maybe satisfies Optional {
+    Just as some
+    Nothing as none
+}
+```
+
+**Rule 8.1.a (Variant-to-constructor).** Each `Variant as ctor` line maps a data variant to one of the cap's `Self.fn` constructors. The variant's field types must match (or be a refinement of) the corresponding `Self.fn`'s parameter types.
+
+**Rule 8.1.b (Coverage).** A complete `satisfies` declaration must map every `Self.fn` constructor of the cap to either a data variant or `impossible`:
+
+```
+NonEmptyList satisfies Sequencing {
+    Cons as cons
+    impossible as empty       // NonEmptyList has no empty case
+}
+```
+
+### 8.2 `impossible`
+
+Mapping `impossible as ctor` declares that the cap's constructor `ctor` is unreachable for this satisfying type. Any code path that reaches `Cap.ctor(...)` on a value statically known to be of this satisfying type is a compile error.
+
+```
+u64 satisfies Optional of Self {
+    Self as some                 // u64 is its own Just
+    impossible as none           // u64 is never absent
+}
+// Optional.none on a u64 is a compile error
+```
+
+**Rule 8.2.** The compiler verifies `impossible` soundness: no branch of a reachable expression may construct the marked constructor on a value statically constrained to be of this satisfying type.
+
+### 8.3 Method-body form
+
+A `satisfies` block may also provide explicit method definitions:
+
+```
+Maybe satisfies Optional {
+    fn isDefined = match Self {
+        Maybe.Nothing => false,
+        Maybe.Just(_) => true,
+    }
+    ...
+}
+```
+
+This is required when the auto-derivation rules (§7.4) cannot uniquely produce the cap's required methods (e.g., when multiple right-bias choices are available; see `docs/plans/implementation-plan.md` §"Right-bias and ambiguity").
+
+### 8.4 Modular import
+
+A `satisfies` declaration is **modular**: it must be brought into scope at use sites via `use`:
+
+```
+use std.maybe.Maybe satisfies Optional
+```
+
+This single declaration imports both `Maybe` (the type) and the satisfaction binding it to `Optional`. Without the `satisfies` clause, only the type is imported; satisfaction is invisible.
+
+There is **no global coherence requirement**. Different modules can map the same data type to different capabilities, or even map the same `Cap.ctor` differently — as long as no single use site has more than one resolution in scope (otherwise §8.5 ambiguity applies).
+
+### 8.5 Constructor resolution
+
+A call `Cap.ctor(args...)` resolves to a concrete data constructor as follows:
+
+1. Collect the in-scope `satisfies` declarations for `Cap`.
+2. Filter by **expected type** at the call site:
+   - Function return type: `fn f(...) -> is Optional of A { Optional.some(x) }` — the call resolves against types that satisfy `Optional of A`.
+   - Assignment LHS type: `let y: is Optional of u64 = Optional.some(42)`.
+   - Argument expected type at a function call.
+3. If exactly one satisfying type matches, resolution succeeds.
+4. If zero match, the call is a type error.
+5. If multiple match, the typer halts with an ambiguity error and emits copy-pasteable disambiguation suggestions per `docs/plans/implementation-plan.md` §"Ambiguity resolution via compiler suggestions."
+
+Direct data construction (`Maybe.Just(42)`) bypasses resolution: it always produces a value of the named data type, regardless of which caps are in scope.
+
+## 9. Effects (brief)
+
+`effect E { fn op(...) -> T }` declares a set of effect operations. A function that performs effects declares them in its `with` clause: `fn read() -> String with FileSystem`. Effect rows compose with `+`. This document does not specify effect inference, evidence-passing compilation, or handler semantics; see `spec/effects.md`.
+
+For typing purposes here, an effect's operations are first-class methods on the effect type (e.g., `Console.print_line(s)` is a method call returning `()` and adding `Console` to the caller's effect row).
+
+## 10. Type inference architecture
+
+The typer is **bidirectional** with **prototype types** carried as expected-type arguments. The high-level shape is documented in `docs/references/scala3-compiler-reference.md` §4.3; this section records Fixed-specific decisions.
+
+### 10.1 Two passes
+
+1. **Index pass (Namer).** Walk all top-level declarations; create symbols for `cap`, `data`, `effect`, `type`, `fn`, and `satisfies` declarations with **lazy completers** for their bodies. This enables mutual recursion across declarations: a `cap A extends B` and `cap B extends A` (if both type-checkable) can refer to each other before either body is fully processed.
+2. **Type pass (Typer).** Type each function body, forcing the lazy completers as needed.
+
+### 10.2 Bidirectional checking
+
+Every typed expression carries an **expected type (prototype)** flowing from the surrounding context. The typer's main entry is roughly:
+
+```
+typed(expr, pt) → typed expression of type T such that T <: pt
+```
+
+Where `<:` is subtyping (§10.4). Prototypes may be:
+
+- A concrete type (`u64`, `is Optional of A`, …)
+- A function-application prototype (`FunProto`): "I am being called with these arguments."
+- A selection prototype (`SelectionProto`): "I expect a member named `foo` here."
+- The wildcard `?` (no expectation; pure type synthesis).
+
+### 10.3 `is`-bound flow
+
+When typing an expression `e` against an expected type that includes a capability bound `is C`, the typer:
+
+1. Synthesizes `e`'s natural type `T`.
+2. Verifies that some satisfaction binds `T` to `C` (directly, transitively via `extends`, or via auto-derivation §7.4).
+3. Records the satisfaction so subsequent method calls on `e` can resolve to `C`'s methods.
+
+### 10.4 Subtyping
+
+Subtyping in Fixed is intentionally narrow:
+
+- **`!` is a subtype of every type.** Expressions of type `!` are valid in any expression position.
+- **A type satisfying a cap is a subtype of that cap-bound.** `Maybe of i64` is a subtype of `is Optional of i64` (assuming the satisfaction is in scope).
+- **Capability bounds compose by intersection.** `is C1 + C2` is a subtype of `is C1` and of `is C2`.
+- **Refinement caps strengthen, not weaken.** `N is Numeric + between(0, 100)` is a subtype of `N is Numeric`.
+- **No structural subtyping on `data`.** Two `data` declarations with identical structure are distinct types.
+
+## 11. Open questions
+
+(All OQ1–OQ6 from v0.1 are resolved in this version; their resolutions are folded into the relevant sections above. OQ7 is pre-resolved and deferred to `spec/properties.md`.)
+
+**Pre-resolved deferrals (lift into the indicated spec doc when drafted):**
+
+- **OQ7 → spec/properties.md.** In a function-body postcondition `prop` (i.e., a `prop` declaration appearing inside a `fn` block, not inside a `cap` or `data` body), the identifier `result` is **implicitly bound** to the function's return value at the function's declared return type. The binding is in scope only inside that prop body. In other prop contexts (cap-member or data-member props), `result` carries no special meaning and is parsed as a regular identifier.
+
+  ```
+  fn sort(collection: ...) -> C is Sorted {
+      prop result_same_size: result.size == collection.size
+      //                     ^^^^^^ implicitly bound to the fn's return value
+      collection.fold_right(...)
+  }
+  ```
+
+**Carried over from `docs/plans/implementation-plan.md` (Open Design Questions, not resolved here):**
+
+- Effect handler composition syntax (plan ODQ #6). Defer to `spec/effects.md`.
+- FFI boundary semantics (plan ODQ #5). Out of scope for the type system spec.
+- Codata as a third declaration form alongside `data` and `cap` (plan ODQ #12). Defer to a future spec doc.
+- Error-message wording rules (plan ODQ #4). Implementation-side, not normative for typing.
+
+## 12. Cross-references
+
+| Document | What it adds |
+|---|---|
+| `spec/syntax_grammar.ebnf` | All syntactic forms cited above |
+| `spec/quantities.md` (TBD) | QTT inference, erasure, linearity, FBIP |
+| `spec/effects.md` (TBD) | Effect rows, evidence passing, handler semantics |
+| `spec/properties.md` (TBD) | `prop` semantics, static verification, PBT fallback, `forall`/`implies` |
+| `spec/pattern_matching.md` (TBD) | `match → fold` desugaring, exhaustiveness |
+| `spec/perceus.md` (TBD) | Perceus RC insertion, drop specialization |
+| `docs/references/scala3-compiler-reference.md` | Reference patterns from dotc — bidirectional typing, Recheck pattern |
+| `docs/plans/implementation-plan.md` | Phase plan, open design questions migrated above |
