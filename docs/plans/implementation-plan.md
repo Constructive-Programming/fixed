@@ -343,13 +343,20 @@ Use `satisfies` to **bridge** between data and capabilities — mapping data con
 | **Constructor casing** | Capitalized: `Json.Null`, `List.Cons` | lowercase: `Optional.some`, `Expr.lit` |
 
 Rules:
-1. **`match` arms may only use data-qualified patterns** — `Json.Null`, `List.Cons(h, t)`, `Direction.North`, `Ordering.Equal`, etc.
-2. **Capability destruction uses `fold`** — `opt.fold(on_some, on_none)`, `expr.fold(on_lit, on_var, ...)`, `result.fold(on_ok, on_err)`
+1. **`match` arms may only use data-qualified patterns** — `Json.Null`, `List.Cons(h, t)`, `Direction.North`, `Tuple(a, b)`, etc.
+2. **Capability destruction uses `fold`** — `opt.fold(on_some, on_none)`, `expr.fold(on_lit, on_var, ...)`, `result.fold(on_ok, on_err)`, `ord.fold(on_lt, on_eq, on_gt)`
 3. **Construction through a cap's constructor *requirement* is valid** — `Optional.some(x)` is resolved via `satisfies` to a satisfying type's actual constructor (e.g., `Maybe.Just(x)`) at compile time
-4. **Data constructors are Capitalized** — `List.Cons`, `List.Nil`, `Ordering.Less`, `Json.Null`
-5. **Cap constructors are lowercase** — `Optional.some(x)`, `Expr.lit(v)`, `Result.ok(v)` (these are `Self.fn` names)
+4. **Data constructors are Capitalized** — `List.Cons`, `List.Nil`, `Tuple`, `Json.Null`
+5. **Cap constructors are lowercase** — `Optional.some(x)`, `Expr.lit(v)`, `Result.ok(v)`, `Ordering.lt`, `Pair.pair(a, b)` (these are `Self.fn` names)
 
-**Stdlib data types**: `List`, `Ordering`, `Pair`, `Json` are **data types**, so matching on them is valid. Their constructors are capitalized: `List.Cons`, `List.Nil`, `Ordering.Less`, `Ordering.Equal`, `Ordering.Greater`, `Pair`, `Json.Null`, `Json.Bool`, etc.
+**Stdlib classification** (see `spec/stdlib.md` for the normative version):
+
+| Stdlib name | Kind | Notes |
+|---|---|---|
+| `List`, `Json`, `Tuple`, `Nat` | **data** | Matchable; `List.Cons`/`List.Nil`, `Json.Null`/…, `Tuple(a, b)`, `Nat.Zero`/`Nat.Succ` |
+| `Optional`, `Result`, `Pair`, `Ordering`, `Boolean`, `Empty` | **cap** | Destructure via `fold`; cap constructors lowercase (`Optional.some`, `Pair.pair`, `Ordering.lt`, …) |
+
+`Pair` is a cap (abstract two-projection container); `Tuple` is the canonical concrete `data` type that satisfies it. `Ordering` is a cap; programs that want a literal three-variant enum declare a `data` type and `satisfies Ordering`.
 
 ### Everything is an expression
 
