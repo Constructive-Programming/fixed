@@ -31,15 +31,15 @@ data Maybe of A:
     Nothing
 
 Maybe satisfies Optional:
-    fn isDefined = match Self:
+    fn isDefined = match self:
         Maybe.Nothing => false
         Maybe.Just(_) => true
-    fn map(f: Part -> B) = match Self:
+    fn map(f: Part -> B) = match self:
         Maybe.Nothing => Maybe.Nothing
         Maybe.Just(a) => Maybe.Just(f(a))
-    fn orElse(other: Maybe of Self) = match Self:
+    fn orElse(other: Maybe of Part) = match self:
         Maybe.Nothing => other
-        _ => Self
+        _ => self
 
 data Outcome of (E, A):
     Success(value: A)

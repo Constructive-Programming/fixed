@@ -3,9 +3,26 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4.4
+   Status:        DRAFT v0.4.5
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
-   Last revised:  2026-04-30
+   Last revised:  2026-05-01
+
+   Refinements in v0.4.5
+   ---------------------
+   - **`CapType` admitted as a `TypeAtom`** — `cap of T` (and
+     `cap extends C`) may now appear in any TypeExpr position, not just
+     as the leading branch of `FnReturnType`. This is what enables
+     higher-order parameter types like `(N, N) -> cap of N`. See
+     spec/type_system.md §6.3 for the use-site/declaration-site
+     equivalence. The `FnReturnType` production is retained as
+     legacy/preferred form for direct return-type writing; both shapes
+     parse and mean the same thing.
+   - **`ParenTypeApp` added to `TypeAtom`** — `( TypeExpr ) ( "of" OfArg )?`
+     allows the explicit-binding HKT-application form
+     `(M is Monad) of (is List of B)`. Without parens,
+     `M is Monad of B` parses as `M is (Monad of B)` (the existing
+     greedy CapRef rule); the parens force the outer `of` to apply to
+     the named alias as a constructor.
 
    Refinements in v0.4.4
    ---------------------
@@ -522,6 +539,8 @@ TypeAtom
     | IsBound
     | NamedAlias
     | TypeRef
+    | CapType
+    | ParenTypeApp
     ;
 
 SelfOf
@@ -530,6 +549,24 @@ SelfOf
 
 NamedAlias
     = UPPER_IDENT "is" CapBoundChain
+    ;
+
+(* `cap of T` and `cap extends C` admitted as TypeAtoms — needed for
+   higher-order positions where a function returns a cap, e.g.
+   `(N, N) -> cap of N` as a parameter type. The same form is reachable
+   via FnReturnType when used directly as a function's return type. *)
+CapType
+    = "cap" CapReturnSpec?
+    ;
+
+(* Explicit-binding HKT application: a parenthesized NamedAlias (or any
+   TypeExpr) followed by `of` to apply it as a type constructor. Use:
+       fn map_m(...) -> (M is Monad) of (is List of B) = ...
+   Without the parens, `M is Monad of B` greedily binds the `of` inside
+   the cap-bound (CapRef), giving the different meaning "M satisfies
+   `Monad of B`". The parens force outer application. *)
+ParenTypeApp
+    = "(" TypeExpr ")" "of" OfArg
     ;
 
 IsBound
