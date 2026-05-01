@@ -317,15 +317,14 @@ Fixed is **indentation-sensitive**, like Python and Scala 3:
 - The indented block ends when indentation returns to the enclosing level (DEDENT).
 - Indentation must be consistent within a block (mix of tabs and spaces is an error per §3 of grammar comments).
 
-**Line continuation** (per grammar v0.3.1 + v0.4): a physical newline is **NOT** a logical newline if the previous line ended with one of:
-- `=` (when used as definition body or block introducer)
-- `->` (lambda body / arrow type RHS)
-- `=>` (match/handler arm body)
-- `.` (method-call chain or qualifier)
-- An open paren/bracket/brace not yet closed (parens, brackets, braces span lines without continuation tokens)
-- `+`, `*`, `-`, `/`, `%`, `<`, `<=`, `>`, `>=`, `==`, `!=`, `&&`, `||`, `\|>`, `\|`, `,`, `:` (binary operators and separators — pending confirmation against grammar comments)
+**Line continuation** is normative in `syntax_grammar.ebnf` lines 186–200 (no further spec edit needed). The two rules are:
 
-The scanner emits NEWLINE only when the previous line did NOT end with a continuation token AND no open paren/bracket/brace is unmatched. Otherwise the physical newline is suppressed.
+- **Trailing continuation** — if the line ends with one of these tokens, the next physical line continues the same logical line: `+`, `-`, `*`, `/`, `%`, `&&`, `||`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `|>`, `->`, `=>`, `=`, `<-`, `.`, `is`, `extends`, `implies`. The dual-mode tokens `=`/`->`/`=>` are *also* block-introducers — see §5.3.
+- **Leading continuation** — if the next physical line begins with `with`, `extends`, or `->`, it continues the previous logical line.
+
+Inside `(...)`/`[...]`/`{...}`, indentation is suppressed by default; off-side resumes inside arm/lambda/fn/block bodies opened with `=>`/`->`/`=`/`:` respectively (grammar lines 173–181).
+
+The scanner emits NEWLINE only when the previous line did NOT end with a trailing-continuation token, the next line does NOT start with a leading-continuation token, and no `(`/`[`/`{` is open without a matching close.
 
 ### 5.3 INDENT/DEDENT synthesis
 
@@ -443,18 +442,22 @@ The parser produces `DataVariantPat(qualifier, name, fields=Nil)` for the bare f
 
 ### 7.6 Operator precedence
 
-| Prec | Operators | Associativity |
-|---|---|---|
-| 1 (lowest) | `\|>` | Left |
-| 2 | `\|\|` | Left |
-| 3 | `&&` | Left |
-| 4 | `==`, `!=` | Non-associative |
-| 5 | `<`, `<=`, `>`, `>=` | Non-associative |
-| 6 | `+`, `-` (binary) | Left |
-| 7 | `*`, `/`, `%` | Left |
-| 8 (highest) | `!`, `-` (unary) | Prefix |
+Normative in `syntax_grammar.ebnf` lines 709–720 (no further spec edit needed). Productions `PipeExpr → OrExpr → AndExpr → CmpExpr → AddExpr → MulExpr → AppExpr → AtomExpr` encode precedence from lowest to highest:
 
-Operator parser uses precedence climbing. `+` in capability composition (`Folding + Filtering`) is **disambiguated by context** — in is-bound position, `+` separates `CapBound`s; in expression position, `+` is binary numeric add. The parser tracks which it's in.
+| Production | Operators | Associativity |
+|---|---|---|
+| `PipeExpr` | `\|>` | Left |
+| `OrExpr` | `\|\|` | Left |
+| `AndExpr` | `&&` | Left |
+| `CmpExpr` | `==`, `!=`, `<`, `<=`, `>`, `>=` | Non-associative (`?` in grammar — at most one comparison per expr) |
+| `AddExpr` | `+`, `-` | Left |
+| `MulExpr` | `*`, `/`, `%` | Left |
+| `AppExpr` | `f(args)`, `e.m(args)`, `e.field` | (call/access) |
+| `AtomExpr` | literals, idents, `(...)`, lambdas, `if`, `match`, `handle`, `do` | (atom) |
+
+**No prefix unary operators in v0.4.5.** Negation is expressed via `0 - x` or `n.neg()` per `cap Numeric`; logical not via `!cond` is **not in the grammar** and the examples don't use it. If unary needs are real, that's a small grammar extension for a future revision.
+
+Capability composition `+` (`Folding + Filtering`) and capability extension `+` (`extends Functor + Monad`) reuse the `+` lexeme but appear only in is-bound / extends contexts (productions `CapBoundChain`, `CapBound ( "+" CapBound )*`). The parser disambiguates by syntactic position — is-bound `+` cannot reach `AddExpr`'s production.
 
 ### 7.7 `is` as identifier vs keyword
 
@@ -500,7 +503,6 @@ Minimum: every grammar production is exercised by at least one example or test. 
 
 ### 9.2 Parser risks
 
-- **Continuation tokens**: the list of "continuation operators" needs final commit. The grammar lists `=`, `->`, `=>`, `.` explicitly; binary operators (`+`, `*`, etc.) and `,` are likely also continuation tokens. **Action**: walk the grammar header carefully and write down the canonical continuation list before coding the scanner.
 - **`fn f(x) = body` body delimitation**: `=` opens a body; the body is either same-line (single Expr) or NEWLINE-then-INDENT-block. The lexer detects which by peeking at the next non-space token. Track explicitly to avoid premature NEWLINE emission.
 - **Nested cap-generators in is-bound**: `is between(0, 100) + multiple_of(2)` — both elements are RefinementCall. The `+` here is is-bound composition. Parser tracks "is-bound mode" and treats `+` accordingly.
 - **`Self of B'` substitution at parse time**: parser does not perform substitution; it produces a `SelfType` node with the of-arg unsubstituted. Substitution happens in the typer.
@@ -561,8 +563,6 @@ Implementation proceeds bottom-up. Roughly 4 sub-milestones inside Phase 2:
 
 These are intentionally NOT resolved in Phase 2:
 
-- **Continuation-token canonical list** — the grammar mentions some explicitly; others (binary operators, comma) need explicit confirmation. Action item before scanner coding.
-- **Tab vs space in indentation** — spec to commit on "spaces only" or "consistent within file."
 - **Comment retention for documentation** — defer; v0.4.5 silently drops comments.
 - **Better error recovery** — Phase 2 halts on first error; richer recovery (synchronization at top-level decl boundaries) is a Phase 3 enhancement.
 - **String interpolation** — explicitly out of scope for v0.4.5; deferred.
