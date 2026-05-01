@@ -12,44 +12,32 @@
 use std.io.Console
 
 // =========================================================================
-// Type aliases — naming common cap bundles
-// =========================================================================
-
-// A Point is anything with two numeric coordinates.
-// This is a type alias, not a concrete type — the compiler picks the
-// representation. Any value with .x and .y that are the same Numeric
-// type satisfies `is Point`.
-type Point = HasX + HasY
-
-cap HasX:
-    fn x -> Part
-
-cap HasY:
-    fn y -> Part
-
-// =========================================================================
 // Data declarations — concrete shapes with known variants
 // =========================================================================
+
+// A Point is a 2D coordinate. Single-constructor data declaration —
+// the variant name equals the type name, so `Point(x, y)` constructs
+// a value and `Point { x: x, y: y }` is the struct-literal form.
+data Point of N(x: N, y: N)
 
 // A Shape is a closed set of geometric primitives.
 // N is Numeric constrains all coordinates/dimensions to the same type.
 data Shape of N:
-    Circle(center: is Point of N, radius: N)
-    Rectangle(top_left: is Point of N, width: N, height: N)
-    Triangle(a: is Point of N, b: is Point of N, c: is Point of N)
+    Circle(center: Point of N, radius: N)
+    Rectangle(top_left: Point of N, width: N, height: N)
+    Triangle(a: Point of N, b: Point of N, c: Point of N)
 
 // A bounding box — always axis-aligned
-data BoundingBox of N (min: is Point of N, max: is Point of N)
+data BoundingBox of N (min: Point of N, max: Point of N)
 
 // =========================================================================
 // Helpers
 // =========================================================================
 
-fn point(x: N, y: N) -> is Point of N =
-    // The compiler generates a value satisfying HasX + HasY
+fn point(x: N, y: N) -> Point of N =
     Point { x: x, y: y }
 
-fn distance(p1: is Point of (N is Numeric), p2: is Point of N) -> f64 =
+fn distance(p1: Point of (N is Numeric), p2: Point of N) -> f64 =
     let dx = p1.x - p2.x
     let dy = p1.y - p2.y
     builtin.sqrt(dx * dx + dy * dy)

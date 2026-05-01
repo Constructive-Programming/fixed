@@ -22,36 +22,54 @@ fn greet(name: String) -> () with Console =
 
 // --- Fibonacci ---
 
+// Functions in Fixed are total: they cannot recurse on themselves.
+// All recursion is structural — driven by fold/unfold over a recursive
+// data type. Iteration is expressed by unfolding a Nat (a Peano numeral
+// data type from std) of the desired depth and then folding it with the
+// step function. The depth-N fold runs the step N times.
+
 // `N is Numeric` introduces a named capability alias `N`.
 // All parameters typed `N` must share the same concrete type.
 // The return type `N` is also constrained — the caller gets back
 // whatever numeric type they passed in.
 fn fib_iter(n: N is Numeric) -> N =
-    // Inner function reuses `N` — all four values (i, a, b, return)
-    // must be the same numeric type.
-    fn go(i: N, a: N, b: N) -> N =
-        if i == 0:
-            a
+    // Build a Nat of depth n (anamorphism), then fold it with a (prev, curr)
+    // accumulator. After n steps, the .first projection holds fib(n).
+    Nat.unfold(n, (k: N) ->
+        if k == 0:
+            Nat.Zero
         else:
-            go(i - 1, b, a + b)
-    go(n, 0, 1)
+            Nat.Succ(k - 1)
+    ).fold(
+        () -> (0, 1),                       // Zero: pair (a, b) = (0, 1)
+        (acc) ->                             // Succ: receive folded sub-result
+            let (a, b) = acc
+            (b, a + b)
+    ).first
 
 // Print the first `count` Fibonacci numbers.
 // `count` is a concrete `u64` — concrete types are just well-known capabilities.
 fn print_fibs(count: u64) -> () with Console =
-    // `is Numeric` without a name: anonymous capability.
-    // Each parameter independently satisfies Numeric — the compiler
-    // is free to choose different concrete types for `i` and `count`
-    // (though in practice they'll unify here because `i < count`
-    // requires them to be comparable, i.e., the same type).
-    fn go(i: is Numeric, count: is Numeric) -> () with Console =
-        if i < count:
+    // Fold a Nat of depth `count`, threading the next index in the accumulator.
+    // Nat.fold dispatches inside-out, so we count *down* from count to produce
+    // prints in 0,1,...,count-1 order: each step's print fires from outer Succ
+    // layers (smaller index) toward inner ones (larger index)... wait — the
+    // opposite. We instead initialise with the *last* index and decrement; the
+    // outermost step (which fires last in source order) prints index 0.
+    //
+    // To produce output in 0..count-1 order, build the index list with
+    // List.unfold, then fold-left: each step is one print at one index.
+    List.unfold(0, (i) ->
+        if i >= count:
+            List.Nil
+        else:
+            List.Cons(i, i + 1)
+    ).fold(
+        (),
+        (_, i) ->
             let val = fib_iter(i)
             Console.print_line("fib(".concat(i.show()).concat(") = ").concat(val.show()))
-            go(i + 1, count)
-        else:
-            ()
-    go(0, count)
+    )
 
 fn main() -> () with Console =
     Console.print_line("What is your name?")

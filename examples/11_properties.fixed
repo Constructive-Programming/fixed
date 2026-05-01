@@ -71,35 +71,58 @@ u64 satisfies Optional of Self:
 // Any code path that would call Optional.none on a u64 is a compile error.
 
 // A non-empty list can never be empty
-data NonEmptyList of A (head: A, tail: is List of A)
+data NonEmptyList of A (head: A, tail: List of A)
 
 NonEmptyList satisfies Sequencing:
-    Cons as cons
+    NonEmptyList as cons
     impossible as empty
 
 // =========================================================================
-// Part 4: Properties as postconditions on functions
+// Part 4: Sorted-collection invariants live on the *result type*
 // =========================================================================
+//
+// Function-result postconditions (a `prop result_*: ...` at the top of a
+// fn body) are deferred to a future release of Fixed. The sortedness and
+// size invariants that would otherwise be expressed as postconditions on
+// `sort` / `insert_sorted` are instead carried by the result type's
+// capability bound — `C is Sorted` already obligates sortedness, and
+// `Sized` props on the cap (§Part 1) carry size-relation invariants.
 
-// sort returns a Sorted collection of the same size
+// sort returns a Sorted collection. The `Sorted` cap (Part 1) already
+// declares the sortedness invariant on any value of type `C is Sorted`,
+// so the typer enforces it at the call site without a separate
+// postcondition on this fn.
 fn sort(collection: C is Sequencing + Sized of (A is Ord)) -> C is Sorted =
-    prop result_same_size: result.size == collection.size
     collection.fold_right(C.empty, (x, acc) -> insert_sorted(acc, x))
 
-// insert into a sorted collection preserves sortedness
+// insert into a sorted collection preserves sortedness — again carried
+// by the result type `C is Sorted`. A size-grows-by-one postcondition
+// would be a future-release feature.
+//
+// Implementation: walk the input as a List (concrete, foldable). The
+// fold-left accumulator is (prefix-already-decided-to-keep, inserted?).
+// On each element we either insert `value` before it (if not yet inserted
+// and `value <= e`), or simply append `e` to the prefix. After the fold,
+// if `value` was never inserted (it is the largest), append it.
 fn insert_sorted(
     sorted: C is Sorted of (A is Ord),
     value: A
 ) -> C is Sorted =
-    prop grows_by_one: result.size == sorted.size + 1
-    sorted.head.fold(
-        (h) ->
-            if value <= h:
-                C.cons(value, sorted)
-            else:
-                C.cons(h, insert_sorted(sorted.tail, value)),
-        () -> C.cons(value, C.empty),
+    let initial = (C.empty, false)
+    let folded = sorted.fold(initial, (acc, e) ->
+        let (out, inserted) = acc
+        if inserted:
+            (C.cons(e, out), true)
+        else if value <= e:
+            (C.cons(e, C.cons(value, out)), true)
+        else:
+            (C.cons(e, out), false)
     )
+    let (out, inserted) = folded
+    if inserted:
+        reverse(out)
+    else:
+        reverse(C.cons(value, out))
 
 // `Bounded`'s `of` value-params (lo, hi) are *type-level indices* — different
 // bounds give different types (`Bounded of (i64, 0, 10)` is not the same type

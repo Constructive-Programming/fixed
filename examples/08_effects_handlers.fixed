@@ -60,7 +60,7 @@ fn parse_config(text: String) -> Config
 
 // Pure helper — no effects needed, no `with` clause
 fn find_value(
-    lines: is List of String,
+    lines: List of String,
     key: String,
 ) -> is Optional of String =
     find(lines, (line) -> starts_with(line, key))
@@ -109,35 +109,54 @@ ChatMessage satisfies Message:
     ChatMessage as new
 
 // --- Chat room logic ---
+//
+// Functions in Fixed are total — chat_loop and listen_loop cannot
+// self-recurse on an unbounded effect-driven loop. We bound each by a
+// `max_messages` parameter and fold a Nat of that depth, propagating an
+// "already terminated" flag when "quit" arrives so further iterations
+// no-op. (A future codata story — see implementation-plan.md OQ12 — would
+// admit truly unbounded conversational loops without an iteration cap.)
 
-fn participant(name: String) -> ()
+fn participant(name: String, max_messages: u64) -> ()
     with Console + Channel of (is Message) + Async =
     Console.print_line(name.concat(" joined the chat"))
 
-    fn chat_loop(name: String) -> ()
-        with Console + Channel of (is Message) + Async =
-        Console.print_line(name.concat("> "))
-        let input = Console.read_line()
+    Nat.unfold(max_messages, (k) ->
+        if k == 0: Nat.Zero
+        else: Nat.Succ(k - 1)
+    ).fold(
+        () -> false,                                  // not yet quit
+        (terminated) ->
+            if terminated:
+                true
+            else:
+                Console.print_line(name.concat("> "))
+                let input = Console.read_line()
+                if input == "quit":
+                    Console.print_line(name.concat(" left the chat"))
+                    true
+                else:
+                    Channel.send(Message.new(name, input))
+                    Async.yield_now
+                    false
+    )
+    ()
 
-        if input == "quit":
-            Console.print_line(name.concat(" left the chat"))
-        else:
-            Channel.send(Message.new(name.clone(), input))
+fn listener(max_messages: u64) -> ()
+    with Console + Channel of (is Message) + Async =
+    Nat.unfold(max_messages, (k) ->
+        if k == 0: Nat.Zero
+        else: Nat.Succ(k - 1)
+    ).fold(
+        () -> (),
+        (_) ->
+            let msg = Channel.receive
+            Console.print_line(
+                "[".concat(msg.sender).concat("]: ").concat(msg.body)
+            )
             Async.yield_now
-            chat_loop(name)
-
-    chat_loop(name)
-
-fn listener() -> () with Console + Channel of (is Message) + Async =
-    fn listen_loop() -> () with Console + Channel of (is Message) + Async =
-        let msg = Channel.receive
-        Console.print_line(
-            "[".concat(msg.sender).concat("]: ").concat(msg.body)
-        )
-        Async.yield_now
-        listen_loop()
-
-    listen_loop()
+            ()
+    )
 
 // =========================================================================
 // Part 3: Handler composition — schedulers and channels
@@ -149,47 +168,65 @@ cap TaskQueue:
     fn pop -> is Optional of (is Pair of (() -> (), Self))
     fn is_empty -> bool
 
-data SimpleQueue(tasks: is List of (() -> ()))
+data SimpleQueue(tasks: List of (() -> ()))
 
 SimpleQueue satisfies TaskQueue:
     SimpleQueue as empty
 
-fn run_scheduler(task: () -> () with Async) -> () =
-    fn schedule(queue: is TaskQueue) -> () =
-        queue.pop.fold(
-            (pair) ->
-                let Pair { first: next_task, second: remaining } = pair
-                handle next_task():
-                    Async.spawn(new_task) =>
-                        let q = remaining.push(new_task)
-                        resume(())
-                        schedule(q)
-                    Async.yield_now() =>
-                        let q = remaining.push(() -> resume(()))
-                        schedule(q),
-            () -> (),  // all tasks done
-        )
-
+// run_scheduler: total schedulers also need an iteration bound (max_steps).
+// Each fold step pops one task from the queue, runs one effect, and updates
+// the queue. After max_steps or when the queue empties, the scheduler stops.
+fn run_scheduler(task: () -> () with Async, max_steps: u64) -> () =
     let initial_queue = TaskQueue.empty.push(() ->
         handle task():
             Async.spawn(t) => resume(())
             Async.yield_now() => resume(())
     )
-    schedule(initial_queue)
 
-fn run_with_channel(task: () -> () with Channel of A) -> () =
-    fn go(buffer: is List of A, task: () -> () with Channel of A) -> () =
-        handle task():
-            Channel.send(value) =>
-                go(List.Cons(value, buffer), () -> resume(()))
-            Channel.receive() =>
-                match buffer:
-                    List.Cons(head, tail) =>
-                        go(tail, () -> resume(head))
-                    List.Nil() =>
-                        ()
+    Nat.unfold(max_steps, (k) ->
+        if k == 0: Nat.Zero
+        else: Nat.Succ(k - 1)
+    ).fold(
+        () -> initial_queue,
+        (queue) ->
+            queue.pop.fold(
+                (pair) ->
+                    let next_task = pair.first
+                    let remaining = pair.second
+                    handle next_task():
+                        Async.spawn(new_task) =>
+                            let q = remaining.push(new_task)
+                            resume(())
+                            q
+                        Async.yield_now() =>
+                            let q = remaining.push(() -> resume(()))
+                            q,
+                () -> queue,    // empty queue: idempotent
+            )
+    )
+    ()
 
-    go(List.Nil(), task)
+// run_with_channel: same shape — bound the dispatcher with max_steps.
+// State is (buffer, current task). Each step intercepts one Channel op.
+fn run_with_channel(task: () -> () with Channel of A, max_steps: u64) -> () =
+    Nat.unfold(max_steps, (k) ->
+        if k == 0: Nat.Zero
+        else: Nat.Succ(k - 1)
+    ).fold(
+        () -> (List.Nil, task),                       // (buffer, current)
+        (acc) ->
+            let (buffer, t) = acc
+            handle t():
+                Channel.send(value) =>
+                    (List.Cons(value, buffer), () -> resume(()))
+                Channel.receive() =>
+                    match buffer:
+                        List.Cons(head, tail) =>
+                            (tail, () -> resume(head))
+                        List.Nil =>
+                            (buffer, t)               // no-op
+    )
+    ()
 
 // =========================================================================
 // Part 4: Nested handlers — putting it all together
@@ -219,14 +256,20 @@ fn main() -> () =
             resume(builtin.stdin_read_line())
 
     // Example 2: Concurrency effects with nested handlers
+    //
+    // All four "loops" (participant, listener, run_scheduler, run_with_channel)
+    // are bounded by max-iteration parameters per the totality discussion at
+    // the participant/listener definitions. The numbers below are
+    // demonstration-scale; a real program with a codata-based loop story
+    // (deferred per implementation-plan.md OQ12) would not need them.
     handle (do:
         run_scheduler(() ->
             run_with_channel(() ->
-                Async.spawn(() -> participant("Alice"))
-                Async.spawn(() -> participant("Bob"))
-                Async.spawn(() -> listener())
-            )
-        )
+                Async.spawn(() -> participant("Alice", 32))
+                Async.spawn(() -> participant("Bob", 32))
+                Async.spawn(() -> listener(64))
+            , 256),     // run_with_channel max_steps
+            256)        // run_scheduler max_steps
     ):
         Console.print_line(msg) =>
             builtin.stdout_write(msg.concat("\n"))

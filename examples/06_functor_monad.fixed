@@ -55,29 +55,45 @@ fn when(condition: bool, action: M is Monad of ()) -> M of () =
     else:
         M.pure(())
 
-fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A) =
-    match list:
-        List.Cons(head, tail) =>
+// Functions in Fixed are total — `sequence` and `fold_m` cannot self-recurse.
+// Both are catamorphisms over the input List, so we use List's auto-derived
+// `fold` (catamorphism style: one callback per variant, with recursive
+// positions already folded to the result type R).
+
+fn sequence(list: List of (M is Monad of A)) -> M of (List of A) =
+    list.fold(
+        // Cons(head, tail): `tail` has already been folded to `M of (List of A)`.
+        (head, tail_m) ->
             do:
                 a <- head
-                rest <- sequence(tail)
-                M.pure(List.Cons(a, rest))
-        List.Nil() => M.pure(List.Nil())
+                rest <- tail_m
+                M.pure(List.Cons(a, rest)),
+        // Nil:
+        () -> M.pure(List.Nil),
+    )
 
-fn map_m(list: is List of A, f: A -> M of B) -> (M is Monad) of (is List of B) =
+fn map_m(list: List of A, f: A -> M of B) -> (M is Monad) of (List of B) =
     sequence(list.map(f))
 
 fn fold_m(
-    list: is List of A,
+    list: List of A,
     init: B,
     f: (B, A) -> M of B,
 ) -> (M is Monad) of B =
-    match list:
-        List.Cons(head, tail) =>
-            do:
-                acc <- f(init, head)
-                fold_m(tail, acc, f)
-        List.Nil() => M.pure(init)
+    // The natural shape is *right-folded* monadic build-up — but we want a
+    // left-fold-style traversal (apply `f` to elements in order). Express it
+    // as a continuation-passing fold: each Cons callback returns a function
+    // `B -> M of B` that, given the accumulator-so-far, runs `f` then chains
+    // into the tail's continuation.
+    let kont = list.fold(
+        (head, tail_kont: B -> M of B) ->
+            (acc: B) ->
+                do:
+                    next <- f(acc, head)
+                    tail_kont(next),
+        () -> (acc: B) -> M.pure(acc),
+    )
+    kont(init)
 
 // --- do notation example ---
 

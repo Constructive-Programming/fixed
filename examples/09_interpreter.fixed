@@ -23,7 +23,7 @@ cap Expr:
     Self.fn neg(inner: Self) -> Self
     Self.fn let_in(name: String, value: Self, body: Self) -> Self
     Self.fn if_then(cond: Self, then_branch: Self, else_branch: Self) -> Self
-    Self.fn call(func_name: String, args: is List of Self) -> Self
+    Self.fn call(func_name: String, args: List of Self) -> Self
     fn fold<R>(
         on_lit: f64 -> R,
         on_var: String -> R,
@@ -32,7 +32,7 @@ cap Expr:
         on_neg: R -> R,
         on_let: (String, R, R) -> R,
         on_if: (R, R, R) -> R,
-        on_call: (String, is List of R) -> R,
+        on_call: (String, List of R) -> R,
     ) -> R
 
 // --- Concrete AST data type satisfies Expr ---
@@ -45,7 +45,7 @@ data AstNode:
     Negate(inner: AstNode)
     LetBinding(name: String, value: AstNode, body: AstNode)
     Conditional(cond: AstNode, then_branch: AstNode, else_branch: AstNode)
-    FnCall(func_name: String, args: is List of AstNode)
+    FnCall(func_name: String, args: List of AstNode)
 
 AstNode satisfies Expr:
     Literal as lit
@@ -66,7 +66,7 @@ cap Env:
 
 // --- Concrete environment ---
 
-data VarMap(bindings: is List of (is Pair of (String, f64)))
+data VarMap(bindings: List of (is Pair of (String, f64)))
 
 VarMap satisfies Env:
     VarMap as empty
@@ -76,25 +76,25 @@ VarMap satisfies Env:
 cap Builtins:
     fn eval_builtin(
         name: String,
-        args: is List of f64,
+        args: List of f64,
     ) -> is Optional of f64
 
 fn default_builtins() -> is Builtins =
     // The compiler generates a concrete implementation.
     // In practice this would use a Map internally.
-    fn eval_builtin(name: String, args: is List of f64) -> is Optional of f64 =
+    fn eval_builtin(name: String, args: List of f64) -> is Optional of f64 =
         if name == "sqrt":
             match args:
-                List.Cons(x, List.Nil()) => Optional.some(builtin.sqrt(x))
+                List.Cons(x, List.Nil) => Optional.some(builtin.sqrt(x))
                 _ => Optional.none
         else if name == "abs":
             match args:
-                List.Cons(x, List.Nil()) =>
+                List.Cons(x, List.Nil) =>
                     Optional.some(if x < 0.0: 0.0 - x else: x)
                 _ => Optional.none
         else if name == "max":
             match args:
-                List.Cons(a, List.Cons(b, List.Nil())) =>
+                List.Cons(a, List.Cons(b, List.Nil)) =>
                     Optional.some(if a > b: a else: b)
                 _ => Optional.none
         else:

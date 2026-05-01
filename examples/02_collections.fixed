@@ -159,45 +159,59 @@ fn concat(left: C is Sequencing + Folding, right: C) -> C =
     left.fold_right(right, (x, acc) -> C.cons(x, acc))
 
 // --- Uses type alias: ArrayLike bundles the capabilities ---
+//
+// Functions in Fixed are total — bisection cannot self-recurse. We
+// fold a Nat of depth `sorted.size` (a loose but sound upper bound; log2
+// would suffice but is harder to compute portably). State is the
+// (result, low, high) triple; once `result` is set or `low >= high`,
+// further steps are idempotent no-ops.
 fn binary_search(
     sorted: C is ArrayLike of (A is Ordered),
     target: A,
 ) -> R is Optional of u64 + Empty =
-    fn go(
-        sorted: C,
-        target: A,
-        low: u64,
-        high: u64,
-    ) -> R =
-        if low >= high:
-            R.empty
-        else:
-            let mid = low + (high - low) / 2
-            sorted.get(mid).map((value) ->
-                match target.compare(value):
-                    Ordering.Equal   => mid
-                    Ordering.Less    => go(sorted, target, low, mid)
-                    Ordering.Greater => go(sorted, target, mid + 1, high)
-            )
-    go(sorted, target, 0, sorted.size)
+    Nat.unfold(sorted.size, (k) ->
+        if k == 0: Nat.Zero
+        else: Nat.Succ(k - 1)
+    ).fold(
+        () -> (R.empty, 0, sorted.size),                       // (result, low, high)
+        (acc) ->
+            let (result, low, high) = acc
+            if result.isDefined || low >= high:
+                acc
+            else:
+                let mid = low + (high - low) / 2
+                sorted.get(mid).fold(
+                    (value) ->
+                        target.compare(value).fold(
+                            () -> (result, low, mid),           // lt
+                            () -> (R.some(mid), low, high),     // eq — found
+                            () -> (result, mid + 1, high),      // gt
+                        ),
+                    () -> acc,                                   // out of bounds
+                )
+    ).first
 
 // --- Uses type alias for cleaner signatures ---
+//
+// Build a sub-collection of the first n elements by left-folding the
+// index list [0, 1, ..., n-1] and consing successful lookups.
 fn take(collection: C is ArrayLike, n: u64) -> C =
-    fn go(source: C, i: u64, n: u64) -> C =
-        if i >= n:
-            C.empty
-        else:
-            source.get(i).map((value) ->
-                C.cons(value, go(source, i + 1, n))
-            ).orElse(C.empty)
-    go(collection, 0, n)
+    range(0, n).fold_right(C.empty, (i, acc) ->
+        collection.get(i).fold(
+            (value) -> C.cons(value, acc),
+            () -> acc,
+        )
+    )
 
 // --- Build a range: needs Sequencing ---
+//
+// Anamorphism on List: unfold the index counter into a List of u64,
+// then fold-right into the target representation R.
 fn range(start: u64, end: u64) -> R is Sequencing + Empty =
-    if start >= end:
-        R.empty
-    else:
-        R.cons(start, range(start + 1, end))
+    List.unfold(start, (i) ->
+        if i >= end: List.Nil
+        else: List.Cons(i, i + 1)
+    ).fold_right(R.empty, (x, acc) -> R.cons(x, acc))
 
 // --- Using data types: pattern matching on concrete variants ---
 
@@ -223,16 +237,16 @@ fn main() -> () with Console =
     let numbers = range(1, 11)  // [1, 2, ..., 10]
 
     // Uses Functor
-    let doubled = double(numbers.clone())
+    let doubled = double(numbers)
 
     // Uses Filtering + Functor
-    let even_d = even_doubled(numbers.clone())
+    let even_d = even_doubled(numbers)
 
     // Uses Folding only — the compiler could back this with anything
-    let total = sum(numbers.clone())
+    let total = sum(numbers)
 
     // Uses Sequencing + Folding
-    let rev = reverse(numbers.clone())
+    let rev = reverse(numbers)
 
     Console.print_line("Numbers: ".concat(numbers.show()))
     Console.print_line("Doubled: ".concat(doubled.show()))

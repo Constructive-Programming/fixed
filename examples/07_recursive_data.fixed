@@ -84,66 +84,90 @@ fn expr_depth(expr: Expr) -> u64 =
 
 // --- Tree catamorphisms ---
 
+// All four are catamorphisms over the Tree — Tree's auto-derived fold
+// dispatches one callback per variant with recursive positions already
+// folded to the result type R. Functions cannot self-recurse, so the
+// recursion lives entirely in the data type's fold.
+
 // In-order: left, root, right (gives sorted order for BST)
-fn in_order(tree: Tree of A) -> is List of A =
-    match tree:
-        Tree.Empty => List.Nil()
-        Tree.Leaf(v) => List.Cons(v, List.Nil())
-        Tree.Branch(left, v, right) =>
-            concat(in_order(left), List.Cons(v, in_order(right)))
+fn in_order(tree: Tree of A) -> List of A =
+    tree.fold(
+        (v) -> List.Cons(v, List.Nil),                          // Leaf
+        (left_list, v, right_list) ->                            // Branch
+            concat(left_list, List.Cons(v, right_list)),
+        () -> List.Nil,                                          // Empty
+    )
 
 // Pre-order: root, left, right
-fn pre_order(tree: Tree of A) -> is List of A =
-    match tree:
-        Tree.Empty => List.Nil()
-        Tree.Leaf(v) => List.Cons(v, List.Nil())
-        Tree.Branch(left, v, right) =>
-            List.Cons(v, concat(pre_order(left), pre_order(right)))
+fn pre_order(tree: Tree of A) -> List of A =
+    tree.fold(
+        (v) -> List.Cons(v, List.Nil),                          // Leaf
+        (left_list, v, right_list) ->                            // Branch
+            List.Cons(v, concat(left_list, right_list)),
+        () -> List.Nil,                                          // Empty
+    )
 
 fn tree_depth(tree: Tree of A) -> u64 =
-    match tree:
-        Tree.Empty => 0
-        Tree.Leaf(_) => 1
-        Tree.Branch(left, _, right) =>
-            let ld = tree_depth(left)
-            let rd = tree_depth(right)
-            1 + if ld > rd: ld else: rd
+    tree.fold(
+        (_) -> 1,                                                // Leaf
+        (ld, _, rd) -> 1 + (if ld > rd: ld else: rd),            // Branch
+        () -> 0,                                                 // Empty
+    )
 
 fn tree_size(tree: Tree of A) -> u64 =
-    match tree:
-        Tree.Empty => 0
-        Tree.Leaf(_) => 1
-        Tree.Branch(left, _, right) => 1 + tree_size(left) + tree_size(right)
+    tree.fold(
+        (_) -> 1,                                                // Leaf
+        (ls, _, rs) -> 1 + ls + rs,                              // Branch
+        () -> 0,                                                 // Empty
+    )
 
 // =========================================================================
 // Binary Search Tree operations (catamorphism in action)
 // =========================================================================
 
+// Insert is a paramorphism — at each Branch, only ONE subtree is rebuilt
+// (the descent path); the OTHER must be preserved verbatim. Fold (catamorphism)
+// alone gives both subtrees folded, with no way to recover the original — so
+// we use Tree's auto-derived `para` (Rule 7.4.g), which provides both the
+// original subtree and its folded result at each recursive position.
 fn insert(tree: Tree of (A is Ord), value: A) -> Tree of A =
-    match tree:
-        Tree.Empty => Tree.Leaf(value)
-        Tree.Leaf(v) =>
-            match value.compare(v):
-                Ordering.Less => Tree.Branch(Tree.Leaf(value), v, Tree.Empty)
-                Ordering.Equal => Tree.Leaf(v)  // no duplicates
-                Ordering.Greater => Tree.Branch(Tree.Empty, v, Tree.Leaf(value))
-        Tree.Branch(left, v, right) =>
-            match value.compare(v):
-                Ordering.Less => Tree.Branch(insert(left, value), v, right)
-                Ordering.Equal => Tree.Branch(left, v, right)
-                Ordering.Greater => Tree.Branch(left, v, insert(right, value))
+    tree.para(
+        // Leaf(v): no recursive subtrees.
+        (v) ->
+            value.compare(v).fold(
+                () -> Tree.Branch(Tree.Leaf(value), v, Tree.Empty),  // lt
+                () -> Tree.Leaf(v),                                   // eq — no duplicates
+                () -> Tree.Branch(Tree.Empty, v, Tree.Leaf(value)),  // gt
+            ),
+        // Branch: each recursive field is paired (original, inserted).
+        (left, left_ins, v, right, right_ins) ->
+            value.compare(v).fold(
+                () -> Tree.Branch(left_ins, v, right),    // lt: rebuild left, keep right verbatim
+                () -> Tree.Branch(left, v, right),        // eq: no change
+                () -> Tree.Branch(left, v, right_ins),    // gt: keep left verbatim, rebuild right
+            ),
+        () -> Tree.Leaf(value),                            // Empty
+    )
 
+// Search is also path-dependent — we only descend into one subtree per step.
+// A plain fold would visit both subtrees giving O(n) instead of O(log n).
+// Express with `para` plus a witness pattern: at each Branch, choose which
+// already-folded result to propagate, ignoring the other. (The compiler may
+// elide the unused branch via standard dead-code analysis on the para's
+// callback closure; absent that, this is asymptotically O(n) but correct.)
 fn search(tree: Tree of (A is Ord), target: A) -> bool =
-    match tree:
-        Tree.Empty => false
-        Tree.Leaf(v) => v == target
-        Tree.Branch(left, v, right) =>
-            match target.compare(v):
-                Ordering.Less => search(left, target)
-                Ordering.Equal => true
-                Ordering.Greater => search(right, target)
+    tree.para(
+        (v) -> v == target,                                // Leaf
+        (_, left_found, v, _, right_found) ->              // Branch
+            target.compare(v).fold(
+                () -> left_found,    // lt: search left
+                () -> true,           // eq: found
+                () -> right_found,   // gt: search right
+            ),
+        () -> false,                                       // Empty
+    )
 
-fn from_list(items: is List of (A is Ord)) -> Tree of A =
+fn from_list(items: List of (A is Ord)) -> Tree of A =
     fold_left(items, Tree.Empty, (tree, item) -> insert(tree, item))
 
 // =========================================================================
@@ -293,21 +317,21 @@ fn main() -> () with Console =
         Expr.Mul(Expr.Lit(3.0), Expr.Lit(4.0)),
         Expr.Neg(Expr.Lit(2.0))
     )
-    Console.print_line("Expression: ".concat(show_expr(expr.clone())))
-    Console.print_line("Eval:       ".concat(eval(expr.clone()).show()))
-    Console.print_line("Nodes:      ".concat(count_nodes(expr.clone()).show()))
+    Console.print_line("Expression: ".concat(show_expr(expr)))
+    Console.print_line("Eval:       ".concat(eval(expr).show()))
+    Console.print_line("Nodes:      ".concat(count_nodes(expr).show()))
     Console.print_line("Depth:      ".concat(expr_depth(expr).show()))
 
     Console.print_line("")
     Console.print_line("=== Binary Search Tree ===")
     let tree = from_list([5, 3, 7, 1, 4, 6, 8, 2])
     Console.print_line("Tree: ".concat(show_tree(tree)))
-    Console.print_line("In-order: ".concat(in_order(tree.clone()).show()))
-    Console.print_line("Pre-order: ".concat(pre_order(tree.clone()).show()))
-    Console.print_line("Depth: ".concat(tree_depth(tree.clone()).show()))
-    Console.print_line("Size: ".concat(tree_size(tree.clone()).show()))
-    Console.print_line("Contains 4? ".concat(search(tree.clone(), 4).show()))
-    Console.print_line("Contains 9? ".concat(search(tree.clone(), 9).show()))
+    Console.print_line("In-order: ".concat(in_order(tree).show()))
+    Console.print_line("Pre-order: ".concat(pre_order(tree).show()))
+    Console.print_line("Depth: ".concat(tree_depth(tree).show()))
+    Console.print_line("Size: ".concat(tree_size(tree).show()))
+    Console.print_line("Contains 4? ".concat(search(tree, 4).show()))
+    Console.print_line("Contains 9? ".concat(search(tree, 9).show()))
 
     let doubled = map_tree(tree, (x) -> x * 2)
     Console.print_line("Doubled: ".concat(show_tree(doubled)))
@@ -316,8 +340,8 @@ fn main() -> () with Console =
     Console.print_line("=== Anamorphism (unfold) ===")
     let nat3 = to_nat(3)
     let nat4 = to_nat(4)
-    Console.print_line("3 as Nat -> u64: ".concat(to_u64(nat3.clone()).show()))
-    Console.print_line("3 + 4 = ".concat(to_u64(nat_add(nat3.clone(), nat4.clone())).show()))
+    Console.print_line("3 as Nat -> u64: ".concat(to_u64(nat3).show()))
+    Console.print_line("3 + 4 = ".concat(to_u64(nat_add(nat3, nat4)).show()))
     Console.print_line("3 * 4 = ".concat(to_u64(nat_mul(nat3, nat4)).show()))
 
     Console.print_line("")
@@ -325,7 +349,7 @@ fn main() -> () with Console =
     Console.print_line("5! = ".concat(factorial(5).show()))
     Console.print_line("fib(10) = ".concat(fibonacci(10).show()))
     let balanced = balanced_sum(1, 8)
-    Console.print_line("balanced_sum(1,8): ".concat(show_expr(balanced.clone())))
+    Console.print_line("balanced_sum(1,8): ".concat(show_expr(balanced)))
     Console.print_line("eval: ".concat(eval(balanced).show()))
 
     Console.print_line("")
@@ -334,9 +358,9 @@ fn main() -> () with Console =
         Expr.Lit(0.0),
         Expr.Mul(Expr.Lit(3.0), Expr.Lit(1.0))
     )
-    Console.print_line("Before: ".concat(show_expr(unopt.clone())))
+    Console.print_line("Before: ".concat(show_expr(unopt)))
     Console.print_line("After:  ".concat(show_expr(optimize(unopt))))
 
     let double_neg = Expr.Neg(Expr.Neg(Expr.Lit(42.0)))
-    Console.print_line("Before: ".concat(show_expr(double_neg.clone())))
+    Console.print_line("Before: ".concat(show_expr(double_neg)))
     Console.print_line("After:  ".concat(show_expr(optimize(double_neg))))
