@@ -3,6 +3,12 @@ target/
 *.o
 *.out
 
+# Scala / sbt
+.bloop/
+.metals/
+project/project/
+project/target/
+
 # Editor
 *.swp
 *.swo
