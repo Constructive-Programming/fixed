@@ -60,6 +60,17 @@ Stack-allocated and quantity-0 values have **no header**. Stack allocation occur
 - The value is a phantom-typed marker (zero-size).
 - A future stack-allocated-recursive-data candidate (deferred per type_system.md §6.5.9) applies.
 
+**Rule PR3.1.a (SCC × quantity-1 priority — resolves C6).** When a value's data type is a member of a non-singleton SCC of mutually recursive data types (`spec/type_system.md` §7.5, this doc §10), stack allocation is **gated** on whether the value escapes the current frame:
+
+1. If the value's lifetime is bounded by the current call frame (no return, no closure capture, no escaping reference) **and** its quantity is 1 **and** its serialized size fits the stack budget, stack-allocate. The compiler may co-allocate other quantity-1 SCC members in the same frame as a small ad-hoc arena.
+2. If the value escapes (returned, captured, or stored in a heap-resident outer value), heap-allocate per §10.1's SCC unified layout regardless of quantity.
+
+The conservative default for v0.4.5 is rule (2) — heap-allocate any SCC member — until escape analysis is implemented in Phase 4. Rule (1) is the **target** behavior; implementations may opt in once they can soundly identify non-escaping quantity-1 SCC values.
+
+Single-member SCCs (a self-recursive `data T:` whose only recursive member is itself) are not affected by this rule — the size budget alone gates their stack-allocation per the bullets above.
+
+Rationale: heap-allocating quantity-1 SCC values "just because they're recursive" is a real performance regression for small bounded trees. The escape-analysis gate keeps the soundness story (escaping references must be heap-tracked) while admitting the optimization where it pays off.
+
 ### 3.2 `dup` and `drop` primitives (Rule PR3.2)
 
 The IR has two RC primitives:
@@ -256,21 +267,13 @@ fn drop_list(x: List of A) -> () =
     match x:
         List.Nil => free(x)
         List.Cons(h, t) =>
-            drop(h)
-            free(x)             // free first…
-            drop_list(t)        // …then tail-call to drop tail; constant stack
+            let t_local = x.tail   // hoist the tail before x is freed
+            drop(h)                // drop the head's reference
+            free(x)                // free the Cons cell itself
+            drop_list(t_local)     // tail-call to drop the rest; constant stack
 ```
 
-Wait — order matters. The standard Perceus drop reverses field order: drop fields after freeing the parent's slot. The actual sequence for `Cons`:
-
-```
-let t = x.tail
-drop(h)
-free(x)
-drop_list(t)        // tail call; stack-bounded
-```
-
-This bounds drop-stack usage even for arbitrarily long lists. The compiler must guarantee the tail-call optimization.
+Field hoisting (`let t_local = x.tail`) precedes `free(x)` so the recursive descent retains a valid tail reference after the cell is released. The tail-call to `drop_list` bounds drop-stack usage even for arbitrarily long lists; the compiler must guarantee tail-call optimization for compiler-emitted drop functions.
 
 ## 8. Borrowing (inferred)
 
@@ -318,6 +321,12 @@ The continuation's quantity is **1** by construction (Rule Q5.11) — `resume` c
 A linear effect (`spec/effects.md` §3.5) imposes a usage budget of ≤ 1 op per code path. The handler installs a single permission per nesting; once the op is intercepted, the permission is consumed.
 
 Memory implication: the handler-frame for a linear effect has lifetime bounded by the SUBJECT's evaluation. After the handler exits, the frame is freed (no residual continuation references can outlive the handler since linearity prevents capturing an unused permission).
+
+**Quantity-1 captures across linear arm bodies (Rule PR9.2.a).** Per `spec/quantities.md` Rule Q7.4, a linear-effect arm body has quantity 1 (the at-most-once invariant of the effect propagates to the arm). Quantity-1 outer bindings captured into a linear arm body therefore generate **no `dup`** at the capture site — the binding's last-use is consumed by the arm exactly once across all paths reaching the handler. This is consistent with Rule PR3.5 (quantity-1 → no RC overhead) and Rule PR3.6 (no `dup`/`drop` for quantity-1 bindings).
+
+Non-linear arm bodies (`Console`, `FileSystem`, etc.) remain quantity-ω closures per Rule Q5.7; capturing a quantity-1 outer binding into one is a Rule Q7.1 violation rejected at type-check time, never reaching Perceus.
+
+Both Rule Q7.4 and Rule PR9.2.a are contingent on `OQ-Q5` (`spec/quantities.md`). Implementations should gate them behind the same flag that gates `linear effect` per `spec/effects.md` §3.5.
 
 ### 9.3 Tail-resume optimization (Rule PR9.3)
 

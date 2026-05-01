@@ -89,7 +89,7 @@ match d:
 
 **Rule M3.4.a (Variant resolution):** A bare `Variant` pattern resolves against the scrutinee's static type. If the scrutinee's type has a variant named `Variant`, the pattern matches it; otherwise the pattern is an error. If the bare name shadows a binder in scope, the pattern is treated as the binder iff the scrutinee's type has no such variant. This is the "binder-vs-variant" rule and is purely syntactic disambiguation by the typer.
 
-**Rule M3.4.b (Field-pattern arity):** A variant pattern's parenthesised field patterns must match the variant's field count exactly. Trailing-field elision is **not** supported in v0.4.2 — `List.Cons(h, t)` requires both, and `List.Cons(h)` is a compile error. (The struct-destructure pattern §3.6 is the form for selective field binding by name.)
+**Rule M3.4.b (Field-pattern arity):** A variant pattern's parenthesised field patterns must match the variant's field count exactly. Trailing-field elision is **not** supported in v0.4.2 — `List.Cons(h, t)` requires both, and `List.Cons(h)` is a compile error. (The struct-destructure pattern §3.6 is the form for selective field binding by name.) **Unit variants (zero fields) are matched by name only — `List.Nil`, never `List.Nil()`.** Writing `List.Nil()` (empty parens) is a compile error: the trailing `()` is interpreted as a zero-arity argument list, which then fails arity-matching against a zero-field variant declaration. The same rule applies in expression position — the unit-variant value is `List.Nil`, not `List.Nil()`.
 
 **Rule M3.4.c (Match on capability-bounded values is forbidden):** If the scrutinee's static type is a capability bound (`is Optional of A`, `C is Sequencing`, etc.) rather than a `data` type, `match` is a compile error. The user must call `value.fold(...)` explicitly. Capabilities are abstract — they do not expose variants — so pattern matching against variant names cannot type-check against an arbitrary satisfying type. See §8 for the precise relationship between `match` and `fold`.
 
@@ -284,6 +284,21 @@ The check is required (not optional): an implementation that ignores refinement-
 ### 6.3 Counterexamples
 
 The error message for a non-exhaustive match must include at least one **uncovered value** — a concrete value of the scrutinee type that is not matched by any arm. Per `docs/plans/implementation-plan.md` "Agent-Friendly CLI and Compiler Output", error messages include copy-pasteable suggestions; a non-exhaustive-match error suggests adding the missing arm verbatim.
+
+### 6.4 Coverage as a unified obligation (Rule M6.4) — resolves X3
+
+The exhaustiveness obligation specified in §6.1–6.3 is one instance of a more general **constructor-coverage obligation**: every arm-list whose dispatch is by constructor name must cover every constructor of the discriminator. The two instances in Fixed v0.4.5 are:
+
+1. **`match` arms** (this section) — the discriminator is a `data` type; the constructors are its variants; the algorithm is the pattern-matrix / Maranget machinery of §6.1–6.3.
+2. **Handler arms** (`spec/effects.md` §5.3) — the discriminator is the set of effects handled by a `handle` block; the "constructors" are the operation names of those effects (plus an optional `return(...)` arm for normal completion); coverage requires that every operation of every handled effect appear as an arm.
+
+Both are checked by the same algorithm at the implementation level — the constructor-set matrix is identical in shape; the only difference is the discriminator's source (a data declaration vs an effect declaration). Implementations are required to maintain a single coverage pass that consumes either kind of input.
+
+**Rule M6.4.a (Coverage shape).** Given a discriminator `D` with constructor set `K(D) = {k_1, ..., k_n}` and an arm list `A = [a_1, ..., a_m]` where each arm dispatches on a constructor name, define `cover(A) = ⋃_i constructors_matched(a_i)`. The arm list is **covering** iff `K(D) ⊆ cover(A)`. Wildcards in `match` and `return(...)` in handlers contribute the residual constructor set.
+
+**Rule M6.4.b (Refinement-aided coverage).** Refinement caps (§6.2 Rule M6.2) narrow the data discriminator's reachable variant set; the same narrowing applies in handler-arm coverage when the SUBJECT's type is refined (rare in practice; effect rows do not carry refinement caps in v0.4.5). The conformance requirement is the union of M6.2 + M6.4.
+
+**Rule M6.4.c (Error reporting parity).** A non-exhaustive match emits `error[E091]`; a handler block missing one or more operation arms emits `error[E093]`. Both errors must include a copy-pasteable suggestion adding the missing arm(s), per `docs/plans/implementation-plan.md` "Agent-Friendly CLI and Compiler Output".
 
 ## 7. Redundancy / reachability
 

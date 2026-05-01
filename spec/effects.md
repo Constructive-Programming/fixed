@@ -1,10 +1,12 @@
 # Fixed Effects
 
-**Status:** Draft v0.2
-**Specifies:** algebraic effect declarations, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.2 source.
-**Last revised:** 2026-04-30
+**Status:** Draft v0.2.1
+**Specifies:** algebraic effect declarations, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.4 source.
+**Last revised:** 2026-05-01
 
-**Changes from v0.1.** Resolves OQ-E5 (linear effects → §3.5) and OQ-E6 (effect aliasing → §4.5). Removes Rule E6.5 (wildcard handler arms) per OQ-E2 decision. OQ-E1, OQ-E3, OQ-E4 marked as deferred decisions.
+**Changes from v0.2.** Re-opens OQ-E5: §3.5 (linear effects) is now marked **Proposal**, contingent on the resolution of OQ-Q5 in `spec/quantities.md` (whether effect rows participate in QTT quantity). The proposed semantics in §3.5 are unchanged in shape but no longer normative until OQ-Q5 is closed. No other semantic changes from v0.2; bump tracks the v0.4.4 source grammar.
+
+**Changes from v0.1.** Resolved OQ-E6 (effect aliasing → §4.5). Removed Rule E6.5 (wildcard handler arms) per OQ-E2 decision. OQ-E1, OQ-E3, OQ-E4 marked as deferred decisions.
 
 ## 1. Scope
 
@@ -26,9 +28,9 @@ It does **not** specify:
 
 ## 2. Dependencies and theoretical basis
 
-- `spec/syntax_grammar.ebnf` v0.4.1 — `EffectDecl`, `EffectMember`, `WithClause`, `EffectRow`, `EffectBound`, `HandleExpr`, `HandlerArm`, `resume` keyword.
-- `spec/type_system.md` v0.4.1 — Rule 4.1 (typevar introduction), §5.6 (`!` type), §9 (brief reference forwarding to this doc).
-- `spec/quantities.md` v0.1 — Rule Q5.11 (resume single-shot).
+- `spec/syntax_grammar.ebnf` v0.4.4 — `EffectDecl`, `EffectMember`, `WithClause`, `EffectRow`, `EffectBound`, `HandleExpr`, `HandlerArm`, `resume` keyword.
+- `spec/type_system.md` v0.4.x — Rule 4.1 (typevar introduction), §5.6 (`!` type), §9 (brief reference forwarding to this doc).
+- `spec/quantities.md` v0.2 — Rule Q5.11 (resume single-shot), OQ-Q5 (open: effect-row × quantity interaction).
 - Plotkin & Pretnar, *"Handlers of Algebraic Effects"*, ESOP 2009. The model.
 - Leijen, *"Type Directed Compilation of Row-Typed Algebraic Effects"*, POPL 2017. The evidence-passing compilation strategy Fixed adopts.
 - Xie & Leijen, *"Generalized Evidence Passing for Effect Handlers"*, ICFP 2021. Refinements used in Koka, the closest production reference.
@@ -94,7 +96,9 @@ effect Channel of A:
 
 `Fail of String` and `Fail of i64` are **distinct effects** for inference and handling purposes. Identity is by name × `of` arguments (§4.2).
 
-### 3.5 Linear effects (Rule E3.5)
+### 3.5 Linear effects (Rule E3.5) — **Proposal, contingent on OQ-Q5**
+
+> **Status note.** This section describes the *proposed* semantics for `linear effect`. Whether an effect row carries a QTT quantity at all (and therefore whether "quantity 1 in the row" is a meaningful claim) is the subject of OQ-Q5 in `spec/quantities.md`, which is open. The rules below stand as the design Fixed expects to adopt once OQ-Q5 is resolved; they are not yet normative. Implementations should treat §3.5 as an opt-in feature behind a flag until OQ-Q5 closes.
 
 An effect declared with the `linear` modifier is a **linear effect** — its operations are subject to a usage constraint enforced by the typer:
 
@@ -131,6 +135,18 @@ linear effect Handle of R:
 ```
 
 **Compatibility.** A non-linear handler does not satisfy a linear-effect contract; declaring `linear effect E` requires every handler that handles E to be a `handle` block (handlers do not need to be marked `linear` — linearity is a property of the effect, not the handler).
+
+**Quantity-1 captures across linear arm bodies (resolves L6).** Because a linear effect's arm body runs at most once per `handle` block, the arm body itself has quantity 1 — see `spec/quantities.md` Rule Q7.4. A quantity-1 outer binding may therefore be captured into a linear-effect arm body without violating Rule Q7.1 (the standard "no quantity-1 capture into a quantity-ω closure" rule):
+
+```
+let lock_token = make_token()        // quantity 1
+handle (do: ... Lock.release):
+    Lock.release =>
+        consume(lock_token)          // OK: arm body is quantity 1, see Rule Q7.4
+        resume(())
+```
+
+The same capture into a *non-linear* arm body (e.g. `Console.print_line`) remains a Rule Q7.1 error.
 
 ## 4. Effect rows
 
@@ -223,6 +239,20 @@ type RuntimeEffects = IO + Clock + Log
 
 A linear effect appearing inside an alias retains its linearity (Rule E3.5) when the alias is expanded — `type IO = Console + FileSystem` containing a linear `FileSystem` would propagate the linearity check to every use site of `IO`.
 
+**Rule E4.5.e (No `extends` in effect aliases) — resolves X4.** Effect aliases are **pure aliases** — textual expansion to a `+`-combined row of effects. The `extends` keyword is **not** valid in an `EffectAliasDecl`; an alias declaration of the form
+
+```
+type X extends Y = E1 + E2     // ❌ compile error
+```
+
+is rejected by the parser (and would have no useful semantics since aliases are not nominal types). Composition of effect rows is achieved by the `+` operator inside the RHS, not by inheritance:
+
+```
+type X = Y + E1 + E2           // ✅ correct — Y is expanded, then E1 + E2 added
+```
+
+The corresponding question for `effect` declarations (whether `effect MyConsole extends Console: ...` is allowed) remains deferred per OQ-E3.
+
 ## 5. Effect inference
 
 ### 5.1 Inference algorithm (Rule E5.1)
@@ -246,7 +276,11 @@ Errors:
 - `error[E080]: undeclared effect <E>`: an effect appears in `R_inferred` but not in `R`.
 - `error[E081]: unused declared effect <E>`: an effect is declared in `R` but does not appear in `R_inferred`. (Warning rather than error — unused declarations may be intentional for forward compatibility.)
 
-### 5.3 Handler subtraction (Rule E5.3)
+### 5.3 Handler arm coverage and subtraction (Rule E5.3)
+
+Handler-arm coverage — that every operation of every handled effect appears in the handler's arm list — is one instance of the unified constructor-coverage obligation defined in `spec/pattern_matching.md` Rule M6.4. The discriminator is the set of handled effects, the constructors are operation names (plus optional `return`), and the algorithm reuses the pattern-matrix machinery from `pattern_matching.md` §6.
+
+A handler block with missing arms emits `error[E093]: handler does not cover operations <list>` with a copy-pasteable suggestion adding the missing `Eff.op(args) => ...` arms.
 
 A `handle SUBJECT: arms` block subtracts effects from SUBJECT's inferred row. The subtraction set is the union of the effects mentioned by the arms:
 
@@ -257,7 +291,7 @@ If SUBJECT's row contains `E1 + E2 + E3` and the arms handle `E1` and `E2`, the 
 
 Multiple arms for the same effect are permitted (one per operation of that effect); they all together "handle" the effect.
 
-**Coverage:** a handler must provide an arm for every operation of each effect it claims to handle (or use a wildcard, see Rule E6.5). Otherwise: `error[E082]: incomplete handler for <E>`.
+**Coverage:** a handler must provide an arm for every operation of each effect it claims to handle. Coverage is the unified constructor-coverage obligation per Rule M6.4 in `spec/pattern_matching.md`; missing arms emit `error[E093]: handler does not cover operations <list>` with a copy-pasteable suggestion (Rule E6.5 wildcard arms were removed per OQ-E2 in v0.2).
 
 ### 5.4 Top-level handling (Rule E5.4)
 
@@ -440,14 +474,14 @@ fn each<E>(list: is List of A, f: A -> () with E) -> () with E =
 
 **Resolved in v0.2:**
 
-- **OQ-E5 — Linear effects.** Resolved → §3.5. `linear effect E:` declares an effect whose ops are quantity 1 in the row; usage check enforces ≤ 1 per code path. Useful for resource management.
 - **OQ-E6 — Effect aliasing.** Resolved → §4.5. `type X = E1 + E2 + ...` introduces an effect-row alias; the typer detects effect-vs-cap kind from RHS contents.
 
 **Deferred decisions (revisit when motivated by examples):**
 
-- **OQ-E1 — Multi-shot handlers (deferred to v0.5+).** Linked to `spec/quantities.md` OQ-Q1. v0.4.2 keeps `resume` at quantity 1 per Rule Q5.11 and Rule E6.4. Multi-shot would require continuation copying or persistent continuation representation, both with significant memory overhead.
-- **OQ-E3 — Effect inheritance (deferred).** No `extends` for effects in v0.4.2. Adding `effect MyConsole extends Console: ...` is straightforward if stdlib needs it.
-- **OQ-E4 — Higher-rank effect polymorphism (deferred).** A function whose argument is itself effect-polymorphic (`fn higher(g: forall E. (A -> B with E) -> ...)`) is not in v0.4.2. Defer until benchmark code reveals the need.
+- **OQ-E5 — Linear effects (re-opened in v0.2.1).** §3.5 sketches the proposed semantics: `linear effect E:` declares an effect whose ops are quantity 1 in the row. Closure depends on `spec/quantities.md` OQ-Q5 (whether effect rows participate in QTT quantity at all). Until OQ-Q5 closes, §3.5 is non-normative.
+- **OQ-E1 — Multi-shot handlers (deferred to v0.5+).** Linked to `spec/quantities.md` OQ-Q1. v0.4.4 keeps `resume` at quantity 1 per Rule Q5.11 and Rule E6.4. Multi-shot would require continuation copying or persistent continuation representation, both with significant memory overhead.
+- **OQ-E3 — Effect inheritance (deferred).** No `extends` for effects in v0.4.4. Adding `effect MyConsole extends Console: ...` is straightforward if stdlib needs it.
+- **OQ-E4 — Higher-rank effect polymorphism (deferred).** A function whose argument is itself effect-polymorphic (`fn higher(g: forall E. (A -> B with E) -> ...)`) is not in v0.4.4. Defer until benchmark code reveals the need.
 
 **Closed (decided not to add):**
 

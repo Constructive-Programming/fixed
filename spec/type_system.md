@@ -76,6 +76,11 @@ fn add(a: is Quantity of U, b: is Quantity of U) -> is Quantity of U: ...
 
 // `examples/02_collections.fixed:127-129`  —  N introduced inside the `of`
 fn sum(numbers: is Folding of (N is Numeric)) -> N: ...
+
+// Cap method type variables introduced by free UPPER_IDENT, no explicit
+// `<R>` needed (the bare `R` is a fresh type variable per Rule 4.1):
+cap Folding:
+    fn fold(init: R, f: (R, Part) -> R) -> R   // R introduced once at first use
 ```
 
 **Non-example.** The following is rejected:
@@ -161,6 +166,30 @@ cap Functor:
 cap BiFunctor of (A, B):
     fn bimap<A2, B2>(f: A -> A2, g: B -> B2) -> Self of (A2, B2)
 ```
+
+**Rule 5.4.c (the `self` receiver value).** Inside an *instance method body* (a `fn name(...)` with an optional default body declared in a cap, or an `fn name(...) = body` declared in a `satisfies` block), the lowercase identifier `self` is an **implicit binder for the receiver value** — the value the method was called on. Its static type is `Self` (the cap's abstract receiver type at cap-declaration sites; the satisfying type at `satisfies` sites). The capital `Self` continues to denote the *type*; lowercase `self` denotes the *value*.
+
+`self` is **only** bound in instance method bodies. In static method bodies (`Self.fn name(...) = body`) there is no receiver, so `self` is unbound — using it is a compile error. Outside method bodies, `self` is a normal identifier with no special meaning.
+
+```
+cap Optional:
+    fn isDefined -> bool = self.fold((_) -> true, () -> false)
+    //                     ^^^^ receiver value, type Self
+
+    Self.fn none -> Self                  // static — no `self` available
+    fn map<B>(f: Part -> B) -> Self of B  // declaration only, no body
+```
+
+Inside a `match`/`fold` discriminator, `self` is the natural scrutinee:
+
+```
+Maybe satisfies Optional:
+    fn isDefined = match self:
+        Maybe.Just(_) => true
+        Maybe.Nothing => false
+```
+
+This rule supersedes any earlier convention in the example corpus that used capital `Self` as a value (e.g., older versions of `examples/03_option_result.fixed`). Such uses were corrected in the v0.4.5 sweep; capital `Self` as a value-position identifier is no longer supported.
 
 ### 5.5 Arrow types and the unit type
 
@@ -286,11 +315,45 @@ cap Optional:
     fn fold<R>(on_some: Part -> R, on_none: () -> R) -> R
 
     // Default implementations — types satisfying Optional may override.
-    fn isDefined -> bool = Self.fold((_) -> true, () -> false)
-    fn or_else(default: Part) -> Part = Self.fold((v) -> v, () -> default)
+    fn isDefined -> bool = self.fold((_) -> true, () -> false)
+    fn or_else(default: Part) -> Part = self.fold((v) -> v, () -> default)
 ```
 
-**Rule 6.1 (Default method bodies / extension methods).** A cap method's optional body acts as both a *default implementation* — used when the satisfying type does not provide its own — and an *extension method*: every type satisfying the cap automatically gets the method as a callable, even without writing one in `satisfies`. Bodies may use `Self`, `Part`, and other in-scope cap members (including the cap's `Self.fn` constructor *requirements* and abstract method *requirements*, which are guaranteed to be provided by the satisfying type).
+**Rule 6.1 (Default method bodies / extension methods).** A cap method's optional body acts as both a *default implementation* — used when the satisfying type does not provide its own — and an *extension method*: every type satisfying the cap automatically gets the method as a callable, even without writing one in `satisfies`. Bodies may use `self` (the receiver value, lowercase — see Rule 5.4.c), `Self` (the receiver's type), `Part`, and other in-scope cap members (including the cap's `Self.fn` constructor *requirements* and abstract method *requirements*, which are guaranteed to be provided by the satisfying type).
+
+#### 6.1.1 Default body typing (Rule 6.1.1) — resolves X5
+
+A cap method's default body is type-checked in **two phases**, layered to balance early error detection against per-satisfaction precision.
+
+**Phase 1 — Abstract-Self typing (declaration time).** The body is type-checked once when the cap is declared, treating `Self` as an opaque type with the cap's declared methods available, `Part` as an opaque element type, and abstract method requirements visible by their declared signatures. The body must type-check using only what the cap promises. This catches:
+
+- Method-call mismatches against the cap's declared interface
+- Type errors against the abstract `Self` (e.g. calling a method the cap does not declare)
+- Argument-arity mismatches against `Self.fn` constructor requirements
+
+A body that fails Phase 1 is a compile error against the cap declaration, not against any particular satisfying type.
+
+**Phase 2 — Per-satisfaction Recheck (cap-closure phase).** When a `Type satisfies Cap` declaration is processed, the cap's default bodies are **re-checked** against the satisfying type's concrete signatures, but only for *quantities* (per `spec/quantities.md` §5.12) and *effects* (per `spec/effects.md`). Types are guaranteed compatible by cap-closure (the satisfaction is rejected at this phase if the satisfying type's signatures are not assignable to the cap's declared signatures). The re-check therefore catches:
+
+- Quantity mismatches: the satisfying type's `fold` is quantity 1 in some position, and a default body's call expects quantity ω there (or vice versa).
+- Effect-row mismatches: the satisfying type's method performs effects the default body's `with`-clause does not declare.
+
+A body that passes Phase 1 but fails Phase 2 is a compile error against the *satisfaction* (not the cap declaration), with the satisfying type named in the diagnostic.
+
+**Why two phases.** Phase 1 catches obvious bugs early and gives cap authors actionable errors at the cap-declaration site, without requiring N satisfying types to be in scope. Phase 2 covers the gap Phase 1 leaves — quantities and effect rows are not visible at the abstract-`Self` level, so per-satisfaction visibility is required to catch their mismatches. This pattern mirrors Scala 3's `cc/` capture-checker and is consistent with the existing Recheck-phase architecture for quantities (`spec/quantities.md` §5.12) and representation selection (§6.5.7 of this doc).
+
+```
+cap Optional:
+    Self.fn some(v: Part) -> Self
+    Self.fn none -> Self
+    fn fold<R>(on_some: Part -> R, on_none: () -> R) -> R
+    fn isDefined -> bool = self.fold((_) -> true, () -> false)
+    //                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    //   Phase 1 typing: self : Self (abstract); fold available with declared signature; OK.
+    //   Phase 2 (per satisfaction): if Maybe.fold runs at quantity ω with no effects (typical),
+    //     isDefined inherits the same and passes; if a satisfying type's fold runs with an
+    //     effect, isDefined for that satisfaction is rejected unless `with` is widened.
+```
 
 ### 6.2 `extends` inheritance
 
@@ -317,6 +380,114 @@ fn between(min: N is Ord, max: N) -> cap of N =
 ```
 
 Both forms produce a *cap-generating function* (see `spec/properties.md` for the prop semantics; this document treats `fn -> cap` as a regular function whose return type happens to be a refinement capability).
+
+#### 6.3.0 Use-site bridge: `cap of T` ↔ `RefinementCall` (Rule 6.3.0) — resolves C3
+
+A function `fn f(args) -> cap of T` (or `fn f(args) -> cap extends C`) is a **cap-generating function**. Its declaration site uses the `cap`-prefixed return-type form (per grammar `FnReturnType` and `CapType`). Its **use sites** in `is`-bound position do **not** repeat the `cap` keyword — instead, they call the generator by name as a `RefinementCall`:
+
+```
+fn between(min: N is Ord, max: N) -> cap of N =
+    prop in_range: min <= Self && Self <= max
+
+// Use site — call the generator by name, no `cap` keyword:
+fn validate_age(age: u8 is between(0, 150)) -> u8 = age
+//                       ^^^^^^^^^^^^^^^^ RefinementCall (per grammar §10)
+```
+
+Per the grammar (`syntax_grammar.ebnf` §10 — `CapBound = CapRef | RefinementCall | PrimitiveType`), a `RefinementCall` is exactly `LOWER_IDENT "(" ArgList? ")"` — the lowercase generator name applied to value-args. The result is a refinement cap that the typer treats as if it were a Marker-classified cap with the generator's prop body as obligation.
+
+**Higher-order positions.** When a cap-generator value is passed as an argument or stored as a binding, its *type* requires the `cap of T` form (per Rule S0.2 / grammar's `CapType` admitted as a `TypeAtom`):
+
+```
+fn validate_with(
+    value: N is Numeric,
+    constraint: (N, N) -> cap of N,    // higher-order parameter type
+    lo: N,
+    hi: N,
+) -> N is constraint(lo, hi) = ...
+```
+
+The parameter `constraint` has type `(N, N) -> cap of N`. When applied at the use site (`is constraint(lo, hi)`), the call is a `RefinementCall` with `constraint` as the (now value-bound) generator name.
+
+Rule 6.3.0 establishes the equivalence:
+
+```
+fn f(...) -> cap of T = body      ≡      f as a value of type (...) -> cap of T
+```
+
+Both forms type-check identically; the `cap`-prefixed return form is preferred when declaring a generator directly, the higher-order `cap of T` form is required only when a function value (parameter, binding, return) carries a generator's *type*.
+
+#### 6.3.1 Cap identity (Rule 6.3.1) — resolves X7
+
+Two cap-generator applications produce the **same cap** iff:
+
+1. They invoke the same generator (after `type`-alias expansion to the underlying generator), and
+2. Their value-args are equal under symbolic comparison (literal equality for literals; equal-binding identity for in-scope bindings, conservatively).
+
+Different generators always produce different caps even if their prop bodies are syntactically identical. Equality is **nominal** at the (generator-name, value-args) tuple, not structural over prop bodies.
+
+```
+fn between(lo: N is Ord, hi: N) -> cap of N = prop r: lo <= Self && Self <= hi
+fn alt_between(lo: N is Ord, hi: N) -> cap of N = prop r: lo <= Self && Self <= hi
+// Even though the bodies match, `between(0, 10)` and `alt_between(0, 10)`
+// are *different* caps. A value of one is not assignable to a binding of the other.
+
+type alt_between = between
+// `alt_between` is now a type-alias for `between`, so `alt_between(0, 10)` *is*
+// `between(0, 10)` (same generator after alias expansion).
+```
+
+Type-arg equivalence follows the standard type-equivalence rules (§5).
+
+This nominal rule is decidable, predictable, and forward-compatible: a future relaxation to structural prop equivalence (e.g., via SMT) would only widen the equivalence relation and never break existing assignment compatibility.
+
+#### 6.3.2 Auto-derivation on cap-generator returns (Rule 6.3.2) — resolves L4
+
+Cap-generator returns are **Marker** classification (per §6.4 — no methods, only `prop` obligations). Auto-derivations from §7.4 (Functor, Folding, accessors, etc.) **never apply** to a cap-generator's return cap. Auto-derivation operates on the *base type* the refinement narrows, not on the refinement cap itself.
+
+```
+// `is Functor of (i64 + between(0, 10))` — Functor auto-derives over the
+// underlying `i64`'s structure (well, `i64` isn't a Functor-bearing type;
+// substitute a List-of-i64 here). The `between(0, 10)` refinement adds an
+// obligation but does not change which auto-derivations apply.
+
+// `is pair_constraint(0, 100)` where `pair_constraint(lo, hi) -> cap of (X, Y)`
+// returns a multi-param refinement — does **not** auto-derive Functor.
+// Programs needing Functor over a multi-param refinement must declare a
+// named cap with explicit type parameters; Rule 7.4.c then applies normally.
+```
+
+Right-bias (Rule 7.4.c) is therefore irrelevant to cap-generator returns: there is no auto-derivation site to apply it to.
+
+#### 6.3.3 Termination of cap-generator value-args (Rule 6.3.3) — resolves L5
+
+Type-checking a signature that mentions `f(arg1, arg2, ...)` (a cap-generator call in `is`-bound position) requires evaluating the value-args at compile time so the resulting prop obligations can be discharged. Termination is guaranteed by restricting what may appear as a value-arg.
+
+**v0 rule (Fixed v0.4.5).** A cap-generator value-arg is one of:
+1. a literal expression (`0`, `"abc"`, `1024`), or
+2. a reference to an in-scope binding whose value is itself a literal under (1) (i.e., the binding's initializer is a literal — transitively).
+
+Function calls, arithmetic on bindings, and computed expressions are not admitted in v0. Programs that need a computed bound must lift the computation to a `let` binding above the signature and pass the binding by name (subject to the literal-initializer restriction).
+
+**v1 rule (target — Phase 3 totality).** Once the function-totality checker lands in Phase 3, the v0 rule relaxes to: any expression whose evaluation is *total* per the function-totality rule may be a cap-generator value-arg. Because Fixed already requires every `fn` to be total (recursion-via-fold-only, no self-recursion), this relaxation makes every fn call a safe cap-generator value-arg.
+
+The v0→v1 promotion is purely a relaxation; programs valid under v0 are valid under v1.
+
+```
+// v0 — accepted:
+fn validate_age(age: u8 is between(0, 150)) -> u8 = age
+let upper = 150
+fn validate_age2(age: u8 is between(0, upper)) -> u8 = age   // upper is a literal-initialized binding
+
+// v0 — rejected (computed bound):
+let upper = config.max_age()
+fn validate_age3(age: u8 is between(0, upper)) -> u8 = age   // error: not a literal
+
+// v1 (when totality lands):
+// All three forms are accepted; the totality checker certifies `config.max_age()`.
+```
+
+Tracking gate: see implementation-plan.md Phase 3 totality-checker delivery.
 
 ### 6.4 Capability classification
 
@@ -378,11 +549,29 @@ For each viable candidate, compute a **performance score** as a weighted linear 
 - **Locality** — contiguous layouts score higher for fold-heavy use; pointer-chased layouts lose cache lines and amortise across allocator slabs.
 - **PGO hit rate** — when profile data is present, weight the operations the profile shows dominate.
 
-Default weights are platform-defined and stable across builds. PGO data may override per-call-site, never globally — this keeps representation choices deterministic across PGO refinements (small profile changes shouldn't flip representations across the whole codebase).
+**Normative weights and tie threshold (Rule 6.5.4 — resolves C4).** The default weights for the scoring function are fixed at the spec level for cross-implementation determinism:
+
+| Dimension | Weight | Range of raw score |
+|---|---|---|
+| Allocation cost | 0.30 | 0–10 (lower allocation cost ⇒ higher raw score) |
+| Access fit | 0.30 | 0–10 (perfect match ⇒ 10; mismatch with workaround ⇒ 0–5) |
+| Memory footprint | 0.15 | 0–10 (smaller is higher) |
+| Locality | 0.15 | 0–10 (cache-friendly ⇒ higher) |
+| PGO hit rate | 0.10 | 0–10 (more profile coverage ⇒ higher; 0 if no PGO data) |
+
+Each candidate's raw scores per dimension are normalised to `[0, 10]` and combined as a weighted sum. The maximum possible total is `10.0`.
+
+The **tie threshold ε** is fixed at `ε = 0.5` (5% of the maximum total). Two candidates whose scores differ by less than ε are treated as tied; ties trigger the ambiguity error described in §6.5.5.
+
+The **Lipschitz bound** on the scoring function is `K ≤ 0.4` per single-bound addition: extending a candidate's bound set by one additional capability bound shifts its score by at most 0.4 points. Because `K < ε`, a single-bound extension cannot flip a clear winner into a tie or vice versa — this is what makes representation selection stable under small program changes.
+
+PGO data may override per-call-site (within the per-call instantiation) but never globally; the global default weights and ε remain fixed regardless of profile data.
+
+Implementations are conformant if they (a) use these defaults for unprofiled code and (b) document any per-call-site PGO override that can deviate from them. The weights and ε are subject to revision in future spec versions; programs that depend on a specific representation choice should pin it via explicit type annotation rather than relying on scoring.
 
 #### 6.5.5 Pick or halt
 
-- If exactly one candidate has the maximum score (within an implementation-defined ε > 0), select it.
+- If exactly one candidate has the maximum score with margin ≥ ε (the threshold fixed in Rule 6.5.4 above), select it.
 - If two or more candidates tie within ε, halt compilation with an ambiguity error per `docs/plans/implementation-plan.md` §"Ambiguity resolution via compiler suggestions": list every tied candidate with its score and a copy-pasteable disambiguation suggestion. The user resolves via explicit type annotation (per §8.5 — type annotation forces a specific candidate).
 
 #### 6.5.6 Commit
@@ -415,7 +604,7 @@ Mutually recursive `data` types (§7.5) form a strongly-connected component on t
 #### 6.5.9 Open questions
 
 - **Cross-function rep flow.** A generic function's representation is determined by its signature; concrete reps are monomorphised at each instantiation. Whether two call sites share a monomorphisation is an implementation detail; this spec promises only that selection is consistent within a single function instantiation.
-- **Heuristic stability.** The scoring function should be Lipschitz under bound-set extension: `bound_set ⊂ bound_set'` ⇒ score difference is bounded. Without this, PGO results become brittle and small program changes flip representations across the codebase. The exact stability constant is implementation-defined for v0.4.1.
+- ~~**Heuristic stability.**~~ Resolved in v0.4.5 — the Lipschitz bound `K ≤ 0.4 < ε = 0.5` is now part of Rule 6.5.4 (normative weights). Single-bound extensions cannot flip a clear winner.
 - **Stack-allocated recursive data** (deferred). Recursive `data` declarations whose `of` value-params are concrete and bound the recursion depth could be added as a sixth built-in candidate (stack-flat struct), competing alongside the heap-allocated co-recursive group. Targeted for v0.5+ once the pass is implemented and the win is measured against a representative workload.
 
 ### 6.6 Built-in representation candidates (resolves OQ4)
@@ -520,6 +709,30 @@ A `data` declaration automatically satisfies certain capabilities based on its v
 
 **Rule 7.4.a (Folding).** Every `data` declaration with at least one variant gets an auto-derived `fold<R>` method. The fold takes one callback per variant, in declaration order, with parameter list mirroring the variant's field list. Recursive `Self`-typed fields are pre-folded to `R` before the callback runs.
 
+**Rule 7.4.a.1 (Functor-mediated recursion in `fold`).** A field of type `F of Self` (or transitively `F1 of (F2 of (... of Self))`) where every `Fi` satisfies `Functor` (auto-derived per Rule 7.4.c, or explicit via `satisfies`) is also pre-folded: the callback receives `F of R` (resp. `F1 of (F2 of (... of R))`) — every element in the wrapping `Functor` chain has been folded element-wise to `R`. This generalises catamorphism through composed-Functor-wrapped recursive positions.
+
+```
+data Json:
+    Null
+    Bool(value: bool)
+    Number(value: f64)
+    String(value: String)
+    Array(elements: List of Json)                          // List satisfies Functor
+    Object(fields: List of (Tuple of (String, Json)))      // List ∘ (Tuple of (String, _)) — both Functors
+
+// Auto-derived fold:
+//   fn fold<R>(
+//       on_null:   () -> R,
+//       on_bool:   (b: bool) -> R,
+//       on_number: (n: f64) -> R,
+//       on_string: (s: String) -> R,
+//       on_array:  (elements: List of R) -> R,
+//       on_object: (fields:   List of (Tuple of (String, R))) -> R,
+//   ) -> R
+```
+
+The Functor composition is computed by the typer at fold-derivation time: for each recursive position, walk outward through Functor-satisfying type constructors until either `Self` is reached (apply 7.4.a.1) or a non-Functor wrapper is encountered (the field is left unfolded — the callback receives the original type and recursive descent must be expressed by the user via stdlib helpers or other folds).
+
 ```
 data Expr:
     Lit(value: f64)
@@ -546,11 +759,13 @@ fn unfold<S>(seed: S, step: S -> Self) -> Self
 
 The compiler iterates `step` until no recursive seeds remain. The combination of `fold` (Rule 7.4.a) and `unfold` enables hylomorphism (`unfold` then `fold`) and the compiler is permitted to fuse the intermediate structure away.
 
-**Rule 7.4.c (Functor over the rightmost type parameter).** A `data T of (X1, ..., Xn)` declaration is auto-derived as `Functor of Xn` (the **rightmost type parameter** — right-bias convention) iff:
+**Rule 7.4.c (Functor over the rightmost type parameter).** A *named* `data T of (X1, ..., Xn)` declaration is auto-derived as `Functor of Xn` (the **rightmost type parameter** — right-bias convention) iff:
 
 1. `Xn` is non-phantom and is a type parameter (not a value parameter).
 2. `Xn` appears in **covariant** position in at least one variant field.
 3. `Xn` does **not** appear in contravariant position (e.g., as a function-parameter type) in any variant field.
+
+This rule applies to **named** data types only. Anonymous caps produced by cap-generator calls (e.g., `pair_constraint(0, 100)`) are never auto-derived per Rule 6.3.2 — refinement caps add prop obligations, not method surfaces.
 
 The auto-derived `map` is implemented as a `fold` that re-builds each variant with the function applied to fields of type `Xn`, leaving fields of other types untouched. The map's range type substitutes `Xn` with the supplied target type:
 
@@ -573,6 +788,28 @@ fn field2 -> T2
 These accessors are auto-implemented and require no `satisfies` declaration.
 
 **Rule 7.4.e (Marker / refinement caps are never auto-derived).** Marker caps (no methods) and refinement caps generated by `fn -> cap` impose `prop` obligations only; they are never auto-derived. Satisfaction is by static verification (see `spec/properties.md`), not by code synthesis.
+
+**Rule 7.4.g (Paramorphism — `para`).** Every recursive `data` declaration (any variant has at least one field of type `Self`, transitively) gets an auto-derived `para<R>` method (paramorphism). The `para` shape mirrors `fold` (Rule 7.4.a) one callback per variant, recursive positions pre-folded to `R` — *plus* each recursive field's original subtree is also passed to the callback alongside the folded result.
+
+```
+data Tree of A:
+    Leaf(value: A)
+    Branch(left: Tree of A, value: A, right: Tree of A)
+    Empty
+
+// Auto-derived:
+//   fn para<R>(
+//       on_leaf:   (value: A) -> R,
+//       on_branch: (left_orig: Tree of A, left_folded: R,
+//                    value: A,
+//                    right_orig: Tree of A, right_folded: R) -> R,
+//       on_empty:  () -> R,
+//   ) -> R
+```
+
+Paramorphism subsumes catamorphism (the original-subtree arguments may simply be ignored) but enables structural decisions that depend on the *original* shape, not just the folded result. Canonical use: peephole optimizers that rewrite based on local subtree shape (`Neg(Neg(x))` → `x`), or BST `insert` where one subtree is rebuilt and the other is preserved verbatim.
+
+Fixed's auto-derived `para` is sound for any total-recursion `data` declaration; it produces no infinite descent because it dispatches on one constructor layer per call and the recursion is driven by the data's structure (just like `fold`).
 
 **Rule 7.4.f (Caps with `Self.fn` constructor requirements require explicit `satisfies`).** A cap declaring any `Self.fn` constructor *requirement* (sum or product classification, §6.4) is **never** auto-derived. An explicit `satisfies` mapping is required to bind data variants to those requirements:
 
@@ -607,6 +844,28 @@ data Node:
 Representation: data types in a strongly-connected component of the data dependency graph are co-allocated. The compiler treats them as a single recursive group requiring heap allocation; refcount headers are shared per-node, and the compiler may emit a unified tag space across the group when this enables better packing. See `spec/perceus.md` for refcount details.
 
 Self-recursion (a single data type referencing itself) is the trivial 1-element SCC and is handled by the same rule.
+
+**Rule 7.5.a (Auto-derivation does not apply across non-singleton SCCs) — resolves L7.** Auto-derivations from §7.4 (`fold`/Rule 7.4.a, `unfold`/Rule 7.4.b, `Functor`/Rule 7.4.c, accessors/Rule 7.4.d) **are disabled** for `data` declarations whose dependency graph forms an SCC of size ≥ 2. Each member of such an SCC requires explicit `satisfies` declarations for any capabilities it must satisfy.
+
+Rationale: auto-derivation operates on a single declaration's variants and fields; mutually recursive types require interleaved fold callbacks (Tree's fold needs Node's fold, and vice versa). Specifying that interleaving as a generated mutual-fold combinator is non-trivial and not justified by current example code; refusing auto-derivation for v0.4.5 keeps the spec simple. Singleton SCCs (a single self-recursive data type) continue to receive auto-derivations under §7.4.
+
+```
+data Tree:
+    Branch(node: Node)
+    Leaf
+
+data Node:
+    N(tree: Tree, value: i64)
+
+// Tree and Node form a 2-element SCC. Rule 7.5.a disables auto-derived `fold`
+// on both. To consume them, the user writes explicit satisfaction:
+//
+//   Tree satisfies Folding:
+//       fn fold<R>(on_branch: ..., on_leaf: ...) -> R = ...
+//   Node satisfies Folding: ...
+```
+
+OQ-T1 (deferred): a *mutual-fold convenience* — generated `(Tree, Node).fold(...)` combinators emitted automatically for SCCs — is a backwards-compatible extension on top of Rule 7.5.a. Revisit if mutually-recursive data types become common in real programs and explicit `satisfies` proves to be friction.
 
 ### 7.6 GADT-style equality constraints (deferred to v0.3, resolves OQ5)
 
@@ -727,6 +986,34 @@ A call `Cap.ctor(args...)` resolves to a concrete data constructor as follows:
 5. If multiple match, the typer halts with an ambiguity error and emits copy-pasteable disambiguation suggestions per `docs/plans/implementation-plan.md` §"Ambiguity resolution via compiler suggestions."
 
 Direct data construction (`Maybe.Just(42)`) bypasses resolution: it always produces a value of the named data type, regardless of which caps are in scope.
+
+#### 8.5.1 Refinement-narrowed expected types (Rule 8.5.1) — resolves X1, L1
+
+When the expected type contains refinement caps (Marker classification, per §6.4) — typically produced by cap-generator calls per §6.3 — resolution proceeds in two stages: **strip, resolve, re-apply**.
+
+**Stage A — Strip refinement caps.** Partition the expected bound set `E` into:
+- `E_base` — caps with constructor requirements (sum, product, recursive, capability-only).
+- `E_ref` — refinement caps (Marker class, including caps produced by cap-generators per Rule 6.3.0).
+
+**Stage B — Resolve against the residual.** Run §8.5's resolution against `E_base` only. Refinement caps are obligation-only and have no satisfactions to filter against; including them in step 2 of §8.5 produces empty filter results.
+
+**Stage C — Re-apply refinements as obligations.** The chosen constructor's result is a value of the satisfying type, which by virtue of having satisfied `E_base` is well-typed. The refinement caps in `E_ref` become **prop obligations** on that result, discharged by the verifier per `spec/properties.md` §7. If `E_base` is empty (the expected type is *only* refinement caps), resolution fails with `error[E???]: refinement caps have no constructors; the expected type must include a base capability with a constructor requirement`.
+
+```
+fn try_make(i: u64) -> is Optional of u64 + between(1, 99) =
+    Optional.some(i)
+//  ^^^^^^^^^^^^^^^^
+//  Stage A: E_base = { Optional of u64 }, E_ref = { between(1, 99) }
+//  Stage B: resolve `Optional.some(i)` against `is Optional of u64` →
+//           e.g. Maybe.Just(i) via in-scope satisfaction.
+//  Stage C: Maybe.Just(i) is a value of `Maybe of u64`. The `between(1, 99)`
+//           prop becomes an obligation on i (i.e. 1 <= i && i <= 99). The
+//           prop verifier discharges it from the call site's context.
+```
+
+This rule extends to nested refinements (e.g. `is Optional of (u64 + between(1, 99))` — the inner refinement `between(1, 99)` is stripped from the *type-arg* before resolving against `is Optional of u64`, then re-applied as an obligation on the contained value at use sites).
+
+A refinement-only expected type (e.g. `is between(0, 10)` alone) is rejected: refinement caps must compose with at least one base capability (or a primitive type) so a constructor exists.
 
 ## 9. Effects (brief)
 

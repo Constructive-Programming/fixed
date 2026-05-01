@@ -272,6 +272,36 @@ When a constructor is applied to a quantity-1 receiver of the same shape, Perceu
 
 A quantity-1 binding has no `dup`/`drop` operations inserted by Perceus. The single use consumes the value; there is no need to count references.
 
+### 7.4 Linear-effect handler arms (Rule Q7.4) — **Proposal, contingent on OQ-Q5; resolves L6**
+
+> **Status note.** Like `spec/effects.md` §3.5, this rule is a proposal contingent on OQ-Q5 closing in favor of effect rows participating in QTT quantity. Implementations should treat Rule Q7.4 as opt-in behind the same flag that gates §3.5.
+
+A handler arm body for a `linear effect` (per `spec/effects.md` §3.5) is itself a **quantity-1 closure**. The arm runs at most once per `handle` block (Rule E3.5.c — at-most-once semantics), so the body's quantity inherits from the effect's linearity rather than defaulting to ω as a regular closure body would.
+
+Consequence: a quantity-1 outer binding **may be captured** by a linear-effect arm body. The capture's contribution to the outer scope's usage of that binding is the join of (arm-body usage) and (other-paths usage), bounded above by 1 because the arm runs at most once.
+
+```
+let lock_token = make_token()        // quantity 1
+handle (do: ... Lock.release):
+    Lock.release =>
+        consume(lock_token)          // captured from outer scope — OK under Rule Q7.4
+        resume(())
+// total quantity of lock_token across the handle block: 1 (consumed in the arm)
+```
+
+The standard Rule Q7.1 prohibition ("quantity-1 binding may not be captured by a quantity-ω closure") **still applies** to non-linear handler arms. A capture across a non-linear arm boundary is rejected:
+
+```
+let lock_token = make_token()
+handle (do: ... Console.print_line):
+    Console.print_line(msg) =>
+        consume(lock_token)          // error: Console is non-linear; arm body is quantity ω;
+                                      //        Rule Q7.1 forbids capture of a quantity-1 binding here.
+        resume(())
+```
+
+If OQ-Q5 closes the other way (effect rows do not participate in QTT quantity), Rule Q7.4 is withdrawn and Rule Q7.1 applies uniformly to all handler arms regardless of effect linearity.
+
 ## 8. Unrestricted (quantity ω)
 
 A quantity-ω binding is **freely shared**. The Perceus pass inserts:
@@ -363,7 +393,7 @@ let result = x.value + x.lo                     // x.value: runtime read; x.lo: 
 
 - **OQ-Q4 — Quantity polymorphism.** A truly generic `id : T -> T` could be quantity-polymorphic — the parameter's quantity equals the call site's. Idris 2 has limited quantity polymorphism; Fixed has so far inferred everything. Decision deferred until benchmark code shows the need.
 
-- **OQ-Q5 — Effect operations and quantities.** Effect ops (e.g., `Console.print_line`) currently follow Rule Q5.2. Whether *effect rows* themselves participate in quantity (e.g., a "linear effect" that may be performed at most once) is a separate research question, related to OQ-Q1.
+- **OQ-Q5 — Effect operations and quantities.** Effect ops (e.g., `Console.print_line`) currently follow Rule Q5.2. Whether *effect rows* themselves participate in quantity (e.g., a "linear effect" that may be performed at most once) is a separate research question, related to OQ-Q1. The proposed semantics live in `spec/effects.md` §3.5 (re-opened OQ-E5 in v0.2.1) and stand non-normative pending closure of this question.
 
 ## 12. Cross-references
 

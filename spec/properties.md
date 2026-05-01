@@ -1,8 +1,12 @@
 # Fixed Properties
 
-**Status:** Draft v0.2
-**Specifies:** `prop` declarations, `forall` / `implies` / `suchThat` constructs, the verification strategy (static-then-PBT), property-based test generation, and how verified properties feed compiler optimization for Fixed v0.4.4 source.
-**Last revised:** 2026-04-30
+**Status:** Draft v0.2.1
+**Specifies:** `prop` declarations, `forall` / `implies` / `suchThat` constructs, the verification strategy (static-then-PBT), property-based test generation, and how verified properties feed compiler optimization for Fixed v0.4.5 source.
+**Last revised:** 2026-05-01
+
+**Changes from v0.2.**
+- **Function-result postconditions deferred** (re-opens OQ7 from `spec/type_system.md`). The §3.3 mechanism — a `prop` declaration at the top of a fn body, with `result` as an implicit binder for the return value — is removed from v0.4.5. Postconditions are reserved for a future release if user demand emerges. The grammar still admits `PropDecl` as an `Expr` alternative because refinement-cap fn bodies (§3.4) require it; the typer rejects `prop` declarations inside non-cap-returning fn bodies. OQ-P5 is moot under this deferral.
+- See §3.3 below for the new (deferred) status note.
 
 **Changes from v0.1.**
 - `implies` is now **eager** (no automatic vacuous-truth discard in PBT) — it is plain propositional implication in both static and PBT contexts.
@@ -14,16 +18,16 @@
 
 ## 1. Scope
 
-This document specifies Fixed's `prop` system end-to-end: where invariants can be declared, how their bodies are typed, the strategy by which the compiler verifies them, what falls out as compiler optimization, and how `prop` interacts with `extends` inheritance and the `result` postcondition binder. Concretely:
+This document specifies Fixed's `prop` system end-to-end: where invariants can be declared, how their bodies are typed, the strategy by which the compiler verifies them, what falls out as compiler optimization, and how `prop` interacts with `extends` inheritance. Concretely:
 
-- The four contexts in which `prop` appears (§3): cap members, data members, fn-body postconditions, and `fn -> cap` (refinement-cap) returns.
+- The three contexts in which `prop` appears (§3): cap members, data members, and `fn -> cap` (refinement-cap) returns. Function-result postconditions are deferred to a future release (see §3.3).
 - The expression sublanguage allowed inside a prop body (§4): quantity 0, no effects, `forall` and `implies` reachable here only.
 - The `forall` quantifier (§5) and the `implies` connective (§6).
 - The verification strategy: static-first, PBT-fallback (§7), with mechanics for generator derivation, shrinking, iteration, and counterexample reporting (§8).
 - How verified props become compiler assumptions and drive optimisation (§9), including `unreachable` discharge.
 - How props compose through `extends` (§10).
 
-This document **resolves OQ7** from `spec/type_system.md` — the implicit `result` binder in fn-body postconditions is specified normatively here in §3.3.
+OQ7 from `spec/type_system.md` (the implicit `result` postcondition binder) was provisionally resolved in v0.2 of this document and is **re-deferred in v0.2.1** along with the broader fn-result postcondition feature; see §3.3.
 
 It does **not** specify:
 
@@ -41,7 +45,7 @@ It does **not** specify:
 
 Theoretical basis:
 
-- Hoare, *"An Axiomatic Basis for Computer Programming"*, CACM 1969 — preconditions/postconditions; the `result` binder in §3.3 is the standard postcondition pattern.
+- Hoare, *"An Axiomatic Basis for Computer Programming"*, CACM 1969 — preconditions/postconditions; the deferred `result` binder (§3.3) is the standard postcondition pattern, retained for future reintroduction.
 - Floyd, *"Assigning Meanings to Programs"*, AMS 1967 — verification conditions.
 - Claessen & Hughes, *"QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs"*, ICFP 2000 — the PBT model Fixed adopts for the fallback verifier.
 - MacIver et al., Hypothesis (Python) — the shrinker model used in §8.2.
@@ -55,7 +59,7 @@ A `PropDecl` per the grammar has the form:
 prop NAME: BODY
 ```
 
-where `BODY` is a `PropExpr` (extends `Expr` with `forall` and `implies`, per §5–§6). `prop` declarations are valid in **four** syntactic positions, each with slightly different semantics:
+where `BODY` is a `PropExpr` (extends `Expr` with `forall` and `implies`, per §5–§6). `prop` declarations are valid in **three** syntactic positions, each with slightly different semantics. (A fourth context — fn-result postconditions — is deferred to a future release; see §3.3.)
 
 ### 3.1 Cap members (Rule P3.1)
 
@@ -88,30 +92,15 @@ Implicit bindings inside the body:
 - The data's `of` parameters (e.g., `lo`, `hi` above) — accessible as compile-time constants per Rule Q6.2.
 - Constructor variants and their fields (via `forall` quantification: `forall (b: Self) -> ...`).
 
-### 3.3 Function-body postconditions and the `result` binder (Rule P3.3) — resolves OQ7 in type_system.md
+### 3.3 Function-result postconditions — **deferred (was Rule P3.3)**
 
-A `prop` declared at the top of a function body is a **postcondition** — a property the function's return value (and arguments) must satisfy after execution.
-
-```
-fn sort(collection: C is Sequencing + Sized of (A is Ord)) -> C is Sorted =
-    prop result_same_size: result.size == collection.size
-    collection.fold_right(C.empty, (x, acc) -> insert_sorted(acc, x))
-```
-
-**Rule P3.3 (the `result` binder).** Inside a fn-body `prop` declaration, the identifier `result` is an **implicit binder** for the function's declared return value at the function's declared return type. The binding is in scope **only inside that prop body**.
-
-In other prop contexts (cap-member or data-member props, refinement-cap returns), the identifier `result` carries no special meaning — it is parsed as an ordinary identifier.
-
-A function body may contain multiple postconditions; each is a separate `prop` declaration:
-
-```
-fn insert_sorted(sorted: C is Sorted, value: A) -> C is Sorted =
-    prop grows_by_one: result.size == sorted.size + 1
-    prop preserves_sortedness: sorted_check(result)
-    ...
-```
-
-Implicit bindings: function parameters (in the prop body's outer scope), `result` (the implicit return-value binder).
+> **Status: deferred.** Function-result postconditions — `prop` declarations at the top of a fn body that use the implicit `result` binder for the return value — are not part of v0.4.5. They are reserved for a future release if user demand emerges.
+>
+> **Rationale.** The feature requires committing to (a) an implicit reserved-in-context identifier (`result`), (b) per-fn-call discharge of postcondition obligations at every call site, and (c) integration with the static prover for fn-call summaries. Each is independently a sizable spec + implementation surface. Without concrete user demand we prefer to ship invariants on caps and data (§3.1, §3.2) and refinement caps (§3.4), which already cover the common verification use cases via type-level obligations rather than fn-result postconditions.
+>
+> **Typer behaviour.** A `prop` declaration appearing at the top of a non-cap-returning fn body is a compile error: `error[E???]: function-result postconditions are deferred. Express the property as an invariant on a result type (e.g. `is Sorted`, `cap of A`) instead.`
+>
+> **Reintroduction path.** When this is re-enabled, the v0.2 specification is the starting point: the `result` identifier becomes contextually reserved inside fn-body prop declarations; a multi-prop fn body lists postconditions as separate `prop` declarations; static-prover discharge proceeds against the fn body's symbolic execution. See `docs/decisions/X6-result-binder.md` for the design space considered.
 
 ### 3.4 `fn -> cap` returns — refinement caps (Rule P3.4)
 
@@ -201,6 +190,21 @@ A `forall` is verifiable iff every binder's type has a **PBT generator** in scop
 
 Refinement caps (Marker class) restrict an underlying generator. `between(0, 10)` constrains an integer generator to `{0..10}`.
 
+**Rule P5.3.a (Refinement-narrowed binders) — resolves X2.** When a `forall` binder's type combines a base capability with one or more refinement caps (e.g., `forall (n: u64 + between(0, 10))` or `forall (xs: is Sequencing of (N is Numeric))` where the base is `Sequencing of N` and `N is Numeric` further refines `N`), the generator is constructed compositionally:
+
+1. Generate inhabitants from the **base**: the base type's generator under (1)–(4) above.
+2. **Filter** by the refinement caps' prop bodies, using the same `suchThat`-style filter semantics as Rule P5.4.c. Each refinement cap's prop body becomes a generator-side filter; values failing the prop are discarded toward the discard-rate guard (Rule P5.4.d).
+
+A refinement-only binder type (a `forall` binder whose type is *only* refinement caps with no base) is a verification error: `error[E101a]: cannot verify <prop> — refinement-only binder type has no underlying generator`. The user must add a base capability or primitive type to the binder's bound set.
+
+**Rule P5.3.b (Polymorphic binders — sampling across satisfactions) — resolves L3.** When a `forall` binder's type is `is C of (...)` and multiple in-scope `T satisfies C` are visible (case 4 above with N > 1 satisfactions), the PBT runtime **samples** across the satisfying types rather than enumerating their cross-product. The default sampling strategy is *uniform* across the in-scope satisfactions: each iteration picks a satisfying type at random with equal probability, then generates a value of that type.
+
+For nested polymorphic binders (e.g., `is Sequencing of (N is Numeric)` with N satisfactions for `Sequencing` and M satisfactions for `Numeric`), the cross-product is `N × M` candidate type combinations; uniform sampling picks one such combination per iteration. The total iteration budget (Rule P7.6) is applied to *iterations*, not to satisfaction-pairs — so increasing the satisfaction count thins the per-pair coverage.
+
+This sampling strategy is the same one used by Hypothesis (Python) and Hedgehog (Haskell) for polymorphic property tests; users seeking deterministic per-pair coverage can pin a specific satisfaction via type annotation or via a custom generator when OQ-P2 is resolved.
+
+A future weighting hint (`@sampling(weights = ...)` or similar attribute) is anticipated for cases where one satisfying type matters more than others — deferred until use cases motivate it.
+
 **Rule P5.3 (Generator availability).** If a `forall` binder's type has no generator and the prop body cannot be statically proven, the typer halts: `error[E101]: cannot verify <prop> — no generator for <type>`. The user resolves by providing a custom generator (mechanism deferred — see OQ-P2) or by restricting the binder's domain via a refinement cap.
 
 ### 5.4 `suchThat` (Rule P5.4)
@@ -288,7 +292,7 @@ For each `prop`, the compiler attempts:
 The static prover sees:
 
 - The prop body.
-- Free bindings: `Self`, `Part`, fn parameters, `result` (per §3.3), data-`of`-params (per §3.2).
+- Free bindings: `Self`, `Part`, fn parameters, data-`of`-params (per §3.2). (`result` is reserved for the deferred postcondition feature; see §3.3.)
 - Type information for every binding.
 - Verified props of inherited caps (per `extends`, §10).
 
@@ -522,7 +526,7 @@ fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String =
 - **OQ-P2 — Custom generators.** Rule P5.3 requires every `forall` binder type to have a generator. Users may want to provide custom generators for domain types (e.g., a generator for "valid email strings"). Mechanism deferred — likely a `gen` declaration parallel to `satisfies` mapping a type to a generator function.
 - **OQ-P3 — Per-prop verification annotations.** §8.3 mentions "per-prop annotation" for iteration count and timeout. Concrete syntax not yet specified; candidates include attribute-style markers (`@iterations(1000)`) or a structured `prop` modifier (`prop ... limits { iterations: 1000 }`). Defer until iterations matter in practice.
 - **OQ-P4 — User-supplied static proofs.** When the prover reports `unknown` and PBT is unsuitable (e.g., the binder type has no generator), the user could supply an explicit proof. Mechanism deferred until needed.
-- **OQ-P5 — `result` in non-postcondition contexts.** Rule P3.3 makes `result` an implicit binder only in fn-body postconditions. Whether `result` should also have meaning inside `cap`-method postconditions (where the cap has implicit return-typed methods) is open; defer until a use case appears.
+- **OQ-P5 — `result` in non-postcondition contexts.** Moot in v0.2.1 — fn-body postconditions themselves are deferred (§3.3). When postconditions are re-enabled, the question of `result` in `cap`-method postconditions resurfaces and OQ-P5 will be revisited.
 - **OQ-P6 — Temporal / safety properties.** Properties about traces of operations (e.g., "every `acquire` is eventually followed by `release`") are out of scope for v0.4.3. Linear effects (`spec/effects.md` §3.5) provide a partial alternative for resource lifecycles. Revisit when language matures.
 
 ## 13. Cross-references
@@ -530,7 +534,7 @@ fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String =
 | Document | Relationship |
 |---|---|
 | `spec/syntax_grammar.ebnf` | `PropDecl`, `PropExpr`, `ForallExpr`, `ImpliesExpr` syntax |
-| `spec/type_system.md` | §5.3 (`Part`), §5.4 (`Self`), §6.4 (Marker class — refinement caps), §7.4.a (auto-derived `fold`); resolves OQ7 |
+| `spec/type_system.md` | §5.3 (`Part`), §5.4 (`Self`), §6.4 (Marker class — refinement caps), §7.4.a (auto-derived `fold`); OQ7 deferred per §3.3 |
 | `spec/quantities.md` | Rule Q5.5 (prop bodies at quantity 0), Q5.9 / Q5.10 (semiring usage) |
 | `spec/effects.md` | Effects forbidden in props (§4.2 here); linear effects (§3.5 there) as resource-lifecycle alternative to OQ-P6 |
 | `spec/pattern_matching.md` | Rule M6.2 (refinement-aided exhaustiveness) shares prop-evidence machinery |
