@@ -3,9 +3,19 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4.5
+   Status:        DRAFT v0.4.6
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
    Last revised:  2026-05-01
+
+   Refinements in v0.4.6
+   ---------------------
+   - **Prefix unary operators** added: `UnaryExpr = ("-" | "!")? AppExpr`,
+     positioned in the precedence chain between `MulExpr` and `AppExpr`
+     (tighter than `*`/`/`/`%`, looser than method/application).
+     Single-arity: `--x` and `!!x` not admitted. Both desugar via cap
+     methods — `-x ≡ x.negate` (`cap Numeric`), `!x ≡ x.not`
+     (`cap Boolean`). See `spec/stdlib.md` §4.9 / §4.5 for the method
+     declarations and operator desugaring tables.
 
    Refinements in v0.4.5
    ---------------------
@@ -711,10 +721,16 @@ PatternList
      logical or    ||
      logical and   &&
      comparison    == != < > <= >=
-     additive      + -
+     additive      + -                     (binary)
      multiplicative * / %
+     unary         -  !                     (prefix; single-arity, v0.4.5)
      application/method  f(args)  e.m(args)  e.field
      atom
+
+   Unary `-` and `!` are tighter than `*`/`/`/`%` so that `-a * b`
+   parses as `(-a) * b`, matching the convention in C/Rust/Scala.
+   Per UnaryExpr's definition, only one prefix operator may apply per
+   atom; iterate via parens when needed.
 
    `if`, `match`, `handle`, `do`, lambdas, struct literals, list
    literals, tuples, and `unreachable` all act as atoms.
@@ -775,7 +791,17 @@ AddExpr
     ;
 
 MulExpr
-    = AppExpr ( ( "*" | "/" | "%" ) AppExpr )*
+    = UnaryExpr ( ( "*" | "/" | "%" ) UnaryExpr )*
+    ;
+
+(* Prefix unary operators (v0.4.5): single-arity prefix `-` (numeric
+   negation) and `!` (logical not). Both desugar via cap methods —
+   `-x ≡ x.negate` (cap Numeric), `!x ≡ x.not` (cap Boolean). The unary
+   form is single-arity: `--x` and `!!x` are not admitted; programs
+   needing iterated negation use parens (`-(-x)`) or call the underlying
+   methods directly. *)
+UnaryExpr
+    = ( "-" | "!" )? AppExpr
     ;
 
 AppExpr

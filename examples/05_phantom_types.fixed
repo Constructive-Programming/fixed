@@ -108,7 +108,7 @@ fn scale(q: is Quantity of U, factor: f64) -> is Quantity of U =
     Quantity.new(q.value * factor)
 
 fn negate(q: is Quantity of U) -> is Quantity of U =
-    Quantity.new(0.0 - q.value)
+    Quantity.new(-q.value)
 
 // --- Unit conversions (type-changing operations) ---
 

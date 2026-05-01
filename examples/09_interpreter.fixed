@@ -90,7 +90,7 @@ fn default_builtins() -> is Builtins =
         else if name == "abs":
             match args:
                 List.Cons(x, List.Nil) =>
-                    Optional.some(if x < 0.0: 0.0 - x else: x)
+                    Optional.some(if x < 0.0: -x else: x)
                 _ => Optional.none
         else if name == "max":
             match args:
@@ -118,7 +118,7 @@ fn eval(expr: is Expr, env: is Env) -> f64 with EvalError =
         ),
         (left_fn, right_fn) -> (env) -> left_fn(env) + right_fn(env),
         (left_fn, right_fn) -> (env) -> left_fn(env) * right_fn(env),
-        (inner_fn) -> (env) -> 0.0 - inner_fn(env),
+        (inner_fn) -> (env) -> -inner_fn(env),
         (name, val_fn, body_fn) -> (env) ->
             let v = val_fn(env)
             body_fn(env.bind(name, v)),

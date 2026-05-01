@@ -227,7 +227,7 @@ fn sum_bounded(
     numbers.fold(0, (acc, x) -> acc + x)
 
 fn abs(n: N is Numeric + Ord) -> N is positive() =
-    if n < 0: 0 - n else: n
+    if n < 0: -n else: n
 
 fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String =
     let n = parse_u16(s)

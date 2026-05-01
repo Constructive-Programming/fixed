@@ -257,7 +257,7 @@ Each node carries:
 | `Literal` | `LiteralExpr` | Integer, float, string, char, bool, unit. |
 | `Ident` | `LOWER_IDENT` / `UPPER_IDENT` in expr position | Variable reference, type reference, etc. |
 | `BinOp` | `OrExpr`/`AndExpr`/`CmpExpr`/`AddExpr`/`MulExpr` | Operator nodes. |
-| `UnaryOp` | `UnaryExpr` | `!`, `-` prefix. |
+| `UnaryOp` | `UnaryExpr` (added in grammar v0.4.6) | Single-arity prefix `-` (numeric negation, desugars to `.negate`) or `!` (logical not, desugars to `.not`). The parser produces this node; desugaring happens in the typer. |
 | `Pipe` | `PipeExpr` | `x \|> f` ≡ `f(x)`. |
 | `FieldAccess` | `.LOWER_IDENT` | Property access (no method call). |
 | `TupleExpr` | `TupleExpr` | `(a, b, ...)` with optional trailing comma. |
@@ -442,7 +442,7 @@ The parser produces `DataVariantPat(qualifier, name, fields=Nil)` for the bare f
 
 ### 7.6 Operator precedence
 
-Normative in `syntax_grammar.ebnf` lines 709–720 (no further spec edit needed). Productions `PipeExpr → OrExpr → AndExpr → CmpExpr → AddExpr → MulExpr → AppExpr → AtomExpr` encode precedence from lowest to highest:
+Normative in `syntax_grammar.ebnf` (lines 709–725 after v0.4.6). Productions `PipeExpr → OrExpr → AndExpr → CmpExpr → AddExpr → MulExpr → UnaryExpr → AppExpr → AtomExpr` encode precedence from lowest to highest:
 
 | Production | Operators | Associativity |
 |---|---|---|
@@ -450,12 +450,13 @@ Normative in `syntax_grammar.ebnf` lines 709–720 (no further spec edit needed)
 | `OrExpr` | `\|\|` | Left |
 | `AndExpr` | `&&` | Left |
 | `CmpExpr` | `==`, `!=`, `<`, `<=`, `>`, `>=` | Non-associative (`?` in grammar — at most one comparison per expr) |
-| `AddExpr` | `+`, `-` | Left |
+| `AddExpr` | `+`, `-` (binary) | Left |
 | `MulExpr` | `*`, `/`, `%` | Left |
+| `UnaryExpr` | `-`, `!` (prefix) | Single-arity (`?` in grammar — at most one prefix per atom) |
 | `AppExpr` | `f(args)`, `e.m(args)`, `e.field` | (call/access) |
 | `AtomExpr` | literals, idents, `(...)`, lambdas, `if`, `match`, `handle`, `do` | (atom) |
 
-**No prefix unary operators in v0.4.5.** Negation is expressed via `0 - x` or `n.neg()` per `cap Numeric`; logical not via `!cond` is **not in the grammar** and the examples don't use it. If unary needs are real, that's a small grammar extension for a future revision.
+Prefix unary `-` and `!` were added in grammar v0.4.6 — they're single-arity (`-(-x)` requires parens; `--x` is a parse error). Both desugar via cap methods: `-x ≡ x.negate` (`cap Numeric` §4.9), `!x ≡ x.not` (`cap Boolean` §4.5). The parser produces a `UnaryOp` node; desugaring happens in the typer.
 
 Capability composition `+` (`Folding + Filtering`) and capability extension `+` (`extends Functor + Monad`) reuse the `+` lexeme but appear only in is-bound / extends contexts (productions `CapBoundChain`, `CapBound ( "+" CapBound )*`). The parser disambiguates by syntactic position — is-bound `+` cannot reach `AddExpr`'s production.
 

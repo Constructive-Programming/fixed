@@ -125,9 +125,16 @@ cap Boolean:
     Self.fn yes -> Self
     Self.fn no -> Self
     fn fold(on_yes: () -> R, on_no: () -> R) -> R
+    fn not -> Self = self.fold(() -> Self.no, () -> Self.yes)
 ```
 
-The primitive `bool` satisfies `Boolean` (the typer auto-bridges).
+The primitive `bool` satisfies `Boolean` (the typer auto-bridges). Operator desugaring:
+
+```
+!a         ≡   a.not
+```
+
+Per the v0.4.6 grammar (`UnaryExpr`), prefix `!` is single-arity: `!!a` is not admitted; iterate via parens (`!(!a)`) or call methods directly.
 
 ### 4.6 `cap Empty`
 
@@ -175,6 +182,7 @@ cap Numeric extends Eq + Ord:
     fn mul(other: Self) -> Self
     fn div(other: Self) -> Self      // truncating for integers, IEEE for floats
     fn rem(other: Self) -> Self      // remainder; pairs with div
+    fn negate -> Self                 // additive inverse — `-x ≡ x.negate`
 ```
 
 Operator desugaring:
@@ -185,7 +193,10 @@ a - b      ≡   a.sub(b)
 a * b      ≡   a.mul(b)
 a / b      ≡   a.div(b)
 a % b      ≡   a.rem(b)
+-a         ≡   a.negate           // prefix unary, single-arity per v0.4.6 grammar
 ```
+
+Per the v0.4.6 grammar (`UnaryExpr`), prefix `-` is single-arity: `--a` is not admitted; iterate via parens (`-(-a)`) or call `.negate` directly.
 
 Numeric-literal polymorphism (`type_system.md` §5.7) goes through `Self.fn from_i64`: an integer literal in a `Numeric`-bounded position is desugared to `Self.from_i64(LITERAL)`. Float literals desugar to a `from_f64` overload (forthcoming; deferred until float-spec lands).
 

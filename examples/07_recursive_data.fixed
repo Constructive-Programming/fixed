@@ -55,7 +55,7 @@ fn eval(expr: Expr) -> f64 =
         (v) -> v,                        // Lit: just the value
         (left, right) -> left + right,   // Add: children already folded to f64
         (left, right) -> left * right,   // Mul: children already folded to f64
-        (inner) -> 0.0 - inner,          // Neg: child already folded to f64
+        (inner) -> -inner,                // Neg: child already folded to f64
     )
 
 fn show_expr(expr: Expr) -> String =
