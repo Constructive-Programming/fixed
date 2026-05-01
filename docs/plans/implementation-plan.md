@@ -194,7 +194,7 @@ cap Optional extends Functor + Folding:
 | `extends` | Cap inherits requirements from another cap | `cap Monad extends Functor` |
 | `satisfies` | Type provides concrete implementation of a cap | `Maybe satisfies Optional: ...` |
 
-A `satisfies` declaration maps data constructors to capability constructors by name using `as`:
+A `satisfies` declaration maps data constructors to capability constructor *requirements* by name using `as` (the cap declares the requirement; the data type provides the implementation):
 
 ```
 data Maybe of A:
@@ -217,12 +217,12 @@ fn wrap(x: A) -> is Optional of A =
 
 `use Type satisfies Cap` does two things in one line: it imports the type *and* brings the satisfaction mapping into scope.
 
-Unreachable constructors are marked with `impossible`:
+Constructor requirements that the satisfying type does not implement are marked `impossible`. Calls to them through the cap lower to a runtime panic (see spec/type_system.md §8.2 for the precise rule):
 
 ```
 u64 satisfies Optional of Self:
     Self as some
-    impossible as none   // u64 is always present — `none` is a compile error
+    impossible as none   // u64 is always present; `Optional.none` on a u64 panics at runtime
 ```
 
 ### `Self of B` for higher-kinded returns
@@ -314,7 +314,7 @@ data Config(host: String, port: u16, debug: bool)
 Key properties:
 - **The compiler still owns the representation** — `data` declares the shape (variants and fields), not the layout
 - **Data types automatically satisfy capabilities** their shape supports (e.g., a multi-variant data gets `Folding` for free, a data with fields gets accessors)
-- **Explicit `satisfies` declarations** map data constructors to capability constructors by name using `as`, bridging the gap between abstract `Self.fn` requirements and concrete data variants
+- **Explicit `satisfies` declarations** map data constructors to capability constructor *requirements* by name using `as`, bridging the gap between abstract `Self.fn` requirements and concrete data variants
 - **Pattern matching** uses dot syntax: `Expr.Lit(v)`, `Color.RGB(r, g, b)`, `Direction.North`
 - **`of` works on data** just like on caps: `data Tagged of (Tag, Value)` introduces type parameters (Tag is inferred phantom; see type_system.md §5.9)
 - **Capability constraints inside data fields**: `RGB(red: N is Numeric, green: N, blue: N)` — all three fields share the same numeric type
@@ -345,7 +345,7 @@ Use `satisfies` to **bridge** between data and capabilities — mapping data con
 Rules:
 1. **`match` arms may only use data-qualified patterns** — `Json.Null`, `List.Cons(h, t)`, `Direction.North`, `Ordering.Equal`, etc.
 2. **Capability destruction uses `fold`** — `opt.fold(on_some, on_none)`, `expr.fold(on_lit, on_var, ...)`, `result.fold(on_ok, on_err)`
-3. **Construction via cap constructors is valid** — `Optional.some(x)` is resolved via `satisfies` to `Maybe.Just(x)` at compile time
+3. **Construction through a cap's constructor *requirement* is valid** — `Optional.some(x)` is resolved via `satisfies` to a satisfying type's actual constructor (e.g., `Maybe.Just(x)`) at compile time
 4. **Data constructors are Capitalized** — `List.Cons`, `List.Nil`, `Ordering.Less`, `Json.Null`
 5. **Cap constructors are lowercase** — `Optional.some(x)`, `Expr.lit(v)`, `Result.ok(v)` (these are `Self.fn` names)
 
@@ -406,7 +406,7 @@ fn factorial(n: u64) -> u64 =
 | Data declarations | `data Color:` + indented variants `Red`, `Green`, `Blue`, `RGB(...)` | No prior equivalent (escape hatch) |
 | Single-constructor data sugar | `data Config(host: String, port: u16)` | `data Config:` + `Config(host: String, port: u16)` |
 | Satisfaction decl | `Maybe satisfies Optional:` + `Just as some`, `Nothing as none` | Haskell's `instance`, Rust's `impl Trait for Type` |
-| Impossible mapping | `impossible as none` | Partial satisfaction — unreachable constructor |
+| Impossible mapping | `impossible as none` | Partial satisfaction — requirement with no implementation; calls panic at runtime per type_system.md §8.2 |
 | Satisfaction import | `use std.maybe.Maybe satisfies Optional` | Brings satisfaction mapping into scope |
 | No semicolons | Newlines separate expressions | `;` statement terminators |
 | Cap-generating functions | `fn between(min, max) -> cap of N:` + indented `prop ...` | Separate type-level and value-level abstractions |
@@ -581,7 +581,7 @@ The **more capabilities** you request, the **fewer representations** qualify. Th
 | 6 | `examples/06_functor_monad.fixed` | HKTs, `Functor`/`Monad` hierarchy, `do` notation, `Optional extends Monad` |
 | 7 | `examples/07_recursive_data.fixed` | Recursive data (Tree, Expr, Nat), BST ops, catamorphism/anamorphism/hylomorphism/paramorphism |
 | 8 | `examples/08_effects_handlers.fixed` | Multiple effects (Fail, Log, Channel, Async), handler composition, concurrency as effects |
-| 9 | `examples/09_interpreter.fixed` | `cap Expr` (8 constructors), fold-based eval, `satisfies` (AstNode), effects for eval errors |
+| 9 | `examples/09_interpreter.fixed` | `cap Expr` (8 constructor requirements), fold-based eval, `satisfies` (AstNode), effects for eval errors |
 | 10 | `examples/10_geometry.fixed` | `type` aliases, `data` declarations, geometry ops (area, perimeter, bounding box) |
 | 11 | `examples/11_properties.fixed` | `prop` invariants, `forall`/`implies`, `impossible`, `fn -> cap` refinements, type aliases with refinements |
 
@@ -622,7 +622,7 @@ Formal specification documents that pin down semantics before implementation.
 - **No explicit `self`**: instance methods don't declare a self parameter; the compiler infers it
 - **Coherence rules**: how orphan rules work when there are no concrete types. Satisfaction declarations (`Type satisfies Cap`) are modular — they must be brought into scope via `use Type satisfies Cap` to be visible. No global coherence requirement.
 - **Recursive capability detection**: Self in constructor parameter position
-- **`satisfies` semantics**: How `Type satisfies Cap:` + indented `Variant as constructor` declarations map data constructors to capability constructors. How `impossible as constructor` marks unreachable constructors. How the compiler verifies soundness of partial satisfactions. How `use Type satisfies Cap` brings satisfaction mappings into scope.
+- **`satisfies` semantics**: How `Type satisfies Cap:` + indented `Variant as name` declarations map data constructors to capability constructor *requirements* (caps declare requirements; types provide constructors — see spec/type_system.md §8). How `impossible as name` records that the satisfying type provides no implementation, lowering to a runtime panic per Rule 8.2. How `use Type satisfies Cap` brings satisfaction mappings into scope.
 - **Constructor resolution**: How the compiler selects among in-scope `satisfies` declarations when a `Self.fn` constructor is called on a capability. Context-based resolution via return types and assignment targets. Ambiguity errors with copy-pasteable suggestions.
 
 ---
@@ -783,7 +783,7 @@ let z = Maybe.Just(42)
 
 ### Partial satisfaction with `impossible`
 
-Any type can satisfy a cap, marking unreachable constructors with `impossible`:
+Any type can satisfy a cap; constructor *requirements* the type does not implement are marked `impossible` (calls to them lower to runtime panics — see spec/type_system.md §8.2):
 
 ```
 u64 satisfies Optional of Self:
@@ -791,7 +791,7 @@ u64 satisfies Optional of Self:
     impossible as none
 ```
 
-Meaning: `u64` is always present (`some` = identity), never absent (`none` = unreachable). The compiler verifies soundness — any code path that would invoke `none` on a `u64 is Optional` is a compile error.
+Meaning: `u64` is always present (`some` = identity); the `none` requirement has no implementation (`impossible`). Calls to `Optional.none` whose resolution targets `u64` lower to a runtime panic — see spec/type_system.md §8.2 (Rule 8.2) for the runtime-panic semantics. The compiler does not statically verify reachability; users who need that guarantee add a `prop` excluding the offending path (per spec/properties.md, Rule P9.2 — verified props discharge the panic).
 
 ```
 data NonEmptyList of A (head: A, tail: is List of A)

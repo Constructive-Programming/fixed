@@ -221,7 +221,7 @@ Multi-shot handlers (where `resume` may be called any number of times) are not s
 
 When a cap method carries a default body (Rule 6.1 in type_system.md), the body's quantity inference runs in two passes:
 
-1. **At the cap declaration:** the body is analysed against the cap's abstract `Self`, treating each `Self.fn` constructor and abstract method as a function with worst-case (quantity-ω) parameter quantities. This produces a *quantity skeleton* for the default body.
+1. **At the cap declaration:** the body is analysed against the cap's abstract `Self`, treating each `Self.fn` constructor *requirement* and abstract method *requirement* as a function with worst-case (quantity-ω) parameter quantities. This produces a *quantity skeleton* for the default body.
 2. **At each satisfying type:** the satisfying type's concrete method quantities are substituted into the skeleton, and the body is re-checked. If the satisfying type's methods have quantities tighter than ω, the default body may inherit tighter quantities for its captured arguments.
 
 If a satisfying type provides an explicit `satisfies`-block override (an `InstanceMethodDef`), the default body is not used; quantities are computed entirely from the override.

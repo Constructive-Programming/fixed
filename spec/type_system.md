@@ -1,8 +1,10 @@
 # Fixed Type System
 
-**Status:** Draft v0.4.1
-**Specifies:** typing of Fixed v0.4.1 source.
-**Last revised:** 2026-04-30
+**Status:** Draft v0.4.2
+**Specifies:** typing of Fixed v0.4.4 source.
+**Last revised:** 2026-05-01
+
+**Changes from v0.4.1.** §8 reframed to make the *capabilities-declare-requirements, types-provide-constructors* distinction explicit (new §8 intro). §8.1 wording updated (Rule 8.1.a / 8.1.b refer to "constructor requirements"). §8.2 (`impossible`) example replaced with a self-contained `Either` / `AlwaysRight` pair to avoid ambiguity between the simplified `Optional` and the canonical one. **Rule 8.2 weakened**: `impossible` is no longer statically verified to be unreachable — calls to an impossible-mapped constructor compile to runtime panics rather than compile errors. Users who need static guarantees may add a `prop` excluding the offending path. Wording across §6.4, §6.6, §7.4.f tightened to "constructor requirements" instead of "constructors".
 
 **Changes from v0.4.** `phantom` is no longer a keyword; phantom-ness of type parameters is inferred from usage (new §5.9). §6.5 representation-selection algorithm expanded from a one-paragraph sketch to a normative procedure with inputs, candidate pool, viability filter, scoring, ambiguity handling, phase placement, and caching. Rule 6.6 (priority) updated previously to put built-ins on equal footing with user-`satisfies` types — see §6.5.4 / 6.5.5 for how the equal priority resolves through scoring.
 
@@ -288,7 +290,7 @@ cap Optional:
     fn or_else(default: Part) -> Part = Self.fold((v) -> v, () -> default)
 ```
 
-**Rule 6.1 (Default method bodies / extension methods).** A cap method's optional body acts as both a *default implementation* — used when the satisfying type does not provide its own — and an *extension method*: every type satisfying the cap automatically gets the method as a callable, even without writing one in `satisfies`. Bodies may use `Self`, `Part`, and other in-scope cap members (including the cap's `Self.fn` constructors and abstract methods, which are guaranteed to be provided by the satisfying type).
+**Rule 6.1 (Default method bodies / extension methods).** A cap method's optional body acts as both a *default implementation* — used when the satisfying type does not provide its own — and an *extension method*: every type satisfying the cap automatically gets the method as a callable, even without writing one in `satisfies`. Bodies may use `Self`, `Part`, and other in-scope cap members (including the cap's `Self.fn` constructor *requirements* and abstract method *requirements*, which are guaranteed to be provided by the satisfying type).
 
 ### 6.2 `extends` inheritance
 
@@ -322,10 +324,10 @@ Every cap declaration is assigned exactly one **classification** based on its me
 
 | Classification | Detection rule | Examples |
 |---|---|---|
-| **Sum** | At least one `Self.fn ctor(...) -> Self` plus one `fn fold<R>(...)` member | `Optional`, `Result`, `Expr` |
-| **Product** | Exactly one `Self.fn ctor(...) -> Self`, plus accessor methods (`fn field -> T`) and no `fold` | `Config` (when expressed as a cap), `Message` |
-| **Recursive** | Any `Self.fn` ctor whose parameter list contains `Self` | `Sequencing` (via `cons(h, t: Self) -> Self`) |
-| **Capability-only** | No `Self.fn` constructors; only instance methods | `Folding`, `Functor`, `Filtering`, `Sized`, `RandomAccess` |
+| **Sum** | At least one `Self.fn ctor(...) -> Self` constructor requirement plus one `fn fold<R>(...)` member | `Optional`, `Result`, `Expr` |
+| **Product** | Exactly one `Self.fn ctor(...) -> Self` constructor requirement, plus accessor methods (`fn field -> T`) and no `fold` | `Config` (when expressed as a cap), `Message` |
+| **Recursive** | Any `Self.fn` constructor requirement whose parameter list contains `Self` | `Sequencing` (via `cons(h, t: Self) -> Self`) |
+| **Capability-only** | No `Self.fn` constructor requirements; only instance methods | `Folding`, `Functor`, `Filtering`, `Sized`, `RandomAccess` |
 | **Marker** | No methods at all (possibly with `prop` declarations) | `Locked`, `Open`, `Meters`, `Seconds`; refinement caps `between(lo, hi)` |
 
 A cap may belong to multiple of these categories transitively via `extends` (e.g., `Sequencing` is recursive *and* capability-only via the inherited members of `Folding`). The classification of the **declaring** cap is the union: the compiler treats it as "having sum/product/recursive shape" exactly when its own declared members trigger the rule.
@@ -427,7 +429,7 @@ The illustrative set for v0.2:
 | Linked list of `T` | `Sequencing of T + Folding of T + Empty + Filtering + Functor` |
 | Contiguous array of `T` | `Sequencing of T + Folding of T + RandomAccess of (T, u64) + Sized of (T, u64) + Empty + Filtering + Functor` |
 | Hash map of `K × V` | `Map of (K, V)` (when `K` satisfies `Hash + Eq`) |
-| Auto-tagged-union for a sum cap | The sum cap's full method set (auto-implemented from the cap's `Self.fn` constructors) |
+| Auto-tagged-union for a sum cap | The sum cap's full method set (auto-implemented from the cap's `Self.fn` constructor requirements) |
 | Auto-flat-struct for a product cap | The product cap's full method set |
 
 **Rule 6.6 (priority).** During representation selection, built-in candidates have **equal priority** to user-`satisfies`-mapped data types. If a user-defined data type can satisfy the same bound set, it competes alongside the built-in candidates; the compiler picks among them by **allocation and performance heuristics**, with PGO refinement when profile data is available.
@@ -572,7 +574,7 @@ These accessors are auto-implemented and require no `satisfies` declaration.
 
 **Rule 7.4.e (Marker / refinement caps are never auto-derived).** Marker caps (no methods) and refinement caps generated by `fn -> cap` impose `prop` obligations only; they are never auto-derived. Satisfaction is by static verification (see `spec/properties.md`), not by code synthesis.
 
-**Rule 7.4.f (Caps with `Self.fn` constructors require explicit `satisfies`).** A cap declaring any `Self.fn` constructor (sum or product classification, §6.4) is **never** auto-derived. An explicit `satisfies` mapping is required to bind data variants to cap constructors:
+**Rule 7.4.f (Caps with `Self.fn` constructor requirements require explicit `satisfies`).** A cap declaring any `Self.fn` constructor *requirement* (sum or product classification, §6.4) is **never** auto-derived. An explicit `satisfies` mapping is required to bind data variants to those requirements:
 
 ```
 data Maybe of A:
@@ -616,6 +618,10 @@ Per-variant type narrowing in pattern arms (the GADT feature in Haskell, OCaml, 
 
 ## 8. `satisfies`
 
+A capability declares **what must exist**, not what does exist. The `Self.fn ctor(...) -> Self` declarations inside a cap body are **constructor requirements** — they specify that any type satisfying the cap must provide an implementation. Capabilities do not have constructors of their own; construction is always grounded in a concrete `data` type. A `satisfies` declaration is the mapping that names which data variants implement which cap requirements.
+
+The same distinction applies to abstract methods: a cap declares `fn name(...) -> T` as a method requirement; the satisfying type provides the implementation (auto-derived where Rule 7.4 applies, or explicit per §8.3).
+
 ### 8.1 Mapping form
 
 ```
@@ -628,9 +634,11 @@ Maybe satisfies Optional:
     Nothing as none
 ```
 
-**Rule 8.1.a (Variant-to-constructor).** Each `Variant as ctor` line maps a data variant to one of the cap's `Self.fn` constructors. The variant's field types must match (or be a refinement of) the corresponding `Self.fn`'s parameter types.
+(`Optional` here is the canonical sum cap from `examples/06_functor_monad.fixed`, declaring `Self.fn some(value: Part) -> Self` and `Self.fn none -> Self` as constructor requirements. The simplified `Optional` in `examples/02_collections.fixed` has no `Self.fn` requirements and is satisfied by auto-derivation alone — see §7.4.)
 
-**Rule 8.1.b (Coverage).** A complete `satisfies` declaration must map every `Self.fn` constructor of the cap to a data variant (or, in the partial-satisfaction case below, to `impossible`):
+**Rule 8.1.a (Variant-to-requirement).** Each `Variant as name` line provides a data variant as the implementation of one of the cap's `Self.fn` constructor requirements. The variant's field types must match (or be a refinement of) the corresponding requirement's parameter types.
+
+**Rule 8.1.b (Coverage).** A complete `satisfies` declaration must map every `Self.fn` constructor requirement of the cap to a data variant (or, in the partial-satisfaction case below, to `impossible`):
 
 ```
 data Outcome of (E, A):
@@ -642,20 +650,42 @@ Outcome satisfies Result:
     Failure as err
 ```
 
-Both of `Result`'s `Self.fn` constructors (`ok` and `err`) are mapped; the satisfaction is total. Missing or duplicate mappings are compile errors.
+Both of `Result`'s `Self.fn` constructor requirements (`ok` and `err`) are mapped; the satisfaction is total. Missing or duplicate mappings are compile errors.
 
-### 8.2 `impossible`
+### 8.2 `impossible` — partial satisfaction
 
-Mapping `impossible as ctor` declares that the cap's constructor `ctor` is unreachable for this satisfying type. Any code path that reaches `Cap.ctor(...)` on a value statically known to be of this satisfying type is a compile error.
+A satisfying type may declare that a particular constructor requirement does not apply to it by mapping `impossible as name`. The satisfying type then provides no implementation for that requirement; calls to it through the capability surface compile to **runtime panics**.
+
+A self-contained example. Define a sum-style cap with two requirements:
 
 ```
-u64 satisfies Optional of Self:
-    Self as some                 // u64 is its own Just
-    impossible as none           // u64 is never absent
-// Optional.none on a u64 is a compile error
+cap Either of (L, R):
+    Self.fn left(value: L) -> Self
+    Self.fn right(value: R) -> Self
+    fn fold<X>(on_left: L -> X, on_right: R -> X) -> X
+
+// A data type that is always the right side — for instance, a parse result
+// from a trusted source where failure is impossible by construction.
+data AlwaysRight of (L, R) (value: R)
+
+AlwaysRight satisfies Either of (L, R):
+    AlwaysRight as right
+    impossible as left
 ```
 
-**Rule 8.2.** The compiler verifies `impossible` soundness: no branch of a reachable expression may construct the marked constructor on a value statically constrained to be of this satisfying type.
+Calling `Either.right(v)` at a position whose expected type resolves to `AlwaysRight` selects the `right` mapping and constructs an `AlwaysRight(v)`. Calling `Either.left(err)` at the same position has no implementation in `AlwaysRight` — the compiler emits a **runtime panic** at that call site.
+
+**Rule 8.2 (Impossible — runtime panic semantics).** Mapping `impossible as name` records that the satisfying type provides no implementation of the constructor requirement `name`. The compiler does **not** statically verify that the requirement is unreachable on this satisfying type. Calls to `Cap.name(...)` whose resolution targets this satisfying type compile to a runtime panic of the form `panic: impossible constructor 'name' invoked on <SatisfyingType>`.
+
+Static guarantees that the panic is unreachable are the user's responsibility, expressible as `prop` declarations on the surrounding code per `spec/properties.md`. For instance:
+
+```
+fn unwrap_right(x: AlwaysRight of (L, R)) -> R =
+    prop never_calls_left: ...     // user-supplied invariant ruling out Either.left
+    x.fold((_) -> unreachable, (r) -> r)
+```
+
+Why runtime panic rather than static rejection? Static reachability analysis across `satisfies` declarations is non-trivial — a closed-world reachability check would constrain how third-party `satisfies` declarations interact, and an open-world check requires whole-program analysis. Runtime panic gives the same operational guarantee (the impossible constructor never returns a real value) without forcing the typer into expensive reachability reasoning. Users who want a static guarantee can add a `prop` (`spec/properties.md`); a verified prop discharges the panic per Rule P9.2.
 
 ### 8.3 Method-body form
 
