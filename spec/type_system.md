@@ -158,9 +158,26 @@ cap Functor:
     fn map(f: Part -> B) -> Self of B          // B introduces a fresh type variable
 ```
 
-**Rule 5.4.a (single-arg).** `Self of B` is well-formed only when `Self` has at least one non-phantom type parameter. The application substitutes `B` for `Self`'s **first non-phantom type parameter**; other parameters are preserved.
+**Rule 5.4.a (single-arg).** `Self of B` is well-formed only when `Self` has at least one non-phantom type parameter. The application substitutes `B` for `Self`'s **rightmost non-phantom type parameter** — the right-bias convention, consistent with Rule 7.4.c (Functor auto-derivation maps over the rightmost). Other parameters are preserved.
 
-**Rule 5.4.b (multi-arg, resolves OQ1).** `Self of (B1, B2, ..., Bk)` substitutes `B1..Bk` positionally over the first `k` non-phantom type parameters of `Self`. The arity `k` must be at most the number of non-phantom parameters of `Self`; supplying more is a compile error.
+**Rule 5.4.b (multi-arg, resolves OQ1).** `Self of (B1, B2, ..., Bk)` substitutes `B1..Bk` positionally over the **last `k` non-phantom type parameters** of `Self` (right-aligned positional substitution). The arity `k` must be at most the number of non-phantom parameters of `Self`; supplying more is a compile error.
+
+```
+data Tuple of (A, B):
+    Tuple(first: A, second: B)
+
+// Tuple satisfies Functor (right-bias: over B):
+//   fn map<B'>(f: B -> B') -> Self of B'
+//   = fn map<B'>(f: B -> B') -> Tuple of (A, B')
+
+data Triple of (X, Y, Z):
+    Triple(a: X, b: Y, c: Z)
+
+// `Self of (Y', Z')` substitutes the last 2 non-phantom params:
+//   = Triple of (X, Y', Z')
+```
+
+**Rationale for right-bias.** Earlier drafts (≤ v0.4.4) substituted left (first non-phantom). That rule was inconsistent with Rule 7.4.c, which auto-derives Functor over the rightmost type parameter, and with the corresponding stdlib commitment (`Tuple satisfies Functor` over the second projection — see `spec/stdlib.md` §5). v0.4.5 unifies the conventions: every "active parameter" choice in Fixed is right-biased.
 
 ```
 cap BiFunctor of (A, B):
@@ -463,11 +480,26 @@ Right-bias (Rule 7.4.c) is therefore irrelevant to cap-generator returns: there 
 
 Type-checking a signature that mentions `f(arg1, arg2, ...)` (a cap-generator call in `is`-bound position) requires evaluating the value-args at compile time so the resulting prop obligations can be discharged. Termination is guaranteed by restricting what may appear as a value-arg.
 
-**v0 rule (Fixed v0.4.5).** A cap-generator value-arg is one of:
-1. a literal expression (`0`, `"abc"`, `1024`), or
-2. a reference to an in-scope binding whose value is itself a literal under (1) (i.e., the binding's initializer is a literal — transitively).
+**v0 rule (Fixed v0.4.5).** A cap-generator value-arg expression is admissible iff every leaf is one of these forms and every internal node is a closed-form arithmetic operator over them:
 
-Function calls, arithmetic on bindings, and computed expressions are not admitted in v0. Programs that need a computed bound must lift the computation to a `let` binding above the signature and pass the binding by name (subject to the literal-initializer restriction).
+| Admissible leaf | Example |
+|---|---|
+| `LiteralExpr` per the grammar — primitive literals (`0`, `1024`, `"abc"`, `true`, `'c'`, `()`) | `between(0, 100)` |
+| `LOWER_IDENT` bound by a `let` whose initializer is itself a v0-admissible expression (transitively) | `let upper = 150` then `between(0, upper)` |
+| `LOWER_IDENT` bound by a `let` whose initializer is another v0-admissible binding | `let lo = 0; let upper = 150; between(lo, upper)` |
+
+| Admissible internal node | Example |
+|---|---|
+| Closed-form arithmetic over admissible operands: `+`, `-`, `*`, `/`, `%` (compile-time constant-foldable) | `between(0, 2 * upper)` |
+
+Not admitted in v0:
+- Function calls (`config.max_age()`)
+- Field access on bindings (`config.max`)
+- `match`/`if` expressions
+- Capability-method calls
+- Module-level constant references that aren't covered by the above (a `let` at module scope with a literal initializer **is** admitted; anything else isn't)
+
+Programs that need richer computed bounds must lift the computation to a `let` whose initializer satisfies the v0 rule, or wait for v1 (totality-gated, below).
 
 **v1 rule (target — Phase 3 totality).** Once the function-totality checker lands in Phase 3, the v0 rule relaxes to: any expression whose evaluation is *total* per the function-totality rule may be a cap-generator value-arg. Because Fixed already requires every `fn` to be total (recursion-via-fold-only, no self-recursion), this relaxation makes every fn call a safe cap-generator value-arg.
 
@@ -845,9 +877,9 @@ Representation: data types in a strongly-connected component of the data depende
 
 Self-recursion (a single data type referencing itself) is the trivial 1-element SCC and is handled by the same rule.
 
-**Rule 7.5.a (Auto-derivation does not apply across non-singleton SCCs) — resolves L7.** Auto-derivations from §7.4 (`fold`/Rule 7.4.a, `unfold`/Rule 7.4.b, `Functor`/Rule 7.4.c, accessors/Rule 7.4.d) **are disabled** for `data` declarations whose dependency graph forms an SCC of size ≥ 2. Each member of such an SCC requires explicit `satisfies` declarations for any capabilities it must satisfy.
+**Rule 7.5.a (Auto-derivation does not apply across non-singleton SCCs) — resolves L7.** Auto-derivations from §7.4 (`fold`/Rule 7.4.a, `unfold`/Rule 7.4.b, `Functor`/Rule 7.4.c, accessors/Rule 7.4.d, `para`/Rule 7.4.g) **are disabled** for `data` declarations whose dependency graph forms an SCC of size ≥ 2. Each member of such an SCC requires explicit `satisfies` declarations for any capabilities it must satisfy.
 
-Rationale: auto-derivation operates on a single declaration's variants and fields; mutually recursive types require interleaved fold callbacks (Tree's fold needs Node's fold, and vice versa). Specifying that interleaving as a generated mutual-fold combinator is non-trivial and not justified by current example code; refusing auto-derivation for v0.4.5 keeps the spec simple. Singleton SCCs (a single self-recursive data type) continue to receive auto-derivations under §7.4.
+Rationale: auto-derivation operates on a single declaration's variants and fields; mutually recursive types require interleaved fold/para callbacks (Tree's fold needs Node's fold, and vice versa). Specifying that interleaving as a generated mutual-fold combinator is non-trivial and not justified by current example code; refusing auto-derivation for v0.4.5 keeps the spec simple. Singleton SCCs (a single self-recursive data type) continue to receive auto-derivations under §7.4 — including paramorphism (Rule 7.4.g) for self-recursive types like `Tree` or `Expr` in `examples/07_recursive_data.fixed`.
 
 ```
 data Tree:
@@ -1069,7 +1101,7 @@ Subtyping in Fixed is intentionally narrow:
 
 **Pre-resolved deferrals (lift into the indicated spec doc when drafted):**
 
-- **OQ7 → spec/properties.md.** In a function-body postcondition `prop` (i.e., a `prop` declaration appearing inside a `fn` block, not inside a `cap` or `data` body), the identifier `result` is **implicitly bound** to the function's return value at the function's declared return type. The binding is in scope only inside that prop body. In other prop contexts (cap-member or data-member props), `result` carries no special meaning and is parsed as a regular identifier.
+- **OQ7 → spec/properties.md (deferred in v0.4.5).** Function-body postconditions are **deferred to a future release** per `spec/properties.md` §3.3 (re-opened in v0.2.1 of that doc). The original v0.4.4 resolution — that `result` is implicitly bound to the return value inside fn-body `prop` declarations — is no longer normative; the worked example below is retained for reference but does **not** type-check in v0.4.5. When postconditions are reintroduced, this OQ will be re-resolved and the `result` binder restored.
 
   ```
   fn sort(collection: ...) -> C is Sorted =

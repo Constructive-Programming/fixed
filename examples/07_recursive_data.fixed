@@ -258,20 +258,22 @@ fn fibonacci(n: u64) -> u64 =
 // subtree alongside the folded result. This lets you make decisions based
 // on the structure, not just the accumulated value.
 
+// Para callbacks receive each recursive position as `(orig, folded)` —
+// original subtree first, then its already-folded R result, per Rule 7.4.g.
 fn optimize(expr: Expr) -> Expr =
     expr.para(
         // Lit: nothing to optimize
         (v) -> Expr.Lit(v),
 
         // Add: check for x + 0 and 0 + x
-        (left_opt, left_orig, right_opt, right_orig) ->
+        (left_orig, left_opt, right_orig, right_opt) ->
             match (left_opt, right_opt):
                 (Expr.Lit(0.0), _) => right_opt
                 (_, Expr.Lit(0.0)) => left_opt
                 _ => Expr.Add(left_opt, right_opt),
 
         // Mul: check for x * 0, x * 1, 0 * x, 1 * x
-        (left_opt, left_orig, right_opt, right_orig) ->
+        (left_orig, left_opt, right_orig, right_opt) ->
             match (left_opt, right_opt):
                 (Expr.Lit(0.0), _) => Expr.Lit(0.0)
                 (_, Expr.Lit(0.0)) => Expr.Lit(0.0)
@@ -280,7 +282,7 @@ fn optimize(expr: Expr) -> Expr =
                 _ => Expr.Mul(left_opt, right_opt),
 
         // Neg: check for double negation using the ORIGINAL subtree
-        (inner_opt, inner_orig) ->
+        (inner_orig, inner_opt) ->
             match inner_orig:
                 Expr.Neg(inner_inner) => inner_inner  // --x => x (use original!)
                 _ => Expr.Neg(inner_opt),

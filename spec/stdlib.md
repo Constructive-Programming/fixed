@@ -26,7 +26,11 @@ It does **not** specify:
 | `Ordering`    | cap  | Abstract `<`/`==`/`>` outcome; representation chosen per use           |
 | `Boolean`     | cap  | Abstract two-state with `fold`; backed by primitive `bool`             |
 | `Empty`       | cap  | Abstract "has no inhabitants"                                          |
-| `Clone`       | cap  | Explicit `.clone()`; primary path is borrow inference (see §4.7)       |
+| `Eq`          | cap  | `==`/`!=` operator support (§4.7)                                       |
+| `Ord`         | cap  | `<`/`<=`/`>`/`>=` operator support, extends `Eq` (§4.8)                 |
+| `Numeric`     | cap  | `+`/`-`/`*`/`/`/`%` operator support, extends `Eq + Ord` (§4.9)         |
+| `Show`        | cap  | `.show -> String` (§4.10)                                                |
+| `Clone`       | cap  | Explicit `.clone()`; primary path is borrow inference (§4.11)            |
 
 > **Update from prior drafts.** Earlier drafts of `docs/plans/implementation-plan.md` listed `Pair` and `Ordering` as data types. The classification above supersedes that — they are caps, with `Tuple` (new) as the canonical concrete satisfier of `Pair`. See §6 for migration guidance.
 
@@ -134,7 +138,71 @@ cap Empty:
 
 A constructor-only cap. Common base for collection caps.
 
-### 4.7 `cap Clone`
+### 4.7 `cap Eq`
+
+```
+cap Eq:
+    fn eq(other: Self) -> bool
+```
+
+The `==` operator desugars to `.eq(other)`; `!=` desugars to `!.eq(other)`. Auto-derived for any `data` whose every field type satisfies `Eq` (compiler-generated component-wise equality).
+
+### 4.8 `cap Ord`
+
+```
+cap Ord extends Eq:
+    fn compare(other: Self) -> is Ordering
+```
+
+The relational operators `<`, `<=`, `>`, `>=` desugar via `compare` and `Ordering.fold`:
+
+```
+a < b      ≡   a.compare(b).fold(() -> true,  () -> false, () -> false)
+a <= b     ≡   a.compare(b).fold(() -> true,  () -> true,  () -> false)
+a > b      ≡   a.compare(b).fold(() -> false, () -> false, () -> true)
+a >= b     ≡   a.compare(b).fold(() -> false, () -> true,  () -> true)
+```
+
+`Ord` extends `Eq`; any `Ord` satisfaction also provides `==`/`!=`. Auto-derived for `data` types whose every field type satisfies `Ord` (lexicographic by declaration order).
+
+### 4.9 `cap Numeric`
+
+```
+cap Numeric extends Eq + Ord:
+    Self.fn from_i64(n: i64) -> Self
+    fn add(other: Self) -> Self
+    fn sub(other: Self) -> Self
+    fn mul(other: Self) -> Self
+    fn div(other: Self) -> Self      // truncating for integers, IEEE for floats
+    fn rem(other: Self) -> Self      // remainder; pairs with div
+```
+
+Operator desugaring:
+
+```
+a + b      ≡   a.add(b)
+a - b      ≡   a.sub(b)
+a * b      ≡   a.mul(b)
+a / b      ≡   a.div(b)
+a % b      ≡   a.rem(b)
+```
+
+Numeric-literal polymorphism (`type_system.md` §5.7) goes through `Self.fn from_i64`: an integer literal in a `Numeric`-bounded position is desugared to `Self.from_i64(LITERAL)`. Float literals desugar to a `from_f64` overload (forthcoming; deferred until float-spec lands).
+
+All built-in primitive numeric types — `i8`/`i16`/`i32`/`i64`/`i128`, `u8`/`u16`/`u32`/`u64`/`u128`, `f32`/`f64` — satisfy `Numeric` (compiler-provided).
+
+### 4.10 `cap Show`
+
+```
+cap Show:
+    fn show -> String
+```
+
+Convert a value to a human-readable `String`. Auto-derived for `data` types whose every field type satisfies `Show` (component-wise concat with constructor name and parens).
+
+All primitive types (`bool`, integer types, `f32`, `f64`, `String`, `char`, `()`) satisfy `Show` via compiler-built-in formatters.
+
+### 4.11 `cap Clone`
 
 ```
 cap Clone:
@@ -158,7 +226,8 @@ List satisfies Sequencing:
     Cons as cons
     Nil as empty
 List satisfies Folding              // auto-derived from variants
-List satisfies Functor              // auto-derived; right-bias on A
+List satisfies Functor              // auto-derived per Rule 7.4.c; the active type
+                                    // parameter is `A` (List has only one)
 List satisfies Filtering            // auto-derived
 
 Json satisfies Show
@@ -166,7 +235,9 @@ Json satisfies Eq
 
 Tuple satisfies Pair:
     Tuple as pair
-Tuple satisfies Functor             // right-bias: Functor over B (the second projection)
+Tuple satisfies Functor             // auto-derived per Rule 7.4.c with right-bias:
+                                    // the active type parameter is `B` (the second
+                                    // projection). `tuple.map(f: B -> B') -> Tuple of (A, B')`.
 
 bool satisfies Boolean of Self:
     Self as yes        // when bool is true
@@ -174,6 +245,8 @@ bool satisfies Boolean of Self:
 
 Nat satisfies Folding               // auto-derived from Zero + Succ
 ```
+
+The right-bias commitment for `Tuple satisfies Functor` is **normative** (not commentary): per Rule 7.4.c, the active type parameter for auto-derived Functor on a multi-parameter `data` is the rightmost non-phantom one. Combined with Rule 5.4.a/b (right-aligned positional substitution for `Self of B`), this means `tuple.map(f)` consistently maps over the second projection across the spec, the example corpus, and the typer.
 
 `Optional`, `Result`, `Ordering` are abstract caps with no canonical built-in satisfaction. Programs that want a default backing data type write their own (`data Maybe satisfies Optional`, etc.) — example 03 shows the pattern.
 

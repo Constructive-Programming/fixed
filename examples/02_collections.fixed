@@ -166,7 +166,7 @@ fn concat(left: C is Sequencing + Folding, right: C) -> C =
 // (result, low, high) triple; once `result` is set or `low >= high`,
 // further steps are idempotent no-ops.
 fn binary_search(
-    sorted: C is ArrayLike of (A is Ordered),
+    sorted: C is ArrayLike of (A is Ord),
     target: A,
 ) -> R is Optional of u64 + Empty =
     Nat.unfold(sorted.size, (k) ->
