@@ -166,6 +166,94 @@ class ParserSuite extends FunSuite:
         assertEquals(s, "hello")
       case _ => fail(s"expected FnDecl with StringLit body, got $t")
 
+  // ---- M4.2: parseCapDecl ----
+
+  test("M4.2: cap with instance and static methods"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """cap Sequencing:
+        |    fn head -> is Optional of Part
+        |    fn tail -> Self
+        |    Self.fn cons(h: Part, t: Self) -> Self
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(c: Trees.CapDecl), _) =>
+        assertEquals(c.name, "Sequencing")
+        assertEquals(c.body.length, 3)
+        c.body.head match
+          case im: Trees.InstanceMethod => assertEquals(im.name, "head")
+          case other => fail(s"expected InstanceMethod, got $other")
+        c.body.last match
+          case sm: Trees.StaticMethod =>
+            assertEquals(sm.name, "cons")
+            assertEquals(sm.params.length, 2)
+          case other => fail(s"expected StaticMethod, got $other")
+      case other => fail(s"expected single CapDecl, got $other")
+
+  test("M4.2: cap extends another cap"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """cap Optional extends Functor + Folding:
+        |    fn isDefined -> Boolean
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(c: Trees.CapDecl), _) =>
+        assertEquals(c.extendsList.length, 2)
+        assertEquals(
+          c.extendsList.collect { case Trees.CapRef(n, _, _) => n },
+          List("Functor", "Folding")
+        )
+      case other => fail(s"expected single CapDecl, got $other")
+
+  test("M4.2: cap of-clause with multiple type params"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """cap Sized of (Part, Size is Numeric):
+        |    fn size -> Size
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(c: Trees.CapDecl), _) =>
+        assertEquals(c.ofParams.length, 2)
+        c.ofParams(1) match
+          case Trees.NamedAlias("Size", _, _) => ()
+          case other => fail(s"expected NamedAlias for Size, got $other")
+      case other => fail(s"expected single CapDecl, got $other")
+
+  test("M4.2: empty cap (no `:` body)"):
+    val pr = Parser.parse(SourceFile.fromString("<test>", "cap Locked\n"))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(c: Trees.CapDecl), _) =>
+        assertEquals(c.name, "Locked")
+        assertEquals(c.body, Nil)
+      case other => fail(s"expected single empty CapDecl, got $other")
+
+  test("M4.2: prop declaration in cap body"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """cap Sorted:
+        |    prop sorted: true
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(c: Trees.CapDecl), _) =>
+        assertEquals(c.body.length, 1)
+        c.body.head match
+          case p: Trees.PropDecl => assertEquals(p.name, "sorted")
+          case other => fail(s"expected PropDecl, got $other")
+      case other => fail(s"expected single CapDecl, got $other")
+
   // ---- M4.1: parseDataDecl ----
 
   test("M4.1: simple unit-only enum"):

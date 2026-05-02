@@ -355,6 +355,12 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       val tok = consume()
       val ofArg = if accept(TokenKind.KwOf).isDefined then Some(parseOfArg()) else None
       Trees.SelfType(ofArg, span(tok.span, current.span))
+    case TokenKind.KwPart =>
+      // `Part` — the cap's element-type pseudo-parameter (Rule 5.3).
+      // In type position it behaves like a TypeRef.
+      val tok = consume()
+      val ofArg = if accept(TokenKind.KwOf).isDefined then Some(parseOfArg()) else None
+      Trees.TypeRef("Part", ofArg, span(tok.span, current.span))
     case TokenKind.KwIs =>
       parseIsBound()
     case TokenKind.KwCap =>
@@ -950,9 +956,111 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     val default = if accept(TokenKind.Eq).isDefined then Some(parseExpr()) else None
     Trees.FieldDecl(nameTok.lexeme, ty, default, span(nameTok.span, current.span))
 
+  // ---- CapDecl ----
+
+  // CapDecl   ::= "cap" UPPER_IDENT OfClause? ExtendsClause? (":" INDENT CapBody DEDENT)?
+  //   OfClause     ::= "of" (TypeExpr | "(" OfItem ("," OfItem)* ")")
+  //   ExtendsClause::= "extends" CapBound ("+" CapBound)*
+  //   CapBody      ::= CapMember+
+  //   CapMember    ::= InstanceMethod | StaticMethod | PropDecl
+  //   InstanceMethod ::= "fn" LOWER_IDENT FnParamList? ("->" TypeExpr)? WithClause? ("=" FnBody)?
+  //   StaticMethod   ::= "Self" "." "fn" LOWER_IDENT FnParamList? ("->" TypeExpr)? WithClause? ("=" FnBody)?
+  //   PropDecl       ::= "prop" LOWER_IDENT ":" Expr
+  //
+  // Per v0.3: empty bodies omit the `:` entirely (`cap Locked`).
+  private def parseCapDecl(): Tree =
+    val startTok = expect(TokenKind.KwCap, "`cap`")
+    val nameTok = expect(TokenKind.UpperIdent, "capability name")
+    val ofParams = parseOptionalDataOfClause()
+    val extendsList =
+      if accept(TokenKind.KwExtends).isDefined then parseCapBoundChain()
+      else Nil
+    val body =
+      if accept(TokenKind.Colon).isDefined then parseCapBody()
+      else Nil
+    Trees.CapDecl(nameTok.lexeme, ofParams, extendsList, body, span(startTok.span, current.span))
+
+  private def parseCapBody(): List[Tree] =
+    val _ = expect(TokenKind.Indent, "INDENT")
+    val members = scala.collection.mutable.ListBuffer.empty[Tree]
+    skipNewlines()
+    withAnchors(Anchors.blockBody) {
+      while current.kind != TokenKind.Dedent && current.kind != TokenKind.Eof do
+        current.kind match
+          case TokenKind.KwFn   => members += parseInstanceMethod()
+          case TokenKind.KwSelf => members += parseStaticMethod()
+          case TokenKind.KwProp => members += parsePropDecl()
+          case _ =>
+            reporter.error(
+              "P014",
+              current.span,
+              s"expected `fn`, `Self.fn`, or `prop`, got ${current.kind}${describeLexeme(current)}",
+              Some("cap members are instance methods (`fn`), static methods (`Self.fn`), or `prop` declarations")
+            )
+            syncToAnchors()
+        skipNewlines()
+    }
+    val _ = expect(TokenKind.Dedent, "DEDENT")
+    members.toList
+
+  private def parseInstanceMethod(): Trees.InstanceMethod =
+    val startTok = expect(TokenKind.KwFn, "`fn`")
+    val nameTok = expect(TokenKind.LowerIdent, "method name")
+    val params =
+      if current.kind == TokenKind.LParen then parseFnParamList()
+      else Nil
+    val returnType =
+      if accept(TokenKind.Arrow).isDefined then parseTypeExpr()
+      else Trees.UnitType(current.span)
+    val withClause = parseOptionalWithClause()
+    val body =
+      if accept(TokenKind.Eq).isDefined then Some(parseFnBody())
+      else None
+    Trees.InstanceMethod(
+      name = nameTok.lexeme,
+      typeParamsHint = Nil,
+      params = params,
+      returnType = returnType,
+      withClause = withClause,
+      body = body,
+      span = span(startTok.span, current.span)
+    )
+
+  private def parseStaticMethod(): Trees.StaticMethod =
+    val startTok = expect(TokenKind.KwSelf, "`Self`")
+    val _ = expect(TokenKind.Dot, "`.`")
+    val _ = expect(TokenKind.KwFn, "`fn`")
+    val nameTok = expect(TokenKind.LowerIdent, "static method name")
+    val params =
+      if current.kind == TokenKind.LParen then parseFnParamList()
+      else Nil
+    val returnType =
+      if accept(TokenKind.Arrow).isDefined then parseTypeExpr()
+      else Trees.UnitType(current.span)
+    val withClause = parseOptionalWithClause()
+    val body =
+      if accept(TokenKind.Eq).isDefined then Some(parseFnBody())
+      else None
+    Trees.StaticMethod(
+      name = nameTok.lexeme,
+      typeParamsHint = Nil,
+      params = params,
+      returnType = returnType,
+      withClause = withClause,
+      body = body,
+      span = span(startTok.span, current.span)
+    )
+
+  private def parsePropDecl(): Trees.PropDecl =
+    val startTok = expect(TokenKind.KwProp, "`prop`")
+    val nameTok = expect(TokenKind.LowerIdent, "prop name")
+    val _ = expect(TokenKind.Colon, "`:` after prop name")
+    val body = parseExpr()
+    Trees.PropDecl(nameTok.lexeme, body, span(startTok.span, body.span))
+
   // ---- Stub productions still pending ----
 
-  private def parseCapDecl(): Tree     = unsupported("`cap` declaration")
+
   private def parseEffectDecl(): Tree  = unsupported("`effect` declaration")
   private def parseTypeAlias(): Tree   = unsupported("`type` alias")
   private def parseModDecl(): Tree     = unsupported("`mod` declaration")
