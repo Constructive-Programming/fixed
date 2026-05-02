@@ -70,8 +70,8 @@ fn bind(socket: is TcpSocket of Closed) -> is TcpSocket of Listening =
 fn accept(socket: is TcpSocket of Listening) -> is TcpSocket of Established =
     TcpSocket.new(socket.port)
 
-fn send(socket: is TcpSocket of Established, data: String) -> () with Console =
-    Console.print_line("Sending on port ".concat(socket.port.show()).concat(": ").concat(data))
+fn send(socket: is TcpSocket of Established, payload: String) -> () with Console =
+    Console.print_line("Sending on port ".concat(socket.port.show()).concat(": ").concat(payload))
 
 fn disconnect(socket: is TcpSocket of Established) -> is TcpSocket of Closed =
     TcpSocket.new(socket.port)

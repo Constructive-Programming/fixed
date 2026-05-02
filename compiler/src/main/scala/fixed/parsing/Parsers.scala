@@ -99,6 +99,19 @@ final class Parser(scanner: Scanner, reporter: Reporter):
         val _ = consume()
     }
 
+  /** True iff `k` is `,` / `)` / `]` / `}` AND some active anchor frame
+    * is waiting for it. Used by indented-block productions (parseBlock,
+    * parseMatchArms, parseDoStmts, parseHandlerArms) to terminate an
+    * implicitly-opened off-side body when the enclosing bracketed
+    * production would otherwise see noise after an item. See
+    * `spec/syntax_grammar.ebnf` "Re-enabling the off-side rule inside
+    * brackets" — closing punctuation at the body's indent ends the
+    * body without waiting for the scanner's DEDENT. */
+  private def isOuterBracketWaiter(k: TokenKind): Boolean =
+    (k == TokenKind.Comma || k == TokenKind.RParen
+      || k == TokenKind.RBracket || k == TokenKind.RBrace)
+      && activeAnchors.exists(_.contains(k))
+
   private object Anchors:
     /** Top-level item starts: keywords that begin a top-level production
       * plus UpperIdent (head of a `T satisfies …` decl) and EOF. NEWLINE
@@ -282,23 +295,34 @@ final class Parser(scanner: Scanner, reporter: Reporter):
 
   // ---- Block ----
 
-  /** Parse `INDENT stmt (NEWLINE stmt)* DEDENT` as a Block. Recovery:
-    * if a statement leaves the parser on a non-anchor token (i.e. it
-    * didn't reach end-of-line), sync to NEWLINE/DEDENT/EOF and wrap
-    * the partial statement in a `Trees.Error` so subsequent statements
-    * still parse cleanly. */
+  /** Parse `INDENT stmt (NEWLINE stmt)* DEDENT` as a Block. Two ways
+    * the block can end:
+    *   (1) DEDENT — the normal case for top-level fn bodies.
+    *   (2) An outer-bracket waiter (`,` / `)` / `]` / `}`) at the body
+    *       indent — the body was a re-engaged off-side region inside a
+    *       paren-suppressed context (e.g. a multi-line lambda body
+    *       inside an arg list). The scanner has not yet emitted DEDENT
+    *       at that point; the enclosing `parseDelimited` will drain
+    *       the DEDENT once the comma/close is consumed.
+    *
+    * Recovery: a statement that leaves the parser on a non-anchor,
+    * non-bracket-waiter token gets a P011 diagnostic, syncs to the next
+    * boundary, and is wrapped in `Trees.Error`. */
   private def parseBlock(): Tree =
     val startTok = expect(TokenKind.Indent, "INDENT")
     val stmts = scala.collection.mutable.ListBuffer.empty[Tree]
     skipNewlines()
     withAnchors(Anchors.blockBody) {
-      while current.kind != TokenKind.Dedent && current.kind != TokenKind.Eof do
+      while current.kind != TokenKind.Dedent
+            && current.kind != TokenKind.Eof
+            && !isOuterBracketWaiter(current.kind) do
         val stmtStart = current.span
         val stmt = parseStatement()
-        if Anchors.blockBody.contains(current.kind) || current.kind == TokenKind.Eof then
+        if Anchors.blockBody.contains(current.kind)
+           || current.kind == TokenKind.Eof
+           || isOuterBracketWaiter(current.kind) then
           stmts += stmt
         else
-          // Statement didn't reach a boundary — recover and Error-wrap.
           reporter.error(
             "P011",
             current.span,
@@ -309,11 +333,19 @@ final class Parser(scanner: Scanner, reporter: Reporter):
           stmts += Trees.Error(List(stmt), span(stmtStart, current.span))
         skipNewlines()
     }
-    val endTok = expect(TokenKind.Dedent, "DEDENT")
-    Trees.Block(stmts.toList, span(startTok.span, endTok.span))
+    val endSpan = current.span
+    // Consume DEDENT only if it's actually present. When the block was
+    // implicitly terminated by an outer-bracket waiter, DEDENT comes
+    // after that token and is drained by `parseDelimited`.
+    if accept(TokenKind.Dedent).isEmpty then ()
+    Trees.Block(stmts.toList, span(startTok.span, endSpan))
 
-  // Fixed has no statements — every block element is an Expr.
-  private def parseStatement(): Tree = parseExpr()
+  // Fixed has no statements — every block element is an Expr, with one
+  // exception: a nested `fn name(...) = body` declaration is admissible
+  // in any block to introduce a local function.
+  private def parseStatement(): Tree = current.kind match
+    case TokenKind.KwFn => parseFnDecl()
+    case _              => parseExpr()
 
   // ---- Type expressions ----
 
@@ -437,14 +469,18 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     if current.kind == TokenKind.LParen then
       val startSpan = current.span
       val _ = consume()
-      val first = parseTypeExpr()
-      if accept(TokenKind.Comma).isDefined then
-        val tail = parseDelimited(TokenKind.RParen, ")")(() => parseTypeExpr())
-        val _ = expect(TokenKind.RParen, "`)`")
-        Trees.TupleArrowLhs(first :: tail, span(startSpan, current.span))
+      // `()` — unit type as `of` argument (e.g. `M is Monad of ()`).
+      if accept(TokenKind.RParen).isDefined then
+        Trees.UnitType(span(startSpan, current.span))
       else
-        val _ = expect(TokenKind.RParen, "`)`")
-        first
+        val first = parseTypeExpr()
+        if accept(TokenKind.Comma).isDefined then
+          val tail = parseDelimited(TokenKind.RParen, ")")(() => parseTypeExpr())
+          val _ = expect(TokenKind.RParen, "`)`")
+          Trees.TupleArrowLhs(first :: tail, span(startSpan, current.span))
+        else
+          val _ = expect(TokenKind.RParen, "`)`")
+          first
     else parseTypeExpr()
 
   private def parseCapType(): Tree =
@@ -599,18 +635,28 @@ final class Parser(scanner: Scanner, reporter: Reporter):
 
   /** Parse a comma-separated list of items up to (but not including)
     * `closeKind`. Recovery: if `parseItem` leaves the parser on a token
-    * that is neither `,` nor `closeKind`, emit a diagnostic, sync to the
-    * next such token, and wrap the partial item in `Trees.Error`.
-    * Trailing comma admitted. */
+    * that is neither `,` nor `closeKind`, emit a diagnostic, sync to
+    * the next such token, and wrap the partial item in `Trees.Error`.
+    * Trailing comma admitted.
+    *
+    * Off-side drain: an item that re-engaged off-side (e.g. a multi-
+    * line lambda body) may leave a NEWLINE/DEDENT run pending after
+    * the closing punctuation. Drain those between items so the next
+    * `parseOne` starts on a real token. */
   private def parseDelimited(
       closeKind: TokenKind,
       closeLexeme: String
   )(parseItem: () => Tree): List[Tree] =
     val anchors = Set(TokenKind.Comma, closeKind)
     val items = scala.collection.mutable.ListBuffer.empty[Tree]
+    def drainImpliedDedents(): Unit =
+      while current.kind == TokenKind.Newline
+            || current.kind == TokenKind.Dedent do
+        val _ = consume()
     def parseOne(): Unit =
       val itemStart = current.span
       val item = parseItem()
+      drainImpliedDedents()
       if anchors.contains(current.kind) || current.kind == TokenKind.Eof then
         items += item
       else
@@ -626,6 +672,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       if current.kind != closeKind then
         parseOne()
         while accept(TokenKind.Comma).isDefined do
+          drainImpliedDedents()
           if current.kind == closeKind then ()  // trailing comma
           else parseOne()
     }
@@ -715,11 +762,13 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     val arms = scala.collection.mutable.ListBuffer.empty[Trees.MatchArm]
     skipNewlines()
     withAnchors(Anchors.blockBody) {
-      while current.kind != TokenKind.Dedent && current.kind != TokenKind.Eof do
+      while current.kind != TokenKind.Dedent
+            && current.kind != TokenKind.Eof
+            && !isOuterBracketWaiter(current.kind) do
         arms += parseMatchArm()
         skipNewlines()
     }
-    val _ = expect(TokenKind.Dedent, "DEDENT")
+    if accept(TokenKind.Dedent).isEmpty then ()
     arms.toList
 
   private def parseMatchArm(): Trees.MatchArm =
@@ -754,7 +803,9 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     val stmts = scala.collection.mutable.ListBuffer.empty[Tree]
     skipNewlines()
     withAnchors(Anchors.blockBody) {
-      while current.kind != TokenKind.Dedent && current.kind != TokenKind.Eof do
+      while current.kind != TokenKind.Dedent
+            && current.kind != TokenKind.Eof
+            && !isOuterBracketWaiter(current.kind) do
         val stmtStart = current.span
         val stmt =
           if isDoBindAhead() then
@@ -763,7 +814,9 @@ final class Parser(scanner: Scanner, reporter: Reporter):
             val rhs = parseExpr()
             Trees.DoBind(pat, rhs, span(pat.span, rhs.span))
           else parseExpr()
-        if Anchors.blockBody.contains(current.kind) || current.kind == TokenKind.Eof then
+        if Anchors.blockBody.contains(current.kind)
+           || current.kind == TokenKind.Eof
+           || isOuterBracketWaiter(current.kind) then
           stmts += stmt
         else
           reporter.error(
@@ -776,7 +829,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
           stmts += Trees.Error(List(stmt), span(stmtStart, current.span))
         skipNewlines()
     }
-    val _ = expect(TokenKind.Dedent, "DEDENT")
+    if accept(TokenKind.Dedent).isEmpty then ()
     stmts.toList
 
   // True iff the current statement contains a top-level `<-` before
@@ -813,11 +866,13 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     val arms = scala.collection.mutable.ListBuffer.empty[Tree]
     skipNewlines()
     withAnchors(Anchors.blockBody) {
-      while current.kind != TokenKind.Dedent && current.kind != TokenKind.Eof do
+      while current.kind != TokenKind.Dedent
+            && current.kind != TokenKind.Eof
+            && !isOuterBracketWaiter(current.kind) do
         arms += parseHandlerArm()
         skipNewlines()
     }
-    val _ = expect(TokenKind.Dedent, "DEDENT")
+    if accept(TokenKind.Dedent).isEmpty then ()
     arms.toList
 
   private def parseHandlerArm(): Tree =

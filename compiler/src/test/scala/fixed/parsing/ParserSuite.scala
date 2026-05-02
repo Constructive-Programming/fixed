@@ -275,6 +275,84 @@ class ParserSuite extends FunSuite:
           case other => fail(s"expected StaticCall, got $other")
       case other => fail(s"expected DoExpr, got $other")
 
+  // ---- Triage fixes (M4 chase-down) ----
+
+  test("triage: `()` accepted as `of` argument (UnitType)"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      "fn f(action: M is Monad of ()) -> M of () = action\n"
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+
+  test("triage: leading `.` on a continuation line (chained method call)"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      """fn f(s: String) -> String =
+        |    s.concat("a")
+        |     .concat("b")
+        |     .concat("c")
+        |""".stripMargin
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+
+  test("triage: leading `|>` on a continuation line (pipeline)"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      """fn f(xs: List of u64) -> List of u64 =
+        |    xs.find((x) -> x == 0)
+        |        |> map((x) -> x + 1)
+        |""".stripMargin
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+
+  test("triage: multi-line lambda body inside an arg list closes at the outer comma"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      """fn f() -> u64 = call(
+        |    (value) ->
+        |        target.fold(
+        |            () -> a,
+        |            () -> b,
+        |        ),
+        |    () -> c,
+        |)
+        |""".stripMargin
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+
+  test("triage: multi-line do-block inside an arg list closes at the outer comma"):
+    // `do:` is a `:`-introduced block; it only re-engages off-side
+    // *inside* an already-re-engaged context (e.g. a lambda body),
+    // mirroring the real-world pattern from example 06.
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      """fn f() -> u64 = call(
+        |    (head) -> do:
+        |        x <- step1
+        |        step2(x),
+        |    () -> c,
+        |)
+        |""".stripMargin
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+
+  test("triage: nested `fn` declaration in a block"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      """fn outer(x: u64) -> u64 =
+        |    fn inner(y: u64) -> u64 = y + 1
+        |    inner(x)
+        |""".stripMargin
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(Trees.Block(stmts, _)), _)), _) =>
+        // First stmt is the nested fn; second is the call to inner.
+        stmts.head match
+          case fn: Trees.FnDecl => assertEquals(fn.name, "inner")
+          case other => fail(s"expected nested FnDecl, got $other")
+      case other => fail(s"expected outer FnDecl with Block body, got $other")
+
   // ---- M4.6: parseEffectDecl ----
 
   test("M4.6: simple effect with one op"):

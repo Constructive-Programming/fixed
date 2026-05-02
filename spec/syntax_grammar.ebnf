@@ -3,9 +3,40 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4.7
+   Status:        DRAFT v0.4.8
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
    Last revised:  2026-05-02
+
+   Refinements in v0.4.8
+   ---------------------
+   - **`.` and `|>` clarified as leading-continuation tokens** in
+     addition to trailing. The v0.3.1 changelog added `.` to the line-
+     continuation set, but only the trailing list was updated; `|>`
+     was always trailing-only. The Leading-continuation paragraph now
+     lists both, matching the idiomatic `expr\n   .method()` and
+     `expr\n   |> next` styles used throughout the corpus.
+   - **`:` joins the dual-mode set** (`=`, `->`, `=>`, `:`). The
+     spec already said `cap/data/effect/satisfies/match/handle/do/if/
+     else` followed by `:` re-engages the off-side rule inside
+     bracket-suppressed regions, but the dual-mode paragraph listed
+     only `=`/`->`/`=>`. Without `:`, a `do:` (or `match x:`) that
+     opens its body inside parens — common in nested-lambda code —
+     would not get an INDENT.
+   - **Implicit DEDENT on outer-bracket waiter** (Appendix A.3). When
+     a re-engaged off-side body inside a paren-suppressed context
+     (lambda body, match block, do block, handler block) is followed
+     on the same indent by a token the enclosing bracketed production
+     is waiting for (`,` / `)` / `]` / `}`), the body terminates at
+     that token; the DEDENT the scanner emits at the next less-
+     indented line is absorbed by the enclosing production. Without
+     this, code like
+       `f(\n    (x) ->\n        body,\n    other_arg)`
+     would over-extend the lambda body block past the comma. (Closely
+     analogous to Python's behaviour inside parentheses.)
+   - **Nested `fn` declarations** are admissible as block statements.
+     A block element is either an `Expr` or a local `fn name(...) =
+     body` declaration; the latter introduces a name visible in the
+     remainder of the block.
 
    Refinements in v0.4.7
    ---------------------
@@ -207,16 +238,23 @@
      `+`, `-`, `*`, `/`, `%`, `&&`, `||`, `==`, `!=`, `<`, `>`, `<=`,
      `>=`, `|>`, `->`, `=>`, `=`, `<-`, `.`, `is`, `extends`, `implies`.
 
-   The dual-mode tokens `=`, `->`, `=>` are both trailing-continuation
-   *and* block-introducers. After one of them, the scanner peeks at the
-   next physical line: if it is indented more than the line containing
-   the dual-mode token, INDENT is emitted and the off-side rule applies
-   to the body. Otherwise the line continues normally.
+   The dual-mode tokens `=`, `->`, `=>`, `:` are block-introducers
+   that re-engage the off-side rule even inside parens. After one of
+   them, the scanner peeks at the next physical line: if it is
+   indented more than the line containing the dual-mode token, INDENT
+   is emitted and the off-side rule applies to the body. Otherwise
+   the line continues normally. (`=`, `->`, `=>` are also trailing-
+   continuation tokens; `:` is solely a block-introducer.)
 
    **Leading continuation.** If the next physical line begins with one
    of the following tokens (at any indent), it continues the previous
    logical line:
-     `with`, `extends`, `->`.
+     `with`, `extends`, `->`, `.`, `|>`.
+
+   `.` and `|>` are continuation tokens in *both* leading and trailing
+   position: chained method calls and pipelines may be split with the
+   operator at either end-of-line or start-of-line. Both shapes parse
+   as a single logical line.
 
    The continuation rules apply when the next physical line is *not*
    indented more than the current line — that case engages the off-side
@@ -1147,7 +1185,35 @@ Whitespace       = (* space; tab is a v0.3 error *) ;
    `///` doc-comments are not yet classified separately from `//` line
    comments in v0.4.7; that is a future refinement.
 
-   A.3 — Phase-by-phase tolerance
+   A.3 — Implicit DEDENT on outer-bracket waiter
+   ---------------------------------------------
+
+   When a re-engaged off-side body (lambda body, `match` block, `do`
+   block, handler-arm block) inside a paren-suppressed context is
+   followed on the same indent by a token the enclosing bracketed
+   production is waiting for — `,` / `)` / `]` / `}` — the body
+   terminates at that token. The DEDENT the scanner emits at the next
+   physically-shallower line is absorbed by the enclosing production
+   (typically the comma-separated list helper).
+
+   This makes idiomatic code like
+
+       sorted.get(mid).fold(
+           (value) ->
+               target.compare(value).fold(
+                   () -> (lo, mid, hi),
+                   () -> (lo, hi, mid),
+               ),
+           () -> acc,
+       )
+
+   parse as intended: the `(value) ->` body block ends at the `,`
+   following the inner `.fold(...)`, not at a hypothetical DEDENT
+   that the scanner emits later.
+
+   Closely analogous to Python's behaviour inside parentheses.
+
+   A.4 — Phase-by-phase tolerance
    ------------------------------
 
    The parser is the entry point for the contract, but conformance

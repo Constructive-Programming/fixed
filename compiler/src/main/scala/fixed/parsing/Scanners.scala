@@ -173,7 +173,8 @@ object Scanner:
     val lastKind = state.lastKind
 
     val isDualMode =
-      lastKind == TokenKind.Eq || lastKind == TokenKind.Arrow || lastKind == TokenKind.FatArrow
+      lastKind == TokenKind.Eq || lastKind == TokenKind.Arrow
+      || lastKind == TokenKind.FatArrow || lastKind == TokenKind.Colon
     if isDualMode && newIndent > state.currentIndent then
       state
         .copy(indentStack = newIndent :: state.indentStack)
@@ -223,7 +224,8 @@ object Scanner:
       case _ => state
 
   // Stateless lookahead from `pos`. Skip horizontal whitespace, then check
-  // whether the next word is a leading-continuation keyword or `->`.
+  // whether the next significant character starts a leading-continuation
+  // token: `->`, `.`, `|>`, or a keyword in `leadingContinuationKinds`.
   private def peekKindIsLeadingContinuation(source: SourceFile, pos: Int): Boolean =
     val content = source.content
     val len = source.length
@@ -232,6 +234,8 @@ object Scanner:
     else
       val c = content.charAt(i)
       if c == '-' && peekChar(source, i + 1) == '>' then true
+      else if c == '.' then true
+      else if c == '|' && peekChar(source, i + 1) == '>' then true
       else if c.isLetter || c == '_' then
         val j = skipIdentPart(content, i, len)
         val word = content.substring(i, j)

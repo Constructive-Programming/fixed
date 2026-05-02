@@ -123,13 +123,19 @@ object Tokens:
   )
 
   /** Token kinds that, when appearing at the *start* of a physical line,
-    * cause that line to be treated as a continuation of the previous logical
-    * line (leading line-continuation per grammar lines 197–200).
+    * cause that line to be treated as a continuation of the previous
+    * logical line.
+    *
+    * `Dot` and `PipeForward` are also in `trailingContinuationKinds`
+    * so chained calls / pipelines can be split with the operator at
+    * either end-of-line or (more idiomatically) start-of-line.
     */
   val leadingContinuationKinds: Set[TokenKind] = Set(
     TokenKind.KwWith,
     TokenKind.KwExtends,
-    TokenKind.Arrow
+    TokenKind.Arrow,
+    TokenKind.Dot,
+    TokenKind.PipeForward
   )
 
 end Tokens
