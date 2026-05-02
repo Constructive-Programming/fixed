@@ -73,16 +73,76 @@ final class Parser(scanner: Scanner, reporter: Reporter):
   private def span(start: Span, end: Span): Span =
     Span(start.start, end.end)
 
+  // ---- Recovery (Phase 2.1 M3) ----
+
+  /** Stack of anchor frames, one per active production-with-recovery.
+    * Each production pushes its own anchor set on entry and pops on exit;
+    * `syncToAnchors` uses only the innermost frame so each production's
+    * recovery is local. Outer recovery is the outer caller's job — it
+    * has its own `withAnchors`/`syncToAnchors` pair. */
+  private var activeAnchors: List[Set[TokenKind]] = Nil
+
+  /** Push `anchors` onto the active stack for the duration of `body`.
+    * Always pops, even on exceptional return. */
+  private def withAnchors[T](anchors: Set[TokenKind])(body: => T): T =
+    activeAnchors = anchors :: activeAnchors
+    try body
+    finally activeAnchors = activeAnchors.tail
+
+  /** Skip tokens until `current.kind` is in the innermost active anchor
+    * frame, or EOF. Does NOT consume the anchor — the caller decides
+    * whether to resume or yield to its own caller. No-op when the active
+    * stack is empty (recovery is only meaningful inside a `withAnchors`
+    * scope). */
+  private def syncToAnchors(): Unit =
+    activeAnchors.headOption.foreach { inner =>
+      while current.kind != TokenKind.Eof && !inner.contains(current.kind) do
+        val _ = consume()
+    }
+
+  // Anchor sets, named by the context that owns them. Anchors are
+  // *reached but not consumed*; productions decide whether to recover or
+  // bubble up based on which anchor matched.
+  private object Anchors:
+    /** Top-level item starts: every keyword that begins a top-level
+      * production, plus UpperIdent (head of a `T satisfies …` decl) and
+      * EOF. NEWLINE is NOT included — it's a separator, not a starter. */
+    val topLevel: Set[TokenKind] = Set(
+      TokenKind.KwUse, TokenKind.KwFn, TokenKind.KwCap, TokenKind.KwData,
+      TokenKind.KwEffect, TokenKind.KwLinear, TokenKind.KwType,
+      TokenKind.KwMod, TokenKind.KwPub, TokenKind.UpperIdent,
+      TokenKind.Eof
+    )
+
+    /** Block-body statement boundary: a NEWLINE between statements or a
+      * DEDENT closing the block. EOF is implicitly an anchor for every
+      * frame (see `syncToAnchors`). */
+    val blockBody: Set[TokenKind] = Set(TokenKind.Newline, TokenKind.Dedent)
+
+    /** Type-expression boundary: anything that can plausibly *follow* a
+      * type. Per spec/syntax_grammar.ebnf Appendix A.1.2. Arrow is
+      * included even though it's part of `T -> U` — when a type atom
+      * fails partway through, sync-to-arrow lets `parseArrowType` see
+      * the arrow and continue building. */
+    val typeExpr: Set[TokenKind] = Set(
+      TokenKind.Comma, TokenKind.RParen, TokenKind.RBracket,
+      TokenKind.Newline, TokenKind.Dedent,
+      TokenKind.Eq, TokenKind.Arrow, TokenKind.KwWith
+    )
+  end Anchors
+
   // ---- Compilation unit ----
 
   def parseCompilationUnit(): Tree =
     val startSpan = current.span
     skipNewlines()
     val items = scala.collection.mutable.ListBuffer.empty[Tree]
-    while current.kind != TokenKind.Eof do
-      items += parseTopItem()
-      // Items at top level are separated by NEWLINE; allow blank lines.
-      skipNewlines()
+    withAnchors(Anchors.topLevel) {
+      while current.kind != TokenKind.Eof do
+        items += parseTopItem()
+        // Items at top level are separated by NEWLINE; allow blank lines.
+        skipNewlines()
+    }
     val endSpan = current.span
     Trees.CompilationUnit(items.toList, span(startSpan, endSpan))
 
@@ -100,16 +160,21 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     case TokenKind.KwPub       => unsupported("`pub` modifier")
     case TokenKind.UpperIdent  => parseSatisfiesDecl()
     case _                      =>
+      // Unknown token at top level. Emit a diagnostic, then synchronise
+      // to the next decl introducer (or EOF). This collapses runs of
+      // junk into a single Error item rather than one per stray token.
+      val startSpan = current.span
       reporter.error(
         "P002",
-        current.span,
+        startSpan,
         s"unexpected token at top level: ${current.kind}${describeLexeme(current)}",
         Some("expected `use`, `fn`, `cap`, `data`, `effect`, `type`, `mod`, or `<TypeName> satisfies …`")
       )
-      // Skip the token and recover with a gap node. M3 will replace this
-      // single-token skip with anchor-based synchronisation.
-      val tok = consume()
-      Trees.Error(Nil, tok.span)
+      // syncToAnchors stops at the next anchor (top-level keyword or EOF)
+      // without consuming it, so the outer loop dispatches that token to
+      // its proper handler.
+      syncToAnchors()
+      Trees.Error(Nil, span(startSpan, current.span))
 
   private def unsupported(what: String): Tree =
     reporter.error(
@@ -225,14 +290,36 @@ final class Parser(scanner: Scanner, reporter: Reporter):
 
   // ---- Block ----
 
-  /** Parse `INDENT stmt (NEWLINE stmt)* DEDENT` as a Block. */
+  /** Parse `INDENT stmt (NEWLINE stmt)* DEDENT` as a Block. Recovery:
+    * if a statement leaves the parser on a non-anchor token (i.e. it
+    * didn't reach end-of-line), sync to NEWLINE/DEDENT/EOF and wrap
+    * the partial statement in a `Trees.Error` so subsequent statements
+    * still parse cleanly. */
   private def parseBlock(): Tree =
     val startTok = expect(TokenKind.Indent, "INDENT")
     val stmts = scala.collection.mutable.ListBuffer.empty[Tree]
     skipNewlines()
-    while current.kind != TokenKind.Dedent && current.kind != TokenKind.Eof do
-      stmts += parseStatement()
-      skipNewlines()
+    withAnchors(Anchors.blockBody) {
+      while current.kind != TokenKind.Dedent && current.kind != TokenKind.Eof do
+        val stmtStart = current.span
+        val stmt = parseStatement()
+        if Anchors.blockBody.contains(current.kind) || current.kind == TokenKind.Eof then
+          stmts += stmt
+        else
+          // Statement is malformed — didn't reach a statement boundary.
+          // Emit a diagnostic, sync to the next boundary, and wrap
+          // whatever we got in Error so subsequent statements are
+          // unaffected.
+          reporter.error(
+            "P011",
+            current.span,
+            s"unexpected ${current.kind}${describeLexeme(current)} after statement; expected end of line",
+            Some("split this expression onto its own line")
+          )
+          syncToAnchors()
+          stmts += Trees.Error(List(stmt), span(stmtStart, current.span))
+        skipNewlines()
+    }
     val endTok = expect(TokenKind.Dedent, "DEDENT")
     Trees.Block(stmts.toList, span(startTok.span, endTok.span))
 
@@ -244,7 +331,10 @@ final class Parser(scanner: Scanner, reporter: Reporter):
 
   // TypeExpr ::= ArrowType
   // ArrowType ::= ArrowLhs ("->" ArrowType WithClause?)?
-  def parseTypeExpr(): Tree = parseArrowType()
+  //
+  // Pushes a type-expression anchor frame so any inner parseTypeAtom
+  // failure can sync to a token that plausibly follows a type.
+  def parseTypeExpr(): Tree = withAnchors(Anchors.typeExpr) { parseArrowType() }
 
   private def parseArrowType(): Tree =
     val lhs = parseArrowLhs()
@@ -312,13 +402,17 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       val tok = consume()
       Trees.PrimitiveType(tok.lexeme, tok.span)
     case _ =>
+      val startSpan = current.span
       reporter.error(
         "P004",
-        current.span,
+        startSpan,
         s"expected a type expression, got ${current.kind}${describeLexeme(current)}"
       )
-      val tok = consume()
-      Trees.Error(Nil, tok.span)
+      // Sync to a type-expression boundary so the surrounding parse
+      // (e.g. `fn f(x: @ @ @) -> u64 = …`) keeps its shape rather than
+      // cascading expect()-failures through the rest of the file.
+      syncToAnchors()
+      Trees.Error(Nil, span(startSpan, current.span))
 
   private def parseIsBound(): Tree =
     val startTok = expect(TokenKind.KwIs, "`is`")
@@ -530,14 +624,43 @@ final class Parser(scanner: Scanner, reporter: Reporter):
 
   private def parseArgList(): List[Tree] =
     val _ = expect(TokenKind.LParen, "`(`")
-    val args = scala.collection.mutable.ListBuffer.empty[Tree]
-    if current.kind != TokenKind.RParen then
-      args += parseExpr()
-      while accept(TokenKind.Comma).isDefined do
-        if current.kind == TokenKind.RParen then ()  // trailing comma
-        else args += parseExpr()
+    val args = parseDelimited(TokenKind.RParen, ")")(() => parseExpr())
     val _ = expect(TokenKind.RParen, "`)`")
-    args.toList
+    args
+
+  /** Parse a comma-separated list of items up to (but not including)
+    * `closeKind`. Recovery: if `parseItem` leaves the parser on a token
+    * that is neither `,` nor `closeKind`, emit a diagnostic, sync to the
+    * next such token, and wrap the partial item in `Trees.Error`.
+    * Trailing comma admitted. */
+  private def parseDelimited(
+      closeKind: TokenKind,
+      closeLexeme: String
+  )(parseItem: () => Tree): List[Tree] =
+    val anchors = Set(TokenKind.Comma, closeKind)
+    val items = scala.collection.mutable.ListBuffer.empty[Tree]
+    def parseOne(): Unit =
+      val itemStart = current.span
+      val item = parseItem()
+      if anchors.contains(current.kind) || current.kind == TokenKind.Eof then
+        items += item
+      else
+        reporter.error(
+          "P012",
+          current.span,
+          s"unexpected ${current.kind}${describeLexeme(current)} in list; expected `,` or `$closeLexeme`",
+          Some(s"add `,` to continue or `$closeLexeme` to close the list")
+        )
+        syncToAnchors()
+        items += Trees.Error(List(item), span(itemStart, current.span))
+    withAnchors(anchors) {
+      if current.kind != closeKind then
+        parseOne()
+        while accept(TokenKind.Comma).isDefined do
+          if current.kind == closeKind then ()  // trailing comma
+          else parseOne()
+    }
+    items.toList
 
   private def parseAtomExpr(): Tree = current.kind match
     case TokenKind.IntLit =>
@@ -616,14 +739,9 @@ final class Parser(scanner: Scanner, reporter: Reporter):
 
   private def parseListExpr(): Tree =
     val startTok = expect(TokenKind.LBracket, "`[`")
-    val elements = scala.collection.mutable.ListBuffer.empty[Tree]
-    if current.kind != TokenKind.RBracket then
-      elements += parseExpr()
-      while accept(TokenKind.Comma).isDefined do
-        if current.kind == TokenKind.RBracket then ()
-        else elements += parseExpr()
+    val elements = parseDelimited(TokenKind.RBracket, "]")(() => parseExpr())
     val endTok = expect(TokenKind.RBracket, "`]`")
-    Trees.ListExpr(elements.toList, span(startTok.span, endTok.span))
+    Trees.ListExpr(elements, span(startTok.span, endTok.span))
 
   /** Parse `( ... )` — could be:
     *   - `()`        unit literal
@@ -715,14 +833,11 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     else
       val first = parseExpr()
       if accept(TokenKind.Comma).isDefined then
-        val rest = scala.collection.mutable.ListBuffer[Tree](first)
-        if current.kind != TokenKind.RParen then
-          rest += parseExpr()
-          while accept(TokenKind.Comma).isDefined do
-            if current.kind == TokenKind.RParen then ()
-            else rest += parseExpr()
+        // Tuple literal. The tail uses parseDelimited for recovery; we
+        // already have `first` before the first comma, so prepend it.
+        val tail = parseDelimited(TokenKind.RParen, ")")(() => parseExpr())
         val _ = expect(TokenKind.RParen, "`)`")
-        Trees.TupleExpr(rest.toList, span(startTok.span, current.span))
+        Trees.TupleExpr(first :: tail, span(startTok.span, current.span))
       else
         val _ = expect(TokenKind.RParen, "`)`")
         first

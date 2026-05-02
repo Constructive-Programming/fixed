@@ -166,6 +166,215 @@ class ParserSuite extends FunSuite:
         assertEquals(s, "hello")
       case _ => fail(s"expected FnDecl with StringLit body, got $t")
 
+  // ---- M3.4: type-expression recovery ----
+
+  test("M3.4: malformed param type leaves param shape and body intact"):
+    val src = SourceFile.fromString("<test>", "fn f(x: @ @ @) -> u64 = 0\n")
+    val pr = Parser.parse(src)
+    assert(pr.hasErrors)
+    pr.tree match
+      case Trees.CompilationUnit(List(fn: Trees.FnDecl), _) =>
+        assertEquals(fn.name, "f")
+        assertEquals(fn.params.length, 1)
+        fn.params.head.typeAnn match
+          case _: Trees.Error => ()
+          case other => fail(s"expected Error type annotation, got $other")
+        // Return type and body must NOT have been swallowed by the bad type.
+        fn.returnType match
+          case Trees.PrimitiveType("u64", _) => ()
+          case other => fail(s"expected u64 return, got $other")
+        fn.body match
+          case Some(Trees.IntLit(n, _)) => assertEquals(n, BigInt(0))
+          case other => fail(s"expected IntLit body, got $other")
+      case other => fail(s"expected single FnDecl, got $other")
+
+  test("M3.4: malformed return type leaves body intact"):
+    val src = SourceFile.fromString("<test>", "fn f() -> @ @ = 0\n")
+    val pr = Parser.parse(src)
+    assert(pr.hasErrors)
+    pr.tree match
+      case Trees.CompilationUnit(List(fn: Trees.FnDecl), _) =>
+        fn.returnType match
+          case _: Trees.Error => ()
+          case other => fail(s"expected Error return type, got $other")
+        fn.body match
+          case Some(Trees.IntLit(n, _)) => assertEquals(n, BigInt(0))
+          case other => fail(s"expected IntLit body, got $other")
+      case other => fail(s"expected single FnDecl, got $other")
+
+  // ---- M3.3: delimited-list recovery (args, lists, tuples) ----
+
+  test("M3.3: junk arg in middle of a call yields N args with one Error"):
+    val src = SourceFile.fromString("<test>", "fn f() -> u64 = g(1, @, 3)\n")
+    val pr = Parser.parse(src)
+    assert(pr.hasErrors)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(body), _)), _) =>
+        body match
+          case Trees.Apply(_, args, _) =>
+            assertEquals(args.length, 3, s"expected 3 args, got: $args")
+            assert(args.exists {
+              case _: Trees.Error => true
+              case _ => false
+            }, s"expected an Error among args: $args")
+          case other => fail(s"expected Apply, got $other")
+      case other => fail(s"expected FnDecl, got $other")
+
+  test("M3.3: extra tokens between an arg and `,` are absorbed into Error"):
+    // `g(1 @ @, 3)`: parseExpr returns `1`; the post-item check sees `@`
+    // (not `,` or `)`), syncs to `,`, wraps in Error.
+    val src = SourceFile.fromString("<test>", "fn f() -> u64 = g(1 @ @, 3)\n")
+    val pr = Parser.parse(src)
+    assert(pr.hasErrors)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(body), _)), _) =>
+        body match
+          case Trees.Apply(_, args, _) =>
+            assertEquals(args.length, 2, s"expected 2 args (Error + IntLit), got: $args")
+            args.head match
+              case _: Trees.Error => ()
+              case other => fail(s"expected Error as first arg, got $other")
+            args.last match
+              case Trees.IntLit(n, _) => assertEquals(n, BigInt(3))
+              case other => fail(s"expected IntLit(3) as last arg, got $other")
+          case other => fail(s"expected Apply, got $other")
+      case other => fail(s"expected FnDecl, got $other")
+
+  test("M3.3: list literal with bad element parses with Error in place"):
+    val src = SourceFile.fromString("<test>", "fn f() -> u64 = [1, @, 3].first\n")
+    val pr = Parser.parse(src)
+    assert(pr.hasErrors)
+    val errs = collectAllErrors(pr.tree)
+    assert(errs.nonEmpty, "expected an Error gap node somewhere in the tree")
+
+  test("M3.3: tuple with bad element retains the other elements"):
+    val src = SourceFile.fromString("<test>", "fn f() -> u64 = (1, @, 3).first\n")
+    val pr = Parser.parse(src)
+    assert(pr.hasErrors)
+    val errs = collectAllErrors(pr.tree)
+    assert(errs.nonEmpty)
+
+  // Walk the tree gathering every Trees.Error. Used by the recovery tests
+  // above; the flattening-vs-shape distinction is tested elsewhere.
+  private def collectAllErrors(t: Tree): List[Trees.Error] =
+    t match
+      case e: Trees.Error =>
+        e :: e.recovered.flatMap(collectAllErrors)
+      case Trees.CompilationUnit(items, _) => items.flatMap(collectAllErrors)
+      case Trees.FnDecl(_, _, params, ret, _, body, _) =>
+        params.flatMap(p => collectAllErrors(p.typeAnn)) ++
+          collectAllErrors(ret) ++ body.toList.flatMap(collectAllErrors)
+      case Trees.Block(stmts, _) => stmts.flatMap(collectAllErrors)
+      case Trees.LetExpr(p, init, _) => collectAllErrors(p) ++ collectAllErrors(init)
+      case Trees.IfExpr(c, t1, e, _) => collectAllErrors(c) ++ collectAllErrors(t1) ++ collectAllErrors(e)
+      case Trees.BinOp(_, l, r, _) => collectAllErrors(l) ++ collectAllErrors(r)
+      case Trees.UnaryOp(_, op, _) => collectAllErrors(op)
+      case Trees.Apply(fn, args, _) => collectAllErrors(fn) ++ args.flatMap(collectAllErrors)
+      case Trees.MethodCall(r, _, args, _, _) => collectAllErrors(r) ++ args.flatMap(collectAllErrors)
+      case Trees.StaticCall(_, _, args, _, _) => args.flatMap(collectAllErrors)
+      case Trees.TupleExpr(es, _) => es.flatMap(collectAllErrors)
+      case Trees.ListExpr(es, _) => es.flatMap(collectAllErrors)
+      case _ => Nil
+
+  // ---- M3.2: block-body recovery ----
+
+  test("M3.2: garbage statement is wrapped in Error; surrounding lets parse"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """fn f() -> u64 =
+        |    let x = 1
+        |    @ @ @
+        |    let y = 2
+        |    y
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(pr.hasErrors)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(Trees.Block(stmts, _)), _)), _) =>
+        // Expect: 4 statements — let x, Error, let y, ident y.
+        // (Pre-M3.2 behaviour produced one Error per `@`, i.e. 6
+        // statements; the test below pins the collapsed count.)
+        assertEquals(stmts.length, 4, s"expected 4 statements, got: $stmts")
+        val errs = stmts.collect { case e: Trees.Error => e }
+        assertEquals(errs.length, 1, s"expected exactly one Error among statements: $stmts")
+        // Lets remain parseable on either side.
+        val lets = stmts.collect { case l: Trees.LetExpr => l }
+        assertEquals(lets.length, 2)
+      case other => fail(s"expected FnDecl with Block body, got $other")
+
+  test("M3.2: trailing junk on one line doesn't poison subsequent lines"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """fn f() -> u64 =
+        |    let x = 1 @ @
+        |    x
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(pr.hasErrors)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(Trees.Block(stmts, _)), _)), _) =>
+        // First statement is the broken let (wrapped in Error); second
+        // is the bare `x` ident.
+        assertEquals(stmts.length, 2)
+        stmts.last match
+          case Trees.Ident("x", _) => ()
+          case other => fail(s"expected trailing Ident('x'), got $other")
+      case other => fail(s"expected FnDecl with Block body, got $other")
+
+  // ---- M3.1: top-level recovery ----
+
+  test("M3.1: junk between decls collapses into a single Error item"):
+    // Two valid fns sandwich three stray punctuation tokens. The
+    // pre-M3 behaviour produced one Error per stray token (3 extra
+    // items); after anchor-based sync we get exactly one Error
+    // covering the run, plus the two FnDecls.
+    val src = SourceFile.fromString(
+      "<test>",
+      """fn a() -> u64 = 1
+        |@ @ @
+        |fn b() -> u64 = 2
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(pr.hasErrors)
+    pr.tree match
+      case Trees.CompilationUnit(items, _) =>
+        val fns = items.collect { case f: Trees.FnDecl => f }
+        val errs = items.collect { case e: Trees.Error => e }
+        assertEquals(fns.map(_.name), List("a", "b"))
+        assertEquals(errs.length, 1, s"expected one collapsed Error, got items: $items")
+      case other => fail(s"expected CompilationUnit, got $other")
+
+  test("M3.1: unknown token before a real decl recovers without consuming the decl head"):
+    // A leading `@` must be skipped; the following `fn foo` must parse.
+    val src = SourceFile.fromString("<test>", "@\nfn foo() -> u64 = 0\n")
+    val pr = Parser.parse(src)
+    assert(pr.hasErrors)
+    pr.tree match
+      case Trees.CompilationUnit(items, _) =>
+        val fns = items.collect { case f: Trees.FnDecl => f }
+        assertEquals(fns.map(_.name), List("foo"))
+      case other => fail(s"expected CompilationUnit, got $other")
+
+  test("M3.1: trailing junk after a valid decl yields a single Error item"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """fn a() -> u64 = 1
+        |@@@@
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(pr.hasErrors)
+    pr.tree match
+      case Trees.CompilationUnit(items, _) =>
+        val fns = items.collect { case f: Trees.FnDecl => f }
+        val errs = items.collect { case e: Trees.Error => e }
+        assertEquals(fns.map(_.name), List("a"))
+        assertEquals(errs.length, 1, s"expected one Error after the fn, got: $items")
+      case other => fail(s"expected CompilationUnit, got $other")
+
   // ---- M2: gap nodes ----
 
   test("M2: unexpected top-level token produces a Trees.Error item"):
