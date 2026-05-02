@@ -166,6 +166,62 @@ class ParserSuite extends FunSuite:
         assertEquals(s, "hello")
       case _ => fail(s"expected FnDecl with StringLit body, got $t")
 
+  // ---- M4.6: parseEffectDecl ----
+
+  test("M4.6: simple effect with one op"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """effect Fail of E:
+        |    fn fail(error: E) -> !
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(e: Trees.EffectDecl), _) =>
+        assertEquals(e.isLinear, false)
+        assertEquals(e.name, "Fail")
+        assertEquals(e.ofParams.length, 1)
+        assertEquals(e.members.length, 1)
+        e.members.head match
+          case im: Trees.InstanceMethod => assertEquals(im.name, "fail")
+          case other => fail(s"expected InstanceMethod, got $other")
+      case other => fail(s"expected EffectDecl, got $other")
+
+  test("M4.6: linear effect"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """linear effect File:
+        |    fn open(path: String) -> ()
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(e: Trees.EffectDecl), _) =>
+        assertEquals(e.isLinear, true)
+      case other => fail(s"expected linear EffectDecl, got $other")
+
+  test("M4.6: effect with no params, parameterless op"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """effect Channel of A:
+        |    fn send(value: A) -> ()
+        |    fn receive -> A
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(e: Trees.EffectDecl), _) =>
+        assertEquals(e.members.length, 2)
+        e.members.last match
+          case im: Trees.InstanceMethod =>
+            assertEquals(im.name, "receive")
+            assertEquals(im.params, Nil)
+          case other => fail(s"expected InstanceMethod, got $other")
+      case other => fail(s"expected EffectDecl, got $other")
+
   // ---- M4.5: parseSatisfiesDecl ----
 
   test("M4.5: simple satisfies with constructor mappings"):

@@ -1195,9 +1195,45 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       syncToAnchors()
       Trees.Error(Nil, span(tok, current.span))
 
+  // ---- EffectDecl ----
+
+  // EffectDecl ::= "linear"? "effect" UPPER_IDENT OfClause? (":" INDENT EffectMember+ DEDENT)?
+  //   EffectMember ::= "fn" LOWER_IDENT FnParamList? ("->" TypeExpr)? WithClause?
+  // (Effect ops never have bodies; their semantics are supplied by handlers.)
+  private def parseEffectDecl(): Tree =
+    val startSpan = current.span
+    val isLinear = accept(TokenKind.KwLinear).isDefined
+    val _ = expect(TokenKind.KwEffect, "`effect`")
+    val nameTok = expect(TokenKind.UpperIdent, "effect name")
+    val ofParams = parseOptionalDataOfClause()
+    val members =
+      if accept(TokenKind.Colon).isDefined then parseEffectMembers()
+      else Nil
+    Trees.EffectDecl(isLinear, nameTok.lexeme, ofParams, members, span(startSpan, current.span))
+
+  private def parseEffectMembers(): List[Tree] =
+    val _ = expect(TokenKind.Indent, "INDENT")
+    val members = scala.collection.mutable.ListBuffer.empty[Tree]
+    skipNewlines()
+    withAnchors(Anchors.blockBody) {
+      while current.kind != TokenKind.Dedent && current.kind != TokenKind.Eof do
+        if current.kind == TokenKind.KwFn then
+          members += parseInstanceMethod()
+        else
+          reporter.error(
+            "P017",
+            current.span,
+            s"expected an effect op (`fn name(...) -> T`), got ${current.kind}${describeLexeme(current)}",
+            Some("each effect op is declared like an instance method, without a body")
+          )
+          syncToAnchors()
+        skipNewlines()
+    }
+    val _ = expect(TokenKind.Dedent, "DEDENT")
+    members.toList
+
   // ---- Stub productions still pending ----
 
-  private def parseEffectDecl(): Tree  = unsupported("`effect` declaration")
   private def parseModDecl(): Tree     = unsupported("`mod` declaration")
 
 end Parser
