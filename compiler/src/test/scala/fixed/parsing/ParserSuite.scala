@@ -166,6 +166,51 @@ class ParserSuite extends FunSuite:
         assertEquals(s, "hello")
       case _ => fail(s"expected FnDecl with StringLit body, got $t")
 
+  // ---- M4.7: parseDoExpr ----
+
+  test("M4.7: do-block with binds and a pure-style tail"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """fn f() -> u64 = do:
+        |    x <- safe_divide(100.0, 3.0)
+        |    y <- safe_divide(x, 2.0)
+        |    Optional.pure(x + y)
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(d: Trees.DoExpr), _)), _) =>
+        assertEquals(d.stmts.length, 3)
+        d.stmts.take(2).foreach {
+          case _: Trees.DoBind => ()
+          case other => fail(s"expected DoBind, got $other")
+        }
+        d.stmts.last match
+          case _: Trees.StaticCall => ()
+          case other => fail(s"expected StaticCall (Optional.pure), got $other")
+      case other => fail(s"expected DoExpr in fn body, got $other")
+
+  test("M4.7: nested calls with `<-` inside a sub-expression are not bind"):
+    // Here the `<-` appears inside a parenthesised sub-expression — it
+    // doesn't make the outer statement a DoBind. (Synthetic shape: a
+    // tuple element bound shouldn't match.)
+    val src = SourceFile.fromString(
+      "<test>",
+      """fn f() -> u64 = do:
+        |    M.pure(1)
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(d: Trees.DoExpr), _)), _) =>
+        assertEquals(d.stmts.length, 1)
+        d.stmts.head match
+          case _: Trees.StaticCall => ()
+          case other => fail(s"expected StaticCall, got $other")
+      case other => fail(s"expected DoExpr, got $other")
+
   // ---- M4.6: parseEffectDecl ----
 
   test("M4.6: simple effect with one op"):

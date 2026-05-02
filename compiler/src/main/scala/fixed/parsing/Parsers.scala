@@ -672,7 +672,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     case TokenKind.KwLet     => parseLetExpr()
     case TokenKind.KwMatch   => parseMatchExpr()
     case TokenKind.KwHandle  => unsupported("`handle` expression")
-    case TokenKind.KwDo      => unsupported("`do` expression")
+    case TokenKind.KwDo      => parseDoExpr()
     case TokenKind.KwForall  => unsupported("`forall` quantifier (only valid in prop bodies)")
     case TokenKind.LBracket  => parseListExpr()
     case TokenKind.LParen    => parseParenOrLambdaOrTuple()
@@ -739,6 +739,63 @@ final class Parser(scanner: Scanner, reporter: Reporter):
         loop(Trees.OrPat(acc, rhs, span(acc.span, rhs.span)))
       else acc
     loop(parsePattern())
+
+  // DoExpr ::= "do" ":" INDENT DoStmt+ DEDENT
+  // DoStmt ::= Pattern "<-" Expr   (DoBind)
+  //          | Expr
+  private def parseDoExpr(): Tree =
+    val startTok = expect(TokenKind.KwDo, "`do`")
+    val _ = expect(TokenKind.Colon, "`:` after `do`")
+    val stmts = parseDoStmts()
+    Trees.DoExpr(stmts, span(startTok.span, current.span))
+
+  private def parseDoStmts(): List[Tree] =
+    val _ = expect(TokenKind.Indent, "INDENT")
+    val stmts = scala.collection.mutable.ListBuffer.empty[Tree]
+    skipNewlines()
+    withAnchors(Anchors.blockBody) {
+      while current.kind != TokenKind.Dedent && current.kind != TokenKind.Eof do
+        val stmtStart = current.span
+        val stmt =
+          if isDoBindAhead() then
+            val pat = parsePattern()
+            val _ = expect(TokenKind.BackArrow, "`<-`")
+            val rhs = parseExpr()
+            Trees.DoBind(pat, rhs, span(pat.span, rhs.span))
+          else parseExpr()
+        if Anchors.blockBody.contains(current.kind) || current.kind == TokenKind.Eof then
+          stmts += stmt
+        else
+          reporter.error(
+            "P018",
+            current.span,
+            s"unexpected ${current.kind}${describeLexeme(current)} after do statement; expected end of line",
+            Some("split this expression onto its own line")
+          )
+          syncToAnchors()
+          stmts += Trees.Error(List(stmt), span(stmtStart, current.span))
+        skipNewlines()
+    }
+    val _ = expect(TokenKind.Dedent, "DEDENT")
+    stmts.toList
+
+  // True iff the current statement contains a top-level `<-` before
+  // its terminating NEWLINE/DEDENT/EOF — i.e. it's a `pat <- expr`
+  // bind rather than a plain expression. Tracks paren/bracket/brace
+  // depth so a `<-` inside a nested expression is not mistaken for
+  // the bind arrow.
+  private def isDoBindAhead(): Boolean =
+    @tailrec
+    def loop(i: Int, depth: Int): Boolean =
+      peek(i).kind match
+        case TokenKind.BackArrow if depth == 0 => true
+        case TokenKind.Newline | TokenKind.Dedent | TokenKind.Eof => false
+        case TokenKind.LParen | TokenKind.LBracket | TokenKind.LBrace =>
+          loop(i + 1, depth + 1)
+        case TokenKind.RParen | TokenKind.RBracket | TokenKind.RBrace =>
+          if depth == 0 then false else loop(i + 1, depth - 1)
+        case _ => loop(i + 1, depth)
+    loop(0, 0)
 
   /** A branch body that's either a same-line expression or an INDENTed block. */
   private def parseInlineOrBlockExpr(): Tree =
