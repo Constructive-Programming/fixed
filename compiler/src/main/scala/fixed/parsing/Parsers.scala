@@ -371,9 +371,8 @@ final class Parser(scanner: Scanner, reporter: Reporter):
 
   // Fixed has no statements — every block element is an Expr, with two
   // exceptions admissible in any block:
-  //   - `fn name(...) = body` — nested local function (Q1, M4 triage).
-  //   - `prop name: body` — invariant declaration (used in `fn -> cap`
-  //     bodies and inside data/cap bodies).
+  //   - `fn name(...) = body` — nested local function.
+  //   - `prop name: body` — invariant (used in `fn -> cap` bodies).
   private def parseStatement(): Tree = current.kind match
     case TokenKind.KwFn   => parseFnDecl()
     case TokenKind.KwProp => parsePropDecl()
@@ -1227,10 +1226,8 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       case _ =>
         parseTypeExpr()
 
-  // The data body returns `List[Tree]` (not `List[DataVariant]`)
-  // because — per Rule M5.2 — a data body may include `prop`
-  // declarations alongside its variants. The DataDecl carries them
-  // together; the typer separates the two as needed.
+  // The data body holds `DataVariant` and `PropDecl` mixed; the typer
+  // separates them as needed.
   private def parseDataVariants(): List[Tree] =
     val _ = expect(TokenKind.Indent, "INDENT")
     val items = scala.collection.mutable.ListBuffer.empty[Tree]
