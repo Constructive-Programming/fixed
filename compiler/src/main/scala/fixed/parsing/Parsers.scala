@@ -3,17 +3,20 @@ package fixed.parsing
 import fixed.ast.{Tree, Trees}
 import fixed.util.{Reporter, SourceFile, Span}
 
-/** Hand-written recursive-descent parser. Produces the untyped AST.
+/** Hand-written recursive-descent parser over the token stream produced
+  * by [[Scanner]]. Pulls one token at a time into a small lookahead
+  * buffer so productions needing >1 token of lookahead (lambda-vs-tuple,
+  * RefinementCall vs FnCall, …) can peek.
   *
-  * Pull model: tokens are read from the [[Scanner]] one at a time and
-  * buffered in a small lookahead window so productions that need >1 token
-  * of lookahead (lambda-vs-tuple, RefinementCall vs FnCall, etc.) can peek.
+  * Some productions (`match`, `handle`, `cap`/`data`/`effect`/`satisfies`
+  * declarations, `prop`, `forall`, struct literals) are still stubbed —
+  * they emit an explicit "not yet implemented" diagnostic and a
+  * `Trees.Error` gap node, leaving the surrounding parse intact.
   *
-  * This implementation is scoped to the productions exercised by
-  * `examples/01_basics.fixed`. Productions used only by examples 02–11
-  * (`match`, `handle`, `cap`/`data`/`effect`/`satisfies` declarations,
-  * `prop`, `forall`, struct literals, …) are stubbed with an explicit
-  * "not yet implemented" error and will be filled in for milestones M4–M5.
+  * Recovery: every production that owns a synchronisation context
+  * pushes an anchor frame via `withAnchors` and may call
+  * `syncToAnchors` on failure; see `spec/syntax_grammar.ebnf` Appendix
+  * A.1 for the normative anchor set per context.
   */
 final class Parser(scanner: Scanner, reporter: Reporter):
 
@@ -73,40 +76,31 @@ final class Parser(scanner: Scanner, reporter: Reporter):
   private def span(start: Span, end: Span): Span =
     Span(start.start, end.end)
 
-  // ---- Recovery (Phase 2.1 M3) ----
+  // ---- Recovery ----
 
-  /** Stack of anchor frames, one per active production-with-recovery.
-    * Each production pushes its own anchor set on entry and pops on exit;
-    * `syncToAnchors` uses only the innermost frame so each production's
-    * recovery is local. Outer recovery is the outer caller's job — it
-    * has its own `withAnchors`/`syncToAnchors` pair. */
+  /** Stack of anchor frames, one per active production. Each production
+    * pushes its own anchor set on entry and pops on exit; `syncToAnchors`
+    * skips to the innermost frame's nearest anchor, so each production's
+    * recovery is local — outer recovery is the outer caller's job. */
   private var activeAnchors: List[Set[TokenKind]] = Nil
 
-  /** Push `anchors` onto the active stack for the duration of `body`.
-    * Always pops, even on exceptional return. */
   private def withAnchors[T](anchors: Set[TokenKind])(body: => T): T =
     activeAnchors = anchors :: activeAnchors
     try body
     finally activeAnchors = activeAnchors.tail
 
-  /** Skip tokens until `current.kind` is in the innermost active anchor
-    * frame, or EOF. Does NOT consume the anchor — the caller decides
-    * whether to resume or yield to its own caller. No-op when the active
-    * stack is empty (recovery is only meaningful inside a `withAnchors`
-    * scope). */
+  /** Skip until `current.kind` is in the innermost active anchor frame
+    * or EOF. Does NOT consume the anchor — the caller resumes from it. */
   private def syncToAnchors(): Unit =
     activeAnchors.headOption.foreach { inner =>
       while current.kind != TokenKind.Eof && !inner.contains(current.kind) do
         val _ = consume()
     }
 
-  // Anchor sets, named by the context that owns them. Anchors are
-  // *reached but not consumed*; productions decide whether to recover or
-  // bubble up based on which anchor matched.
   private object Anchors:
-    /** Top-level item starts: every keyword that begins a top-level
-      * production, plus UpperIdent (head of a `T satisfies …` decl) and
-      * EOF. NEWLINE is NOT included — it's a separator, not a starter. */
+    /** Top-level item starts: keywords that begin a top-level production
+      * plus UpperIdent (head of a `T satisfies …` decl) and EOF. NEWLINE
+      * is a separator, not a starter, so it is not an anchor here. */
     val topLevel: Set[TokenKind] = Set(
       TokenKind.KwUse, TokenKind.KwFn, TokenKind.KwCap, TokenKind.KwData,
       TokenKind.KwEffect, TokenKind.KwLinear, TokenKind.KwType,
@@ -114,16 +108,10 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       TokenKind.Eof
     )
 
-    /** Block-body statement boundary: a NEWLINE between statements or a
-      * DEDENT closing the block. EOF is implicitly an anchor for every
-      * frame (see `syncToAnchors`). */
     val blockBody: Set[TokenKind] = Set(TokenKind.Newline, TokenKind.Dedent)
 
-    /** Type-expression boundary: anything that can plausibly *follow* a
-      * type. Per spec/syntax_grammar.ebnf Appendix A.1.2. Arrow is
-      * included even though it's part of `T -> U` — when a type atom
-      * fails partway through, sync-to-arrow lets `parseArrowType` see
-      * the arrow and continue building. */
+    /** Anything that can plausibly follow a type. Arrow is included so a
+      * partial atom can sync forward and let `parseArrowType` resume. */
     val typeExpr: Set[TokenKind] = Set(
       TokenKind.Comma, TokenKind.RParen, TokenKind.RBracket,
       TokenKind.Newline, TokenKind.Dedent,
@@ -180,7 +168,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     reporter.error(
       "P099",
       current.span,
-      s"$what is not yet implemented in the Phase-2 parser (Phase-2.M3 scope)",
+      s"$what is not yet implemented",
       Some("file an issue or extend Parsers.scala")
     )
     val tok = consume()
@@ -218,8 +206,8 @@ final class Parser(scanner: Scanner, reporter: Reporter):
   private def parseFnDecl(): Tree =
     val startTok = expect(TokenKind.KwFn, "`fn`")
     val nameTok = expect(TokenKind.LowerIdent, "function name")
-    // TypeParamsHint <T1, T2, ...>: deferred — example 01 doesn't use the
-    // explicit hint; type params are introduced via Rule 4.1.
+    // TypeParamsHint (`<T1, T2, ...>`) deferred; Fixed type params are
+    // normally introduced at first use via Rule 4.1.
     val params = parseFnParamList()
     val returnType =
       if accept(TokenKind.Arrow).isDefined then parseTypeExpr()
@@ -281,9 +269,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       else None
     Trees.EffectBound(nameTok.lexeme, ofArg, span(nameTok.span, current.span))
 
-  // The body of a fn is either:
-  //  - a single expression on the same line as `=`, or
-  //  - an INDENTed block.
+  // A fn body is either a same-line Expr after `=` or an INDENTed block.
   private def parseFnBody(): Tree =
     if current.kind == TokenKind.Indent then parseBlock()
     else parseExpr()
@@ -306,10 +292,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
         if Anchors.blockBody.contains(current.kind) || current.kind == TokenKind.Eof then
           stmts += stmt
         else
-          // Statement is malformed — didn't reach a statement boundary.
-          // Emit a diagnostic, sync to the next boundary, and wrap
-          // whatever we got in Error so subsequent statements are
-          // unaffected.
+          // Statement didn't reach a boundary — recover and Error-wrap.
           reporter.error(
             "P011",
             current.span,
@@ -323,17 +306,14 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     val endTok = expect(TokenKind.Dedent, "DEDENT")
     Trees.Block(stmts.toList, span(startTok.span, endTok.span))
 
-  /** A statement-level expression: in Fixed everything is an expression,
-    * but at the top of a block we allow `let` and other Expr alternatives. */
+  // Fixed has no statements — every block element is an Expr.
   private def parseStatement(): Tree = parseExpr()
 
   // ---- Type expressions ----
 
-  // TypeExpr ::= ArrowType
-  // ArrowType ::= ArrowLhs ("->" ArrowType WithClause?)?
-  //
-  // Pushes a type-expression anchor frame so any inner parseTypeAtom
-  // failure can sync to a token that plausibly follows a type.
+  // TypeExpr ::= ArrowType ::= ArrowLhs ("->" ArrowType WithClause?)?
+  // The anchor frame lets a failed `parseTypeAtom` sync to whatever
+  // plausibly follows a type.
   def parseTypeExpr(): Tree = withAnchors(Anchors.typeExpr) { parseArrowType() }
 
   private def parseArrowType(): Tree =
@@ -350,17 +330,12 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       //         `(T)` → just T (parenthesised)
       //         `(T) of OfArg` → ParenTypeApp
       val startSpan = current.span
-      val _ = consume()  // consume `(`
+      val _ = consume()
       if accept(TokenKind.RParen).isDefined then
-        // `()` — unit type
-        // Possibly followed by `of` — but unit-of-X isn't meaningful.
-        // We just produce UnitType.
         Trees.UnitType(span(startSpan, current.span))
       else
         val first = parseTypeExpr()
         if accept(TokenKind.Comma).isDefined then
-          // Multi-element tuple-arrow LHS. `first` is already past the
-          // first comma; `parseDelimited` handles the tail with recovery.
           val tail = parseDelimited(TokenKind.RParen, ")")(() => parseTypeExpr())
           val _ = expect(TokenKind.RParen, "`)`")
           Trees.TupleArrowLhs(first :: tail, span(startSpan, current.span))
@@ -404,9 +379,6 @@ final class Parser(scanner: Scanner, reporter: Reporter):
         startSpan,
         s"expected a type expression, got ${current.kind}${describeLexeme(current)}"
       )
-      // Sync to a type-expression boundary so the surrounding parse
-      // (e.g. `fn f(x: @ @ @) -> u64 = …`) keeps its shape rather than
-      // cascading expect()-failures through the rest of the file.
       syncToAnchors()
       Trees.Error(Nil, span(startSpan, current.span))
 
@@ -427,7 +399,6 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     case TokenKind.LowerIdent =>
       val nameTok = consume()
       if current.kind == TokenKind.LParen then
-        // RefinementCall.
         val args = parseArgList()
         Trees.RefinementCall(nameTok.lexeme, args, span(nameTok.span, current.span))
       else
@@ -445,11 +416,11 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     val ofArg = if accept(TokenKind.KwOf).isDefined then Some(parseOfArg()) else None
     Trees.CapRef(nameTok.lexeme, ofArg, span(nameTok.span, current.span))
 
-  // OfArg can be: OfValueParam (decl-site) | LiteralExpr | TypeExpr.
-  // For example 01 we only see OfArg = TypeExpr (e.g., `Folding of i64`)
-  // and tuple-of-TypeExpr (e.g., `BiFunctor of (A, B)`). We keep the parser
-  // permissive: parens enclose either a single TypeExpr or a comma-separated
-  // list of OfArgs.
+  // OfArg ::= OfValueParam (decl-site) | LiteralExpr | TypeExpr. The
+  // parser admits any TypeExpr or a parenthesised comma-list (for the
+  // tuple-of-TypeExpr form `BiFunctor of (A, B)`); decl-site value
+  // params and literal-expression OfArgs are disambiguated by the
+  // typer.
   private def parseOfArg(): Tree =
     if current.kind == TokenKind.LParen then
       val startSpan = current.span
@@ -476,7 +447,6 @@ final class Parser(scanner: Scanner, reporter: Reporter):
 
   // ---- Expressions ----
 
-  /** Top-level expression. */
   def parseExpr(): Tree = current.kind match
     case TokenKind.KwLet => parseLetExpr()
     case _ => parsePipeExpr()
@@ -576,16 +546,13 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     while continue do
       current.kind match
         case TokenKind.LParen =>
-          // Function application: `f(args)`.
           val args = parseArgList()
           receiver = receiver match
             case Trees.Ident(_, sp) =>
-              // Bare ident applied — could be FnCall.
               Trees.Apply(receiver, args, span(sp, current.span))
             case other =>
               Trees.Apply(other, args, span(other.span, current.span))
         case TokenKind.Dot =>
-          // Method call or field access.
           val _ = consume()
           val nameTok = current.kind match
             case TokenKind.LowerIdent | TokenKind.UpperIdent => consume()
@@ -602,11 +569,10 @@ final class Parser(scanner: Scanner, reporter: Reporter):
             else (Nil, false)
           receiver = receiver match
             case Trees.Ident(qual, qspan) if qual.headOption.exists(_.isUpper) && hasArgList =>
-              // `T.member(args)` — static call.
               Trees.StaticCall(qual, nameTok.lexeme, args, hasArgList, span(qspan, current.span))
             case Trees.Ident(qual, qspan) if qual.headOption.exists(_.isUpper) && !hasArgList =>
-              // `T.Variant` — bare data-variant or static-method-no-args.
-              // Represent as StaticCall with empty args; the typer disambiguates.
+              // Bare `T.Variant` (or static-method-no-args). Encoded as
+              // StaticCall with empty args; the typer disambiguates.
               Trees.StaticCall(qual, nameTok.lexeme, Nil, hasArgList = false, span(qspan, current.span))
             case _ =>
               Trees.MethodCall(receiver, nameTok.lexeme, args, hasArgList, span(receiver.span, current.span))
@@ -773,9 +739,8 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       i += 1
     if found < 0 then false
     else
-      // Look at the token immediately after the matching `)`.
+      // Skip a NEWLINE between `)` and `->` (multi-line lambda).
       val afterIdx = found + 1
-      // Skip a possible trailing newline.
       val nextKind =
         if peek(afterIdx).kind == TokenKind.Newline then peek(afterIdx + 1).kind
         else peek(afterIdx).kind
@@ -794,8 +759,6 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     val body = parseInlineOrBlockExpr()
     Trees.LambdaExpr(params.toList, body, span(startTok.span, body.span))
 
-  /** Lambda params allow optional type annotation and default. The simplest
-    * form is just an identifier; a wildcard `_` is also allowed. */
   private def parseLambdaParam(): Trees.FnParam =
     val (name, startSpan) = current.kind match
       case TokenKind.LowerIdent =>
@@ -824,8 +787,8 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     else
       val first = parseExpr()
       if accept(TokenKind.Comma).isDefined then
-        // Tuple literal. The tail uses parseDelimited for recovery; we
-        // already have `first` before the first comma, so prepend it.
+        // Tuple literal — `first` is already past the first comma; the
+        // tail uses parseDelimited for recovery and is prepended.
         val tail = parseDelimited(TokenKind.RParen, ")")(() => parseExpr())
         val _ = expect(TokenKind.RParen, "`)`")
         Trees.TupleExpr(first :: tail, span(startTok.span, current.span))
@@ -853,9 +816,9 @@ final class Parser(scanner: Scanner, reporter: Reporter):
         else
           Trees.DataVariantPat(Some(nameTok.lexeme), variantTok.lexeme, Nil, hasArgList = false, span(nameTok.span, variantTok.span))
       else
-        // Bare uppercase ident as pattern: rare, but let's accept it as a
-        // BinderPat-equivalent. Per Rule M3.4.a it's a no-qualifier variant
-        // pattern; the typer resolves against scrutinee's type.
+        // Bare uppercase ident as pattern — a no-qualifier variant
+        // pattern (per pattern_matching.md Rule 3.4.a). The typer
+        // resolves against the scrutinee's type.
         Trees.DataVariantPat(None, nameTok.lexeme, Nil, hasArgList = false, nameTok.span)
     case TokenKind.LParen =>
       // Tuple pattern.

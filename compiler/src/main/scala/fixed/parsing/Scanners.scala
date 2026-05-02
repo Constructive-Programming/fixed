@@ -5,12 +5,11 @@ import scala.annotation.tailrec
 
 import fixed.util.{Reporter, SourceFile, Span}
 
-// Single-pass lexer. The `Scanner` object holds the immutable state
-// (`ScannerState`, `step`); the `class Scanner` wrapper below adapts it
-// to the parser's pull-style `nextToken()` API. State and token threading
-// are pure; the only side effect is error emission via the supplied
-// `Reporter`. Indentation, line-continuation, and bracket-suppression
-// rules: see `spec/syntax_grammar.ebnf` lines 156–217.
+// Single-pass lexer. The `Scanner` object holds the pure-functional
+// state and `step`; the `class Scanner` wrapper below adapts it to the
+// parser's pull `nextToken()` API. The only impurity is error emission
+// via the supplied `Reporter`. Indentation, line-continuation, and
+// bracket-suppression rules are normative in `spec/syntax_grammar.ebnf`.
 
 object Scanner:
 
@@ -20,15 +19,13 @@ object Scanner:
       pos: Int,
       indentStack: List[Int],
       bracketStack: List[(Char, Int)],
-      lastKind: TokenKind,                // last token's kind (TokenKind.NoStart before first emit)
+      lastKind: TokenKind,                // TokenKind.NoStart before first emit
       eofEmitted: Boolean,
       pending: Queue[Token]
   ):
-    // Suppressed iff inside a bracket whose recorded indent depth still
-    // matches `indentStack.length` — i.e. no body has been engaged since
-    // the bracket opened. (Profiled alternatives — cached `indentDepth`
-    // field, SoA `IArray` bracket stack — both regressed; List wins for
-    // shallow, push/pop-heavy stacks.)
+    // True iff we're inside a bracket whose recorded indent depth still
+    // equals `indentStack.length` — no body has been engaged since the
+    // bracket opened, so off-side rule is suppressed.
     def isInsideSuppressedBrackets: Boolean = bracketStack match
       case (_, depth) :: _ => indentStack.length == depth
       case Nil             => false
@@ -36,7 +33,6 @@ object Scanner:
     def currentIndent: Int = indentStack.head
 
     def enqueue(t: Token): ScannerState = copy(pending = pending.enqueue(t))
-    // We only ever read `.kind`, so store the kind directly — no `Some` box.
     def withLast(t: Token): ScannerState = copy(lastKind = t.kind)
 
   end ScannerState
@@ -58,17 +54,15 @@ object Scanner:
 
   // ---- Transitions ----
 
-  // Advance by one token. Errors detected mid-step are pushed directly to
-  // the supplied `Reporter` — that's the one impurity the scanner has, and
-  // it's bounded: state and token threading remain pure, only diagnostics
-  // flow through the reporter side channel. Idempotent at EOF.
+  // Advance by one token. Idempotent at EOF.
   //
-  // Allocation discipline: every code path that ends with a real token
-  // returns a state whose `lastKind` already matches the token's kind —
-  // `scanToken` and its helpers fold `lastKind` into their own one
-  // `state.copy`, so `step` can return that state directly without a
-  // wrapping copy. Only the synthetic-pending paths still need an extra
-  // copy because the emitted token differs from the one just produced.
+  // Allocation invariant: code paths that end with a real token return
+  // a state whose `lastKind` already matches the token's kind —
+  // `scanToken` folds it into its own one `state.copy`, so `step`
+  // returns that state directly without a wrapping copy. The
+  // synthetic-pending paths still copy because the emitted token
+  // (a synthetic INDENT/DEDENT/NEWLINE) differs from the one just
+  // scanned.
   def step(
       state: ScannerState,
       source: SourceFile,
@@ -78,13 +72,6 @@ object Scanner:
       case Some((tok, rest)) =>
         (state.copy(pending = rest, lastKind = tok.kind), tok)
       case None =>
-        // scanOne inlined: skip trivia → if past end, drain pending /
-        // queue EOF; otherwise handle indent + scan one real token. The
-        // pre-Opt3 version wrapped the real-token branch in a
-        // `ScanResult.RealToken(state, token)` case-class instance per
-        // step — JFR ranked it the third largest allocator. Inlining
-        // turns the wrapper into local locals and gets the JIT to
-        // hoist/eliminate them.
         val (st1, crossedNewline) = skipTrivia(state, source, crossedNewline = false, reporter)
         if st1.pos >= source.length then
           st1.pending.dequeueOption match
@@ -97,13 +84,13 @@ object Scanner:
           val st2 = if crossedNewline then handleNewline(st1, source, reporter) else st1
           val (st3, tok) = scanToken(st2, source, reporter)
           if st3.pending.nonEmpty then
-            // Synthetic tokens (INDENT/DEDENT/NEWLINE) drain ahead of
-            // the real one; re-queue the real token at the tail.
+            // A synthetic INDENT/DEDENT/NEWLINE was queued during indent
+            // handling; emit it now and re-queue the real token at the tail.
             val synth = st3.pending.head
             val rest = st3.pending.tail
             (st3.copy(pending = rest.enqueue(tok), lastKind = synth.kind), synth)
           else
-            (st3, tok)  // st3.lastKind already == tok.kind
+            (st3, tok)
 
   private def closeIndentsAndQueueEof(state: ScannerState): ScannerState =
     val pos = state.pos
@@ -114,16 +101,10 @@ object Scanner:
     val withEof = withDedents.enqueue(Token(TokenKind.Eof, Span(pos, pos)))
     state.copy(indentStack = poppedStack, pending = withEof, eofEmitted = true)
 
-  // Trivia consumption only mutates `pos`; computing the new pos in a
-  // pure recursive helper and folding the result into one
-  // `state.copy` at the end avoids one allocation per whitespace char.
-  // For source with leading 4-space indents this is the difference
-  // between 4 ScannerState copies per line and 1.
-  //
-  // `advanceTrivia` packs `(pos, crossedNewline)` into a Long (low 32
-  // = pos, high 32 = crossed flag) so the recursive accumulator passes
-  // through registers instead of allocating a `Tuple2$mcIZ$sp` per
-  // call. Caller unpacks once at the boundary.
+  // Trivia consumption only mutates `pos`; `advanceTrivia` recurses
+  // over a primitive Int and packs `(pos, crossedNewline)` into a Long
+  // so the loop allocates nothing. One `state.copy` happens at the
+  // boundary if pos changed.
   private def skipTrivia(
       state: ScannerState,
       source: SourceFile,
@@ -148,7 +129,7 @@ object Scanner:
       val c = source.content.charAt(pos)
       if c == ' ' then advanceTrivia(pos + 1, source, reporter, crossed)
       else if c == '\t' then
-        // Tabs forbidden as whitespace per grammar v0.3 (line 160).
+        // Tabs are forbidden as whitespace per the grammar.
         reporter.error(
           "E001",
           Span(pos, pos + 1),
@@ -373,10 +354,8 @@ object Scanner:
     val st = state.copy(pos = start + 2, lastKind = kind)
     (st, Token(kind, Span(start, st.pos)))
 
-  // Close-bracket production. Folds pos / lastKind / bracketStack
-  // updates into a single `state.copy` per token (pre-refactor took
-  // two: one for pos+lastKind in scanToken, one for bracketStack in
-  // popBracket).
+  // Close-bracket production. Folds pos / lastKind / bracketStack into
+  // one `state.copy` per token.
   private def closeBracket(
       state: ScannerState,
       start: Int,
@@ -444,10 +423,11 @@ object Scanner:
   // emit the "at end of input" variant of the error.
   private final case class QuotedBody(pos: Int, lexeme: String, closed: Boolean)
 
-  // The StringBuilder is local and never escapes — it's used purely as a
-  // lexeme accumulator for the loop below, then frozen via `.toString`.
-  // Equivalent to `(content.charAt(_) :: acc).reverse.mkString` but
-  // avoids the per-character List cell allocation on the hot path.
+  // The local StringBuilder never escapes `loop`; it's a lexeme
+  // accumulator frozen via `.toString` at each terminating branch. The
+  // `(c :: acc).reverse.mkString` shape is equivalent but allocates a
+  // List cell per character, which dominated the literal-heavy
+  // benchmark before this hand-rolled accumulator.
   private def scanQuotedBody(
       source: SourceFile,
       start: Int,
@@ -547,36 +527,18 @@ object Scanner:
 
 end Scanner
 
-// Pull-style adapter. The token stream is produced once at construction
-// time by a pure `Iterator.unfold` over `ScannerState`, materialised
-// eagerly into an immutable `Vector[Token]`; an `Iterator[Token]` over
-// that Vector serves the parser's pull API. The iterator is the *one
-// documented boundary mutation* — it owns Scala's internal cursor and is
-// required to satisfy the `def nextToken(): Token` contract without
-// redesigning the Parser. Everything else (trivia extraction, table
-// construction) is a pure fold over the same Vector.
+// Pull-style adapter over the pure functional core. The token stream
+// is produced once at construction by `Iterator.unfold` over
+// `ScannerState`, materialised eagerly into an immutable
+// `Vector[Token]`; an `Iterator[Token]` over that Vector serves the
+// parser's pull API. The iterator is the one documented boundary
+// mutation — it owns Scala's internal cursor and is required to
+// satisfy the `def nextToken(): Token` contract without redesigning
+// the Parser. Trivia extraction is a pure fold over the same Vector.
 //
-// Hot-path discipline: the unfold seed is `ScannerState` directly (no
-// `Option` boxing — termination is encoded by `state.lastKind == Eof`);
-// `step` and `scanToken` fold `lastKind` into their own one
-// `state.copy` so most real tokens cost a single ScannerState
-// allocation per step; trivia consumption packs `(pos, crossed)` into
-// a `Long` to avoid `Tuple2$mcIZ$sp` boxing per character. Per JFR
-// (5000 iters × 11 examples), corpus mean settled at ~60 ns/token
-// captureTrivia=false and ~64 ns/token captureTrivia=true — about
-// 25 % faster than the imperative scanner this replaced.
-//
-// Eager materialisation keeps reporter side effects firing exactly once
-// (the parser will drive to EOF anyway, so laziness buys nothing) and
-// keeps both `tokenize` and `triviaTable` reading from one shared source
-// of truth.
-//
-// Trivia retention (Phase 2.1 M4): real tokens (those with non-empty
-// spans) carry the gap information needed for trivia. `triviaTable`
-// folds over the same Vector, walking each `[prevEnd, start)` gap for
-// `//` comments and blank-line runs. Synthetic tokens (INDENT / DEDENT
-// / NEWLINE / EOF) have zero-length spans and are filtered out — they're
-// structural markers, not source positions.
+// Eager materialisation keeps reporter side effects firing exactly
+// once and gives `tokenize` and `triviaTable` a shared source of
+// truth.
 final class Scanner(
     val source: SourceFile,
     val reporter: Reporter,
@@ -584,12 +546,10 @@ final class Scanner(
 ):
   import Scanner.{ScannerState, initialState, step}
 
-  // Pure unfold over ScannerState, materialised eagerly. Termination:
-  // once a step has emitted EOF the resulting state carries
-  // `lastKind = TokenKind.Eof` (set by step's pending-dequeue branch),
-  // so the next iteration short-circuits. Encoding "done" in the
-  // state itself avoids the per-step `Option[ScannerState]` boxing
-  // that JFR flagged as the second-largest allocator after ScannerState.
+  // Termination: once a step has emitted EOF, the resulting state
+  // carries `lastKind = TokenKind.Eof`, so the next iteration short-
+  // circuits. Encoding "done" in the state itself avoids the per-step
+  // `Option[ScannerState]` boxing the unfold would otherwise incur.
   private val tokens: Vector[Token] =
     Iterator
       .unfold[Token, ScannerState](initialState) { st =>
@@ -601,8 +561,8 @@ final class Scanner(
       .toVector
 
   // The single boundary mutation: Scala's `Iterator` owns an internal
-  // cursor over `tokens`. Once EOF is consumed we synthesise further
-  // EOFs (idempotent at end, matching the previous `var state` semantics).
+  // cursor over `tokens`. Past the materialised end we synthesise
+  // further EOFs so `nextToken` is idempotent at EOF.
   private val iter: Iterator[Token] = tokens.iterator
 
   def nextToken(): Token =
@@ -611,17 +571,13 @@ final class Scanner(
 
   def tokenize(): Seq[Token] = tokens
 
-  /** Build the trivia table from the recorded real-token spans. Walks
-    * each gap once; only allocates per-event when a `//` comment or
-    * blank-line run is actually present. Returns `TriviaTable.empty`
-    * when this scanner was constructed with `captureTrivia = false`. */
+  /** Trivia table keyed on real-token start offsets. Returns
+    * `TriviaTable.empty` when this scanner was constructed with
+    * `captureTrivia = false`. */
   def triviaTable: TriviaTable =
     if !captureTrivia then TriviaTable.empty
     else
       val content = source.content
-      // Fold once over the memoized token stream. Real tokens are the
-      // ones with non-empty spans; synthetics (zero-length) are skipped.
-      // `prevEnd` threads through; `acc` is the immutable result map.
       val (_, table) = tokens.foldLeft((0, Map.empty[Int, List[Trivia]])) {
         case ((prevEnd, acc), tok) =>
           val s = tok.span.start
@@ -635,12 +591,11 @@ final class Scanner(
       }
       TriviaTable.from(table)
 
-  // Walk `[from, end)` of `content` collecting `//`-comments and runs
-  // of two or more `\n`s. Inline whitespace is ignored (recoverable
-  // from token spans). Single newlines are ignored — they're already
-  // represented by NEWLINE / DEDENT tokens. Tail-recursive build with
-  // a List accumulator reversed at the boundary; events are pushed in
-  // discovery order so the post-reverse output is source-order.
+  // Walk `[i, end)` of `content` collecting `//`-comments and runs of
+  // two or more `\n`s. Inline whitespace is ignored (recoverable from
+  // token spans). Single newlines are already represented by
+  // NEWLINE / DEDENT tokens. The accumulator is reversed at the
+  // terminating branch so events come out in source order.
   @tailrec
   private def collectTrivia(
       content: String,
