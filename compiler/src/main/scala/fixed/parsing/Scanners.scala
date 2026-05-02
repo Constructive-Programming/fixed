@@ -22,17 +22,23 @@ object Scanner:
       pos: Int,
       indentStack: List[Int],
       bracketStack: List[(Char, Int)],
-      lastKind: TokenKind,                  // last token's kind (TokenKind.NoStart before first emit)
+      lastKind: TokenKind,                // last token's kind (TokenKind.NoStart before first emit)
       eofEmitted: Boolean,
       pending: Queue[Token],
       errors: Vector[Diagnostic]
   ):
     // Suppressed iff inside an open bracket and no body has been engaged
     // since the bracket opened. We compare `indentStack.length` against
-    // the depth recorded at bracket-open time. (Tried caching depth as a
-    // separate field — net negative because the extra `state.copy` field
-    // costs more than the rare List.length reads save; the indent stack
-    // is shallow in practice.)
+    // the depth recorded at bracket-open time.
+    //
+    // Tried alternatives:
+    //   - Cached `indentStack.length` as a separate `indentDepth: Int`
+    //     field: regressed 7% (extra copy field outweighed the rare
+    //     length traversals; the indent stack is shallow).
+    //   - SoA pair `(IArray[Char], IArray[Int])`: regressed 12% (every
+    //     push/pop allocates two new arrays + extra ScannerState copy
+    //     in the helper; List's O(1) cons/tail wins for small stacks
+    //     with frequent push/pop).
     def isInsideSuppressedBrackets: Boolean = bracketStack match
       case (_, depth) :: _ => indentStack.length == depth
       case Nil             => false
