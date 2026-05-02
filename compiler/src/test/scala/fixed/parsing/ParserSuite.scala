@@ -166,6 +166,101 @@ class ParserSuite extends FunSuite:
         assertEquals(s, "hello")
       case _ => fail(s"expected FnDecl with StringLit body, got $t")
 
+  // ---- M4.4: parseMatchExpr ----
+
+  test("M4.4: simple match on data variants"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """fn f(x: Direction) -> u64 = match x:
+        |    Direction.North => 1
+        |    Direction.South => 2
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(fn: Trees.FnDecl), _) =>
+        fn.body match
+          case Some(m: Trees.MatchExpr) =>
+            assertEquals(m.arms.length, 2)
+            assertEquals(
+              m.arms.map(_.pattern).collect {
+                case Trees.DataVariantPat(Some(q), v, _, _, _) => s"$q.$v"
+              },
+              List("Direction.North", "Direction.South")
+            )
+          case other => fail(s"expected MatchExpr body, got $other")
+      case other => fail(s"expected FnDecl, got $other")
+
+  test("M4.4: wildcard arm + constructor arm"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """fn f(x: Maybe of u64) -> u64 = match x:
+        |    Maybe.Just(v) => v
+        |    _ => 0
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
+        m.arms.last.pattern match
+          case _: Trees.WildcardPat => ()
+          case other => fail(s"expected wildcard last arm, got $other")
+      case other => fail(s"expected FnDecl with MatchExpr body, got $other")
+
+  test("M4.4: or-pattern flattens left-associatively"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """fn f(x: Direction) -> u64 = match x:
+        |    Direction.North | Direction.South | Direction.East => 1
+        |    _ => 0
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
+        // First arm should be OrPat(OrPat(N, S), E).
+        m.arms.head.pattern match
+          case Trees.OrPat(Trees.OrPat(_, _, _), _, _) => ()
+          case other => fail(s"expected nested OrPat, got $other")
+      case other => fail(s"expected MatchExpr, got $other")
+
+  test("M4.4: guard clause"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """fn f(x: u64) -> u64 = match x:
+        |    n if n == 0 => 1
+        |    _ => 0
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
+        assert(m.arms.head.guard.isDefined, "expected guard on first arm")
+      case other => fail(s"expected MatchExpr, got $other")
+
+  test("M4.4: arm with multi-line block body"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """fn f(x: Direction) -> u64 = match x:
+        |    Direction.North =>
+        |        let y = 1
+        |        y + 1
+        |    _ => 0
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
+        m.arms.head.body match
+          case Trees.Block(stmts, _) => assert(stmts.length >= 2)
+          case other => fail(s"expected Block body for first arm, got $other")
+      case other => fail(s"expected MatchExpr, got $other")
+
   // ---- M4.3: parseTypeAlias ----
 
   test("M4.3: simple chain alias"):
@@ -665,15 +760,13 @@ class ParserSuite extends FunSuite:
         }, s"expected a Trees.Error item, got: $items")
       case other => fail(s"expected CompilationUnit, got $other")
 
-  test("M2: stub `match` expression produces a Trees.Error in body"):
-    // `match` is unimplemented in the Phase-2 parser scope; the stub
-    // calls `unsupported(...)` which now returns a Trees.Error gap node
-    // rather than a placeholder Ident. The single-token skip leaves
-    // the trailing `x` as a separate top-level Error — anchor-based
-    // recovery (M3) will fix that, but for M2 we only assert the body.
+  test("M2: stub `handle` expression produces a Trees.Error in body"):
+    // `handle` is still unimplemented; the stub calls `unsupported(...)`
+    // which returns a Trees.Error gap node. The single-token skip
+    // leaves the trailing `x` as a separate top-level Error.
     val src = SourceFile.fromString(
       "<test>",
-      "fn f(x: u64) -> u64 = match x\n"
+      "fn f(x: u64) -> u64 = handle x\n"
     )
     val pr = Parser.parse(src)
     assert(pr.hasErrors)

@@ -1,5 +1,7 @@
 package fixed.parsing
 
+import scala.annotation.tailrec
+
 import fixed.ast.{Tree, Trees}
 import fixed.util.{Reporter, SourceFile, Span}
 
@@ -664,7 +666,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       Trees.Ident("self", tok.span)
     case TokenKind.KwIf      => parseIfExpr()
     case TokenKind.KwLet     => parseLetExpr()
-    case TokenKind.KwMatch   => unsupported("`match` expression")
+    case TokenKind.KwMatch   => parseMatchExpr()
     case TokenKind.KwHandle  => unsupported("`handle` expression")
     case TokenKind.KwDo      => unsupported("`do` expression")
     case TokenKind.KwForall  => unsupported("`forall` quantifier (only valid in prop bodies)")
@@ -694,6 +696,45 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     val _ = expect(TokenKind.Colon, "`:` after `else`")
     val elseBranch = parseInlineOrBlockExpr()
     Trees.IfExpr(cond, thenBranch, elseBranch, span(startTok.span, elseBranch.span))
+
+  // MatchExpr ::= "match" Expr ":" INDENT MatchArm+ DEDENT
+  // MatchArm  ::= OrPattern ("if" Expr)? "=>" InlineOrBlockExpr
+  private def parseMatchExpr(): Tree =
+    val startTok = expect(TokenKind.KwMatch, "`match`")
+    val scrutinee = parseExpr()
+    val _ = expect(TokenKind.Colon, "`:` after match scrutinee")
+    val arms = parseMatchArms()
+    Trees.MatchExpr(scrutinee, arms, span(startTok.span, current.span))
+
+  private def parseMatchArms(): List[Trees.MatchArm] =
+    val _ = expect(TokenKind.Indent, "INDENT")
+    val arms = scala.collection.mutable.ListBuffer.empty[Trees.MatchArm]
+    skipNewlines()
+    withAnchors(Anchors.blockBody) {
+      while current.kind != TokenKind.Dedent && current.kind != TokenKind.Eof do
+        arms += parseMatchArm()
+        skipNewlines()
+    }
+    val _ = expect(TokenKind.Dedent, "DEDENT")
+    arms.toList
+
+  private def parseMatchArm(): Trees.MatchArm =
+    val pat = parseOrPattern()
+    val guard =
+      if accept(TokenKind.KwIf).isDefined then Some(parseExpr())
+      else None
+    val _ = expect(TokenKind.FatArrow, "`=>` in match arm")
+    val body = parseInlineOrBlockExpr()
+    Trees.MatchArm(pat, guard, body, span(pat.span, body.span))
+
+  private def parseOrPattern(): Tree =
+    @tailrec
+    def loop(acc: Tree): Tree =
+      if accept(TokenKind.Pipe).isDefined then
+        val rhs = parsePattern()
+        loop(Trees.OrPat(acc, rhs, span(acc.span, rhs.span)))
+      else acc
+    loop(parsePattern())
 
   /** A branch body that's either a same-line expression or an INDENTed block. */
   private def parseInlineOrBlockExpr(): Tree =
