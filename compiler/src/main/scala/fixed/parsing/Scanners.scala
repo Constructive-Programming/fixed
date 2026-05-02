@@ -5,13 +5,10 @@ import scala.annotation.tailrec
 
 import fixed.util.{Diagnostic, Reporter, Severity, SourceFile, Span}
 
-// Pure-FP single-pass lexer. The `Scanner` object holds the pure core
-// (immutable `ScannerState`, `step`/`scanOne`/`tokenize`); the `class
-// Scanner` wrapper at the bottom adapts it to the pull-style
-// `nextToken()` API the parser uses. Diagnostics live in state until the
-// public boundary flushes them to the user-supplied `Reporter`.
-//
-// Indentation, line-continuation, and bracket-suppression rules: see
+// Pure-FP single-pass lexer. The `Scanner` object holds the immutable
+// core (`ScannerState`, `step`); the `class Scanner` wrapper below
+// adapts it to the parser's pull-style `nextToken()` API. Indentation,
+// line-continuation, and bracket-suppression rules: see
 // `spec/syntax_grammar.ebnf` lines 156–217.
 
 object Scanner:
@@ -27,18 +24,11 @@ object Scanner:
       pending: Queue[Token],
       errors: Vector[Diagnostic]
   ):
-    // Suppressed iff inside an open bracket and no body has been engaged
-    // since the bracket opened. We compare `indentStack.length` against
-    // the depth recorded at bracket-open time.
-    //
-    // Tried alternatives:
-    //   - Cached `indentStack.length` as a separate `indentDepth: Int`
-    //     field: regressed 7% (extra copy field outweighed the rare
-    //     length traversals; the indent stack is shallow).
-    //   - SoA pair `(IArray[Char], IArray[Int])`: regressed 12% (every
-    //     push/pop allocates two new arrays + extra ScannerState copy
-    //     in the helper; List's O(1) cons/tail wins for small stacks
-    //     with frequent push/pop).
+    // Suppressed iff inside a bracket whose recorded indent depth still
+    // matches `indentStack.length` — i.e. no body has been engaged since
+    // the bracket opened. (Profiled alternatives — cached `indentDepth`
+    // field, SoA `IArray` bracket stack — both regressed; List wins for
+    // shallow, push/pop-heavy stacks.)
     def isInsideSuppressedBrackets: Boolean = bracketStack match
       case (_, depth) :: _ => indentStack.length == depth
       case Nil             => false
@@ -54,8 +44,7 @@ object Scanner:
       copy(errors = errors :+ Diagnostic(Severity.Error, code, span, message, suggestion))
 
     def enqueue(t: Token): ScannerState = copy(pending = pending.enqueue(t))
-    // No `Some(t)` allocation: we only ever read `.kind` from the
-    // last-emitted token, so we store the kind directly.
+    // We only ever read `.kind`, so store the kind directly — no `Some` box.
     def withLast(t: Token): ScannerState = copy(lastKind = t.kind)
 
   end ScannerState
@@ -93,10 +82,8 @@ object Scanner:
   // ---- Transitions ----
 
   // Advance by exactly one token (real or synthetic). Idempotent at EOF.
-  // Each branch combines `pending` and `lastKind` updates into a single
-  // `state.copy(...)` rather than chaining `withLast` after another copy —
-  // halves ScannerState allocations on the hot path (29% of all sampled
-  // allocs, per JFR profiling).
+  // Each branch fuses pending+lastKind updates into a single state.copy
+  // (ScannerState was 29% of all allocs per JFR; doubling up halves them).
   def step(state: ScannerState, source: SourceFile): (ScannerState, Token) =
     state.pending.dequeueOption match
       case Some((tok, rest)) =>
@@ -104,8 +91,8 @@ object Scanner:
       case None =>
         scanOne(state, source) match
           case ScanResult.RealToken(st1, tok) =>
-            // If scanOne enqueued synthetic tokens, those drain first;
-            // re-queue the real token at the back.
+            // Synthetic tokens (INDENT/DEDENT/NEWLINE) drain ahead of the
+            // real one; re-queue the real token at the tail.
             if st1.pending.nonEmpty then
               val synth = st1.pending.head
               val rest = st1.pending.tail
@@ -180,17 +167,18 @@ object Scanner:
 
   // ---- Indentation ----
 
-  // Called when we've crossed at least one '\n'. Decision tree (in order):
-  //   1. Dual-mode block-introducer (= / -> / =>) followed by deeper
-  //      indent → push level, emit INDENT (re-engages off-side inside
-  //      brackets too).
-  //   2. Inside un-engaged brackets → suppressed; no token.
-  //   3. Leading-continuation (`with`/`extends`/`->`) on next line → no
-  //      token; line continues.
-  //   4. Trailing-continuation token at end of last line → no token.
-  //   5. Off-side rule: deeper indent + previous token is `:` → INDENT;
-  //      shallower → DEDENT(s) until match (or until we collapse into
-  //      bracket-suppressed territory); same indent → NEWLINE.
+  // Called after crossing one or more '\n's. Decision order (top to bottom
+  // — first match wins):
+  //   1. dual-mode (= / -> / =>) + deeper indent  → push, INDENT (also
+  //      re-engages off-side inside parens)
+  //   2. inside un-engaged brackets               → suppressed, no token
+  //   3. next line starts with leading-cont       → continuation, no token
+  //   4. previous line ended with trailing-cont   → continuation, no token
+  //   5. off-side: deeper + previous `:`          → push, INDENT
+  //                shallower                      → pop levels, DEDENT(s)
+  //                                                 (or collapse into
+  //                                                 bracket-suppressed)
+  //                same                           → NEWLINE
   private def handleNewline(state: ScannerState, source: SourceFile): ScannerState =
     val pos = state.pos
     val lineStart = source.content.lastIndexOf('\n', pos - 1) + 1
@@ -557,13 +545,10 @@ object Scanner:
 
 end Scanner
 
-// Pull-style adapter over the pure core. Holds exactly one `var` — the
-// current `ScannerState` — and rotates it on each `nextToken` call. The
-// pure core is unchanged; this is the bounded mutation site at the
-// boundary, explicitly admitted by the FP-rewrite mandate. We tried a
-// pure `LazyList.scanLeft` adapter first and it cost ~25% per pull from
-// the multi-layer iterator wrapping; this `var` recovers it without
-// touching any of the lexing logic.
+// Pull-style adapter. One `var state` rotated per `nextToken` — the
+// bounded boundary mutation. (A pure `LazyList.scanLeft` adapter cost
+// ~70 ns/token from the multi-layer iterator wrapping; this `var`
+// recovers it without touching the lexing core.)
 final class Scanner(val source: SourceFile, val reporter: Reporter):
   import Scanner.{ScannerState, initialState, step, flushNewErrors}
 
