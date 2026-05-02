@@ -129,14 +129,13 @@ class ParserSuite extends FunSuite:
   test("lambda expression"):
     val src = """fn f(g: (u64) -> u64) -> u64 = g(5)
                 |""".stripMargin
-    val (t, rep) = parse(src)
+    val (_, rep) = parse(src)
     assert(!rep.hasErrors, rep.formatAll)
-    // Just confirm it parses.
 
   test("inline lambda argument"):
     val src = """fn f() -> u64 = call((x) -> x + 1)
                 |""".stripMargin
-    val (t, rep) = parse(src)
+    val (_, rep) = parse(src)
     assert(!rep.hasErrors, rep.formatAll)
 
   test("unary minus"):

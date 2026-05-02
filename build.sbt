@@ -1,4 +1,4 @@
-ThisBuild / scalaVersion := "3.5.0"
+ThisBuild / scalaVersion := "3.8.3"
 ThisBuild / organization := "com.fixed"
 ThisBuild / version      := "0.1.0-SNAPSHOT"
 
@@ -9,7 +9,7 @@ ThisBuild / scalacOptions ++= Seq(
   "-Wunused:all",
   "-Wvalue-discard",
   "-Werror",
-  "-source:3.5"
+  "-source:3.8"
 )
 
 lazy val compiler = (project in file("compiler"))
