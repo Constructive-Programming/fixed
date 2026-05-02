@@ -166,6 +166,102 @@ class ParserSuite extends FunSuite:
         assertEquals(s, "hello")
       case _ => fail(s"expected FnDecl with StringLit body, got $t")
 
+  // ---- M2: gap nodes ----
+
+  test("M2: unexpected top-level token produces a Trees.Error item"):
+    val src = SourceFile.fromString("<test>", "@@@\n")
+    val pr = Parser.parse(src)
+    assert(pr.hasErrors, "expected a diagnostic for the stray token")
+    pr.tree match
+      case Trees.CompilationUnit(items, _) =>
+        assert(items.exists {
+          case _: Trees.Error => true
+          case _ => false
+        }, s"expected a Trees.Error item, got: $items")
+      case other => fail(s"expected CompilationUnit, got $other")
+
+  test("M2: stub `match` expression produces a Trees.Error in body"):
+    // `match` is unimplemented in the Phase-2 parser scope; the stub
+    // calls `unsupported(...)` which now returns a Trees.Error gap node
+    // rather than a placeholder Ident. The single-token skip leaves
+    // the trailing `x` as a separate top-level Error — anchor-based
+    // recovery (M3) will fix that, but for M2 we only assert the body.
+    val src = SourceFile.fromString(
+      "<test>",
+      "fn f(x: u64) -> u64 = match x\n"
+    )
+    val pr = Parser.parse(src)
+    assert(pr.hasErrors)
+    val items = pr.tree match
+      case Trees.CompilationUnit(items, _) => items
+      case other => fail(s"expected CompilationUnit, got $other")
+    val fn = items.collectFirst { case f: Trees.FnDecl => f }
+      .getOrElse(fail(s"expected an FnDecl among $items"))
+    fn.body match
+      case Some(_: Trees.Error) => ()
+      case other => fail(s"expected Trees.Error body, got $other")
+
+  test("M2: no Ident nodes named '<error>' or '<unsupported>' remain in the tree"):
+    val srcs = Seq(
+      "@@@\n",
+      "fn f(x: u64) -> u64 = match x\n",
+      "fn f(x: u64) -> u64 = handle x\n"
+    )
+    for s <- srcs do
+      val pr = Parser.parse(SourceFile.fromString("<test>", s))
+      val flat = collectIdents(pr.tree)
+      assert(
+        !flat.exists(n => n == "<error>" || n == "<unsupported>"),
+        s"placeholder ident leaked into tree for input `${s.trim}`: $flat"
+      )
+
+  // Walk the tree and collect every Ident's name. Used by the no-leak
+  // test above; deliberately exhaustive over the productions the
+  // smoke-test inputs can produce.
+  private def collectIdents(t: Tree): List[String] =
+    t match
+      case Trees.Ident(n, _) => List(n)
+      case Trees.CompilationUnit(items, _) => items.flatMap(collectIdents)
+      case Trees.FnDecl(_, _, params, ret, _, body, _) =>
+        params.flatMap(p => collectIdents(p.typeAnn) ++ p.default.toList.flatMap(collectIdents)) ++
+          collectIdents(ret) ++ body.toList.flatMap(collectIdents)
+      case Trees.Block(stmts, _) => stmts.flatMap(collectIdents)
+      case Trees.LetExpr(p, init, _) => collectIdents(p) ++ collectIdents(init)
+      case Trees.IfExpr(c, t1, e, _) => collectIdents(c) ++ collectIdents(t1) ++ collectIdents(e)
+      case Trees.BinOp(_, l, r, _) => collectIdents(l) ++ collectIdents(r)
+      case Trees.UnaryOp(_, op, _) => collectIdents(op)
+      case Trees.Apply(fn, args, _) => collectIdents(fn) ++ args.flatMap(collectIdents)
+      case Trees.MethodCall(r, _, args, _, _) => collectIdents(r) ++ args.flatMap(collectIdents)
+      case Trees.StaticCall(_, _, args, _, _) => args.flatMap(collectIdents)
+      case Trees.Error(rec, _) => rec.flatMap(collectIdents)
+      case _ => Nil
+
+  // ---- M1 smoke: functional ParseResult API ----
+
+  test("ParseResult: happy path returns tree and empty diagnostics"):
+    val src = SourceFile.fromString("<test>", "fn id(x: u64) -> u64 = x\n")
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    assertEquals(pr.diagnostics, Nil)
+    assert(pr.trivia.isEmpty, "M1 trivia table is always empty; M4 populates it")
+    pr.tree match
+      case Trees.CompilationUnit(List(_: Trees.FnDecl), _) => ()
+      case other => fail(s"expected single FnDecl, got $other")
+
+  test("ParseResult: diagnostics surface without a caller Reporter"):
+    val src = SourceFile.fromString("<test>", "fn ()\n")  // missing name
+    val pr = Parser.parse(src)
+    assert(pr.hasErrors, "expected at least one error diagnostic")
+    assert(pr.diagnostics.nonEmpty)
+
+  test("legacy reporter adapter mirrors ParseResult diagnostics"):
+    val src = SourceFile.fromString("<test>", "fn ()\n")
+    val rep = new Reporter(src)
+    val tree = Parser.parse(src, rep)
+    val pr = Parser.parse(src)
+    assertEquals(rep.diagnostics.toList, pr.diagnostics)
+    assertEquals(tree.toString, pr.tree.toString)
+
   // ---- Integration: example 01 ----
 
   test("parse examples/01_basics.fixed (M3 milestone)"):

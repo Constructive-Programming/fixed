@@ -106,9 +106,10 @@ final class Parser(scanner: Scanner, reporter: Reporter):
         s"unexpected token at top level: ${current.kind}${describeLexeme(current)}",
         Some("expected `use`, `fn`, `cap`, `data`, `effect`, `type`, `mod`, or `<TypeName> satisfies …`")
       )
-      // Skip the token and try to recover by returning a placeholder.
+      // Skip the token and recover with a gap node. M3 will replace this
+      // single-token skip with anchor-based synchronisation.
       val tok = consume()
-      Trees.Ident(s"<error>", tok.span)
+      Trees.Error(Nil, tok.span)
 
   private def unsupported(what: String): Tree =
     reporter.error(
@@ -118,7 +119,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       Some("file an issue or extend Parsers.scala")
     )
     val tok = consume()
-    Trees.Ident("<unsupported>", tok.span)
+    Trees.Error(Nil, tok.span)
 
   // ---- UseDecl ----
 
@@ -317,7 +318,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
         s"expected a type expression, got ${current.kind}${describeLexeme(current)}"
       )
       val tok = consume()
-      Trees.PrimitiveType("<error>", tok.span)
+      Trees.Error(Nil, tok.span)
 
   private def parseIsBound(): Tree =
     val startTok = expect(TokenKind.KwIs, "`is`")
@@ -347,7 +348,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
         current.span,
         s"expected a capability bound, got ${current.kind}${describeLexeme(current)}"
       )
-      Trees.Ident("<error>", consume().span)
+      Trees.Error(Nil, consume().span)
 
   private def parseCapRef(): Tree =
     val nameTok = expect(TokenKind.UpperIdent, "capability name")
@@ -595,7 +596,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
         current.span,
         s"expected an expression, got ${current.kind}${describeLexeme(current)}"
       )
-      Trees.Ident("<error>", consume().span)
+      Trees.Error(Nil, consume().span)
 
   private def parseIfExpr(): Tree =
     val startTok = expect(TokenKind.KwIf, "`if`")
@@ -796,8 +797,33 @@ end Parser
 
 object Parser:
 
-  /** Convenience: parse a whole source file in one shot. */
+  /** Functional entry point: parse a whole source file and return its
+    * tree, diagnostics, and trivia together. The parser does not
+    * require a caller-supplied Reporter — diagnostics flow through the
+    * returned [[ParseResult]].
+    *
+    * Internally we still allocate a private Reporter to drive the
+    * existing Scanner/Parser plumbing; the diagnostics are extracted
+    * and the Reporter is discarded. This keeps the hot path identical
+    * to the pre-M1 implementation while presenting a functional API.
+    *
+    * Trivia is empty in M1; the Scanner starts populating it in M4.
+    *
+    * See `docs/plans/phase-2.1-incremental-parser.md` §2.
+    */
+  def parse(source: SourceFile): ParseResult =
+    val privateReporter = new Reporter(source)
+    val scanner = new Scanner(source, privateReporter)
+    val parser = new Parser(scanner, privateReporter)
+    val tree = parser.parseCompilationUnit()
+    ParseResult(tree, privateReporter.diagnostics.toList, TriviaTable.empty)
+
+  /** Adapter: parse and push diagnostics into the supplied reporter.
+    * Retained so existing callers and tests keep working unchanged.
+    * Removed in Phase 3 once every caller is on the [[ParseResult]]
+    * API.
+    */
   def parse(source: SourceFile, reporter: Reporter): Tree =
-    val scanner = new Scanner(source, reporter)
-    val parser = new Parser(scanner, reporter)
-    parser.parseCompilationUnit()
+    val result = parse(source)
+    result.diagnostics.foreach(reporter.add)
+    result.tree

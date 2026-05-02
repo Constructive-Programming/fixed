@@ -8,11 +8,35 @@ import fixed.util.Span
   * When the typer (Phase 3) lands we'll thread types via a side table keyed
   * on tree identity, or extend this hierarchy with a Tree[T <: Untyped]
   * variant per dotc. For now: minimal, plain.
+  *
+  * `Tree` is intentionally NOT sealed — Phase 2.2 will introduce a
+  * concrete-syntax-tree (CST) view that produces a different `Tree`
+  * implementor outside this file. Keeping the trait open today avoids a
+  * breaking change later. See `docs/plans/phase-2.1-incremental-parser.md`
+  * §5. (Until Phase 3, exhaustive `match` on `Tree` is not relied on; every
+  * call site already has a `case _ => fail(...)` fallback.)
   */
-sealed trait Tree:
+trait Tree:
   def span: Span
 
 object Trees:
+
+  // ---- Recovery gap nodes (Phase 2.1) ----
+
+  /** A production that began but could not complete. `recovered` holds
+    * whatever subtrees were built before the parser bailed; often empty.
+    * The matching diagnostic carries the human-readable explanation.
+    *
+    * See spec/syntax_grammar.ebnf Appendix A.1 and
+    * docs/plans/phase-2.1-incremental-parser.md §3.2. */
+  final case class Error(recovered: List[Tree], span: Span) extends Tree
+
+  /** A required production that was absent entirely (e.g. `fn` with no
+    * name). Span is zero-length, located where the missing token was
+    * expected. `expected` is a grammar-level description.
+    *
+    * See spec/syntax_grammar.ebnf Appendix A.1.1. */
+  final case class Missing(expected: String, span: Span) extends Tree
 
   // ---- Compilation unit ----
 

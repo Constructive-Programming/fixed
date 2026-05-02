@@ -37,6 +37,12 @@ final class Reporter(val source: SourceFile):
   def info(code: String, span: Span, message: String, suggestion: Option[String] = None): Unit =
     buf += Diagnostic(Severity.Info, code, span, message, suggestion)
 
+  /** Append a pre-built diagnostic. Used when a phase (e.g. the parser)
+    * accumulates its own diagnostics functionally and the driver later
+    * folds them into a shared Reporter. */
+  def add(d: Diagnostic): Unit =
+    buf += d
+
   def diagnostics: Seq[Diagnostic] = buf.toSeq
 
   def hasErrors: Boolean = buf.exists(_.isError)
