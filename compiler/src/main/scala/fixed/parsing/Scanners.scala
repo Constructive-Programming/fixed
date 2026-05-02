@@ -21,8 +21,7 @@ object Scanner:
       bracketStack: List[(Char, Int)],
       lastKind: TokenKind,                // last token's kind (TokenKind.NoStart before first emit)
       eofEmitted: Boolean,
-      pending: Queue[Token],
-      errors: Vector[Diagnostic]
+      pending: Queue[Token]
   ):
     // Suppressed iff inside a bracket whose recorded indent depth still
     // matches `indentStack.length` — i.e. no body has been engaged since
@@ -34,14 +33,6 @@ object Scanner:
       case Nil             => false
 
     def currentIndent: Int = indentStack.head
-
-    def withError(
-        code: String,
-        span: Span,
-        message: String,
-        suggestion: Option[String] = None
-    ): ScannerState =
-      copy(errors = errors :+ Diagnostic(Severity.Error, code, span, message, suggestion))
 
     def enqueue(t: Token): ScannerState = copy(pending = pending.enqueue(t))
     // We only ever read `.kind`, so store the kind directly — no `Some` box.
@@ -56,56 +47,58 @@ object Scanner:
       bracketStack = Nil,
       lastKind = TokenKind.NoStart,
       eofEmitted = false,
-      pending = Queue.empty,
-      errors = Vector.empty
+      pending = Queue.empty
     )
+
+  // Empty-errors singleton. Returning `NoErrors` from a helper that didn't
+  // produce diagnostics is allocation-free (`Vector.empty` is interned).
+  private val NoErrors: Vector[Diagnostic] = Vector.empty
+
+  private inline def err(
+      code: String,
+      span: Span,
+      message: String,
+      suggestion: Option[String] = None
+  ): Diagnostic =
+    Diagnostic(Severity.Error, code, span, message, suggestion)
 
   // ---- Public API ----
 
   def tokenize(source: SourceFile, reporter: Reporter): Seq[Token] =
     new Scanner(source, reporter).tokenize()
 
-  // The single boundary between pure state and the user's mutable Reporter.
-  // Pushes any errors that appeared in `curr` but not in `prev`.
-  private[parsing] def flushNewErrors(
-      prev: ScannerState,
-      curr: ScannerState,
-      reporter: Reporter
-  ): Unit =
-    val before = prev.errors.length
-    val after = curr.errors.length
-    if after > before then
-      curr.errors.slice(before, after).foreach { d =>
-        reporter.error(d.code, d.span, d.message, d.suggestion)
-      }
-
   // ---- Transitions ----
 
-  // Advance by exactly one token (real or synthetic). Idempotent at EOF.
-  // Each branch fuses pending+lastKind updates into a single state.copy
-  // (ScannerState was 29% of all allocs per JFR; doubling up halves them).
-  def step(state: ScannerState, source: SourceFile): (ScannerState, Token) =
+  // Advance by one token. Returns the new state, the emitted token, and
+  // diagnostics produced *by this step only* (not accumulated across the
+  // whole scan). Idempotent at EOF. Each branch fuses pending+lastKind
+  // updates into a single state.copy (ScannerState is the dominant
+  // allocator per JFR; doubling up halves the per-step copies).
+  def step(state: ScannerState, source: SourceFile): (ScannerState, Token, Vector[Diagnostic]) =
     state.pending.dequeueOption match
       case Some((tok, rest)) =>
-        (state.copy(pending = rest, lastKind = tok.kind), tok)
+        (state.copy(pending = rest, lastKind = tok.kind), tok, NoErrors)
       case None =>
         scanOne(state, source) match
-          case ScanResult.RealToken(st1, tok) =>
+          case ScanResult.RealToken(st1, tok, errs) =>
             // Synthetic tokens (INDENT/DEDENT/NEWLINE) drain ahead of the
             // real one; re-queue the real token at the tail.
             if st1.pending.nonEmpty then
               val synth = st1.pending.head
               val rest = st1.pending.tail
-              (st1.copy(pending = rest.enqueue(tok), lastKind = synth.kind), synth)
+              (st1.copy(pending = rest.enqueue(tok), lastKind = synth.kind), synth, errs)
             else
-              (st1.copy(lastKind = tok.kind), tok)
-          case ScanResult.OnlySynthetics(st1) =>
+              (st1.copy(lastKind = tok.kind), tok, errs)
+          case ScanResult.OnlySynthetics(st1, errs) =>
             st1.pending.dequeueOption match
               case Some((tok, rest)) =>
-                (st1.copy(pending = rest, lastKind = tok.kind), tok)
+                (st1.copy(pending = rest, lastKind = tok.kind), tok, errs)
               case None =>
-                if !st1.eofEmitted then step(closeIndentsAndQueueEof(st1), source)
-                else (st1, Token(TokenKind.Eof, Span(st1.pos, st1.pos)))
+                if !st1.eofEmitted then
+                  val (next, tok, more) = step(closeIndentsAndQueueEof(st1), source)
+                  (next, tok, errs ++ more)
+                else
+                  (st1, Token(TokenKind.Eof, Span(st1.pos, st1.pos)), errs)
 
   private def closeIndentsAndQueueEof(state: ScannerState): ScannerState =
     val pos = state.pos
@@ -117,48 +110,57 @@ object Scanner:
     state.copy(indentStack = poppedStack, pending = withEof, eofEmitted = true)
 
   private enum ScanResult:
-    case RealToken(state: ScannerState, token: Token)
-    case OnlySynthetics(state: ScannerState)
+    case RealToken(state: ScannerState, token: Token, errors: Vector[Diagnostic])
+    case OnlySynthetics(state: ScannerState, errors: Vector[Diagnostic])
 
   private def scanOne(state: ScannerState, source: SourceFile): ScanResult =
-    val (st1, crossedNewline) = skipTrivia(state, source, crossedNewline = false)
-    if st1.pos >= source.length then ScanResult.OnlySynthetics(st1)
+    val (st1, crossedNewline, e1) = skipTrivia(state, source, crossedNewline = false, NoErrors)
+    if st1.pos >= source.length then ScanResult.OnlySynthetics(st1, e1)
     else
-      val st2 = if crossedNewline then handleNewline(st1, source) else st1
-      val (st3, tok) = scanToken(st2, source)
-      ScanResult.RealToken(st3, tok)
+      val (st2, e2) = if crossedNewline then handleNewline(st1, source) else (st1, NoErrors)
+      val (st3, tok, e3) = scanToken(st2, source)
+      ScanResult.RealToken(st3, tok, mergeErrors(e1, e2, e3))
+
+  private inline def mergeErrors(
+      a: Vector[Diagnostic],
+      b: Vector[Diagnostic],
+      c: Vector[Diagnostic]
+  ): Vector[Diagnostic] =
+    if a.isEmpty && b.isEmpty then c
+    else if a.isEmpty && c.isEmpty then b
+    else if b.isEmpty && c.isEmpty then a
+    else a ++ b ++ c
 
   @tailrec
   private def skipTrivia(
       state: ScannerState,
       source: SourceFile,
-      crossedNewline: Boolean
-  ): (ScannerState, Boolean) =
-    if state.pos >= source.length then (state, crossedNewline)
+      crossedNewline: Boolean,
+      errors: Vector[Diagnostic]
+  ): (ScannerState, Boolean, Vector[Diagnostic]) =
+    if state.pos >= source.length then (state, crossedNewline, errors)
     else
       val c = source.content.charAt(state.pos)
       if c == ' ' then
-        skipTrivia(state.copy(pos = state.pos + 1), source, crossedNewline)
+        skipTrivia(state.copy(pos = state.pos + 1), source, crossedNewline, errors)
       else if c == '\t' then
         // Tabs forbidden as whitespace per grammar v0.3 (line 160).
-        val st1 = state
-          .withError(
-            "E001",
-            Span(state.pos, state.pos + 1),
-            "tab character in source — Fixed v0.4.5 requires spaces for indentation",
-            Some("replace this tab with spaces")
-          )
-          .copy(pos = state.pos + 1)
-        skipTrivia(st1, source, crossedNewline)
+        val tabErr = err(
+          "E001",
+          Span(state.pos, state.pos + 1),
+          "tab character in source — Fixed v0.4.5 requires spaces for indentation",
+          Some("replace this tab with spaces")
+        )
+        skipTrivia(state.copy(pos = state.pos + 1), source, crossedNewline, errors :+ tabErr)
       else if c == '\n' then
-        skipTrivia(state.copy(pos = state.pos + 1), source, crossedNewline = true)
+        skipTrivia(state.copy(pos = state.pos + 1), source, crossedNewline = true, errors)
       else if c == '\r' then
-        skipTrivia(state.copy(pos = state.pos + 1), source, crossedNewline)
+        skipTrivia(state.copy(pos = state.pos + 1), source, crossedNewline, errors)
       else if c == '/' && peekChar(source, state.pos + 1) == '/' then
         val newPos = skipUntilNewline(source, state.pos)
-        skipTrivia(state.copy(pos = newPos), source, crossedNewline)
+        skipTrivia(state.copy(pos = newPos), source, crossedNewline, errors)
       else
-        (state, crossedNewline)
+        (state, crossedNewline, errors)
 
   @tailrec
   private def skipUntilNewline(source: SourceFile, i: Int): Int =
@@ -179,7 +181,10 @@ object Scanner:
   //                                                 (or collapse into
   //                                                 bracket-suppressed)
   //                same                           → NEWLINE
-  private def handleNewline(state: ScannerState, source: SourceFile): ScannerState =
+  private def handleNewline(
+      state: ScannerState,
+      source: SourceFile
+  ): (ScannerState, Vector[Diagnostic]) =
     val pos = state.pos
     val lineStart = source.content.lastIndexOf('\n', pos - 1) + 1
     val newIndent = pos - lineStart
@@ -188,43 +193,46 @@ object Scanner:
     val isDualMode =
       lastKind == TokenKind.Eq || lastKind == TokenKind.Arrow || lastKind == TokenKind.FatArrow
     if isDualMode && newIndent > state.currentIndent then
-      state
+      val st = state
         .copy(indentStack = newIndent :: state.indentStack)
         .enqueue(Token(TokenKind.Indent, Span(pos, pos)))
+      (st, NoErrors)
     else if state.isInsideSuppressedBrackets then
-      state
+      (state, NoErrors)
     else if lastKind != TokenKind.NoStart && lastKind != TokenKind.Newline
             && peekKindIsLeadingContinuation(source, state.pos)
     then
-      state
+      (state, NoErrors)
     else if Tokens.trailingContinuationKinds.contains(lastKind) then
-      state
+      (state, NoErrors)
     else
       val curIndent = state.currentIndent
       if newIndent > curIndent then
-        if lastKind == TokenKind.Colon then
-          state
-            .copy(indentStack = newIndent :: state.indentStack)
-            .enqueue(Token(TokenKind.Indent, Span(pos, pos)))
-        else
-          state.enqueue(Token(TokenKind.Newline, Span(pos, pos)))
+        val st =
+          if lastKind == TokenKind.Colon then
+            state
+              .copy(indentStack = newIndent :: state.indentStack)
+              .enqueue(Token(TokenKind.Indent, Span(pos, pos)))
+          else
+            state.enqueue(Token(TokenKind.Newline, Span(pos, pos)))
+        (st, NoErrors)
       else if newIndent < curIndent then
         val st1 = popIndents(state, newIndent)
-        if st1.isInsideSuppressedBrackets then st1
+        if st1.isInsideSuppressedBrackets then (st1, NoErrors)
         else
-          val st2 =
+          val errs =
             if st1.currentIndent != newIndent then
-              st1.withError(
+              Vector(err(
                 "E002",
                 Span(pos, pos + 1),
                 s"inconsistent indentation; closing dedent does not match any opening indent (got $newIndent, stack=${st1.indentStack.reverse.mkString(",")})",
                 Some("align this line to one of the enclosing block's indent levels")
-              )
-            else st1
-          st2.enqueue(Token(TokenKind.Newline, Span(pos, pos)))
+              ))
+            else NoErrors
+          (st1.enqueue(Token(TokenKind.Newline, Span(pos, pos))), errs)
       else if lastKind != TokenKind.Newline then
-        state.enqueue(Token(TokenKind.Newline, Span(pos, pos)))
-      else state
+        (state.enqueue(Token(TokenKind.Newline, Span(pos, pos))), NoErrors)
+      else (state, NoErrors)
 
   @tailrec
   private def popIndents(state: ScannerState, newIndent: Int): ScannerState =
@@ -271,7 +279,10 @@ object Scanner:
 
   // ---- scanToken: dispatch on first character ----
 
-  private def scanToken(state: ScannerState, source: SourceFile): (ScannerState, Token) =
+  private def scanToken(
+      state: ScannerState,
+      source: SourceFile
+  ): (ScannerState, Token, Vector[Diagnostic]) =
     val start = state.pos
     val c = source.content.charAt(start)
     c match
@@ -280,28 +291,28 @@ object Scanner:
           pos = start + 1,
           bracketStack = ('(', state.indentStack.length) :: state.bracketStack
         )
-        (st, Token(TokenKind.LParen, Span(start, st.pos)))
+        (st, Token(TokenKind.LParen, Span(start, st.pos)), NoErrors)
       case ')' =>
-        val st = popBracket(state.copy(pos = start + 1), '(')
-        (st, Token(TokenKind.RParen, Span(start, st.pos)))
+        val (st, errs) = popBracket(state.copy(pos = start + 1), '(')
+        (st, Token(TokenKind.RParen, Span(start, st.pos)), errs)
       case '[' =>
         val st = state.copy(
           pos = start + 1,
           bracketStack = ('[', state.indentStack.length) :: state.bracketStack
         )
-        (st, Token(TokenKind.LBracket, Span(start, st.pos)))
+        (st, Token(TokenKind.LBracket, Span(start, st.pos)), NoErrors)
       case ']' =>
-        val st = popBracket(state.copy(pos = start + 1), '[')
-        (st, Token(TokenKind.RBracket, Span(start, st.pos)))
+        val (st, errs) = popBracket(state.copy(pos = start + 1), '[')
+        (st, Token(TokenKind.RBracket, Span(start, st.pos)), errs)
       case '{' =>
         val st = state.copy(
           pos = start + 1,
           bracketStack = ('{', state.indentStack.length) :: state.bracketStack
         )
-        (st, Token(TokenKind.LBrace, Span(start, st.pos)))
+        (st, Token(TokenKind.LBrace, Span(start, st.pos)), NoErrors)
       case '}' =>
-        val st = popBracket(state.copy(pos = start + 1), '{')
-        (st, Token(TokenKind.RBrace, Span(start, st.pos)))
+        val (st, errs) = popBracket(state.copy(pos = start + 1), '{')
+        (st, Token(TokenKind.RBrace, Span(start, st.pos)), errs)
 
       case ',' => single(state, start, TokenKind.Comma)
       case ';' => single(state, start, TokenKind.Semicolon)
@@ -338,10 +349,9 @@ object Scanner:
       case '&' =>
         if peekChar(source, start + 1) == '&' then double(state, start, TokenKind.AndAnd)
         else
-          val st = state
-            .withError("E003", Span(start, start + 1), "stray `&` (did you mean `&&`?)")
-            .copy(pos = start + 1)
-          (st, Token(TokenKind.Error, Span(start, st.pos)))
+          val st = state.copy(pos = start + 1)
+          val e = err("E003", Span(start, start + 1), "stray `&` (did you mean `&&`?)")
+          (st, Token(TokenKind.Error, Span(start, st.pos)), Vector(e))
       case '+' => single(state, start, TokenKind.Plus)
       case '*' => single(state, start, TokenKind.Star)
       case '/' => single(state, start, TokenKind.Slash)
@@ -353,38 +363,44 @@ object Scanner:
       case '\''                   => scanChar(state, source, start)
 
       case other =>
-        val st = state
-          .withError("E004", Span(start, start + 1), s"unexpected character ${describeChar(other)}")
-          .copy(pos = start + 1)
-        (st, Token(TokenKind.Error, Span(start, st.pos)))
+        val st = state.copy(pos = start + 1)
+        val e = err("E004", Span(start, start + 1), s"unexpected character ${describeChar(other)}")
+        (st, Token(TokenKind.Error, Span(start, st.pos)), Vector(e))
 
-  private def single(state: ScannerState, start: Int, kind: TokenKind): (ScannerState, Token) =
+  private def single(
+      state: ScannerState, start: Int, kind: TokenKind
+  ): (ScannerState, Token, Vector[Diagnostic]) =
     val st = state.copy(pos = start + 1)
-    (st, Token(kind, Span(start, st.pos)))
+    (st, Token(kind, Span(start, st.pos)), NoErrors)
 
-  private def double(state: ScannerState, start: Int, kind: TokenKind): (ScannerState, Token) =
+  private def double(
+      state: ScannerState, start: Int, kind: TokenKind
+  ): (ScannerState, Token, Vector[Diagnostic]) =
     val st = state.copy(pos = start + 2)
-    (st, Token(kind, Span(start, st.pos)))
+    (st, Token(kind, Span(start, st.pos)), NoErrors)
 
-  private def popBracket(state: ScannerState, expected: Char): ScannerState =
+  private def popBracket(
+      state: ScannerState, expected: Char
+  ): (ScannerState, Vector[Diagnostic]) =
     state.bracketStack match
       case (top, _) :: rest if top == expected =>
-        state.copy(bracketStack = rest)
+        (state.copy(bracketStack = rest), NoErrors)
       case _ =>
         val tag = state.bracketStack match
           case (top, _) :: _ => s"`$top`"
           case Nil           => "empty"
-        state.withError(
+        val e = err(
           "E005",
           Span(state.pos - 1, state.pos),
           s"unmatched closing bracket — expected to close `$expected` but bracket stack is $tag"
         )
+        (state, Vector(e))
 
   // ---- Identifiers, numbers, strings, chars ----
 
   private def scanIdent(
       state: ScannerState, source: SourceFile, start: Int
-  ): (ScannerState, Token) =
+  ): (ScannerState, Token, Vector[Diagnostic]) =
     val end = skipIdentPart(source.content, start, source.length)
     val text = source.slice(start, end)
     val st = state.copy(pos = end)
@@ -395,11 +411,11 @@ object Scanner:
           if text.charAt(0).isUpper then TokenKind.UpperIdent
           else TokenKind.LowerIdent
         Token(kind, Span(start, end), text)
-    (st, tok)
+    (st, tok, NoErrors)
 
   private def scanNumber(
       state: ScannerState, source: SourceFile, start: Int
-  ): (ScannerState, Token) =
+  ): (ScannerState, Token, Vector[Diagnostic]) =
     val intEnd = skipDigits(source, start)
     // Float? '.' followed by another digit. Don't eat `5.foo` — that's
     // an integer 5 followed by `.foo`, not a float "5." followed by `foo`.
@@ -411,10 +427,10 @@ object Scanner:
     if sawDot then
       val fracEnd = skipDigits(source, intEnd + 1)
       val st = state.copy(pos = fracEnd)
-      (st, Token(TokenKind.FloatLit, Span(start, fracEnd), source.slice(start, fracEnd)))
+      (st, Token(TokenKind.FloatLit, Span(start, fracEnd), source.slice(start, fracEnd)), NoErrors)
     else
       val st = state.copy(pos = intEnd)
-      (st, Token(TokenKind.IntLit, Span(start, intEnd), source.slice(start, intEnd)))
+      (st, Token(TokenKind.IntLit, Span(start, intEnd), source.slice(start, intEnd)), NoErrors)
 
   @tailrec
   private def skipDigits(source: SourceFile, i: Int): Int =
@@ -486,7 +502,7 @@ object Scanner:
 
   private def scanString(
       state: ScannerState, source: SourceFile, start: Int
-  ): (ScannerState, Token) =
+  ): (ScannerState, Token, Vector[Diagnostic]) =
     val body = scanQuotedBody(
       source, start, i0 = start + 1, terminator = '"',
       escapeChar = stdEscape,
@@ -494,18 +510,17 @@ object Scanner:
       unterminatedLineMessage = "unterminated string literal — closing `\"` missing on this line",
       unterminatedLineSuggestion = Some("string literals must close on the same line in v0.4.5")
     )
-    val errs2 =
+    val errs =
       if body.closed then body.newErrors
-      else body.newErrors :+ Diagnostic(
-        Severity.Error, "E007", Span(start, body.pos),
-        "unterminated string literal at end of input"
+      else body.newErrors :+ err(
+        "E007", Span(start, body.pos), "unterminated string literal at end of input"
       )
-    val st = state.copy(pos = body.pos, errors = state.errors ++ errs2)
-    (st, Token(TokenKind.StringLit, Span(start, body.pos), body.lexeme))
+    val st = state.copy(pos = body.pos)
+    (st, Token(TokenKind.StringLit, Span(start, body.pos), body.lexeme), errs)
 
   private def scanChar(
       state: ScannerState, source: SourceFile, start: Int
-  ): (ScannerState, Token) =
+  ): (ScannerState, Token, Vector[Diagnostic]) =
     val body = scanQuotedBody(
       source, start, i0 = start + 1, terminator = '\'',
       escapeChar = stdEscape,
@@ -513,21 +528,20 @@ object Scanner:
       unterminatedLineMessage = "unterminated char literal",
       unterminatedLineSuggestion = None
     )
-    val errs2 =
+    val errs1 =
       if body.closed then body.newErrors
-      else body.newErrors :+ Diagnostic(
-        Severity.Error, "E008", Span(start, body.pos),
-        "unterminated char literal at end of input"
+      else body.newErrors :+ err(
+        "E008", Span(start, body.pos), "unterminated char literal at end of input"
       )
-    val errs3 =
+    val errs =
       if body.lexeme.length != 1 then
-        errs2 :+ Diagnostic(
-          Severity.Error, "E009", Span(start, body.pos),
+        errs1 :+ err(
+          "E009", Span(start, body.pos),
           s"char literal must contain exactly one character (got ${body.lexeme.length})"
         )
-      else errs2
-    val st = state.copy(pos = body.pos, errors = state.errors ++ errs3)
-    (st, Token(TokenKind.CharLit, Span(start, body.pos), body.lexeme))
+      else errs1
+    val st = state.copy(pos = body.pos)
+    (st, Token(TokenKind.CharLit, Span(start, body.pos), body.lexeme), errs)
 
   // ---- Char-class helpers ----
 
@@ -550,14 +564,14 @@ end Scanner
 // ~70 ns/token from the multi-layer iterator wrapping; this `var`
 // recovers it without touching the lexing core.)
 final class Scanner(val source: SourceFile, val reporter: Reporter):
-  import Scanner.{ScannerState, initialState, step, flushNewErrors}
+  import Scanner.{ScannerState, initialState, step}
 
   private var state: ScannerState = initialState
 
   def nextToken(): Token =
-    val prev = state
-    val (next, tok) = step(prev, source)
-    flushNewErrors(prev, next, reporter)
+    val (next, tok, errs) = step(state, source)
+    if errs.nonEmpty then
+      errs.foreach(d => reporter.error(d.code, d.span, d.message, d.suggestion))
     state = next
     tok
 
