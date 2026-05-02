@@ -452,7 +452,7 @@ class ParserSuite extends FunSuite:
     val pr = Parser.parse(src)
     assert(!pr.hasErrors, pr.diagnostics.toString)
     assertEquals(pr.diagnostics, Nil)
-    assert(pr.trivia.isEmpty, "M1 trivia table is always empty; M4 populates it")
+    assert(pr.trivia.isEmpty, "no comments or blank lines in this input")
     pr.tree match
       case Trees.CompilationUnit(List(_: Trees.FnDecl), _) => ()
       case other => fail(s"expected single FnDecl, got $other")

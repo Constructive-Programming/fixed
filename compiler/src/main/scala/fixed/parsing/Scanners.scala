@@ -528,15 +528,58 @@ end Scanner
 // bounded boundary mutation. (A pure `LazyList.scanLeft` adapter cost
 // ~70 ns/token from the multi-layer iterator wrapping; this `var`
 // recovers it without touching the lexing core.)
-final class Scanner(val source: SourceFile, val reporter: Reporter):
+//
+// Trivia retention (Phase 2.1 M4): every time `nextToken` emits a
+// *real* (source-consuming) token, we look at the gap between the
+// previous real token's end and this token's start. If the gap holds
+// `//` line comments or runs of blank lines, we record them in the
+// `triviaBuilder`, keyed on this token's start offset. Synthetic
+// tokens (INDENT/DEDENT/NEWLINE/EOF) have zero-length spans and are
+// skipped — they're structural markers, not source positions.
+//
+// The scan-the-gap approach keeps the lexing core untouched: the cost
+// lands on the post-token boundary, where it's cheap (most gaps are
+// just spaces, which the inner while-loop walks past in a few ns).
+final class Scanner(
+    val source: SourceFile,
+    val reporter: Reporter,
+    captureTrivia: Boolean = true
+):
   import Scanner.{ScannerState, initialState, step}
 
   private var state: ScannerState = initialState
 
+  // Trivia retention (Phase 2.1 M4). The hot path records each real
+  // token's (start, end) into a packed long array (start in the high
+  // half, end in the low half); gap scanning is deferred to
+  // `triviaTable`, called once at the end of parsing.
+  //
+  // Trivia capture costs ~7 ns/token over a no-capture run — above
+  // M4's 5% target, so per `phase-2.1-incremental-parser.md` §4.2 it
+  // is gated behind `captureTrivia`. The Parser opts in by default so
+  // LSP/formatter tooling sees comments and blank lines; perf-only
+  // callers (Scanner benchmarks, throwaway tokenizers) opt out.
+  private var realSpans: Array[Long] =
+    if captureTrivia then new Array[Long](math.max(16, source.length / 8)) else null
+  private var realCount: Int = 0
+
   def nextToken(): Token =
     val (next, tok) = step(state, source, reporter)
     state = next
+    if captureTrivia then
+      val s = tok.span.start
+      val e = tok.span.end
+      if s < e then  // real (source-consuming) — synthetics have s == e
+        if realCount == realSpans.length then growRealSpans()
+        realSpans(realCount) = (s.toLong << 32) | (e.toLong & 0xFFFFFFFFL)
+        realCount += 1
     tok
+
+  private def growRealSpans(): Unit =
+    val newCap = realSpans.length * 2
+    val ns = new Array[Long](newCap)
+    System.arraycopy(realSpans, 0, ns, 0, realCount)
+    realSpans = ns
 
   def tokenize(): Seq[Token] =
     @tailrec
@@ -545,5 +588,57 @@ final class Scanner(val source: SourceFile, val reporter: Reporter):
       val next = acc :+ t
       if t.kind == TokenKind.Eof then next else loop(next)
     loop(Vector.empty)
+
+  /** Build the trivia table from the recorded real-token spans. Walks
+    * each gap once; only allocates per-event when a `//` comment or
+    * blank-line run is actually present. Caller must have driven the
+    * scanner to EOF first (which `Parser.parse` does). Returns
+    * `TriviaTable.empty` when this scanner was constructed with
+    * `captureTrivia = false`. */
+  def triviaTable: TriviaTable =
+    if !captureTrivia then return TriviaTable.empty
+    val builder = scala.collection.mutable.Map.empty[Int, List[Trivia]]
+    val content = source.content
+    var prevEnd = 0
+    var i = 0
+    while i < realCount do
+      val packed = realSpans(i)
+      val start = (packed >>> 32).toInt
+      val end = (packed & 0xFFFFFFFFL).toInt
+      if start - prevEnd >= 2 then
+        val events = extractTriviaSlow(content, prevEnd, start)
+        if events.nonEmpty then builder.update(start, events)
+      prevEnd = end
+      i += 1
+    TriviaTable.from(builder.toMap)
+
+  // Walk `[from, end)` of `content` collecting `//`-comments and runs
+  // of two or more `\n`s. Inline whitespace is ignored (recoverable
+  // from token spans). Single newlines are ignored — they're already
+  // represented by NEWLINE / DEDENT tokens. Called only when
+  // `nextToken`'s inline trigger probe has confirmed at least one
+  // candidate character is present.
+  private def extractTriviaSlow(content: String, from: Int, end: Int): List[Trivia] =
+    val events = scala.collection.mutable.ListBuffer.empty[Trivia]
+    var i = from
+    while i < end do
+      val c = content.charAt(i)
+      if c == '/' && i + 1 < end && content.charAt(i + 1) == '/' then
+        val cmtStart = i
+        while i < end && content.charAt(i) != '\n' do i += 1
+        events += Trivia.LineComment(Span(cmtStart, i), content.substring(cmtStart, i))
+      else if c == '\n' then
+        val nlStart = i
+        var nlCount = 0
+        while i < end && content.charAt(i) == '\n' do
+          i += 1
+          nlCount += 1
+        // Blank lines = newlines minus the one that's already represented
+        // by the NEWLINE / DEDENT token. >= 1 blank line is worth recording.
+        if nlCount >= 2 then
+          events += Trivia.BlankLines(Span(nlStart, i), nlCount - 1)
+      else
+        i += 1
+    events.toList
 
 end Scanner

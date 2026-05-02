@@ -931,7 +931,10 @@ object Parser:
     val scanner = new Scanner(source, privateReporter)
     val parser = new Parser(scanner, privateReporter)
     val tree = parser.parseCompilationUnit()
-    ParseResult(tree, privateReporter.diagnostics.toList, TriviaTable.empty)
+    // Scanner's trivia builder is populated incrementally as the parser
+    // pulls tokens; by the time parseCompilationUnit returns it has
+    // observed every real token and the table is complete.
+    ParseResult(tree, privateReporter.diagnostics.toList, scanner.triviaTable)
 
   /** Adapter: parse and push diagnostics into the supplied reporter.
     * Retained so existing callers and tests keep working unchanged.
