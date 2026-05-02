@@ -3,9 +3,18 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4.6
+   Status:        DRAFT v0.4.7
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
-   Last revised:  2026-05-01
+   Last revised:  2026-05-02
+
+   Refinements in v0.4.7
+   ---------------------
+   - **Implementation appendix added** (§A) defining error-recovery
+     anchors and the trivia retention contract. The grammar productions
+     are unchanged; the appendix exists so that two conformant Fixed
+     parsers cannot disagree on what an erroneous file means or whether
+     comments are observable. See `docs/plans/phase-2.1-incremental-
+     parser.md` for the bootstrap implementation.
 
    Refinements in v0.4.6
    ---------------------
@@ -1014,5 +1023,140 @@ Whitespace       = (* space; tab is a v0.3 error *) ;
    N6 — Tab handling (accepted)
         v0.3 errors on tab indentation. Revisit before bootstrap if
         community use shows this is too strict.
+
+   ============================================================
+   Appendix A — Implementation contract (normative)
+   ============================================================
+
+   The grammar above defines the *syntactic surface* of Fixed. This
+   appendix defines two things every conformant Fixed parser must
+   implement on top of that grammar:
+
+     A.1  Error recovery — how a parser behaves on input that does
+          not match the grammar.
+     A.2  Trivia retention — what a parser must preserve about the
+          space between tokens.
+
+   Without these, two conformant parsers could produce materially
+   different results for the same input — one halting on the first
+   error, the other continuing — which would make tooling (LSP,
+   formatters, doc generators, AI agents) non-portable.
+
+   A.1 — Error recovery
+   --------------------
+
+   A conformant parser MUST NOT halt on the first syntactic error. It
+   MUST produce a complete tree for the input it was given, with
+   well-formed *gap nodes* (described below) standing in for productions
+   it could not parse, and one diagnostic per failed production.
+
+   A.1.1  Gap nodes
+
+   Two AST node kinds carry recovery state:
+
+     Error(recovered, span)
+        A production that began but could not complete. `recovered`
+        holds whatever subtrees were built before the parser bailed;
+        often empty.
+
+     Missing(expected, span)
+        A required production that was absent entirely (e.g. `fn` with
+        no name). `expected` is a grammar-level description of what was
+        looked for. Span is zero-length, located where the missing
+        token was expected.
+
+   The exact node-class names are implementation choices; the contract
+   is that the AST distinguishes "tried and failed" (Error) from "wasn't
+   there at all" (Missing), and that downstream phases can recognise
+   both.
+
+   A.1.2  Synchronisation anchors
+
+   When a production fails, the parser skips tokens until it reaches an
+   *anchor* appropriate to its current parsing context, then resumes
+   parsing the surrounding production. Anchors are reached but not
+   consumed.
+
+   The anchor sets, by context, are:
+
+     Top-level item:
+       `use`, `fn`, `cap`, `data`, `effect`, `linear`, `type`, `mod`,
+       `pub`, UPPER_IDENT (start of a satisfies declaration), EOF.
+
+     Block body:
+       NEWLINE at the block's indent, DEDENT, plus any top-level anchor.
+
+     Argument list / tuple / list literal:
+       `,`, the matching `)` / `]` / `}`.
+
+     Type expression:
+       `,`, `)`, NEWLINE, `=`, `->`, `with`.
+
+     Pattern:
+       `=>`, `,`, `)`.
+
+     Match arm or handler arm body:
+       `=>` (recover the body), NEWLINE at the arm's indent.
+
+     `prop` / `forall` / `implies` body:
+       NEWLINE at the body's indent, DEDENT.
+
+   A.1.3  Anchor ranking
+
+   Anchors are *ranked* by depth: the parser bails to the highest-ranked
+   anchor whose context is currently active, never deeper. A missing `)`
+   inside a function call does not eat past the enclosing `fn`'s
+   NEWLINE. This keeps recovery local — at most one top-level item is
+   damaged per syntactic error.
+
+   A.1.4  Bounded skip
+
+   Token-skip per recovery attempt MUST be bounded by the distance to
+   the nearest in-context anchor. A conformant parser MUST NOT loop or
+   restart from the beginning of input on error.
+
+   A.1.5  Happy-path equivalence
+
+   For input that matches the grammar, a conformant parser MUST produce
+   no diagnostics and a tree containing no `Error` or `Missing` nodes.
+   Recovery is observable only on ill-formed input.
+
+   A.2 — Trivia retention
+   ----------------------
+
+   The grammar treats whitespace and `//` comments as insignificant to
+   parsing. They are nonetheless significant to *tooling* (formatters,
+   doc generators, LSP hover for adjacent comments). A conformant parser
+   MUST preserve the following trivia in a side channel addressable by
+   token offset:
+
+     - LineComment(span, text)  — every `//`-comment, including its
+       text content.
+     - BlankLines(span, count)  — runs of two or more consecutive
+       newlines (single newlines are reflected by NEWLINE / DEDENT
+       tokens and do not need separate trivia events).
+
+   The side channel is keyed on the start offset of the *next* real
+   token; trivia is "leading" with respect to the token that follows
+   it. There is no separate "trailing" slot in v0.4.7.
+
+   Inline whitespace between tokens on the same line need NOT be
+   preserved as trivia events; it is reconstructable from the source
+   text given the token spans.
+
+   `///` doc-comments are not yet classified separately from `//` line
+   comments in v0.4.7; that is a future refinement.
+
+   A.3 — Phase-by-phase tolerance
+   ------------------------------
+
+   The parser is the entry point for the contract, but conformance
+   extends through later phases: every phase that consumes the AST MUST
+   handle `Error` and `Missing` nodes (typically by emitting an
+   "unresolved due to parse error" diagnostic and skipping the subtree)
+   rather than crashing or silently producing wrong results. This is the
+   compiler-wide form of the principle stated in
+   `docs/plans/implementation-plan.md` §"Output design principles":
+   *incremental and partial-result-tolerant by default*.
 
    ============================================================ *)

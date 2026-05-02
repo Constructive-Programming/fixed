@@ -348,9 +348,9 @@ For these cases the parser uses bounded peek (≤ 2 tokens). No backtracking par
 
 ### 5.5 Error recovery
 
-Phase 2 minimum: emit one diagnostic with file + line + column + suggestion, then halt parsing. Per `implementation-plan.md` §"Agent-Friendly CLI and Compiler Output": every error has a code (`E001`, `E002`, …), a span, and a copy-pasteable suggestion when applicable.
+Phase 2 minimum: emit one diagnostic with file + line + column + suggestion at the first failure. Per `implementation-plan.md` §"Agent-Friendly CLI and Compiler Output": every error has a code (`E001`, `E002`, …), a span, and a copy-pasteable suggestion when applicable. The parser does not halt — it produces a tree containing a placeholder identifier at the failure site so downstream phases see *something*.
 
-Error-recovery synchronization (parse-as-much-as-possible-after-error) is **deferred** to Phase 3 — it requires a richer error-tree representation than Phase 2 needs.
+Full error recovery (parse-as-much-as-possible: synchronisation anchors, `Error`/`Missing` AST nodes, recovery contract) is **lifted into Phase 2.1** — see `docs/plans/phase-2.1-incremental-parser.md`. The motivation is LSP/IDE integration: the same parser must serve interactive tooling, which requires every file to produce a usable AST regardless of syntax errors. Phase 2 still ships the placeholder-identifier behaviour; Phase 2.1 replaces it with proper gap nodes and anchored recovery.
 
 ## 6. Indentation: nuances and edge cases
 
@@ -564,11 +564,11 @@ Implementation proceeds bottom-up. Roughly 4 sub-milestones inside Phase 2:
 
 These are intentionally NOT resolved in Phase 2:
 
-- **Comment retention for documentation** — defer; v0.4.5 silently drops comments.
-- **Better error recovery** — Phase 2 halts on first error; richer recovery (synchronization at top-level decl boundaries) is a Phase 3 enhancement.
+- **Comment retention (general)** — Phase 2 silently drops comments. Phase 2.1 retains them as trivia in a side table (see `phase-2.1-incremental-parser.md` §4).
+- **Error recovery with anchors and gap nodes** — Phase 2 emits one diagnostic per failed production and inserts a placeholder identifier; Phase 2.1 replaces this with synchronisation anchors and `Error` / `Missing` AST nodes (see `phase-2.1-incremental-parser.md` §3).
 - **String interpolation** — explicitly out of scope for v0.4.5; deferred.
 - **Numeric literal type suffixes** (`5i32`, `1u64`) — deferred.
-- **Doc-comment AST representation** — deferred.
+- **Doc-comment (`///`) classification** — deferred to Phase 2.2; Phase 2.1 captures `///` as an undifferentiated `LineComment`.
 
 ## 12. Time and effort estimate
 

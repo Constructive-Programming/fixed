@@ -486,6 +486,7 @@ The `+` operator composes commands. Each stage is incremental — if source hasn
 - **Incremental feedback**: long-running `verify` reports progress per `prop` — which properties passed, which are being tested, which failed.
 - **Exit codes**: `0` = success, `1` = compile error, `2` = verification failure, `3` = build failure. Clean for CI and scripting.
 - **JSON output**: `--format json` flag on any command for structured output. Same information, machine-parseable. Useful for editor integrations, AI agents, and CI pipelines.
+- **Incremental and partial-result-tolerant by default**: every phase consumes possibly-incomplete input and emits as much output as it can. The parser produces an AST with explicit gap nodes when a production fails, instead of halting; the typer types as much of the AST as it can, leaving holes for unresolvable references; capability closure proceeds with whatever satisfaction declarations resolved. This is the precondition for LSP / IDE integration and for incremental compilation, and it makes the compiler usable mid-edit rather than only at quiescence. See `docs/plans/phase-2.1-incremental-parser.md` for the parser's instantiation of this contract.
 
 ### Why this matters for AI
 
@@ -691,6 +692,24 @@ spec/                      — Phase 1 deliverables
 ### Milestone
 
 All 11 example programs parse successfully into AST.
+
+---
+
+## Phase 2.1: Incremental & Resilient Parsing
+
+Phase 2 produces an AST on the happy path. Phase 2.1 makes that parser **functional, error-tolerant, and trivia-preserving** so the same front-end can serve an LSP/IDE without a separate "tooling parser". Three small layers:
+
+- **Functional API** — `Parser.parse(SourceFile): ParseResult` returns tree + diagnostics + trivia. No caller-supplied `Reporter`. Internals stay imperative for performance; the seam is the public API.
+- **Error recovery with gap nodes** — synchronisation points at decl/block/expression/type boundaries. New `Trees.Error` and `Trees.Missing` nodes replace today's `Ident("<error>")` placeholder. A syntax error in one top-level decl no longer destroys the rest of the file.
+- **Trivia retention** — comments and blank lines preserved in a side table keyed by token offset. The AST is unchanged; printers, formatters, and LSP hover can recover original-source detail.
+
+Layer 2 (lossless concrete syntax tree, on-edit incremental reparse) is deferred to **Phase 2.2** and gated on a concrete LSP consumer driving requirements.
+
+See `docs/plans/phase-2.1-incremental-parser.md` for the full plan, milestones, and recovery anchor table.
+
+### Milestone
+
+Every `examples/*.fixed` corrupted with one syntactic error per top-level decl produces a `CompilationUnit` whose `items.length` matches the un-corrupted parse, with one diagnostic per injected error and no token-skip cascades.
 
 ---
 
