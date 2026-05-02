@@ -1058,11 +1058,28 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     val body = parseExpr()
     Trees.PropDecl(nameTok.lexeme, body, span(startTok.span, body.span))
 
+  // ---- TypeAlias ----
+
+  // TypeAlias ::= "type" UPPER_IDENT ValueParams? "=" CapBoundChain
+  //   ValueParams ::= "(" FnParam ("," FnParam)* ","? ")"
+  // The RHS chain is wrapped in `IsBound(caps)` when there are multiple
+  // caps; a single-cap RHS is the cap node itself.
+  private def parseTypeAlias(): Tree =
+    val startTok = expect(TokenKind.KwType, "`type`")
+    val nameTok = expect(TokenKind.UpperIdent, "type alias name")
+    val valueParams =
+      if current.kind == TokenKind.LParen then parseFnParamList()
+      else Nil
+    val _ = expect(TokenKind.Eq, "`=`")
+    val caps = parseCapBoundChain()
+    val rhs =
+      if caps.size == 1 then caps.head
+      else Trees.IsBound(caps, span(caps.head.span, caps.last.span))
+    Trees.TypeAlias(nameTok.lexeme, valueParams, rhs, span(startTok.span, current.span))
+
   // ---- Stub productions still pending ----
 
-
   private def parseEffectDecl(): Tree  = unsupported("`effect` declaration")
-  private def parseTypeAlias(): Tree   = unsupported("`type` alias")
   private def parseModDecl(): Tree     = unsupported("`mod` declaration")
   private def parseSatisfiesDecl(): Tree = unsupported("`satisfies` declaration")
 

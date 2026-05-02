@@ -166,6 +166,55 @@ class ParserSuite extends FunSuite:
         assertEquals(s, "hello")
       case _ => fail(s"expected FnDecl with StringLit body, got $t")
 
+  // ---- M4.3: parseTypeAlias ----
+
+  test("M4.3: simple chain alias"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      "type Collection = Sequencing + Functor + Folding\n"
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(t: Trees.TypeAlias), _) =>
+        assertEquals(t.name, "Collection")
+        assertEquals(t.valueParams, Nil)
+        t.rhs match
+          case Trees.IsBound(caps, _) =>
+            assertEquals(
+              caps.collect { case Trees.CapRef(n, _, _) => n },
+              List("Sequencing", "Functor", "Folding")
+            )
+          case other => fail(s"expected IsBound chain, got $other")
+      case other => fail(s"expected TypeAlias, got $other")
+
+  test("M4.3: single-cap alias is unwrapped"):
+    val pr = Parser.parse(SourceFile.fromString("<test>", "type Foo = Functor\n"))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.TypeAlias(_, Nil, rhs, _)), _) =>
+        rhs match
+          case Trees.CapRef("Functor", _, _) => ()
+          case other => fail(s"expected single CapRef rhs, got $other")
+      case other => fail(s"expected TypeAlias, got $other")
+
+  test("M4.3: parameterised alias with refinement call"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      "type PortRange(min: u16, max: u16) = u16 + between(min, max)\n"
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(t: Trees.TypeAlias), _) =>
+        assertEquals(t.valueParams.map(_.name), List("min", "max"))
+        t.rhs match
+          case Trees.IsBound(caps, _) =>
+            assertEquals(caps.length, 2)
+            caps(1) match
+              case Trees.RefinementCall("between", args, _) => assertEquals(args.length, 2)
+              case other => fail(s"expected RefinementCall, got $other")
+          case other => fail(s"expected IsBound chain, got $other")
+      case other => fail(s"expected TypeAlias, got $other")
+
   // ---- M4.2: parseCapDecl ----
 
   test("M4.2: cap with instance and static methods"):
