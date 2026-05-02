@@ -18,7 +18,14 @@ lazy val compiler = (project in file("compiler"))
     libraryDependencies ++= Seq(
       "org.scalameta" %% "munit" % "1.0.0" % Test
     ),
-    Test / parallelExecution := false
+    Test / parallelExecution := false,
+    // Suite tests parse the full `examples/` corpus inside hot loops
+    // (CorruptionResilienceSuite × 200 iterations). Fork with a
+    // generous heap and pin baseDirectory to the repo root so the
+    // example files resolve.
+    Test / fork := true,
+    Test / javaOptions += "-Xmx2g",
+    Test / baseDirectory := (ThisBuild / baseDirectory).value
   )
 
 lazy val root = (project in file("."))

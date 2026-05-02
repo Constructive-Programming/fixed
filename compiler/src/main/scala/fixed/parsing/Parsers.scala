@@ -843,10 +843,116 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     val _ = expect(TokenKind.RParen, "`)`")
     pats
 
-  // ---- Stub productions for declarations not in example 01 ----
+  // ---- DataDecl ----
+
+  // DataDecl ::= "data" UPPER_IDENT OfClause? (DataBody | CtorSugar)?
+  //   OfClause   ::= "of" (TypeExpr | "(" TypeExpr ("," TypeExpr)* ")")
+  //   DataBody   ::= ":" INDENT DataVariant+ DEDENT
+  //   CtorSugar  ::= "(" FieldList ")"   — single-variant shorthand
+  //
+  //   DataVariant ::= UPPER_IDENT ("(" FieldList ")")?
+  //   FieldList   ::= FieldDecl ("," FieldDecl)* ","?
+  //   FieldDecl   ::= LOWER_IDENT ":" TypeExpr ("=" Expr)?
+  private def parseDataDecl(): Tree =
+    val startTok = expect(TokenKind.KwData, "`data`")
+    val nameTok = expect(TokenKind.UpperIdent, "data type name")
+    val ofParams = parseOptionalDataOfClause()
+    if current.kind == TokenKind.LParen then
+      // Single-ctor sugar — synthesise one variant with the type's name.
+      val fields = parseFieldList()
+      val variant = Trees.DataVariant(nameTok.lexeme, fields, span(nameTok.span, current.span))
+      Trees.DataDecl(nameTok.lexeme, ofParams, List(variant), span(startTok.span, current.span))
+    else if accept(TokenKind.Colon).isDefined then
+      val variants = parseDataVariants()
+      Trees.DataDecl(nameTok.lexeme, ofParams, variants, span(startTok.span, current.span))
+    else
+      reporter.error(
+        "P013",
+        current.span,
+        s"`data ${nameTok.lexeme}` needs either a `(field: T, ...)` ctor sugar or a `:` block of variants",
+        Some("add `: ...` for variants or `(field: T, ...)` for a single ctor")
+      )
+      Trees.DataDecl(nameTok.lexeme, ofParams, Nil, span(startTok.span, current.span))
+
+  private def parseOptionalDataOfClause(): List[Tree] =
+    if accept(TokenKind.KwOf).isDefined then
+      if current.kind == TokenKind.LParen then
+        val _ = consume()
+        val params = parseDelimited(TokenKind.RParen, ")")(() => parseDataOfItem())
+        val _ = expect(TokenKind.RParen, "`)`")
+        params
+      else
+        List(parseDataOfItem())
+    else Nil
+
+  // Inside an `of (...)` clause, each item is either a TypeExpr (incl.
+  // a NamedAlias like `N is Numeric + Ord`) or an `OfValueParam` —
+  // `name: TypeExpr (= default)?` — used to make data types index
+  // dependently on values (`data Bounded of (N is Numeric, lo: N = 16, hi: N = 24)`).
+  // OfValueParam is lowered to a `FnParam` since the shape matches.
+  private def parseDataOfItem(): Tree =
+    if current.kind == TokenKind.LowerIdent && peek(1).kind == TokenKind.Colon then
+      val nameTok = consume()
+      val _ = expect(TokenKind.Colon, "`:`")
+      val ty = parseTypeExpr()
+      val default = if accept(TokenKind.Eq).isDefined then Some(parseExpr()) else None
+      Trees.FnParam(nameTok.lexeme, ty, default, span(nameTok.span, current.span))
+    else
+      parseTypeExpr()
+
+  private def parseDataVariants(): List[Trees.DataVariant] =
+    val _ = expect(TokenKind.Indent, "INDENT")
+    val variants = scala.collection.mutable.ListBuffer.empty[Trees.DataVariant]
+    skipNewlines()
+    withAnchors(Anchors.blockBody) {
+      while current.kind != TokenKind.Dedent && current.kind != TokenKind.Eof do
+        if current.kind == TokenKind.UpperIdent then
+          variants += parseDataVariant()
+        else
+          // Not a variant head — emit a diagnostic and sync to the next
+          // statement boundary so the loop can make progress. (Props or
+          // other in-body forms land here until their own productions
+          // are wired in.)
+          reporter.error(
+            "P013",
+            current.span,
+            s"expected a variant name, got ${current.kind}${describeLexeme(current)}",
+            Some("variants are introduced by `UpperIdent` at the data body's indent")
+          )
+          syncToAnchors()
+        skipNewlines()
+    }
+    val _ = expect(TokenKind.Dedent, "DEDENT")
+    variants.toList
+
+  private def parseDataVariant(): Trees.DataVariant =
+    val nameTok = expect(TokenKind.UpperIdent, "variant name")
+    val fields =
+      if current.kind == TokenKind.LParen then parseFieldList()
+      else Nil
+    Trees.DataVariant(nameTok.lexeme, fields, span(nameTok.span, current.span))
+
+  private def parseFieldList(): List[Trees.FieldDecl] =
+    val _ = expect(TokenKind.LParen, "`(`")
+    val fields = scala.collection.mutable.ListBuffer.empty[Trees.FieldDecl]
+    if current.kind != TokenKind.RParen then
+      fields += parseFieldDecl()
+      while accept(TokenKind.Comma).isDefined do
+        if current.kind == TokenKind.RParen then ()  // trailing comma
+        else fields += parseFieldDecl()
+    val _ = expect(TokenKind.RParen, "`)`")
+    fields.toList
+
+  private def parseFieldDecl(): Trees.FieldDecl =
+    val nameTok = expect(TokenKind.LowerIdent, "field name")
+    val _ = expect(TokenKind.Colon, "`:`")
+    val ty = parseTypeExpr()
+    val default = if accept(TokenKind.Eq).isDefined then Some(parseExpr()) else None
+    Trees.FieldDecl(nameTok.lexeme, ty, default, span(nameTok.span, current.span))
+
+  // ---- Stub productions still pending ----
 
   private def parseCapDecl(): Tree     = unsupported("`cap` declaration")
-  private def parseDataDecl(): Tree    = unsupported("`data` declaration")
   private def parseEffectDecl(): Tree  = unsupported("`effect` declaration")
   private def parseTypeAlias(): Tree   = unsupported("`type` alias")
   private def parseModDecl(): Tree     = unsupported("`mod` declaration")

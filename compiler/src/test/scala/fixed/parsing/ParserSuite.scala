@@ -166,6 +166,145 @@ class ParserSuite extends FunSuite:
         assertEquals(s, "hello")
       case _ => fail(s"expected FnDecl with StringLit body, got $t")
 
+  // ---- M4.1: parseDataDecl ----
+
+  test("M4.1: simple unit-only enum"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """data Direction:
+        |    North
+        |    South
+        |    East
+        |    West
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
+        assertEquals(d.name, "Direction")
+        assertEquals(d.ofParams, Nil)
+        assertEquals(d.variants.map(_.name), List("North", "South", "East", "West"))
+        assert(d.variants.forall(_.fields.isEmpty))
+      case other => fail(s"expected single DataDecl, got $other")
+
+  test("M4.1: mixed-variants with fields and capability constraints"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """data Color:
+        |    Red
+        |    Green
+        |    RGB(red: N is Numeric, green: N, blue: N)
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
+        assertEquals(d.variants.map(_.name), List("Red", "Green", "RGB"))
+        val rgb = d.variants.find(_.name == "RGB").get
+        assertEquals(rgb.fields.map(_.name), List("red", "green", "blue"))
+        // The first field's type carries the `is Numeric` named alias.
+        rgb.fields.head.typeAnn match
+          case Trees.NamedAlias("N", caps, _) =>
+            assert(caps.exists {
+              case Trees.CapRef("Numeric", _, _) => true
+              case _ => false
+            })
+          case other => fail(s"expected NamedAlias for first field, got $other")
+      case other => fail(s"expected single DataDecl, got $other")
+
+  test("M4.1: of-clause with single type param"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """data Maybe of A:
+        |    Just(value: A)
+        |    Nothing
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
+        assertEquals(d.name, "Maybe")
+        assertEquals(d.ofParams.length, 1)
+        d.ofParams.head match
+          case Trees.TypeRef("A", None, _) => ()
+          case other => fail(s"expected ofParam=TypeRef('A'), got $other")
+      case other => fail(s"expected single DataDecl, got $other")
+
+  test("M4.1: of-clause with paren tuple of type params"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """data Tagged of (Tag, Value):
+        |    Tagged(value: Value)
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
+        assertEquals(d.ofParams.length, 2)
+        assertEquals(d.ofParams.collect { case Trees.TypeRef(n, _, _) => n }, List("Tag", "Value"))
+      case other => fail(s"expected single DataDecl, got $other")
+
+  test("M4.1: single-ctor sugar"):
+    val src = SourceFile.fromString(
+      "<test>",
+      "data Config(host: String, port: u16, debug: bool)\n"
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
+        assertEquals(d.name, "Config")
+        assertEquals(d.variants.length, 1)
+        val v = d.variants.head
+        assertEquals(v.name, "Config")
+        assertEquals(v.fields.map(_.name), List("host", "port", "debug"))
+      case other => fail(s"expected single DataDecl, got $other")
+
+  test("M4.1: of-clause with OfValueParam (named value param + default)"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """data Bounded of (N is Numeric, lo: N = 0, hi: N = 10):
+        |    Bounded(value: N)
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
+        assertEquals(d.ofParams.length, 3)
+        // First is a NamedAlias type expression (`N is Numeric`); the
+        // other two are FnParam (lowered OfValueParam).
+        d.ofParams.head match
+          case _: Trees.NamedAlias => ()
+          case other => fail(s"expected NamedAlias, got $other")
+        d.ofParams.tail.foreach {
+          case fp: Trees.FnParam => assert(fp.default.isDefined, "ofValueParam should carry default")
+          case other => fail(s"expected FnParam, got $other")
+        }
+      case other => fail(s"expected single DataDecl, got $other")
+
+  test("M4.1: recursive references in fields"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """data Nat:
+        |    Zero
+        |    Succ(pred: Nat)
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
+        val succ = d.variants.find(_.name == "Succ").get
+        succ.fields.head.typeAnn match
+          case Trees.TypeRef("Nat", None, _) => ()
+          case other => fail(s"expected TypeRef('Nat'), got $other")
+      case other => fail(s"expected single DataDecl, got $other")
+
   // ---- M3.4: type-expression recovery ----
 
   test("M3.4: malformed param type leaves param shape and body intact"):
