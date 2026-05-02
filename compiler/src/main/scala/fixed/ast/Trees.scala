@@ -46,8 +46,14 @@ object Trees:
 
   /** `use <dotted path> [satisfies <CapRef>]`. The path is a list of
     * identifier segments (not yet resolved). */
+  /** A `use` declaration. `path` is the dotted prefix; if the import is
+    * a brace-group like `use a.b.{X, Y}`, `selectors` lists the
+    * grouped names — semantically equivalent to one UseDecl per name
+    * sharing the prefix. Empty `selectors` means the path itself is the
+    * single imported name. */
   final case class UseDecl(
       path: List[String],
+      selectors: List[String],
       satisfies: Option[Tree],
       span: Span
   ) extends Tree
@@ -62,18 +68,28 @@ object Trees:
       span: Span
   ) extends Tree
 
+  /** A `cap` declaration. `valueParams` is the optional `(min: N, max: N)`
+    * sugar (`cap Between(min: N is Ord, max: N) of N: ...`) that
+    * desugars to `fn between(min: N is Ord, max: N) -> cap of N: ...`.
+    * `ofParams` is the `of (...)` clause (type-level indices). */
   final case class CapDecl(
       name: String,
+      valueParams: List[FnParam],
       ofParams: List[Tree],
       extendsList: List[Tree],
       body: List[Tree],
       span: Span
   ) extends Tree
 
+  /** A `data` declaration. `variants` mixes `DataVariant` and
+    * `PropDecl` (data bodies admit `prop` declarations to express
+    * invariants attached to the type). The typer separates the two
+    * when needed. Callers wanting just the variants use
+    * `collect { case v: DataVariant => v }`. */
   final case class DataDecl(
       name: String,
       ofParams: List[Tree],
-      variants: List[DataVariant],
+      variants: List[Tree],
       span: Span
   ) extends Tree
 

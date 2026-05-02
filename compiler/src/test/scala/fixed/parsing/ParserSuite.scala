@@ -31,7 +31,7 @@ class ParserSuite extends FunSuite:
     val (t, rep) = parse("use std.io.Console\n")
     assert(!rep.hasErrors, rep.formatAll)
     t match
-      case Trees.CompilationUnit(List(Trees.UseDecl(path, None, _)), _) =>
+      case Trees.CompilationUnit(List(Trees.UseDecl(path, Nil, None, _)), _) =>
         assertEquals(path, List("std", "io", "Console"))
       case _ => fail(s"expected single UseDecl, got $t")
 
@@ -352,6 +352,140 @@ class ParserSuite extends FunSuite:
           case fn: Trees.FnDecl => assertEquals(fn.name, "inner")
           case other => fail(s"expected nested FnDecl, got $other")
       case other => fail(s"expected outer FnDecl with Block body, got $other")
+
+  // ---- M5 triage ----
+
+  test("M5: else-if chain"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      """fn f(n: i64) -> i64 =
+        |    if n < 0: 0
+        |    else if n > 10: 10
+        |    else: n
+        |""".stripMargin
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+
+  test("M5: TypeParamsHint on instance method"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      """cap Foldable:
+        |    fn fold<R>(init: R, f: (R, Part) -> R) -> R
+        |""".stripMargin
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(c: Trees.CapDecl), _) =>
+        c.body.head match
+          case im: Trees.InstanceMethod => assertEquals(im.typeParamsHint, List("R"))
+          case other => fail(s"expected InstanceMethod, got $other")
+      case other => fail(s"expected CapDecl, got $other")
+
+  test("M5: prop in data body and as fn-cap statement"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      """data Bounded of (lo: u64, hi: u64):
+        |    Bounded(value: u64)
+        |
+        |    prop in_range: lo <= Self && Self <= hi
+        |
+        |fn between(min: u64, max: u64) -> cap of u64 =
+        |    prop in_range: min <= Self && Self <= max
+        |""".stripMargin
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+
+  test("M5: parameterised cap declaration"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      """cap Between(min: u64, max: u64) of u64:
+        |    prop in_range: min <= Self && Self <= max
+        |""".stripMargin
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(c: Trees.CapDecl), _) =>
+        assertEquals(c.valueParams.map(_.name), List("min", "max"))
+      case other => fail(s"expected CapDecl, got $other")
+
+  test("M5: literal arguments in `of (...)`"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      "fn f() -> Bounded of (u64, 0, 10) = Bounded.Bounded(0)\n"
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+
+  test("M5: forall with suchThat in prop body"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      """cap Stack:
+        |    prop pop_dec: forall (s: Self) suchThat s.size > 0 ->
+        |        s.pop().size == s.size - 1
+        |""".stripMargin
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+
+  test("M5: struct literal `T { field: value, ... }`"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      "fn point(x: u64, y: u64) -> Point of u64 = Point { x: x, y: y }\n"
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(s: Trees.StructLit), _)), _) =>
+        assertEquals(s.typeName, "Point")
+        assertEquals(s.fields.map(_._1), List("x", "y"))
+      case other => fail(s"expected StructLit body, got $other")
+
+  test("M5: use group import `use a.b.{X, Y}`"):
+    val pr = Parser.parse(SourceFile.fromString("<test>", "use std.io.{Console, FileSystem}\n"))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(u: Trees.UseDecl), _) =>
+        assertEquals(u.path, List("std", "io"))
+        assertEquals(u.selectors, List("Console", "FileSystem"))
+      case other => fail(s"expected UseDecl, got $other")
+
+  test("M5: leading `+` continues an arithmetic chain"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      """fn f(a: u64, b: u64, c: u64) -> u64 =
+        |    a
+        |    + b
+        |    + c
+        |""".stripMargin
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+
+  test("M5: bare-name single-ctor pattern `BoundingBox(mn, mx)`"):
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      """fn f(b: BoundingBox) -> u64 = match b:
+        |    BoundingBox(mn, mx) => 0
+        |""".stripMargin
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+
+  test("M5: deeply nested handle (do: ...)"):
+    // This was the chase-down case for owedDedents — multi-line
+    // lambda body inside multi-line lambda body inside do-block
+    // inside handle subject, all collapsing to a single closing
+    // `)` at the outer indent.
+    val pr = Parser.parse(SourceFile.fromString(
+      "<test>",
+      """fn main() -> () =
+        |    handle (do:
+        |        outer(() ->
+        |            inner(() ->
+        |                a
+        |                b
+        |            , 256)
+        |        )
+        |    ):
+        |        Op.op(x) => resume(())
+        |""".stripMargin
+    ))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
 
   // ---- M4.6: parseEffectDecl ----
 
@@ -730,8 +864,9 @@ class ParserSuite extends FunSuite:
       case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
         assertEquals(d.name, "Direction")
         assertEquals(d.ofParams, Nil)
-        assertEquals(d.variants.map(_.name), List("North", "South", "East", "West"))
-        assert(d.variants.forall(_.fields.isEmpty))
+        val vs = onlyVariants(d)
+        assertEquals(vs.map(_.name), List("North", "South", "East", "West"))
+        assert(vs.forall(_.fields.isEmpty))
       case other => fail(s"expected single DataDecl, got $other")
 
   test("M4.1: mixed-variants with fields and capability constraints"):
@@ -747,8 +882,9 @@ class ParserSuite extends FunSuite:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
-        assertEquals(d.variants.map(_.name), List("Red", "Green", "RGB"))
-        val rgb = d.variants.find(_.name == "RGB").get
+        val vs = onlyVariants(d)
+        assertEquals(vs.map(_.name), List("Red", "Green", "RGB"))
+        val rgb = vs.find(_.name == "RGB").get
         assertEquals(rgb.fields.map(_.name), List("red", "green", "blue"))
         // The first field's type carries the `is Numeric` named alias.
         rgb.fields.head.typeAnn match
@@ -804,8 +940,9 @@ class ParserSuite extends FunSuite:
     pr.tree match
       case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
         assertEquals(d.name, "Config")
-        assertEquals(d.variants.length, 1)
-        val v = d.variants.head
+        val vs = onlyVariants(d)
+        assertEquals(vs.length, 1)
+        val v = vs.head
         assertEquals(v.name, "Config")
         assertEquals(v.fields.map(_.name), List("host", "port", "debug"))
       case other => fail(s"expected single DataDecl, got $other")
@@ -845,7 +982,7 @@ class ParserSuite extends FunSuite:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
-        val succ = d.variants.find(_.name == "Succ").get
+        val succ = onlyVariants(d).find(_.name == "Succ").get
         succ.fields.head.typeAnn match
           case Trees.TypeRef("Nat", None, _) => ()
           case other => fail(s"expected TypeRef('Nat'), got $other")
@@ -938,6 +1075,11 @@ class ParserSuite extends FunSuite:
     assert(pr.hasErrors)
     val errs = collectAllErrors(pr.tree)
     assert(errs.nonEmpty)
+
+  // DataDecl.variants holds variants and props mixed; tests usually
+  // care only about the variants.
+  private def onlyVariants(d: Trees.DataDecl): List[Trees.DataVariant] =
+    d.variants.collect { case v: Trees.DataVariant => v }
 
   // Walk the tree gathering every Trees.Error. Used by the recovery tests
   // above; the flattening-vs-shape distinction is tested elsewhere.
@@ -1074,24 +1216,18 @@ class ParserSuite extends FunSuite:
         }, s"expected a Trees.Error item, got: $items")
       case other => fail(s"expected CompilationUnit, got $other")
 
-  test("M2: stub `forall` expression produces a Trees.Error in body"):
-    // `forall` is still unimplemented (only valid in prop bodies);
-    // the stub calls `unsupported(...)` which returns a Trees.Error
-    // gap node.
-    val src = SourceFile.fromString(
-      "<test>",
-      "fn f(x: u64) -> u64 = forall x\n"
-    )
-    val pr = Parser.parse(src)
+  test("M2: stub `mod` declaration produces a Trees.Error item"):
+    // `mod` is still unimplemented; the stub calls `unsupported(...)`
+    // which returns a Trees.Error gap node.
+    val pr = Parser.parse(SourceFile.fromString("<test>", "mod foo\n"))
     assert(pr.hasErrors)
-    val items = pr.tree match
-      case Trees.CompilationUnit(items, _) => items
+    pr.tree match
+      case Trees.CompilationUnit(items, _) =>
+        assert(items.exists {
+          case _: Trees.Error => true
+          case _ => false
+        }, s"expected at least one Trees.Error item, got: $items")
       case other => fail(s"expected CompilationUnit, got $other")
-    val fn = items.collectFirst { case f: Trees.FnDecl => f }
-      .getOrElse(fail(s"expected an FnDecl among $items"))
-    fn.body match
-      case Some(_: Trees.Error) => ()
-      case other => fail(s"expected Trees.Error body, got $other")
 
   test("M2: no Ident nodes named '<error>' or '<unsupported>' remain in the tree"):
     val srcs = Seq(

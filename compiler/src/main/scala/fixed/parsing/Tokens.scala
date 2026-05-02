@@ -126,16 +126,20 @@ object Tokens:
     * cause that line to be treated as a continuation of the previous
     * logical line.
     *
-    * `Dot` and `PipeForward` are also in `trailingContinuationKinds`
-    * so chained calls / pipelines can be split with the operator at
-    * either end-of-line or (more idiomatically) start-of-line.
+    * `Dot`, `PipeForward`, and `Plus` are also in
+    * `trailingContinuationKinds` so chained calls / pipelines /
+    * arithmetic sums can be split with the operator at either end-of-
+    * line or (more idiomatically) start-of-line. (Cap composition
+    * `Functor + Folding` only appears in `is`-bound and `extends`
+    * positions, so leading `+` in expression context is unambiguous.)
     */
   val leadingContinuationKinds: Set[TokenKind] = Set(
     TokenKind.KwWith,
     TokenKind.KwExtends,
     TokenKind.Arrow,
     TokenKind.Dot,
-    TokenKind.PipeForward
+    TokenKind.PipeForward,
+    TokenKind.Plus
   )
 
 end Tokens

@@ -225,7 +225,8 @@ object Scanner:
 
   // Stateless lookahead from `pos`. Skip horizontal whitespace, then check
   // whether the next significant character starts a leading-continuation
-  // token: `->`, `.`, `|>`, or a keyword in `leadingContinuationKinds`.
+  // token: `->`, `.`, `|>`, `+`, or a keyword in
+  // `leadingContinuationKinds`.
   private def peekKindIsLeadingContinuation(source: SourceFile, pos: Int): Boolean =
     val content = source.content
     val len = source.length
@@ -236,6 +237,7 @@ object Scanner:
       if c == '-' && peekChar(source, i + 1) == '>' then true
       else if c == '.' then true
       else if c == '|' && peekChar(source, i + 1) == '>' then true
+      else if c == '+' then true
       else if c.isLetter || c == '_' then
         val j = skipIdentPart(content, i, len)
         val word = content.substring(i, j)

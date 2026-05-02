@@ -9,12 +9,13 @@
 
    Refinements in v0.4.8
    ---------------------
-   - **`.` and `|>` clarified as leading-continuation tokens** in
-     addition to trailing. The v0.3.1 changelog added `.` to the line-
-     continuation set, but only the trailing list was updated; `|>`
-     was always trailing-only. The Leading-continuation paragraph now
-     lists both, matching the idiomatic `expr\n   .method()` and
-     `expr\n   |> next` styles used throughout the corpus.
+   - **`.`, `|>`, and `+` clarified as leading-continuation tokens**
+     in addition to trailing. The v0.3.1 changelog added `.` to the
+     line-continuation set, but only the trailing list was updated;
+     `|>` and `+` were always trailing-only. The Leading-continuation
+     paragraph now lists all three, matching the idiomatic
+     `expr\n   .method()`, `expr\n   |> next`, and `a +\n   b +\n   c`
+     styles used throughout the corpus.
    - **`:` joins the dual-mode set** (`=`, `->`, `=>`, `:`). The
      spec already said `cap/data/effect/satisfies/match/handle/do/if/
      else` followed by `:` re-engages the off-side rule inside
@@ -249,12 +250,14 @@
    **Leading continuation.** If the next physical line begins with one
    of the following tokens (at any indent), it continues the previous
    logical line:
-     `with`, `extends`, `->`, `.`, `|>`.
+     `with`, `extends`, `->`, `.`, `|>`, `+`.
 
-   `.` and `|>` are continuation tokens in *both* leading and trailing
-   position: chained method calls and pipelines may be split with the
-   operator at either end-of-line or start-of-line. Both shapes parse
-   as a single logical line.
+   `.`, `|>`, and `+` are continuation tokens in *both* leading and
+   trailing position: chained method calls, pipelines, and arithmetic
+   sums may be split with the operator at either end-of-line or
+   start-of-line. Both shapes parse as a single logical line. (Cap
+   composition `+` only appears in `is`-bound and `extends` positions,
+   so leading `+` in expression context is unambiguous.)
 
    The continuation rules apply when the next physical line is *not*
    indented more than the current line — that case engages the off-side
