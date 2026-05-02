@@ -359,15 +359,11 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       else
         val first = parseTypeExpr()
         if accept(TokenKind.Comma).isDefined then
-          // Multi-element tuple-arrow LHS.
-          val rest = scala.collection.mutable.ListBuffer[Tree](first)
-          if current.kind != TokenKind.RParen then
-            rest += parseTypeExpr()
-            while accept(TokenKind.Comma).isDefined do
-              if current.kind == TokenKind.RParen then ()  // trailing comma
-              else rest += parseTypeExpr()
+          // Multi-element tuple-arrow LHS. `first` is already past the
+          // first comma; `parseDelimited` handles the tail with recovery.
+          val tail = parseDelimited(TokenKind.RParen, ")")(() => parseTypeExpr())
           val _ = expect(TokenKind.RParen, "`)`")
-          Trees.TupleArrowLhs(rest.toList, span(startSpan, current.span))
+          Trees.TupleArrowLhs(first :: tail, span(startSpan, current.span))
         else
           val _ = expect(TokenKind.RParen, "`)`")
           if accept(TokenKind.KwOf).isDefined then
@@ -460,14 +456,9 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       val _ = consume()
       val first = parseTypeExpr()
       if accept(TokenKind.Comma).isDefined then
-        val rest = scala.collection.mutable.ListBuffer[Tree](first)
-        if current.kind != TokenKind.RParen then
-          rest += parseTypeExpr()
-          while accept(TokenKind.Comma).isDefined do
-            if current.kind == TokenKind.RParen then ()
-            else rest += parseTypeExpr()
+        val tail = parseDelimited(TokenKind.RParen, ")")(() => parseTypeExpr())
         val _ = expect(TokenKind.RParen, "`)`")
-        Trees.TupleArrowLhs(rest.toList, span(startSpan, current.span))
+        Trees.TupleArrowLhs(first :: tail, span(startSpan, current.span))
       else
         val _ = expect(TokenKind.RParen, "`)`")
         first
@@ -588,7 +579,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
           // Function application: `f(args)`.
           val args = parseArgList()
           receiver = receiver match
-            case Trees.Ident(name, sp) =>
+            case Trees.Ident(_, sp) =>
               // Bare ident applied — could be FnCall.
               Trees.Apply(receiver, args, span(sp, current.span))
             case other =>
@@ -869,14 +860,9 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     case TokenKind.LParen =>
       // Tuple pattern.
       val startTok = consume()
-      val elements = scala.collection.mutable.ListBuffer.empty[Tree]
-      if current.kind != TokenKind.RParen then
-        elements += parsePattern()
-        while accept(TokenKind.Comma).isDefined do
-          if current.kind == TokenKind.RParen then ()
-          else elements += parsePattern()
+      val elements = parseDelimited(TokenKind.RParen, ")")(() => parsePattern())
       val endTok = expect(TokenKind.RParen, "`)`")
-      Trees.TuplePat(elements.toList, span(startTok.span, endTok.span))
+      Trees.TuplePat(elements, span(startTok.span, endTok.span))
     case TokenKind.IntLit | TokenKind.FloatLit | TokenKind.StringLit
        | TokenKind.CharLit | TokenKind.KwTrue | TokenKind.KwFalse =>
       Trees.LiteralPat(parseAtomExpr(), current.span)
@@ -890,14 +876,9 @@ final class Parser(scanner: Scanner, reporter: Reporter):
 
   private def parseInnerPatternList(): List[Tree] =
     val _ = expect(TokenKind.LParen, "`(`")
-    val pats = scala.collection.mutable.ListBuffer.empty[Tree]
-    if current.kind != TokenKind.RParen then
-      pats += parsePattern()
-      while accept(TokenKind.Comma).isDefined do
-        if current.kind == TokenKind.RParen then ()
-        else pats += parsePattern()
+    val pats = parseDelimited(TokenKind.RParen, ")")(() => parsePattern())
     val _ = expect(TokenKind.RParen, "`)`")
-    pats.toList
+    pats
 
   // ---- Stub productions for declarations not in example 01 ----
 
@@ -918,11 +899,9 @@ object Parser:
     * returned [[ParseResult]].
     *
     * Internally we still allocate a private Reporter to drive the
-    * existing Scanner/Parser plumbing; the diagnostics are extracted
-    * and the Reporter is discarded. This keeps the hot path identical
-    * to the pre-M1 implementation while presenting a functional API.
-    *
-    * Trivia is empty in M1; the Scanner starts populating it in M4.
+    * Scanner/Parser plumbing; the diagnostics are extracted and the
+    * Reporter is discarded. The hot path stays identical to the
+    * pre-M1 implementation while the API surface is functional.
     *
     * See `docs/plans/phase-2.1-incremental-parser.md` §2.
     */
