@@ -196,9 +196,13 @@ object Trees:
       span: Span
   ) extends Tree
 
+  /** A `handle` expression. `arms` mixes `HandlerArm` (effect ops),
+    * `ReturnArm` (the `return(p) => …` arm — at most one in well-formed
+    * input), and `Error` recovery nodes. Validity (one return arm,
+    * arm coverage, etc.) is enforced by the typer. */
   final case class HandleExpr(
       subject: Tree,
-      arms: List[HandlerArm],
+      arms: List[Tree],
       span: Span
   ) extends Tree
 

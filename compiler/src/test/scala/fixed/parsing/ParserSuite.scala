@@ -166,6 +166,70 @@ class ParserSuite extends FunSuite:
         assertEquals(s, "hello")
       case _ => fail(s"expected FnDecl with StringLit body, got $t")
 
+  // ---- M4.8: parseHandleExpr ----
+
+  test("M4.8: handle with effect arm and return arm"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """fn f() -> u64 = handle inner(input):
+        |    Fail.fail(e) => Result.err(e)
+        |    return(v) => Result.ok(v)
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(h: Trees.HandleExpr), _)), _) =>
+        assertEquals(h.arms.length, 2)
+        h.arms.head match
+          case Trees.HandlerArm("Fail", "fail", params, _, _) =>
+            assertEquals(params.length, 1)
+          case other => fail(s"expected HandlerArm Fail.fail, got $other")
+        h.arms.last match
+          case _: Trees.ReturnArm => ()
+          case other => fail(s"expected ReturnArm, got $other")
+      case other => fail(s"expected HandleExpr in fn body, got $other")
+
+  test("M4.8: handle with parameterless effect op"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """fn f() -> u64 = handle task():
+        |    Async.spawn(t) => resume(())
+        |    Async.yield_now() => resume(())
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(h: Trees.HandleExpr), _)), _) =>
+        assertEquals(h.arms.length, 2)
+        h.arms.last match
+          case Trees.HandlerArm("Async", "yield_now", params, _, _) =>
+            assertEquals(params, Nil)
+          case other => fail(s"expected HandlerArm Async.yield_now, got $other")
+      case other => fail(s"expected HandleExpr, got $other")
+
+  test("M4.8: handle with multi-line block body for an arm"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """fn f() -> u64 = handle task():
+        |    Async.spawn(t) =>
+        |        let q = remaining.push(t)
+        |        resume(())
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(h: Trees.HandleExpr), _)), _) =>
+        h.arms.head match
+          case Trees.HandlerArm(_, _, _, body, _) =>
+            body match
+              case Trees.Block(stmts, _) => assert(stmts.length >= 2)
+              case other => fail(s"expected Block body, got $other")
+          case other => fail(s"expected HandlerArm, got $other")
+      case other => fail(s"expected HandleExpr, got $other")
+
   // ---- M4.7: parseDoExpr ----
 
   test("M4.7: do-block with binds and a pure-style tail"):
@@ -932,13 +996,13 @@ class ParserSuite extends FunSuite:
         }, s"expected a Trees.Error item, got: $items")
       case other => fail(s"expected CompilationUnit, got $other")
 
-  test("M2: stub `handle` expression produces a Trees.Error in body"):
-    // `handle` is still unimplemented; the stub calls `unsupported(...)`
-    // which returns a Trees.Error gap node. The single-token skip
-    // leaves the trailing `x` as a separate top-level Error.
+  test("M2: stub `forall` expression produces a Trees.Error in body"):
+    // `forall` is still unimplemented (only valid in prop bodies);
+    // the stub calls `unsupported(...)` which returns a Trees.Error
+    // gap node.
     val src = SourceFile.fromString(
       "<test>",
-      "fn f(x: u64) -> u64 = handle x\n"
+      "fn f(x: u64) -> u64 = forall x\n"
     )
     val pr = Parser.parse(src)
     assert(pr.hasErrors)

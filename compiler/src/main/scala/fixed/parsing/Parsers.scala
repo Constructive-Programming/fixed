@@ -671,7 +671,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     case TokenKind.KwIf      => parseIfExpr()
     case TokenKind.KwLet     => parseLetExpr()
     case TokenKind.KwMatch   => parseMatchExpr()
-    case TokenKind.KwHandle  => unsupported("`handle` expression")
+    case TokenKind.KwHandle  => parseHandleExpr()
     case TokenKind.KwDo      => parseDoExpr()
     case TokenKind.KwForall  => unsupported("`forall` quantifier (only valid in prop bodies)")
     case TokenKind.LBracket  => parseListExpr()
@@ -796,6 +796,60 @@ final class Parser(scanner: Scanner, reporter: Reporter):
           if depth == 0 then false else loop(i + 1, depth - 1)
         case _ => loop(i + 1, depth)
     loop(0, 0)
+
+  // HandleExpr ::= "handle" Expr ":" INDENT HandlerArm+ DEDENT
+  // HandlerArm ::= EffectArm | ReturnArm
+  //   EffectArm ::= UPPER_IDENT "." LOWER_IDENT ("(" PatternList ")")? "=>" Body
+  //   ReturnArm ::= "return" "(" Pattern ")" "=>" Body
+  private def parseHandleExpr(): Tree =
+    val startTok = expect(TokenKind.KwHandle, "`handle`")
+    val subject = parseExpr()
+    val _ = expect(TokenKind.Colon, "`:` after handle subject")
+    val arms = parseHandlerArms()
+    Trees.HandleExpr(subject, arms, span(startTok.span, current.span))
+
+  private def parseHandlerArms(): List[Tree] =
+    val _ = expect(TokenKind.Indent, "INDENT")
+    val arms = scala.collection.mutable.ListBuffer.empty[Tree]
+    skipNewlines()
+    withAnchors(Anchors.blockBody) {
+      while current.kind != TokenKind.Dedent && current.kind != TokenKind.Eof do
+        arms += parseHandlerArm()
+        skipNewlines()
+    }
+    val _ = expect(TokenKind.Dedent, "DEDENT")
+    arms.toList
+
+  private def parseHandlerArm(): Tree =
+    val startSpan = current.span
+    current.kind match
+      case TokenKind.KwReturn =>
+        val _ = consume()
+        val _ = expect(TokenKind.LParen, "`(`")
+        val pat = parsePattern()
+        val _ = expect(TokenKind.RParen, "`)`")
+        val _ = expect(TokenKind.FatArrow, "`=>` after return arm pattern")
+        val body = parseInlineOrBlockExpr()
+        Trees.ReturnArm(pat, body, span(startSpan, body.span))
+      case TokenKind.UpperIdent =>
+        val effectTok = consume()
+        val _ = expect(TokenKind.Dot, "`.`")
+        val opTok = expect(TokenKind.LowerIdent, "effect op name")
+        val params =
+          if current.kind == TokenKind.LParen then parseInnerPatternList()
+          else Nil
+        val _ = expect(TokenKind.FatArrow, "`=>` after effect op")
+        val body = parseInlineOrBlockExpr()
+        Trees.HandlerArm(effectTok.lexeme, opTok.lexeme, params, body, span(startSpan, body.span))
+      case _ =>
+        reporter.error(
+          "P019",
+          current.span,
+          s"expected a handler arm, got ${current.kind}${describeLexeme(current)}",
+          Some("each arm is `Effect.op(...) => body` or `return(p) => body`")
+        )
+        syncToAnchors()
+        Trees.Error(Nil, span(startSpan, current.span))
 
   /** A branch body that's either a same-line expression or an INDENTed block. */
   private def parseInlineOrBlockExpr(): Tree =
