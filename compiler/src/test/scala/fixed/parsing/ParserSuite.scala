@@ -180,14 +180,12 @@ class ParserSuite extends FunSuite:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(h: Trees.HandleExpr), _)), _) =>
-        assertEquals(h.arms.length, 2)
+        assertEquals(h.arms.length, 1)
         h.arms.head match
           case Trees.HandlerArm("Fail", "fail", params, _, _) =>
             assertEquals(params.length, 1)
           case other => fail(s"expected HandlerArm Fail.fail, got $other")
-        h.arms.last match
-          case _: Trees.ReturnArm => ()
-          case other => fail(s"expected ReturnArm, got $other")
+        assert(h.returnArm.isDefined, "expected returnArm")
       case other => fail(s"expected HandleExpr in fn body, got $other")
 
   test("M4.8: handle with parameterless effect op"):
@@ -222,12 +220,9 @@ class ParserSuite extends FunSuite:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(h: Trees.HandleExpr), _)), _) =>
-        h.arms.head match
-          case Trees.HandlerArm(_, _, _, body, _) =>
-            body match
-              case Trees.Block(stmts, _) => assert(stmts.length >= 2)
-              case other => fail(s"expected Block body, got $other")
-          case other => fail(s"expected HandlerArm, got $other")
+        h.arms.head.body match
+          case Trees.Block(stmts, _) => assert(stmts.length >= 2)
+          case other => fail(s"expected Block body, got $other")
       case other => fail(s"expected HandleExpr, got $other")
 
   // ---- M4.7: parseDoExpr ----
@@ -864,7 +859,7 @@ class ParserSuite extends FunSuite:
       case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
         assertEquals(d.name, "Direction")
         assertEquals(d.ofParams, Nil)
-        val vs = onlyVariants(d)
+        val vs = d.variants
         assertEquals(vs.map(_.name), List("North", "South", "East", "West"))
         assert(vs.forall(_.fields.isEmpty))
       case other => fail(s"expected single DataDecl, got $other")
@@ -882,7 +877,7 @@ class ParserSuite extends FunSuite:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
-        val vs = onlyVariants(d)
+        val vs = d.variants
         assertEquals(vs.map(_.name), List("Red", "Green", "RGB"))
         val rgb = vs.find(_.name == "RGB").get
         assertEquals(rgb.fields.map(_.name), List("red", "green", "blue"))
@@ -940,7 +935,7 @@ class ParserSuite extends FunSuite:
     pr.tree match
       case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
         assertEquals(d.name, "Config")
-        val vs = onlyVariants(d)
+        val vs = d.variants
         assertEquals(vs.length, 1)
         val v = vs.head
         assertEquals(v.name, "Config")
@@ -982,7 +977,7 @@ class ParserSuite extends FunSuite:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
-        val succ = onlyVariants(d).find(_.name == "Succ").get
+        val succ = d.variants.find(_.name == "Succ").get
         succ.fields.head.typeAnn match
           case Trees.TypeRef("Nat", None, _) => ()
           case other => fail(s"expected TypeRef('Nat'), got $other")
@@ -1075,11 +1070,6 @@ class ParserSuite extends FunSuite:
     assert(pr.hasErrors)
     val errs = collectAllErrors(pr.tree)
     assert(errs.nonEmpty)
-
-  // DataDecl.variants holds variants and props mixed; tests usually
-  // care only about the variants.
-  private def onlyVariants(d: Trees.DataDecl): List[Trees.DataVariant] =
-    d.variants.collect { case v: Trees.DataVariant => v }
 
   // Walk the tree gathering every Trees.Error. Used by the recovery tests
   // above; the flattening-vs-shape distinction is tested elsewhere.

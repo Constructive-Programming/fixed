@@ -81,15 +81,15 @@ object Trees:
       span: Span
   ) extends Tree
 
-  /** A `data` declaration. `variants` mixes `DataVariant` and
-    * `PropDecl` (data bodies admit `prop` declarations to express
-    * invariants attached to the type). The typer separates the two
-    * when needed. Callers wanting just the variants use
-    * `collect { case v: DataVariant => v }`. */
+  /** A `data` declaration. Variants and props are stored separately —
+    * the parser knows which is which at dispatch time, so the AST
+    * reflects that statically rather than mixing them in one List[Tree]
+    * that consumers have to re-partition. */
   final case class DataDecl(
       name: String,
       ofParams: List[Tree],
-      variants: List[Tree],
+      variants: List[DataVariant],
+      props: List[PropDecl],
       span: Span
   ) extends Tree
 
@@ -212,13 +212,13 @@ object Trees:
       span: Span
   ) extends Tree
 
-  /** A `handle` expression. `arms` mixes `HandlerArm` (effect ops),
-    * `ReturnArm` (the `return(p) => …` arm — at most one in well-formed
-    * input), and `Error` recovery nodes. Validity (one return arm,
-    * arm coverage, etc.) is enforced by the typer. */
+  /** A `handle` expression. The optional `return(p) => …` arm is
+    * stored separately from the effect-op arms — well-formed input
+    * has at most one. */
   final case class HandleExpr(
       subject: Tree,
-      arms: List[Tree],
+      arms: List[HandlerArm],
+      returnArm: Option[ReturnArm],
       span: Span
   ) extends Tree
 

@@ -99,18 +99,24 @@ final class Parser(scanner: Scanner, reporter: Reporter):
         val _ = consume()
     }
 
-  /** True iff `k` is `,` / `)` / `]` / `}` AND some active anchor frame
-    * is waiting for it. Used by indented-block productions (parseBlock,
-    * parseMatchArms, parseDoStmts, parseHandlerArms) to terminate an
-    * implicitly-opened off-side body when the enclosing bracketed
-    * production would otherwise see noise after an item. See
-    * `spec/syntax_grammar.ebnf` "Re-enabling the off-side rule inside
-    * brackets" — closing punctuation at the body's indent ends the
-    * body without waiting for the scanner's DEDENT. */
+  /** True iff `k` is `,` / `)` / `]` / `}` AND an *outer* anchor frame
+    * (any frame except the innermost) is waiting for it. Used by
+    * indented-block productions (parseBlock, parseMatchArms,
+    * parseDoStmts, parseHandlerArms) to terminate an implicitly-opened
+    * off-side body when the enclosing bracketed production would
+    * otherwise see noise after an item. See `spec/syntax_grammar.ebnf`
+    * "Re-enabling the off-side rule inside brackets".
+    *
+    * `.drop(1)` skips the innermost frame — the one belonging to *this*
+    * production — so the function answers "does some enclosing
+    * production need this token?" rather than "does anyone, including
+    * me?". The previous form happened to be correct only because
+    * `Anchors.blockBody` doesn't contain any of `,`/`)`/`]`/`}`; this
+    * spelling makes the invariant explicit. */
   private def isOuterBracketWaiter(k: TokenKind): Boolean =
     (k == TokenKind.Comma || k == TokenKind.RParen
       || k == TokenKind.RBracket || k == TokenKind.RBrace)
-      && activeAnchors.exists(_.contains(k))
+      && activeAnchors.drop(1).exists(_.contains(k))
 
   // Count of DEDENT tokens that an inner block-style parser exited
   // bracket-aware (without consuming a matching DEDENT). The scanner
@@ -533,6 +539,12 @@ final class Parser(scanner: Scanner, reporter: Reporter):
           first
     else parseTypeExpr()
 
+  // CapType ::= "cap" CapReturnSpec?
+  // CapReturnSpec ::= "of" OfArg
+  //                 | "extends" CapBound ("+" CapBound)*
+  // The grammar makes the two arms exclusive (spec/syntax_grammar.ebnf
+  // §CapReturnSpec): a `cap` is followed by either `of …` or
+  // `extends …`, never both — so `Option[CapReturnSpec]` fits.
   private def parseCapType(): Tree =
     val startTok = expect(TokenKind.KwCap, "`cap`")
     val spec =
@@ -577,6 +589,11 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       lhs = Trees.BinOp("&&", lhs, rhs, span(lhs.span, rhs.span))
     lhs
 
+  // Non-chaining: at most one comparison operator per expression.
+  // `a < b < c` parses as `(a < b) < c`'s LHS rejected by the typer
+  // (no `<` at boolean type), not as `a < b && b < c`. The grammar
+  // marks CmpExpr non-associative; that's why this production has no
+  // outer loop, unlike its peers `parseAddExpr` / `parseMulExpr`.
   private def parseCmpExpr(): Tree =
     val lhs = parseAddExpr()
     val cmpOp = current.kind match
@@ -700,11 +717,19 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     val anchors = Set(TokenKind.Comma, closeKind)
     val items = scala.collection.mutable.ListBuffer.empty[Tree]
     def drainImpliedDedents(): Unit =
-      while current.kind == TokenKind.Newline
-            || current.kind == TokenKind.Dedent do
-        val wasDedent = current.kind == TokenKind.Dedent
-        val _ = consume()
-        if wasDedent && owedDedents > 0 then owedDedents -= 1
+      // NEWLINEs between items are noise inside parens — always drain.
+      // DEDENTs are only ours to consume when the matching block exited
+      // bracket-aware (`owedDedents > 0`); a real outer DEDENT would
+      // otherwise be silently swallowed on a recovery path.
+      var keep = true
+      while keep do
+        current.kind match
+          case TokenKind.Newline =>
+            val _ = consume()
+          case TokenKind.Dedent if owedDedents > 0 =>
+            val _ = consume()
+            owedDedents -= 1
+          case _ => keep = false
     def parseOne(): Unit =
       val itemStart = current.span
       val item = parseItem()
@@ -929,28 +954,35 @@ final class Parser(scanner: Scanner, reporter: Reporter):
   // HandlerArm ::= EffectArm | ReturnArm
   //   EffectArm ::= UPPER_IDENT "." LOWER_IDENT ("(" PatternList ")")? "=>" Body
   //   ReturnArm ::= "return" "(" Pattern ")" "=>" Body
+  // The optional return arm is partitioned out at parse time; multiple
+  // return arms are admitted by the grammar but only the last one
+  // survives (well-formed programs have at most one).
   private def parseHandleExpr(): Tree =
     val startTok = expect(TokenKind.KwHandle, "`handle`")
     val subject = parseExpr()
     val _ = expect(TokenKind.Colon, "`:` after handle subject")
-    val arms = parseHandlerArms()
-    Trees.HandleExpr(subject, arms, span(startTok.span, current.span))
+    val (arms, returnArm) = parseHandlerArms()
+    Trees.HandleExpr(subject, arms, returnArm, span(startTok.span, current.span))
 
-  private def parseHandlerArms(): List[Tree] =
+  private def parseHandlerArms(): (List[Trees.HandlerArm], Option[Trees.ReturnArm]) =
     val _ = expect(TokenKind.Indent, "INDENT")
-    val arms = scala.collection.mutable.ListBuffer.empty[Tree]
+    val arms = scala.collection.mutable.ListBuffer.empty[Trees.HandlerArm]
+    var returnArm: Option[Trees.ReturnArm] = None
     skipNewlines()
     withAnchors(Anchors.blockBody) {
       while current.kind != TokenKind.Dedent
             && current.kind != TokenKind.Eof
             && !isOuterBracketWaiter(current.kind) do
-        arms += parseHandlerArm()
+        parseHandlerArm() match
+          case ra: Trees.ReturnArm  => returnArm = Some(ra)
+          case ha: Trees.HandlerArm => arms += ha
+          case _: Trees.Error       => ()  // recovery; diagnostic already emitted
         skipNewlines()
     }
     absorbOwedDedents()
     if accept(TokenKind.Dedent).isDefined then ()
     else owedDedents += 1
-    arms.toList
+    (arms.toList, returnArm)
 
   private def parseHandlerArm(): Tree =
     val startSpan = current.span
@@ -1180,10 +1212,10 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       // Single-ctor sugar — synthesise one variant with the type's name.
       val fields = parseFieldList()
       val variant = Trees.DataVariant(nameTok.lexeme, fields, span(nameTok.span, current.span))
-      Trees.DataDecl(nameTok.lexeme, ofParams, List(variant), span(startTok.span, current.span))
+      Trees.DataDecl(nameTok.lexeme, ofParams, List(variant), Nil, span(startTok.span, current.span))
     else if accept(TokenKind.Colon).isDefined then
-      val variants = parseDataVariants()
-      Trees.DataDecl(nameTok.lexeme, ofParams, variants, span(startTok.span, current.span))
+      val (variants, props) = parseDataBody()
+      Trees.DataDecl(nameTok.lexeme, ofParams, variants, props, span(startTok.span, current.span))
     else
       reporter.error(
         "P013",
@@ -1191,7 +1223,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
         s"`data ${nameTok.lexeme}` needs either a `(field: T, ...)` ctor sugar or a `:` block of variants",
         Some("add `: ...` for variants or `(field: T, ...)` for a single ctor")
       )
-      Trees.DataDecl(nameTok.lexeme, ofParams, Nil, span(startTok.span, current.span))
+      Trees.DataDecl(nameTok.lexeme, ofParams, Nil, Nil, span(startTok.span, current.span))
 
   private def parseOptionalDataOfClause(): List[Tree] =
     if accept(TokenKind.KwOf).isDefined then
@@ -1226,19 +1258,21 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       case _ =>
         parseTypeExpr()
 
-  // The data body holds `DataVariant` and `PropDecl` mixed; the typer
-  // separates them as needed.
-  private def parseDataVariants(): List[Tree] =
+  // Data bodies admit `DataVariant`s and `PropDecl`s. The parser
+  // partitions them into separate lists at dispatch time so consumers
+  // never need to re-classify.
+  private def parseDataBody(): (List[Trees.DataVariant], List[Trees.PropDecl]) =
     val _ = expect(TokenKind.Indent, "INDENT")
-    val items = scala.collection.mutable.ListBuffer.empty[Tree]
+    val variants = scala.collection.mutable.ListBuffer.empty[Trees.DataVariant]
+    val props = scala.collection.mutable.ListBuffer.empty[Trees.PropDecl]
     skipNewlines()
     withAnchors(Anchors.blockBody) {
       while current.kind != TokenKind.Dedent
             && current.kind != TokenKind.Eof
             && !isOuterBracketWaiter(current.kind) do
         current.kind match
-          case TokenKind.UpperIdent => items += parseDataVariant()
-          case TokenKind.KwProp     => items += parsePropDecl()
+          case TokenKind.UpperIdent => variants += parseDataVariant()
+          case TokenKind.KwProp     => props += parsePropDecl()
           case _ =>
             reporter.error(
               "P013",
@@ -1252,7 +1286,7 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     absorbOwedDedents()
     if accept(TokenKind.Dedent).isDefined then ()
     else owedDedents += 1
-    items.toList
+    (variants.toList, props.toList)
 
   private def parseDataVariant(): Trees.DataVariant =
     val nameTok = expect(TokenKind.UpperIdent, "variant name")
@@ -1328,7 +1362,8 @@ final class Parser(scanner: Scanner, reporter: Reporter):
         skipNewlines()
     }
     absorbOwedDedents()
-    val _ = expect(TokenKind.Dedent, "DEDENT")
+    if accept(TokenKind.Dedent).isDefined then ()
+    else owedDedents += 1
     members.toList
 
   private def parseInstanceMethod(): Trees.InstanceMethod =
@@ -1463,7 +1498,8 @@ final class Parser(scanner: Scanner, reporter: Reporter):
         skipNewlines()
     }
     absorbOwedDedents()
-    val _ = expect(TokenKind.Dedent, "DEDENT")
+    if accept(TokenKind.Dedent).isDefined then ()
+    else owedDedents += 1
     items.toList
 
   private def parseSatisfiesItem(): Tree = current.kind match
@@ -1534,7 +1570,8 @@ final class Parser(scanner: Scanner, reporter: Reporter):
         skipNewlines()
     }
     absorbOwedDedents()
-    val _ = expect(TokenKind.Dedent, "DEDENT")
+    if accept(TokenKind.Dedent).isDefined then ()
+    else owedDedents += 1
     members.toList
 
   // ---- Stub productions still pending ----
