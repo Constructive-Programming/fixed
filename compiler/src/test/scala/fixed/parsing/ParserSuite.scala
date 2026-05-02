@@ -166,6 +166,77 @@ class ParserSuite extends FunSuite:
         assertEquals(s, "hello")
       case _ => fail(s"expected FnDecl with StringLit body, got $t")
 
+  // ---- M4.5: parseSatisfiesDecl ----
+
+  test("M4.5: simple satisfies with constructor mappings"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """Maybe satisfies Optional:
+        |    Just as some
+        |    Nothing as none
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(s: Trees.SatisfiesDecl), _) =>
+        assertEquals(s.typeName, "Maybe")
+        s.capRef match
+          case Trees.CapRef("Optional", _, _) => ()
+          case other => fail(s"expected CapRef('Optional'), got $other")
+        assertEquals(s.mappings.length, 2)
+        assertEquals(
+          s.mappings.collect { case Trees.ConstructorMapping(v, c, _) => (v, c) },
+          List(("Just", "some"), ("Nothing", "none"))
+        )
+      case other => fail(s"expected SatisfiesDecl, got $other")
+
+  test("M4.5: satisfies with `Self as` and `impossible as`"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """u64 satisfies Optional of Self:
+        |    Self as some
+        |    impossible as none
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(s: Trees.SatisfiesDecl), _) =>
+        assertEquals(s.typeName, "u64")
+        val ctors = s.mappings.collect { case Trees.ConstructorMapping(v, c, _) => (v, c) }
+        val impossibles = s.mappings.collect { case Trees.ImpossibleMapping(c, _) => c }
+        assertEquals(ctors, List(("Self", "some")))
+        assertEquals(impossibles, List("none"))
+      case other => fail(s"expected SatisfiesDecl, got $other")
+
+  test("M4.5: satisfies with method override"):
+    val src = SourceFile.fromString(
+      "<test>",
+      """Maybe satisfies Optional:
+        |    fn isDefined = match self:
+        |        Maybe.Nothing => false
+        |        _ => true
+        |""".stripMargin
+    )
+    val pr = Parser.parse(src)
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(s: Trees.SatisfiesDecl), _) =>
+        assertEquals(s.mappings.length, 1)
+        s.mappings.head match
+          case im: Trees.InstanceMethod => assertEquals(im.name, "isDefined")
+          case other => fail(s"expected InstanceMethod, got $other")
+      case other => fail(s"expected SatisfiesDecl, got $other")
+
+  test("M4.5: empty satisfies (no body)"):
+    val pr = Parser.parse(SourceFile.fromString("<test>", "Maybe satisfies Optional\n"))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(s: Trees.SatisfiesDecl), _) =>
+        assertEquals(s.mappings, Nil)
+      case other => fail(s"expected SatisfiesDecl, got $other")
+
   // ---- M4.4: parseMatchExpr ----
 
   test("M4.4: simple match on data variants"):

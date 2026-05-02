@@ -149,6 +149,10 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     case TokenKind.KwMod       => parseModDecl()
     case TokenKind.KwPub       => unsupported("`pub` modifier")
     case TokenKind.UpperIdent  => parseSatisfiesDecl()
+    // A primitive (LowerIdent) followed by `satisfies` is also a
+    // satisfaction declaration (e.g. `u64 satisfies Optional of Self`).
+    case TokenKind.LowerIdent if peek(1).kind == TokenKind.KwSatisfies =>
+      parseSatisfiesDecl()
     case _                      =>
       // Unknown token at top level. Emit a diagnostic, then synchronise
       // to the next decl introducer (or EOF). This collapses runs of
@@ -1118,11 +1122,83 @@ final class Parser(scanner: Scanner, reporter: Reporter):
       else Trees.IsBound(caps, span(caps.head.span, caps.last.span))
     Trees.TypeAlias(nameTok.lexeme, valueParams, rhs, span(startTok.span, current.span))
 
+  // ---- SatisfiesDecl ----
+
+  // SatisfiesDecl ::= TypeName "satisfies" CapBound (":" INDENT SatisfiesItem+ DEDENT)?
+  //   TypeName    ::= UPPER_IDENT | LOWER_IDENT          (primitives)
+  //   SatisfiesItem ::= ConstructorMapping
+  //                  | ImpossibleMapping
+  //                  | InstanceMethod | StaticMethod | PropDecl
+  //   ConstructorMapping ::= (UPPER_IDENT | "Self") "as" LOWER_IDENT
+  //   ImpossibleMapping  ::= "impossible" "as" LOWER_IDENT
+  private def parseSatisfiesDecl(): Tree =
+    val startSpan = current.span
+    val typeName = current.kind match
+      case TokenKind.UpperIdent | TokenKind.LowerIdent => consume().lexeme
+      case _ =>
+        reporter.error(
+          "P015",
+          current.span,
+          s"expected a type name to satisfy a capability, got ${current.kind}${describeLexeme(current)}",
+          Some("`<TypeName> satisfies <CapName>: ...`")
+        )
+        consume().lexeme
+    val _ = expect(TokenKind.KwSatisfies, "`satisfies`")
+    val cap = parseCapBound()
+    val items =
+      if accept(TokenKind.Colon).isDefined then parseSatisfiesBody()
+      else Nil
+    Trees.SatisfiesDecl(typeName, cap, items, span(startSpan, current.span))
+
+  private def parseSatisfiesBody(): List[Tree] =
+    val _ = expect(TokenKind.Indent, "INDENT")
+    val items = scala.collection.mutable.ListBuffer.empty[Tree]
+    skipNewlines()
+    withAnchors(Anchors.blockBody) {
+      while current.kind != TokenKind.Dedent && current.kind != TokenKind.Eof do
+        items += parseSatisfiesItem()
+        skipNewlines()
+    }
+    val _ = expect(TokenKind.Dedent, "DEDENT")
+    items.toList
+
+  private def parseSatisfiesItem(): Tree = current.kind match
+    case TokenKind.KwImpossible =>
+      val startTok = consume()
+      val _ = expect(TokenKind.KwAs, "`as`")
+      val ctorTok = expect(TokenKind.LowerIdent, "cap constructor name")
+      Trees.ImpossibleMapping(ctorTok.lexeme, span(startTok.span, ctorTok.span))
+    case TokenKind.KwSelf if peek(1).kind == TokenKind.KwAs =>
+      // `Self as ctor` — identity-shape mapping for primitives that
+      // are themselves the cap's value (`u64 satisfies Optional of
+      // Self: Self as some`).
+      val startTok = consume()
+      val _ = expect(TokenKind.KwAs, "`as`")
+      val ctorTok = expect(TokenKind.LowerIdent, "cap constructor name")
+      Trees.ConstructorMapping("Self", ctorTok.lexeme, span(startTok.span, ctorTok.span))
+    case TokenKind.UpperIdent =>
+      val variantTok = consume()
+      val _ = expect(TokenKind.KwAs, "`as`")
+      val ctorTok = expect(TokenKind.LowerIdent, "cap constructor name")
+      Trees.ConstructorMapping(variantTok.lexeme, ctorTok.lexeme, span(variantTok.span, ctorTok.span))
+    case TokenKind.KwFn   => parseInstanceMethod()
+    case TokenKind.KwSelf => parseStaticMethod()
+    case TokenKind.KwProp => parsePropDecl()
+    case _ =>
+      reporter.error(
+        "P016",
+        current.span,
+        s"expected a satisfies item, got ${current.kind}${describeLexeme(current)}",
+        Some("items are `Variant as ctor`, `impossible as ctor`, `fn ...`, `Self.fn ...`, or `prop ...`")
+      )
+      val tok = current.span
+      syncToAnchors()
+      Trees.Error(Nil, span(tok, current.span))
+
   // ---- Stub productions still pending ----
 
   private def parseEffectDecl(): Tree  = unsupported("`effect` declaration")
   private def parseModDecl(): Tree     = unsupported("`mod` declaration")
-  private def parseSatisfiesDecl(): Tree = unsupported("`satisfies` declaration")
 
 end Parser
 
