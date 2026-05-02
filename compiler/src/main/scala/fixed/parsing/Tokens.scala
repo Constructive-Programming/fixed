@@ -53,6 +53,7 @@ enum TokenKind:
   case Dedent            // closing one indent level
   case Eof
   case Error             // lex error — accompanied by a Reporter entry
+  case NoStart           // sentinel: scanner has not yet emitted a token
 
 end TokenKind
 
