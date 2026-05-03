@@ -893,12 +893,12 @@ object Parser:
     * that is neither `,` nor `closeKind`, emit a diagnostic, sync to
     * the next such token, and wrap the partial item in `Trees.Error`.
     * Trailing comma admitted. */
-  private def parseDelimited(
+  private inline def parseDelimited(
       s0: ParserState,
       closeKind: TokenKind,
       closeLexeme: String,
       reporter: Reporter
-  )(parseItem: (ParserState, Reporter) => Parsed[Tree]): Parsed[List[Tree]] =
+  )(inline parseItem: (ParserState, Reporter) => Parsed[Tree]): Parsed[List[Tree]] =
     parseDelimitedLoop[Tree](s0, closeKind, closeLexeme, reporter) { (st, r, itemStart) =>
       val (st1, item) = parseItem(st, r)
       (st1, item, Trees.Error(List(item), span(itemStart, st1.current.span)))
@@ -909,12 +909,12 @@ object Parser:
     * the diagnostic is still emitted; most A-typed items contain their
     * own internal `Trees.Error` subtrees on partial parses, so the
     * failure remains visible to downstream consumers. */
-  private def parseDelimitedTyped[A](
+  private inline def parseDelimitedTyped[A](
       s0: ParserState,
       closeKind: TokenKind,
       closeLexeme: String,
       reporter: Reporter
-  )(parseItem: (ParserState, Reporter) => Parsed[A]): Parsed[List[A]] =
+  )(inline parseItem: (ParserState, Reporter) => Parsed[A]): Parsed[List[A]] =
     parseDelimitedLoop[A](s0, closeKind, closeLexeme, reporter) { (st, r, _) =>
       val (st1, item) = parseItem(st, r)
       (st1, item, item)
@@ -923,13 +923,25 @@ object Parser:
   /** Shared loop body. `parseItem` returns `(state, ok, recovered)`:
     * the value to store on a clean parse and the value to store after
     * a P012 sync. The `itemStart` span lets `Tree` callers wrap the
-    * partial item in `Trees.Error`. */
-  private def parseDelimitedLoop[A](
+    * partial item in `Trees.Error`.
+    *
+    * Marked `inline` (with `inline parseItem`) so each call site gets
+    * its own monomorphic copy of the loop. The previous shared-body
+    * version had a megamorphic `Function3` apply — many call sites
+    * (parseArgList, parseFnParamList, parseFieldList, parseStructLit,
+    * parseUseDecl selectors, parseLambdaExpr params, parseListExpr,
+    * parseInnerPatternList, parseOptionalDataOfClause,
+    * parseOptionalTypeParamsHint, …) made the JIT fall back to vtable
+    * dispatch, blocking escape analysis on the `(state, ok, recovered)`
+    * tuple and forcing per-call lambda allocation. Inlining specialises
+    * the loop per call site, the tuple is scalar-replaced, and the
+    * lambda goes away. */
+  private inline def parseDelimitedLoop[A](
       s0: ParserState,
       closeKind: TokenKind,
       closeLexeme: String,
       reporter: Reporter
-  )(parseItem: (ParserState, Reporter, Span) => (ParserState, A, A)): Parsed[List[A]] =
+  )(inline parseItem: (ParserState, Reporter, Span) => (ParserState, A, A)): Parsed[List[A]] =
     val anchors = Set(TokenKind.Comma, closeKind)
 
     def parseOne(st: ParserState): Parsed[A] =
