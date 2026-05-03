@@ -30,20 +30,17 @@ import fixed.util.{Reporter, SourceFile, Span}
 final class Parser(scanner: Scanner, reporter: Reporter):
   import Parser.initialState
 
-  // Materialise the entire token stream once, mirroring the Scanner's
-  // `tokens: Vector[Token]` boundary: every production walks the stream
-  // by an immutable `idx` carried in `ParserState`. The scanner emits
-  // an explicit EOF that terminates the unfold; we keep it as the
-  // sentinel at `tokens.last` so `peek` past the end is safe.
-  private val tokens: Vector[Token] =
-    Iterator
-      .unfold[Token, Boolean](false) { done =>
-        if done then None
-        else
-          val t = scanner.nextToken()
-          Some((t, t.kind == TokenKind.Eof))
-      }
-      .toVector
+  // Reuse the Scanner's already-materialised token vector and project
+  // it into an `Array[Token]` for cheap O(1) indexing. The array is
+  // logically immutable: it is written once at parser construction and
+  // never re-assigned or mutated. `current`/`peek` execute in every
+  // cursor advance, so saving the Vector trie traversal pays back
+  // across the whole parse pass.
+  //
+  // `Vector.toArray` walks the vector once to build the array. The
+  // alternative — leaving the stream as `Vector[Token]` — re-pays the
+  // trie cost on every read. The materialisation is the right trade.
+  private val tokens: Array[Token] = scanner.tokenize().toArray
 
   /** Parse the whole compilation unit. */
   def parseCompilationUnit(): Tree =
@@ -73,24 +70,24 @@ object Parser:
     * bracket-aware but not yet drained (see comment on `addOwed`
     * below). */
   final case class ParserState(
-      tokens: Vector[Token],
+      tokens: Array[Token],
       idx: Int,
       anchors: List[Set[TokenKind]],
       owedDedents: Int
   ):
     /** The current (next un-consumed) token. Always available — the
       * scanner has appended a final EOF to `tokens`. */
-    def current: Token =
+    inline def current: Token =
       if idx < tokens.length then tokens(idx)
       else tokens(tokens.length - 1)
 
     /** Peek the token `n` ahead of `current` (n=0 means current). */
-    def peek(n: Int): Token =
+    inline def peek(n: Int): Token =
       val j = idx + n
       if j < tokens.length then tokens(j)
       else tokens(tokens.length - 1)
 
-    def advance: ParserState = copy(idx = idx + 1)
+    inline def advance: ParserState = copy(idx = idx + 1)
 
     /** Push a new anchor frame for a production. */
     def pushAnchors(a: Set[TokenKind]): ParserState =
@@ -132,15 +129,15 @@ object Parser:
   /** Result of a single production: the new state plus the produced value. */
   type Parsed[A] = (ParserState, A)
 
-  def initialState(tokens: Vector[Token]): ParserState =
+  def initialState(tokens: Array[Token]): ParserState =
     ParserState(tokens = tokens, idx = 0, anchors = Nil, owedDedents = 0)
 
   // ---- Cursor primitives ----
 
-  private def consume(s: ParserState): Parsed[Token] =
+  private inline def consume(s: ParserState): Parsed[Token] =
     (s.advance, s.current)
 
-  private def accept(s: ParserState, kind: TokenKind): (ParserState, Option[Token]) =
+  private inline def accept(s: ParserState, kind: TokenKind): (ParserState, Option[Token]) =
     if s.current.kind == kind then
       val (s1, t) = consume(s)
       (s1, Some(t))
