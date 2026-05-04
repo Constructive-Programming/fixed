@@ -138,7 +138,7 @@ compiler/src/test/scala/fixed/
 
 ### 2.1 No new build dependencies
 
-Munit + Scala 3 standard library cover the typer the same way they covered the parser. No external `cats`/`zio`/`scalaz`. The FP discipline established for the Scanner and Parser (zero `var`, zero `while`, zero `mutable.*` in user code) extends to the typer — see §3.4.
+Munit + Scala 3 standard library cover the typer the same way they covered the parser. No external `cats`/`zio`/`scalaz`. The FP discipline established for the Scanner and Parser (zero `var`, zero `while`, zero `mutable.*` in user code) extends to the typer — see §3.5.
 
 ## 3. Typed-tree model
 
@@ -194,15 +194,15 @@ object Typed:
       def updated(t: Tree, ty: Type): TypeMap   = (m: Map[Tree, Type]).updated(t, ty)
 ```
 
-The typer's central `typed` returns `(TyperState, Tree)` per §3.3, with the `TypeMap` carried inside `TyperState`.
+The typer's central `typed` returns `(TyperState, Tree)` per §3.4, with the `TypeMap` carried inside `TyperState`.
 
-**Constraint on Recheck implementations (load-bearing)**. A Recheck phase that synthesises a *new* tree node (not present in the parser output) MUST give it a span that doesn't collide with any existing parser-allocated node. The simplest discipline: synthesised nodes use a sentinel `Span(-1, -1)` plus a position-encoding embedded in `caseClass + fields` so they remain mutually distinct. Phase 3 / Part A does no such synthesis — the typer rewrites types, not trees. Phase 4 desugaring (`match → fold`, etc.) will be where this constraint first bites; the sub-plan author handles it then. If the constraint becomes load-bearing earlier, the §3.4 escape-hatch table absorbs the pattern.
+**Constraint on Recheck implementations (load-bearing)**. A Recheck phase that synthesises a *new* tree node (not present in the parser output) MUST give it a span that doesn't collide with any existing parser-allocated node. The simplest discipline: synthesised nodes use a sentinel `Span(-1, -1)` plus a position-encoding embedded in `caseClass + fields` so they remain mutually distinct. Phase 3 / Part A does no such synthesis — the typer rewrites types, not trees. Phase 4 desugaring (`match → fold`, etc.) will be where this constraint first bites; the sub-plan author handles it then. If the constraint becomes load-bearing earlier, the §3.5 escape-hatch table absorbs the pattern.
 
 **Storage shape across phases**. Each Recheck phase produces a new `TypeMap`. We do **not** retain the prior phase's map by default — the next phase reads what it needs from its input map and writes its own refinements into a fresh map. Working set is O(tree-count × 2) at any moment, not O(tree-count × phase-count). Should a downstream phase need historical views, promote `TypeMap` to `Map[PhaseId, TypeMap]` then.
 
-**Why not IdentityHashMap?** `java.util.IdentityHashMap` would also work and would not depend on the §3.0 invariant — but it is mutable, which would be the only mutable structure in the typer's hot path and would force a §3.4 escape-hatch entry. The structural-equality `Map` is pure and sufficient under the audit above. If TyperBench (M2 perf checkpoint) shows hashing case classes is the bottleneck, the §3.4 table absorbs an `IdentityHashMap`-based replacement behind the same `TypeMap` interface.
+**Why not IdentityHashMap?** `java.util.IdentityHashMap` would also work and would not depend on the §3.0 invariant — but it is mutable, which would be the only mutable structure in the typer's hot path and would force a §3.5 escape-hatch entry. The structural-equality `Map` is pure and sufficient under the audit above. If TyperBench (M2 perf checkpoint) shows hashing case classes is the bottleneck, the §3.5 table absorbs an `IdentityHashMap`-based replacement behind the same `TypeMap` interface.
 
-### 3.1 Symbol and Denotation
+### 3.2 Symbol and Denotation
 
 ```scala
 package fixed.core
@@ -228,7 +228,7 @@ A `SymbolTable` (in `core/Symbols.scala`) is `IntMap[Denotation]` — one denota
 
 If a future recheck phase or codegen does need the historical view (the "what did this symbol look like at phase N" property dotc's `docs/_docs/contributing/architecture/time.md` describes), promote `SymbolTable` to `IntMap[Vector[Denotation]]` keyed by `(SymbolId, PhaseId)`. The migration is local — every read/write goes through the `SymbolTable` API, not the underlying map. Adopting now would be generality without need.
 
-### 3.2 Type ADT
+### 3.3 Type ADT
 
 The Fixed type system is smaller than Scala's, but not as small as the v0.1 draft of this plan claimed. The set below is the result of a use-site trace against `spec/type_system.md` §5 + §6, `spec/effects.md`, `spec/properties.md`, and the v0.4.8 grammar productions; each case is justified by at least one feature it must represent (column "Used by").
 
@@ -311,7 +311,7 @@ Each `Type` case is justified by at least one source obligation, chosen so a fut
 
 `NamedAlias` from a previous draft is intentionally **dropped** — once the Namer binds `N` into the local scope, the rest of the signature uses `TypeRef(N)` and looks the name up. No separate enum case needed.
 
-`ProtoType` from a previous draft is also dropped — prototypes are inference state, not types. They live in their own ADT in `core/ProtoTypes.scala` (see §3.3).
+`ProtoType` from a previous draft is also dropped — prototypes are inference state, not types. They live in their own ADT in `core/ProtoTypes.scala` (see §3.4).
 
 #### Helpers, not types
 
@@ -327,7 +327,7 @@ Promote to a separate ADR document only when a second cross-cutting decision war
 
 `Type` is `enum` (Scala 3 ADT) — exhaustively pattern-matchable. Recheck phases extend with refinements via separate side tables; `Type` itself stays at this size.
 
-### 3.3 Prototypes (bidirectional typing)
+### 3.4 Prototypes (bidirectional typing)
 
 Per dotc `typer/ProtoTypes.scala`, every recursive call to the typer carries an expected type ("prototype"). Fixed adopts the same idea, with one canonical signature for every typer routine:
 
@@ -360,12 +360,12 @@ Every `typedX` is `(TyperState, Trees.X, Proto) => (TyperState, Tree)`. `Context
 Why prototypes matter for Fixed (per the reference doc §4.3):
 
 - `is` bounds at parameter sites *are* prototypes. `let x = some_expr` flowing into `n: N is Numeric` types `some_expr` with `pt = Proto.IsBound([CapBound(Numeric, Nil, Nil)])`.
-- `fn -> cap` arguments use prototypes that carry the call-site value as a `SymbolicTerm` (see `RefinementType` in §3.2), so the cap body's `prop in_range: min <= Self && Self <= max` can be checked against the actual call.
+- `fn -> cap` arguments use prototypes that carry the call-site value as a `SymbolicTerm` (see `RefinementType` in §3.3), so the cap body's `prop in_range: min <= Self && Self <= max` can be checked against the actual call.
 - `satisfies` resolution at constructor-call sites (`Optional.some(x)` → `Maybe.Just(x)`) is a prototype-driven search: given `pt = ExpectedType(TypeRef(Optional, [A]))`, find an in-scope satisfaction whose ctor arity matches.
 
 The three-tuple-return design of an earlier draft (`(tpdTree, refinedTypeMap, refinedSymbolTable)`) is replaced by the single-`TyperState` shape above. One canonical signature; every typer routine matches it.
 
-### 3.4 FP discipline carried over (with documented escape hatches)
+### 3.5 FP discipline carried over (with documented escape hatches)
 
 The Scanner and Parser are hard-FP (zero `var`, zero `while`, zero `mutable.*`). The Typer **extends the same discipline by default** — but with explicit escape hatches in places where pure-FP is known to cost too much against the inference workload.
 
@@ -374,7 +374,7 @@ The Scanner and Parser are hard-FP (zero `var`, zero `while`, zero `mutable.*`).
 - `Context` is an immutable case class threaded via `using Context`. Updates are `ctx.copy(...)` or pure helpers like `ctx.withOwner(sym)` / `ctx.withScope(scope)`.
 - `SymbolTable` is `IntMap[Denotation]` — adding/replacing a denotation returns a new table.
 - `TypeMap` is the immutable `IntMap[Type]` from §3.
-- Every typer routine returns `(TyperState, Tree)` per §3.3. State threading is explicit; nothing escapes via `var`.
+- Every typer routine returns `(TyperState, Tree)` per §3.4. State threading is explicit; nothing escapes via `var`.
 - `inline def` cursor primitives, `IntMap` over `Map[K, _]` where K is `Int`-shaped, JFR-tuned hot paths — all the moves used in the Parser apply.
 
 **Documented escape hatches** — pre-approved zones where mutability lives behind a pure interface. Each is justified by a workload mismatch with persistent FP:
@@ -384,12 +384,11 @@ The Scanner and Parser are hard-FP (zero `var`, zero `while`, zero `mutable.*`).
 | `Reporter.add(d)` | `private val buf: ListBuffer[Diagnostic]` | Already in use; diagnostics are an output stream, not a value to fold over. (Inherited unchanged from Phase 2.) |
 | `Unifier` (M3) | `mutable.LongMap[Type]` for the `TypeVar.id ↦ resolved Type` substitution | Persistent union-find is 5–20× slower than mutable in published benchmarks. The substitution map is local to one typed-call subtree and is forgotten when the call returns; no observer outside the substitution sees the mutation. The exposed surface is a pure `def unify(a: Type, b: Type): Either[UnifyError, Type]`. |
 
-**Removal criterion**: each entry must remain justifiable under measurement. If TyperBench shows the substitution map is *not* a hot spot at M5, the Unifier entry comes back out and `Unifier` is reimplemented with a persistent map. The bar for *adding* a hatch and for *keeping* one is the same — measured perf justification. The table is small on purpose.
+**Removal criterion**: each entry must remain justifiable under measurement. The Unifier entry is removed iff TyperBench corpus mean (release, JFR-tuned) at M5 shows substitution-map operations (`unifier.bind`, `unifier.find`) account for **<2 % of typer wall time** AND a persistent `IntMap[Type]` alternative submitted in the same PR shows **<10 % regression** on TyperBench. Without those two measurements meeting both thresholds, the entry stays. The bar for *adding* a hatch and for *keeping* one is the same; the table is small on purpose.
 
-**Two more potential entries** are flagged here because they may need to be added later, but are NOT yet:
+**Committed-but-deferred entry**: `PropSolver` (M9, Part B) — Princess (per §5.6.1) has its own internal mutability. We don't write the solver, we use it; the `trait ObligationSolver` adapter exposes a pure interface. The entry will be formalised in `phase-3.3-properties.md` when that sub-plan is authored. M9 is a committed Part B milestone; this is a scheduled future entry, not a contingent one.
 
-- `PropSolver` (M9, Part B) — Princess (per §5.6.1) has its own internal mutability. We don't write the solver, we use it; the `trait ObligationSolver` adapter exposes a pure interface. This entry lives in `phase-3.3-properties.md` once that sub-plan is authored.
-- Tree-node synthesis in Phase 4 desugaring — when `match → fold` lowering creates new tree nodes, those nodes need spans that don't collide with parser-allocated ones (per §3.1's load-bearing constraint). The simplest discipline is sentinel-span synthesis; if it bites, a Phase 4 ADR adds a counter-based variant.
+**Future-Phase entry to watch**: Tree-node synthesis in Phase 4 desugaring — when `match → fold` lowering creates new tree nodes, those nodes need spans that don't collide with parser-allocated ones (per §3.1's load-bearing constraint). The simplest discipline is sentinel-span synthesis; if it bites, a Phase 4 ADR adds a counter-based variant.
 
 **Perf-recovery milestones** are budgeted at M2 (post-Namer) and M5 (post-base typer) — the two points where the FP-vs-perf cost is most likely to bite in Part A. Each runs `TyperBench` (a typer-level analogue of `ParserBench`, introduced in M2) and applies JFR-driven tuning until corpus mean is within 2× of the equivalent dotc throughput per typed AST node. Part B sub-plans (M9 prop verifier, M11 representation selector) carry their own perf-recovery checkpoints in their respective sub-plan documents.
 
@@ -422,16 +421,17 @@ The milestone numbering (M6–M11) is the **implementation order** — but execu
 ```
               CapClosure (M6)
                  │
-                 ├──────────────┐
-                 ▼              ▼
+                 ├──────────────┬──────────────┐
+                 ▼              ▼              │
           EffectChecker (M7)   QuantityChecker (M10)
-                 │              │
-                 │              ├──────────────┐
-                 │              ▼              ▼
-                 │         PropVerifier (M9)   │
                  │              │              │
-                 └──────────────┴──────────────┤
-                                               ▼
+                 │              ├──────────────┤
+                 │              ▼              ▼
+                 │         PropVerifier (M9) ◄─┘  (M6 directly feeds M9
+                 │              │                   for cap-classification)
+                 │              │
+                 └──────────────┴────────────────┐
+                                                 ▼
                                   RepresentationSelector (M11)
 ```
 
@@ -440,13 +440,14 @@ The milestone numbering (M6–M11) is the **implementation order** — but execu
 | M6 → M7 | Effect inference needs the closed cap set to type `with` clauses against effect caps. |
 | M6 → M10 | QTT needs the **closed extends chain** to count uses through transitively-inherited cap methods (a single `m()` call may invoke a method declared in any super-cap; without closure M10 would miscount linearity). Cap-vs-value classification alone is a Namer fact, NOT what M6 contributes here. |
 | M6 → M11 | Representation selection consumes the closed cap set per `spec/type_system.md` §6.5. |
+| M6 → M9 | Prop verifier needs the closed cap set to translate `Self` in prop bodies into a solver domain (Sum cap → finite enumeration; Refinement cap → numeric range; Recursive cap → inductively-defined). Without M6's classification (per `spec/type_system.md` §6.4), `prop nonneg: Self >= 0` cannot be cast as a Princess formula. |
 | M7 → M11 | Effect-row info determines whether a fn body needs a continuation slot (handler-arm reentry). |
-| M10 → M9 (PBT branch only) | M9 has two branches (see §5.6): (a) **static-decidable** props discharged by Princess at compile time, (b) **PBT-queued** props deferred to codegen-time property-based testing. The PBT branch should skip 0-quantity bindings (no runtime PBT for erased terms). The **static branch runs unconditionally** — a 0-quantity binding can carry a soundness-relevant compile-time prop (e.g. `prop nonneg: phantom-N >= 0`) whose discharge guarantees a type-level invariant even though no runtime value exists. |
+| M10 → M9 (PBT branch only) | M9 has two **execution branches** (see §5.6): (a) **static-discharge** — Princess attempts compile-time discharge; the three prop *forms* §5.6 lists (Static-decidable / Compile-time-undecidable / Trivially-false) all enter through this branch and are routed by Princess's reply (`Unsat` / `Unknown` / `Sat`); (b) **PBT-queue** — `Unknown` results are deferred to codegen-time property-based testing. The PBT branch should skip 0-quantity bindings (no runtime PBT for erased terms). The **static-discharge branch runs unconditionally** — a 0-quantity binding can carry a soundness-relevant compile-time prop (e.g. `prop nonneg: phantom-N >= 0`) whose discharge guarantees a type-level invariant even though no runtime value exists. |
 | M10 → M11 | Representation selection elides 0-quantity bindings entirely. |
 
 The dependency graph is a DAG. The execution order in the `phases` list above (M6, M7, M10, M9, M11) is one valid topological sort.
 
-**Why the M10 → M9 edge is one-way**: M9's static-discharge sub-pass needs *no* M10 input. If sub-plan authoring shows the PBT-skip optimisation is small (most props turn out to be statically discharged anyway), M9 can run in parallel with M10 — both consuming M7's output, neither blocking the other. Authoring `phase-3.3-properties.md` should measure this on `examples/11_properties.fixed` before locking the order.
+**Why the M10 → M9 edge is one-way**: M9's static-discharge sub-pass needs *no* M10 input — but it does need M6's classification (per the M6 → M9 edge above). If sub-plan authoring shows the PBT-skip optimisation is small (most props turn out to be statically discharged anyway), M9 can run in parallel with M10 — both consuming M6 + M7 output, neither blocking the other. Authoring `phase-3.3-properties.md` should measure this on `examples/11_properties.fixed` before locking the order.
 
 M8 (exhaustiveness) sits inside M5; M7 may run in parallel with M10 if profiling justifies it, but the default is sequential.
 
@@ -463,7 +464,7 @@ Exit ramp: at any point M6–M11, fold M10/M11 into a single "quantities + repr"
 
 ### 4.2 Two-pass typer (no LazyType)
 
-`TyperPhase` runs Namer (signature pass) then Typer (body pass), per dotc `typer/TyperPhase.scala`. dotc uses `LazyType` completers in the Namer's denotations — thunks that run full body typing when forced — because dotc's mutable `info: Type` field can be re-assigned in place. Under our FP discipline (§3.4) that pattern would force every typer routine to thread an updated `SymbolTable` outward, which is exactly the closure-allocation hot spot the FP-discipline cost analysis warns about. We choose a different split.
+`TyperPhase` runs Namer (signature pass) then Typer (body pass), per dotc `typer/TyperPhase.scala`. dotc uses `LazyType` completers in the Namer's denotations — thunks that run full body typing when forced — because dotc's mutable `info: Type` field can be re-assigned in place. Under our FP discipline (§3.5) that pattern would force every typer routine to thread an updated `SymbolTable` outward, which is exactly the closure-allocation hot spot the FP-discipline cost analysis warns about. We choose a different split.
 
 #### 4.2.1 Pass structure
 
@@ -511,14 +512,21 @@ namerPass(decls: List[Tree], reporter: Reporter): SymbolTable =
       val sym = scc.head
       typeSignatureOf(sym, table)  // produces a refined Denotation
     else
-      // True cycle. Per spec/type_system.md §5.7, recursive type aliases are
-      // permitted ONLY for nominal recursion (`type T = is C of (T, ...)`).
-      // For each member of the SCC we type its signature with every other SCC
-      // member's info set to TypeRef(otherSym) — i.e. "use the name, will be
-      // resolved by post-pass". After the SCC is processed, fold the body to
-      // close the recursion.
-      if scc.allAreNominalTypeAliases then
-        typeRecursiveAliasGroup(scc, table)
+      // True cycle. Recursive type aliases are admissible iff every back-edge
+      // in the SCC is interposed by a nominal data/cap constructor (i.e. the
+      // back-edge appears strictly under at least one TypeRef whose generator
+      // is a `data` or `cap` symbol — `type T = is C of (T,)` is admissible
+      // because `C` interposes; `type T = T of A` is not). The admissibility
+      // predicate is the same shape spec/type_system.md §7.5 uses for `data`
+      // mutual recursion; the spec rule for `type` aliases is being authored
+      // alongside this milestone (tracked in §10).
+      //
+      // For an admissible SCC: every member's signature already uses
+      // TypeRef(otherSym) by SymbolId, so no fixpoint is required — the
+      // SymbolIds were assigned at enterPending and the references resolve
+      // through the table. We simply mark each member resolved.
+      if scc.allBackEdgesAreNominallyInterposed then
+        scc.foldLeft(table)(_.markResolved(_))
       else
         scc.foreach(s => reporter.error("T050", s.span,
           s"cyclic signature: ${scc.map(_.name).mkString(\" -> \")}"))
@@ -919,7 +927,7 @@ The `phantom` keyword was removed from the language in v0.4.1; the parser doesn'
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| Type representation grows beyond the §3.2 closed set as edge cases surface. | High | Add new cases via an entry in §10 (Open questions) of this plan — every new `Type` case requires updating every recheck phase's per-node logic. Promote to a separate ADR document only when a second cross-cutting decision warrants the discipline. |
+| Type representation grows beyond the §3.3 closed set as edge cases surface. | High | Add new cases via an entry in §10 (Open questions) of this plan — every new `Type` case requires updating every recheck phase's per-node logic. Promote to a separate ADR document only when a second cross-cutting decision warrants the discipline. |
 | Bidirectional inference is hard to get right for `cap of T` returns and `fn -> cap` arguments. | Medium | M3 ships with a small set of fully-worked test cases (prototype tests in `TyperSuite`). Don't move on until those pass. |
 | Capability closure performance — recursive `extends` could blow up. | Low | Memoise per-cap-symbol; the closure is a fixpoint and converges in one pass for finite cap hierarchies. |
 | Prop verifier scope creep — full SMT solver is months of work. | High | M9 ships with **only** linear-arithmetic + boolean propositions discharged statically. Everything else queued as runtime PBT obligations. The static decision procedure can grow in Phase 6. |
