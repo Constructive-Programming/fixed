@@ -30,6 +30,9 @@ enum Type:
   /** A compile-time value in an `of` list: the `0` of `Bounded of (N, 0, 10)`. */
   case ValueArg(term: SymbolicTerm)
 
+  /** A unification variable; solved by the typer's `Unifier`. */
+  case TypeVar(id: Int)
+
 final case class EffectBound(sym: SymbolId, args: List[Type])
 
 /** A `with` row. Effect inference (M7) adds an open-row variable. */

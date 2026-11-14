@@ -20,7 +20,7 @@ object SymbolId:
 
 /** What a symbol denotes. */
 enum SymKind:
-  case Fn, Method, StaticMethod, Cap, Data, Variant, Effect, Operation, TypeAlias, Import, TypeParam, ValueParam
+  case Fn, Method, StaticMethod, Cap, Data, Variant, Effect, Operation, TypeAlias, Import, TypeParam, ValueParam, Local
 
 /** A symbol's current view: name, owner, kind, signature type and declaration span. */
 final case class Denotation(
@@ -48,6 +48,13 @@ final case class SymbolTable(entries: IntMap[Denotation], nextId: Int):
 
   /** All denotations in entry order. */
   def denotations: List[Denotation] = entries.values.toList
+
+  /** Names visible at the top level: prelude and root-owned symbols, later entries shadowing earlier ones. */
+  def topLevelScope: Map[String, SymbolId] =
+    entries.valuesIterator
+      .filter(d => d.owner == SymbolId.Root || d.owner == SymbolId.Prelude)
+      .map(d => d.name -> d.id)
+      .toMap
 
 object SymbolTable:
   /** Ids 0 and 1 are reserved for the pseudo-owners [[SymbolId.Root]] and [[SymbolId.Prelude]]. */
@@ -89,3 +96,4 @@ extension (table: SymbolTable)
       case Type.PartType                => "Part"
       case Type.RefinementType(g, vals) => vals.map(term).mkString(s"${table(g).name}(", ", ", ")")
       case Type.ValueArg(v)             => term(v)
+      case Type.TypeVar(id)             => s"?$id"
