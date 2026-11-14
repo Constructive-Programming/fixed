@@ -576,9 +576,9 @@ class ParserSuite extends FunSuite:
     pr.tree match
       case Trees.CompilationUnit(List(s: Trees.SatisfiesDecl), _) =>
         assertEquals(s.typeName, "u64")
-        val ctors = s.mappings.collect { case Trees.ConstructorMapping(v, c, _) => (v, c) }
+        val selfs = s.mappings.collect { case Trees.SelfMapping(c, _) => c }
         val impossibles = s.mappings.collect { case Trees.ImpossibleMapping(c, _) => c }
-        assertEquals(ctors, List(("Self", "some")))
+        assertEquals(selfs, List("some"))
         assertEquals(impossibles, List("none"))
       case other => fail(s"expected SatisfiesDecl, got $other")
 

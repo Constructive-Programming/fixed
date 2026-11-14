@@ -194,16 +194,18 @@ object Trees:
 
   // ---- Satisfaction mappings ----
 
-  final case class ConstructorMapping(
-      variant: String,
-      capCtor: String,
-      span: Span
-  ) extends Tree
+  /** A `<source> as capCtor` item in a satisfies block; the type says what the source is. */
+  sealed trait SatisfiesMapping extends Tree:
+    def capCtor: String
 
-  final case class ImpossibleMapping(
-      capCtor: String,
-      span: Span
-  ) extends Tree
+  /** `Variant as capCtor`. */
+  final case class ConstructorMapping(variant: String, capCtor: String, span: Span) extends SatisfiesMapping
+
+  /** `Self as capCtor` — the satisfying type is itself the cap's value. */
+  final case class SelfMapping(capCtor: String, span: Span) extends SatisfiesMapping
+
+  /** `impossible as capCtor` — the cap constructor has no counterpart. */
+  final case class ImpossibleMapping(capCtor: String, span: Span) extends SatisfiesMapping
 
   // ---- Expressions ----
 

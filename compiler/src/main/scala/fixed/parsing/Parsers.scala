@@ -1658,7 +1658,7 @@ object Parser:
   //   SatisfiesItem ::= ConstructorMapping
   //                  | ImpossibleMapping
   //                  | InstanceMethod | StaticMethod | PropDecl
-  //   ConstructorMapping ::= (UPPER_IDENT | "Self") "as" LOWER_IDENT
+  //   ConstructorMapping ::= (UPPER_IDENT | "Self") "as" LOWER_IDENT   (Self → SelfMapping)
   //   ImpossibleMapping  ::= "impossible" "as" LOWER_IDENT
   private def parseSatisfiesDecl(s0: ParserState)(using Reporter): Parsed[Tree] =
     val (s1, typeName) = s0.current.kind match
@@ -1692,7 +1692,7 @@ object Parser:
       case TokenKind.KwImpossible => Some(Trees.ImpossibleMapping(_, _))
       // `Self as ctor` — identity-shape mapping for primitives that are
       // themselves the cap's value (`u64 satisfies Optional of Self: Self as some`).
-      case TokenKind.KwSelf if s.peek(1).kind == TokenKind.KwAs => Some(Trees.ConstructorMapping("Self", _, _))
+      case TokenKind.KwSelf if s.peek(1).kind == TokenKind.KwAs => Some(Trees.SelfMapping(_, _))
       case TokenKind.UpperIdent => Some(Trees.ConstructorMapping(s.current.lexeme, _, _))
       case _                    => None
 
