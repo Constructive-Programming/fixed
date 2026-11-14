@@ -260,6 +260,22 @@ The same gate (`sbt check test`) runs as a **pre-commit hook** (`.githooks/pre-c
 loading the sbt build sets `git config core.hooksPath .githooks` automatically) and in
 **CI** (`.github/workflows/ci.yml`, on pushes to `main` and on pull requests).
 
+### Commit messages
+
+[Conventional Commits](https://www.conventionalcommits.org/) with a required scope,
+checked by `.githooks/commit-msg` and again in CI:
+
+```
+perf(scanner): remove boxing on the hot path
+
+Optional body, wrapped at 72 columns.
+```
+
+- **types:** `feat` `fix` `perf` `refactor` `test` `docs` `build` `ci` `chore` `revert`
+- **scopes:** `ast` `scanner` `parser` `util` `spec` `examples` `docs` `build` `bench`
+  (several: `feat(parser,spec): …`; breaking change: `refactor(ast)!: …`)
+- subject ≤ 72 chars, no trailing period, blank line before the body.
+
 Config: `.scalafmt.conf`, `.scalafix.conf`; CPD threshold is `cpdMinTokens` in `build.sbt`.
 
 Benchmarks (JMH, `bench/`): `sbt "bench/Jmh/run -prof gc fixed.bench.FrontEndBench"` —

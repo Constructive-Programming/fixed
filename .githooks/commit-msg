@@ -1,0 +1,39 @@
+#!/usr/bin/env sh
+# Commit-message gate: Conventional Commits with a required scope.
+#
+#   <type>(<scope>[,<scope>...])[!]: <summary>      (subject <= 72 chars, no trailing period)
+#   <blank line>
+#   [body, wrapped at 72]
+#
+# Usage: commit-msg <message-file>   (git calls it as a hook; CI calls it per commit)
+set -eu
+
+TYPES='feat|fix|perf|refactor|test|docs|build|ci|chore|revert'
+SCOPES='ast|scanner|parser|util|spec|examples|docs|build|bench'
+
+# Drop git's comment lines and leading blank lines.
+msg=$(grep -v '^#' "$1" | sed '/./,$!d')
+subject=$(printf '%s\n' "$msg" | sed -n '1p')
+second=$(printf '%s\n' "$msg" | sed -n '2p')
+
+fail() {
+  echo "commit-msg: $1" >&2
+  echo "  subject: $subject" >&2
+  echo "  expected: <type>(<scope>[,<scope>]): <summary>" >&2
+  echo "  types:  $(echo "$TYPES" | tr '|' ' ')" >&2
+  echo "  scopes: $(echo "$SCOPES" | tr '|' ' ')" >&2
+  exit 1
+}
+
+# Messages git generates itself.
+case "$subject" in
+  "Merge "* | 'Revert "'* | "fixup! "* | "squash! "* | "amend! "*) exit 0 ;;
+esac
+
+[ -n "$subject" ] || fail "empty message"
+printf '%s' "$subject" | grep -Eq "^($TYPES)\\(($SCOPES)(,($SCOPES))*\\)!?: [^ ].*$" \
+  || fail "subject does not match the Conventional Commits format with a known type and scope"
+[ "${#subject}" -le 72 ] || fail "subject is ${#subject} chars (max 72)"
+case "$subject" in *.) fail "subject ends with a period" ;; esac
+[ -z "$second" ] || fail "second line must be blank (separate subject and body)"
+exit 0
