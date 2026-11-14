@@ -43,7 +43,49 @@ val cpdMinTokens = 25
 lazy val Cpd = config("cpd").hide
 lazy val cpd = taskKey[Unit]("Run PMD CPD copy-paste detection over compiler sources")
 
+import _root_.scalafix.sbt.{BuildInfo => ScalafixBuildInfo}
+
+// Custom scalafix rules (.claude/skills/scalafix-rule). Rules are Scala 3 compiled against
+// scalafix-core's 2.13 artifact; scalafix-testkit is published per full Scala version, so the
+// test harness pins the newest one available.
+val scalafixTestkitScala = "3.10.0"
+
+lazy val `scalafix-rules` = (project in file("scalafix/rules"))
+  .disablePlugins(ScalafixPlugin)
+  .settings(
+    publish / skip := true,
+    libraryDependencies +=
+      ("ch.epfl.scala" %% "scalafix-core" % ScalafixBuildInfo.scalafixVersion).cross(CrossVersion.for3Use2_13),
+    scalacOptions --= Seq("-Werror")
+  )
+
+lazy val `scalafix-input` = (project in file("scalafix/input"))
+  .disablePlugins(ScalafixPlugin, ScalafmtPlugin) // testkit fixtures: formatting would move asserts
+  .settings(publish / skip := true, scalacOptions --= Seq("-Werror", "-Wunused:all", "-Wvalue-discard"))
+
+lazy val `scalafix-output` = (project in file("scalafix/output"))
+  .disablePlugins(ScalafixPlugin, ScalafmtPlugin) // testkit fixtures: formatting would move asserts
+  .settings(publish / skip := true, scalacOptions --= Seq("-Werror", "-Wunused:all", "-Wvalue-discard"))
+
+lazy val `scalafix-tests` = (project in file("scalafix/tests"))
+  .dependsOn(`scalafix-input`, `scalafix-rules`)
+  .enablePlugins(ScalafixTestkitPlugin)
+  .disablePlugins(ScalafixPlugin)
+  .settings(
+    publish / skip := true,
+    scalaVersion := scalafixTestkitScala,
+    scalacOptions --= Seq("-Werror"),
+    libraryDependencies +=
+      ("ch.epfl.scala" % "scalafix-testkit" % ScalafixBuildInfo.scalafixVersion % Test).cross(CrossVersion.full),
+    scalafixTestkitOutputSourceDirectories := (`scalafix-output` / Compile / sourceDirectories).value,
+    scalafixTestkitInputSourceDirectories := (`scalafix-input` / Compile / sourceDirectories).value,
+    scalafixTestkitInputClasspath := (`scalafix-input` / Compile / fullClasspath).value,
+    scalafixTestkitInputScalacOptions := (`scalafix-input` / Compile / scalacOptions).value,
+    scalafixTestkitInputScalaVersion := (`scalafix-input` / Compile / scalaVersion).value
+  )
+
 lazy val compiler = (project in file("compiler"))
+  .dependsOn(`scalafix-rules` % ScalafixConfig)
   .settings(
     name := "fixed-compiler",
     libraryDependencies ++= Seq(
@@ -73,7 +115,7 @@ lazy val bench = (project in file("bench"))
   )
 
 lazy val root = (project in file("."))
-  .aggregate(compiler)
+  .aggregate(compiler, `scalafix-tests`)
   .configs(Cpd)
   .settings(
     name := "fixed",
