@@ -9,14 +9,13 @@ import fixed.util.Span
   * on tree identity, or extend this hierarchy with a Tree[T <: Untyped]
   * variant per dotc. For now: minimal, plain.
   *
-  * `Tree` is intentionally NOT sealed — Phase 2.2 will introduce a
-  * concrete-syntax-tree (CST) view that produces a different `Tree`
-  * implementor outside this file. Keeping the trait open today avoids a
-  * breaking change later. See `docs/plans/phase-2.1-incremental-parser.md`
-  * §5. (Until Phase 3, exhaustive `match` on `Tree` is not relied on; every
-  * call site already has a `case _ => fail(...)` fallback.)
+  * `Tree` is sealed: every AST node is defined in this file, so the
+  * typer gets exhaustiveness checking and the cardinality analyzer can
+  * bound every node. The Phase 2.2 concrete-syntax-tree view
+  * (`docs/plans/phase-2.1-incremental-parser.md` §5) should get its own
+  * trait rather than implement `Tree`.
   */
-trait Tree:
+sealed trait Tree:
   def span: Span
 
 object Trees:

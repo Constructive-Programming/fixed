@@ -386,9 +386,9 @@ object Scanner:
     val text = source.slice(start, end)
     val sp = Span(start, end)
     val tok = Tokens.keywords.get(text) match
-      case Some(kw)                    => Token.of(kw, sp)
+      case Some(kw)                       => Token.of(kw, sp)
       case None if text.charAt(0).isUpper => Token.UpperIdent(sp, text)
-      case None                        => Token.LowerIdent(sp, text)
+      case None                           => Token.LowerIdent(sp, text)
     (state.copy(pos = end, lastKind = tok.kind), tok)
 
   private def scanNumber(

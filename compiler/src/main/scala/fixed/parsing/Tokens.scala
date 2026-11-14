@@ -71,7 +71,6 @@ enum Token(val span: Span, val kind: TokenKind):
   /** Source text; empty for tokens that carry none. */
   def lexeme: String = ""
 
-
   case KwAs(at: Span) extends Token(at, TokenKind.KwAs)
   case KwCap(at: Span) extends Token(at, TokenKind.KwCap)
   case KwData(at: Span) extends Token(at, TokenKind.KwData)
