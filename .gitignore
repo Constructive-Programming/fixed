@@ -19,3 +19,6 @@ project/target/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local secrets
+.envrc

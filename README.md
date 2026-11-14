@@ -249,6 +249,15 @@ stdlib/             (planned) Standard library in Fixed
 src/                (planned) Compiler implementation in Rust
 ```
 
+## Quality checks
+
+```
+sbt check   # scalafmt + scalafix (lint, unused, import order) + PMD CPD (copy-paste); fails on any finding
+sbt fix     # apply scalafix rewrites and scalafmt formatting
+```
+
+Config: `.scalafmt.conf`, `.scalafix.conf`; CPD threshold is `cpdMinTokens` in `build.sbt`.
+
 ## Status
 
 **Phase 0 (design) is under way.** The language design is explored through 11 example programs covering:

@@ -13,14 +13,14 @@ import fixed.util.Span
 enum TokenKind:
   // ---- Reserved words (alphabetical) ----
   case KwAs, KwCap, KwData, KwDo, KwEffect, KwElse, KwExtends, KwFalse,
-       KwFn, KwForall, KwHandle, KwIf, KwImplies, KwImpossible, KwIn, KwIs,
-       KwLet, KwLinear, KwMatch, KwMod, KwOf, KwPart, KwProp, KwPub,
-       KwResume, KwReturn, KwSatisfies, KwSelf, KwSelfLower, KwSuchThat,
-       KwTrue, KwType, KwUnreachable, KwUse, KwWith
+    KwFn, KwForall, KwHandle, KwIf, KwImplies, KwImpossible, KwIn, KwIs,
+    KwLet, KwLinear, KwMatch, KwMod, KwOf, KwPart, KwProp, KwPub,
+    KwResume, KwReturn, KwSatisfies, KwSelf, KwSelfLower, KwSuchThat,
+    KwTrue, KwType, KwUnreachable, KwUse, KwWith
 
   // ---- Identifiers ----
-  case LowerIdent       // [a-z_][a-zA-Z_0-9]*
-  case UpperIdent       // [A-Z][a-zA-Z_0-9]*
+  case LowerIdent // [a-z_][a-zA-Z_0-9]*
+  case UpperIdent // [A-Z][a-zA-Z_0-9]*
 
   // ---- Literals ----
   case IntLit
@@ -34,26 +34,26 @@ enum TokenKind:
   case Comma, Colon, Semicolon, Dot
 
   // ---- Operators ----
-  case Eq                // =
-  case Arrow             // ->
-  case FatArrow          // =>
-  case BackArrow         // <- (bind in `do:`)
-  case Pipe              // |   (or-pattern separator)
-  case PipeForward       // |>
+  case Eq // =
+  case Arrow // ->
+  case FatArrow // =>
+  case BackArrow // <- (bind in `do:`)
+  case Pipe // |   (or-pattern separator)
+  case PipeForward // |>
   case Plus, Minus, Star, Slash, Percent
   case Lt, Le, Gt, Ge, EqEq, Neq
   case AndAnd, OrOr
   case Bang
   case Underscore
-  case At                // @ — reserved; not yet used
+  case At // @ — reserved; not yet used
 
   // ---- Synthetic (scanner-emitted, not literal source text) ----
-  case Newline           // logical newline (between same-indent lines)
-  case Indent            // entering a more-indented block
-  case Dedent            // closing one indent level
+  case Newline // logical newline (between same-indent lines)
+  case Indent // entering a more-indented block
+  case Dedent // closing one indent level
   case Eof
-  case Error             // lex error — accompanied by a Reporter entry
-  case NoStart           // sentinel: scanner has not yet emitted a token
+  case Error // lex error — accompanied by a Reporter entry
+  case NoStart // sentinel: scanner has not yet emitted a token
 
 end TokenKind
 
@@ -70,41 +70,41 @@ object Tokens:
     * keyword.
     */
   val keywords: Map[String, TokenKind] = Map(
-    "as"          -> TokenKind.KwAs,
-    "cap"         -> TokenKind.KwCap,
-    "data"        -> TokenKind.KwData,
-    "do"          -> TokenKind.KwDo,
-    "effect"      -> TokenKind.KwEffect,
-    "else"        -> TokenKind.KwElse,
-    "extends"     -> TokenKind.KwExtends,
-    "false"       -> TokenKind.KwFalse,
-    "fn"          -> TokenKind.KwFn,
-    "forall"      -> TokenKind.KwForall,
-    "handle"      -> TokenKind.KwHandle,
-    "if"          -> TokenKind.KwIf,
-    "implies"     -> TokenKind.KwImplies,
-    "impossible"  -> TokenKind.KwImpossible,
-    "in"          -> TokenKind.KwIn,
-    "is"          -> TokenKind.KwIs,
-    "let"         -> TokenKind.KwLet,
-    "linear"      -> TokenKind.KwLinear,
-    "match"       -> TokenKind.KwMatch,
-    "mod"         -> TokenKind.KwMod,
-    "of"          -> TokenKind.KwOf,
-    "Part"        -> TokenKind.KwPart,
-    "prop"        -> TokenKind.KwProp,
-    "pub"         -> TokenKind.KwPub,
-    "resume"      -> TokenKind.KwResume,
-    "return"      -> TokenKind.KwReturn,
-    "satisfies"   -> TokenKind.KwSatisfies,
-    "Self"        -> TokenKind.KwSelf,
-    "self"        -> TokenKind.KwSelfLower,
-    "suchThat"    -> TokenKind.KwSuchThat,
-    "true"        -> TokenKind.KwTrue,
-    "type"        -> TokenKind.KwType,
+    "as" -> TokenKind.KwAs,
+    "cap" -> TokenKind.KwCap,
+    "data" -> TokenKind.KwData,
+    "do" -> TokenKind.KwDo,
+    "effect" -> TokenKind.KwEffect,
+    "else" -> TokenKind.KwElse,
+    "extends" -> TokenKind.KwExtends,
+    "false" -> TokenKind.KwFalse,
+    "fn" -> TokenKind.KwFn,
+    "forall" -> TokenKind.KwForall,
+    "handle" -> TokenKind.KwHandle,
+    "if" -> TokenKind.KwIf,
+    "implies" -> TokenKind.KwImplies,
+    "impossible" -> TokenKind.KwImpossible,
+    "in" -> TokenKind.KwIn,
+    "is" -> TokenKind.KwIs,
+    "let" -> TokenKind.KwLet,
+    "linear" -> TokenKind.KwLinear,
+    "match" -> TokenKind.KwMatch,
+    "mod" -> TokenKind.KwMod,
+    "of" -> TokenKind.KwOf,
+    "Part" -> TokenKind.KwPart,
+    "prop" -> TokenKind.KwProp,
+    "pub" -> TokenKind.KwPub,
+    "resume" -> TokenKind.KwResume,
+    "return" -> TokenKind.KwReturn,
+    "satisfies" -> TokenKind.KwSatisfies,
+    "Self" -> TokenKind.KwSelf,
+    "self" -> TokenKind.KwSelfLower,
+    "suchThat" -> TokenKind.KwSuchThat,
+    "true" -> TokenKind.KwTrue,
+    "type" -> TokenKind.KwType,
     "unreachable" -> TokenKind.KwUnreachable,
-    "use"         -> TokenKind.KwUse,
-    "with"        -> TokenKind.KwWith
+    "use" -> TokenKind.KwUse,
+    "with" -> TokenKind.KwWith
   )
 
   /** Token kinds that, when appearing at the end of a logical line, suppress
@@ -112,14 +112,28 @@ object Tokens:
     * `spec/syntax_grammar.ebnf` lines 186–195).
     */
   val trailingContinuationKinds: Set[TokenKind] = Set(
-    TokenKind.Plus,         TokenKind.Minus,    TokenKind.Star,
-    TokenKind.Slash,        TokenKind.Percent,  TokenKind.AndAnd,
-    TokenKind.OrOr,         TokenKind.EqEq,     TokenKind.Neq,
-    TokenKind.Lt,           TokenKind.Gt,       TokenKind.Le,
-    TokenKind.Ge,           TokenKind.PipeForward,
-    TokenKind.Arrow,        TokenKind.FatArrow, TokenKind.Eq,
-    TokenKind.BackArrow,    TokenKind.Dot,      TokenKind.KwIs,
-    TokenKind.KwExtends,    TokenKind.KwImplies
+    TokenKind.Plus,
+    TokenKind.Minus,
+    TokenKind.Star,
+    TokenKind.Slash,
+    TokenKind.Percent,
+    TokenKind.AndAnd,
+    TokenKind.OrOr,
+    TokenKind.EqEq,
+    TokenKind.Neq,
+    TokenKind.Lt,
+    TokenKind.Gt,
+    TokenKind.Le,
+    TokenKind.Ge,
+    TokenKind.PipeForward,
+    TokenKind.Arrow,
+    TokenKind.FatArrow,
+    TokenKind.Eq,
+    TokenKind.BackArrow,
+    TokenKind.Dot,
+    TokenKind.KwIs,
+    TokenKind.KwExtends,
+    TokenKind.KwImplies
   )
 
   /** Token kinds that, when appearing at the *start* of a physical line,

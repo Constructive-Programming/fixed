@@ -1,5 +1,7 @@
 package fixed.util
 
+import scala.collection.Searching
+
 /** A loaded source file: bytes + path + lazy line-offset table.
   *
   * Spans into a SourceFile are character offsets (0-indexed). Line/column
@@ -12,25 +14,16 @@ final class SourceFile(val path: String, val content: String):
     * entry one past the end so `lineOf(content.length)` is the last line.
     */
   lazy val lineOffsets: IndexedSeq[Int] =
-    val buf = scala.collection.mutable.ArrayBuffer[Int](0)
-    var i = 0
-    while i < content.length do
-      if content.charAt(i) == '\n' then
-        buf += i + 1
-      i += 1
-    buf += content.length + 1
-    buf.toIndexedSeq
+    (0 +: content.indices.filter(content.charAt(_) == '\n').map(_ + 1)) :+ (content.length + 1)
 
   /** Returns the (line, column) pair for an offset, both 1-indexed. */
   def lineColumn(offset: Int): (Int, Int) =
     require(offset >= 0 && offset <= content.length, s"offset $offset out of bounds for $path")
-    // Binary search the line.
+    // Binary search the line: last table entry <= offset.
     val table = lineOffsets
-    var lo = 0
-    var hi = table.length - 1
-    while lo < hi - 1 do
-      val mid = (lo + hi) >>> 1
-      if table(mid) <= offset then lo = mid else hi = mid
+    val lo = table.search(offset) match
+      case Searching.Found(i)          => i
+      case Searching.InsertionPoint(i) => i - 1
     val line = lo + 1
     val column = offset - table(lo) + 1
     (line, column)
@@ -40,7 +33,10 @@ final class SourceFile(val path: String, val content: String):
 
   /** Returns the substring at the given span. */
   def slice(start: Int, end: Int): String =
-    require(start >= 0 && end >= start && end <= content.length, s"bad span [$start, $end] for $path of length ${content.length}")
+    require(
+      start >= 0 && end >= start && end <= content.length,
+      s"bad span [$start, $end] for $path of length ${content.length}"
+    )
     content.substring(start, end)
 
   /** Total length in characters. */

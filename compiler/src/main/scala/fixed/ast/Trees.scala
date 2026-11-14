@@ -58,15 +58,38 @@ object Trees:
       span: Span
   ) extends Tree
 
-  final case class FnDecl(
+  /** A function-shaped declaration: the shape shared by free fns and
+    * cap / effect / satisfies methods. The concrete type says where it sits.
+    */
+  sealed trait FnLike extends Tree:
+    def sig: FnSig
+    def name: String = sig.name
+    def typeParamsHint: List[String] = sig.typeParamsHint
+    def params: List[FnParam] = sig.params
+    def returnType: Tree = sig.returnType
+    def withClause: Option[Tree] = sig.withClause
+    def body: Option[Tree] = sig.body
+
+  /** The fields every `FnLike` shares. */
+  final case class FnSig(
       name: String,
       typeParamsHint: List[String],
       params: List[FnParam],
       returnType: Tree,
       withClause: Option[Tree],
-      body: Option[Tree],
-      span: Span
-  ) extends Tree
+      body: Option[Tree]
+  )
+
+  /** Flat extractor over `FnSig`, so `FnLike` nodes match field by field:
+    * `case FnDecl(name, hints, params, ret, w, body, span) =>`.
+    */
+  sealed abstract class FnLikeCompanion[T <: FnLike]:
+    def unapply(t: T): (String, List[String], List[FnParam], Tree, Option[Tree], Option[Tree], Span) =
+      (t.name, t.typeParamsHint, t.params, t.returnType, t.withClause, t.body, t.span)
+
+  /** Top-level or block-local `fn`. */
+  final case class FnDecl(sig: FnSig, span: Span) extends FnLike
+  object FnDecl extends FnLikeCompanion[FnDecl]
 
   /** A `cap` declaration. `valueParams` is the optional `(min: N, max: N)`
     * sugar (`cap Between(min: N is Ord, max: N) of N: ...`) that
@@ -123,34 +146,33 @@ object Trees:
 
   // ---- Function-related ----
 
-  final case class FnParam(
-      name: String,
-      typeAnn: Tree,
-      default: Option[Tree],
-      span: Span
-  ) extends Tree
+  /** `name : Type (= default)?` — the shape shared by parameters and fields. */
+  sealed trait Binder extends Tree:
+    def binding: Binding
+    def name: String = binding.name
+    def typeAnn: Tree = binding.typeAnn
+    def default: Option[Tree] = binding.default
+
+  /** The fields every `Binder` shares. */
+  final case class Binding(name: String, typeAnn: Tree, default: Option[Tree])
+
+  /** Flat extractor over `Binding`: `case FnParam(name, typeAnn, default, span) =>`. */
+  sealed abstract class BinderCompanion[T <: Binder]:
+    def unapply(t: T): (String, Tree, Option[Tree], Span) = (t.name, t.typeAnn, t.default, t.span)
+
+  /** A fn / lambda / `of (...)` value parameter. */
+  final case class FnParam(binding: Binding, span: Span) extends Binder
+  object FnParam extends BinderCompanion[FnParam]
 
   // ---- Cap members ----
 
-  final case class InstanceMethod(
-      name: String,
-      typeParamsHint: List[String],
-      params: List[FnParam],
-      returnType: Tree,
-      withClause: Option[Tree],
-      body: Option[Tree],
-      span: Span
-  ) extends Tree
+  /** `fn` member of a cap, effect or satisfies block. */
+  final case class InstanceMethod(sig: FnSig, span: Span) extends FnLike
+  object InstanceMethod extends FnLikeCompanion[InstanceMethod]
 
-  final case class StaticMethod(
-      name: String,
-      typeParamsHint: List[String],
-      params: List[FnParam],
-      returnType: Tree,
-      withClause: Option[Tree],
-      body: Option[Tree],
-      span: Span
-  ) extends Tree
+  /** `Self.fn` member of a cap or satisfies block. */
+  final case class StaticMethod(sig: FnSig, span: Span) extends FnLike
+  object StaticMethod extends FnLikeCompanion[StaticMethod]
 
   final case class PropDecl(
       name: String,
@@ -166,12 +188,9 @@ object Trees:
       span: Span
   ) extends Tree
 
-  final case class FieldDecl(
-      name: String,
-      typeAnn: Tree,
-      default: Option[Tree],
-      span: Span
-  ) extends Tree
+  /** A data-variant field. */
+  final case class FieldDecl(binding: Binding, span: Span) extends Binder
+  object FieldDecl extends BinderCompanion[FieldDecl]
 
   // ---- Satisfaction mappings ----
 
@@ -243,26 +262,33 @@ object Trees:
       span: Span
   ) extends Tree
 
-  /** `recv.method(args)` or `recv.method` (the latter has no `(...)` per the
-    * grammar — a zero-arg method-style call). */
-  final case class MethodCall(
-      receiver: Tree,
-      method: String,
-      args: List[Tree],
-      hasArgList: Boolean,
-      span: Span
-  ) extends Tree
+  /** `x.method(args)`, or `x.method` with no `(...)` (`hasArgList` false) —
+    * the grammar's zero-arg member form. The concrete type says what `x` is.
+    */
+  sealed trait MemberCall extends Tree:
+    def selection: Selection
+    def method: String = selection.method
+    def args: List[Tree] = selection.args
+    def hasArgList: Boolean = selection.hasArgList
 
-  /** `T.member(args)` or `T.member` — same shape as MethodCall but with
-    * the qualifier guaranteed to be an Ident referring to a type. The
-    * typer will distinguish static-method calls from variant constructions. */
-  final case class StaticCall(
-      qualifier: String,
-      method: String,
-      args: List[Tree],
-      hasArgList: Boolean,
-      span: Span
-  ) extends Tree
+  /** The fields every `MemberCall` shares: `.method(args)`. */
+  final case class Selection(method: String, args: List[Tree], hasArgList: Boolean)
+
+  /** Flat extractor over `Selection`, given what the call is made on (`H`):
+    * `case MethodCall(receiver, method, args, hasArgList, span) =>`.
+    */
+  sealed abstract class MemberCallCompanion[H, T <: MemberCall](target: T => H):
+    def unapply(t: T): (H, String, List[Tree], Boolean, Span) = (target(t), t.method, t.args, t.hasArgList, t.span)
+
+  /** `recv.method(args)` / `recv.method` — a value receiver. */
+  final case class MethodCall(receiver: Tree, selection: Selection, span: Span) extends MemberCall
+  object MethodCall extends MemberCallCompanion[Tree, MethodCall](_.receiver)
+
+  /** `T.member(args)` / `T.member` — the qualifier is a type name; the typer
+    * decides between a static-method call and a variant construction.
+    */
+  final case class StaticCall(qualifier: String, selection: Selection, span: Span) extends MemberCall
+  object StaticCall extends MemberCallCompanion[String, StaticCall](_.qualifier)
 
   /** Plain `f(args)` — a value-level function call. */
   final case class Apply(fn: Tree, args: List[Tree], span: Span) extends Tree
@@ -357,8 +383,16 @@ object Trees:
       span: Span
   ) extends Tree
 
-  /** `C of A` — a capability reference, optionally with a type-arg. */
-  final case class CapRef(name: String, ofArg: Option[Tree], span: Span) extends Tree
+  /** `Name of A` — a named reference, optionally with a type-arg. */
+  sealed trait NamedRef extends Tree:
+    def name: String
+    def ofArg: Option[Tree]
+
+  /** `C of A` — a capability reference. */
+  final case class CapRef(name: String, ofArg: Option[Tree], span: Span) extends NamedRef
+
+  /** `E of A` — one effect in an `EffectRow` / `WithClause`. */
+  final case class EffectBound(name: String, ofArg: Option[Tree], span: Span) extends NamedRef
 
   /** `lower_ident(args)` in is-bound position — a refinement-cap call. */
   final case class RefinementCall(
@@ -417,13 +451,6 @@ object Trees:
 
   /** `E + F + G` — a row of effects. */
   final case class EffectRow(effects: List[Tree], span: Span) extends Tree
-
-  /** `E of A` — single-effect bound, optionally with type-arg. */
-  final case class EffectBound(
-      name: String,
-      ofArg: Option[Tree],
-      span: Span
-  ) extends Tree
 
 end Trees
 

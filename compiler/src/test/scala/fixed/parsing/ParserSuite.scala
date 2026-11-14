@@ -25,7 +25,7 @@ class ParserSuite extends FunSuite:
     assert(!rep.hasErrors)
     t match
       case Trees.CompilationUnit(items, _) => assertEquals(items, Nil)
-      case _ => fail(s"expected CompilationUnit, got $t")
+      case _                               => fail(s"expected CompilationUnit, got $t")
 
   test("single use decl"):
     val (t, rep) = parse("use std.io.Console\n")
@@ -47,7 +47,7 @@ class ParserSuite extends FunSuite:
         assertEquals(params.head.name, "x")
         body match
           case Trees.Ident("x", _) => ()
-          case _ => fail(s"expected body Ident('x'), got $body")
+          case _                   => fail(s"expected body Ident('x'), got $body")
       case _ => fail(s"expected FnDecl, got $t")
 
   test("fn with effect row"):
@@ -70,7 +70,7 @@ class ParserSuite extends FunSuite:
           case Trees.NamedAlias("N", caps, _) =>
             assert(caps.exists {
               case Trees.CapRef("Numeric", _, _) => true
-              case _ => false
+              case _                             => false
             })
           case other => fail(s"expected NamedAlias, got $other")
       case _ => fail(s"expected FnDecl, got $t")
@@ -84,7 +84,7 @@ class ParserSuite extends FunSuite:
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(body), _)), _) =>
         body match
           case Trees.IfExpr(_, _, _, _) => ()
-          case _ => fail(s"expected IfExpr, got $body")
+          case _                        => fail(s"expected IfExpr, got $body")
       case _ => fail(s"expected FnDecl, got $t")
 
   test("let expression with tuple pattern"):
@@ -111,7 +111,7 @@ class ParserSuite extends FunSuite:
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(body), _)), _) =>
         body match
           case Trees.MethodCall(_, "concat", _, _, _) => ()
-          case other => fail(s"expected MethodCall, got $other")
+          case other                                  => fail(s"expected MethodCall, got $other")
       case _ => fail(s"expected FnDecl, got $t")
 
   test("static call"):
@@ -123,7 +123,7 @@ class ParserSuite extends FunSuite:
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(body), _)), _) =>
         body match
           case Trees.StaticCall("Nat", "unfold", _, true, _) => ()
-          case other => fail(s"expected StaticCall, got $other")
+          case other                                         => fail(s"expected StaticCall, got $other")
       case _ => fail(s"expected FnDecl, got $t")
 
   test("lambda expression"):
@@ -147,7 +147,7 @@ class ParserSuite extends FunSuite:
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(body), _)), _) =>
         body match
           case Trees.UnaryOp("-", _, _) => ()
-          case other => fail(s"expected UnaryOp, got $other")
+          case other                    => fail(s"expected UnaryOp, got $other")
       case _ => fail(s"expected FnDecl, got $t")
 
   test("integer literal"):
@@ -222,7 +222,7 @@ class ParserSuite extends FunSuite:
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(h: Trees.HandleExpr), _)), _) =>
         h.arms.head.body match
           case Trees.Block(stmts, _) => assert(stmts.length >= 2)
-          case other => fail(s"expected Block body, got $other")
+          case other                 => fail(s"expected Block body, got $other")
       case other => fail(s"expected HandleExpr, got $other")
 
   // ---- M4.7: parseDoExpr ----
@@ -243,11 +243,11 @@ class ParserSuite extends FunSuite:
         assertEquals(d.stmts.length, 3)
         d.stmts.take(2).foreach {
           case _: Trees.DoBind => ()
-          case other => fail(s"expected DoBind, got $other")
+          case other           => fail(s"expected DoBind, got $other")
         }
         d.stmts.last match
           case _: Trees.StaticCall => ()
-          case other => fail(s"expected StaticCall (Optional.pure), got $other")
+          case other               => fail(s"expected StaticCall (Optional.pure), got $other")
       case other => fail(s"expected DoExpr in fn body, got $other")
 
   test("M4.7: nested calls with `<-` inside a sub-expression are not bind"):
@@ -267,7 +267,7 @@ class ParserSuite extends FunSuite:
         assertEquals(d.stmts.length, 1)
         d.stmts.head match
           case _: Trees.StaticCall => ()
-          case other => fail(s"expected StaticCall, got $other")
+          case other               => fail(s"expected StaticCall, got $other")
       case other => fail(s"expected DoExpr, got $other")
 
   // ---- Triage fixes (M4 chase-down) ----
@@ -345,7 +345,7 @@ class ParserSuite extends FunSuite:
         // First stmt is the nested fn; second is the call to inner.
         stmts.head match
           case fn: Trees.FnDecl => assertEquals(fn.name, "inner")
-          case other => fail(s"expected nested FnDecl, got $other")
+          case other            => fail(s"expected nested FnDecl, got $other")
       case other => fail(s"expected outer FnDecl with Block body, got $other")
 
   // ---- M5 triage ----
@@ -373,7 +373,7 @@ class ParserSuite extends FunSuite:
       case Trees.CompilationUnit(List(c: Trees.CapDecl), _) =>
         c.body.head match
           case im: Trees.InstanceMethod => assertEquals(im.typeParamsHint, List("R"))
-          case other => fail(s"expected InstanceMethod, got $other")
+          case other                    => fail(s"expected InstanceMethod, got $other")
       case other => fail(s"expected CapDecl, got $other")
 
   test("M5: prop in data body and as fn-cap statement"):
@@ -501,7 +501,7 @@ class ParserSuite extends FunSuite:
         assertEquals(e.members.length, 1)
         e.members.head match
           case im: Trees.InstanceMethod => assertEquals(im.name, "fail")
-          case other => fail(s"expected InstanceMethod, got $other")
+          case other                    => fail(s"expected InstanceMethod, got $other")
       case other => fail(s"expected EffectDecl, got $other")
 
   test("M4.6: linear effect"):
@@ -555,7 +555,7 @@ class ParserSuite extends FunSuite:
         assertEquals(s.typeName, "Maybe")
         s.capRef match
           case Trees.CapRef("Optional", _, _) => ()
-          case other => fail(s"expected CapRef('Optional'), got $other")
+          case other                          => fail(s"expected CapRef('Optional'), got $other")
         assertEquals(s.mappings.length, 2)
         assertEquals(
           s.mappings.collect { case Trees.ConstructorMapping(v, c, _) => (v, c) },
@@ -598,7 +598,7 @@ class ParserSuite extends FunSuite:
         assertEquals(s.mappings.length, 1)
         s.mappings.head match
           case im: Trees.InstanceMethod => assertEquals(im.name, "isDefined")
-          case other => fail(s"expected InstanceMethod, got $other")
+          case other                    => fail(s"expected InstanceMethod, got $other")
       case other => fail(s"expected SatisfiesDecl, got $other")
 
   test("M4.5: empty satisfies (no body)"):
@@ -649,7 +649,7 @@ class ParserSuite extends FunSuite:
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
         m.arms.last.pattern match
           case _: Trees.WildcardPat => ()
-          case other => fail(s"expected wildcard last arm, got $other")
+          case other                => fail(s"expected wildcard last arm, got $other")
       case other => fail(s"expected FnDecl with MatchExpr body, got $other")
 
   test("M4.4: or-pattern flattens left-associatively"):
@@ -667,7 +667,7 @@ class ParserSuite extends FunSuite:
         // First arm should be OrPat(OrPat(N, S), E).
         m.arms.head.pattern match
           case Trees.OrPat(Trees.OrPat(_, _, _), _, _) => ()
-          case other => fail(s"expected nested OrPat, got $other")
+          case other                                   => fail(s"expected nested OrPat, got $other")
       case other => fail(s"expected MatchExpr, got $other")
 
   test("M4.4: guard clause"):
@@ -701,7 +701,7 @@ class ParserSuite extends FunSuite:
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
         m.arms.head.body match
           case Trees.Block(stmts, _) => assert(stmts.length >= 2)
-          case other => fail(s"expected Block body for first arm, got $other")
+          case other                 => fail(s"expected Block body for first arm, got $other")
       case other => fail(s"expected MatchExpr, got $other")
 
   // ---- M4.3: parseTypeAlias ----
@@ -732,7 +732,7 @@ class ParserSuite extends FunSuite:
       case Trees.CompilationUnit(List(Trees.TypeAlias(_, Nil, rhs, _)), _) =>
         rhs match
           case Trees.CapRef("Functor", _, _) => ()
-          case other => fail(s"expected single CapRef rhs, got $other")
+          case other                         => fail(s"expected single CapRef rhs, got $other")
       case other => fail(s"expected TypeAlias, got $other")
 
   test("M4.3: parameterised alias with refinement call"):
@@ -749,7 +749,7 @@ class ParserSuite extends FunSuite:
             assertEquals(caps.length, 2)
             caps(1) match
               case Trees.RefinementCall("between", args, _) => assertEquals(args.length, 2)
-              case other => fail(s"expected RefinementCall, got $other")
+              case other                                    => fail(s"expected RefinementCall, got $other")
           case other => fail(s"expected IsBound chain, got $other")
       case other => fail(s"expected TypeAlias, got $other")
 
@@ -772,7 +772,7 @@ class ParserSuite extends FunSuite:
         assertEquals(c.body.length, 3)
         c.body.head match
           case im: Trees.InstanceMethod => assertEquals(im.name, "head")
-          case other => fail(s"expected InstanceMethod, got $other")
+          case other                    => fail(s"expected InstanceMethod, got $other")
         c.body.last match
           case sm: Trees.StaticMethod =>
             assertEquals(sm.name, "cons")
@@ -812,7 +812,7 @@ class ParserSuite extends FunSuite:
         assertEquals(c.ofParams.length, 2)
         c.ofParams(1) match
           case Trees.NamedAlias("Size", _, _) => ()
-          case other => fail(s"expected NamedAlias for Size, got $other")
+          case other                          => fail(s"expected NamedAlias for Size, got $other")
       case other => fail(s"expected single CapDecl, got $other")
 
   test("M4.2: empty cap (no `:` body)"):
@@ -838,7 +838,7 @@ class ParserSuite extends FunSuite:
         assertEquals(c.body.length, 1)
         c.body.head match
           case p: Trees.PropDecl => assertEquals(p.name, "sorted")
-          case other => fail(s"expected PropDecl, got $other")
+          case other             => fail(s"expected PropDecl, got $other")
       case other => fail(s"expected single CapDecl, got $other")
 
   // ---- M4.1: parseDataDecl ----
@@ -886,7 +886,7 @@ class ParserSuite extends FunSuite:
           case Trees.NamedAlias("N", caps, _) =>
             assert(caps.exists {
               case Trees.CapRef("Numeric", _, _) => true
-              case _ => false
+              case _                             => false
             })
           case other => fail(s"expected NamedAlias for first field, got $other")
       case other => fail(s"expected single DataDecl, got $other")
@@ -907,7 +907,7 @@ class ParserSuite extends FunSuite:
         assertEquals(d.ofParams.length, 1)
         d.ofParams.head match
           case Trees.TypeRef("A", None, _) => ()
-          case other => fail(s"expected ofParam=TypeRef('A'), got $other")
+          case other                       => fail(s"expected ofParam=TypeRef('A'), got $other")
       case other => fail(s"expected single DataDecl, got $other")
 
   test("M4.1: of-clause with paren tuple of type params"):
@@ -958,10 +958,10 @@ class ParserSuite extends FunSuite:
         // other two are FnParam (lowered OfValueParam).
         d.ofParams.head match
           case _: Trees.NamedAlias => ()
-          case other => fail(s"expected NamedAlias, got $other")
+          case other               => fail(s"expected NamedAlias, got $other")
         d.ofParams.tail.foreach {
           case fp: Trees.FnParam => assert(fp.default.isDefined, "ofValueParam should carry default")
-          case other => fail(s"expected FnParam, got $other")
+          case other             => fail(s"expected FnParam, got $other")
         }
       case other => fail(s"expected single DataDecl, got $other")
 
@@ -980,7 +980,7 @@ class ParserSuite extends FunSuite:
         val succ = d.variants.find(_.name == "Succ").get
         succ.fields.head.typeAnn match
           case Trees.TypeRef("Nat", None, _) => ()
-          case other => fail(s"expected TypeRef('Nat'), got $other")
+          case other                         => fail(s"expected TypeRef('Nat'), got $other")
       case other => fail(s"expected single DataDecl, got $other")
 
   // ---- M3.4: type-expression recovery ----
@@ -995,14 +995,14 @@ class ParserSuite extends FunSuite:
         assertEquals(fn.params.length, 1)
         fn.params.head.typeAnn match
           case _: Trees.Error => ()
-          case other => fail(s"expected Error type annotation, got $other")
+          case other          => fail(s"expected Error type annotation, got $other")
         // Return type and body must NOT have been swallowed by the bad type.
         fn.returnType match
           case Trees.PrimitiveType("u64", _) => ()
-          case other => fail(s"expected u64 return, got $other")
+          case other                         => fail(s"expected u64 return, got $other")
         fn.body match
           case Some(Trees.IntLit(n, _)) => assertEquals(n, BigInt(0))
-          case other => fail(s"expected IntLit body, got $other")
+          case other                    => fail(s"expected IntLit body, got $other")
       case other => fail(s"expected single FnDecl, got $other")
 
   test("M3.4: malformed return type leaves body intact"):
@@ -1013,10 +1013,10 @@ class ParserSuite extends FunSuite:
       case Trees.CompilationUnit(List(fn: Trees.FnDecl), _) =>
         fn.returnType match
           case _: Trees.Error => ()
-          case other => fail(s"expected Error return type, got $other")
+          case other          => fail(s"expected Error return type, got $other")
         fn.body match
           case Some(Trees.IntLit(n, _)) => assertEquals(n, BigInt(0))
-          case other => fail(s"expected IntLit body, got $other")
+          case other                    => fail(s"expected IntLit body, got $other")
       case other => fail(s"expected single FnDecl, got $other")
 
   // ---- M3.3: delimited-list recovery (args, lists, tuples) ----
@@ -1030,10 +1030,13 @@ class ParserSuite extends FunSuite:
         body match
           case Trees.Apply(_, args, _) =>
             assertEquals(args.length, 3, s"expected 3 args, got: $args")
-            assert(args.exists {
-              case _: Trees.Error => true
-              case _ => false
-            }, s"expected an Error among args: $args")
+            assert(
+              args.exists {
+                case _: Trees.Error => true
+                case _              => false
+              },
+              s"expected an Error among args: $args"
+            )
           case other => fail(s"expected Apply, got $other")
       case other => fail(s"expected FnDecl, got $other")
 
@@ -1050,10 +1053,10 @@ class ParserSuite extends FunSuite:
             assertEquals(args.length, 2, s"expected 2 args (Error + IntLit), got: $args")
             args.head match
               case _: Trees.Error => ()
-              case other => fail(s"expected Error as first arg, got $other")
+              case other          => fail(s"expected Error as first arg, got $other")
             args.last match
               case Trees.IntLit(n, _) => assertEquals(n, BigInt(3))
-              case other => fail(s"expected IntLit(3) as last arg, got $other")
+              case other              => fail(s"expected IntLit(3) as last arg, got $other")
           case other => fail(s"expected Apply, got $other")
       case other => fail(s"expected FnDecl, got $other")
 
@@ -1077,21 +1080,21 @@ class ParserSuite extends FunSuite:
     t match
       case e: Trees.Error =>
         e :: e.recovered.flatMap(collectAllErrors)
-      case Trees.CompilationUnit(items, _) => items.flatMap(collectAllErrors)
+      case Trees.CompilationUnit(items, _)             => items.flatMap(collectAllErrors)
       case Trees.FnDecl(_, _, params, ret, _, body, _) =>
         params.flatMap(p => collectAllErrors(p.typeAnn)) ++
           collectAllErrors(ret) ++ body.toList.flatMap(collectAllErrors)
-      case Trees.Block(stmts, _) => stmts.flatMap(collectAllErrors)
-      case Trees.LetExpr(p, init, _) => collectAllErrors(p) ++ collectAllErrors(init)
-      case Trees.IfExpr(c, t1, e, _) => collectAllErrors(c) ++ collectAllErrors(t1) ++ collectAllErrors(e)
-      case Trees.BinOp(_, l, r, _) => collectAllErrors(l) ++ collectAllErrors(r)
-      case Trees.UnaryOp(_, op, _) => collectAllErrors(op)
-      case Trees.Apply(fn, args, _) => collectAllErrors(fn) ++ args.flatMap(collectAllErrors)
+      case Trees.Block(stmts, _)              => stmts.flatMap(collectAllErrors)
+      case Trees.LetExpr(p, init, _)          => collectAllErrors(p) ++ collectAllErrors(init)
+      case Trees.IfExpr(c, t1, e, _)          => collectAllErrors(c) ++ collectAllErrors(t1) ++ collectAllErrors(e)
+      case Trees.BinOp(_, l, r, _)            => collectAllErrors(l) ++ collectAllErrors(r)
+      case Trees.UnaryOp(_, op, _)            => collectAllErrors(op)
+      case Trees.Apply(fn, args, _)           => collectAllErrors(fn) ++ args.flatMap(collectAllErrors)
       case Trees.MethodCall(r, _, args, _, _) => collectAllErrors(r) ++ args.flatMap(collectAllErrors)
       case Trees.StaticCall(_, _, args, _, _) => args.flatMap(collectAllErrors)
-      case Trees.TupleExpr(es, _) => es.flatMap(collectAllErrors)
-      case Trees.ListExpr(es, _) => es.flatMap(collectAllErrors)
-      case _ => Nil
+      case Trees.TupleExpr(es, _)             => es.flatMap(collectAllErrors)
+      case Trees.ListExpr(es, _)              => es.flatMap(collectAllErrors)
+      case _                                  => Nil
 
   // ---- M3.2: block-body recovery ----
 
@@ -1137,7 +1140,7 @@ class ParserSuite extends FunSuite:
         assertEquals(stmts.length, 2)
         stmts.last match
           case Trees.Ident("x", _) => ()
-          case other => fail(s"expected trailing Ident('x'), got $other")
+          case other               => fail(s"expected trailing Ident('x'), got $other")
       case other => fail(s"expected FnDecl with Block body, got $other")
 
   // ---- M3.1: top-level recovery ----
@@ -1200,10 +1203,13 @@ class ParserSuite extends FunSuite:
     assert(pr.hasErrors, "expected a diagnostic for the stray token")
     pr.tree match
       case Trees.CompilationUnit(items, _) =>
-        assert(items.exists {
-          case _: Trees.Error => true
-          case _ => false
-        }, s"expected a Trees.Error item, got: $items")
+        assert(
+          items.exists {
+            case _: Trees.Error => true
+            case _              => false
+          },
+          s"expected a Trees.Error item, got: $items"
+        )
       case other => fail(s"expected CompilationUnit, got $other")
 
   test("M2: stub `mod` declaration produces a Trees.Error item"):
@@ -1213,10 +1219,13 @@ class ParserSuite extends FunSuite:
     assert(pr.hasErrors)
     pr.tree match
       case Trees.CompilationUnit(items, _) =>
-        assert(items.exists {
-          case _: Trees.Error => true
-          case _ => false
-        }, s"expected at least one Trees.Error item, got: $items")
+        assert(
+          items.exists {
+            case _: Trees.Error => true
+            case _              => false
+          },
+          s"expected at least one Trees.Error item, got: $items"
+        )
       case other => fail(s"expected CompilationUnit, got $other")
 
   test("M2: no Ident nodes named '<error>' or '<unsupported>' remain in the tree"):
@@ -1238,21 +1247,21 @@ class ParserSuite extends FunSuite:
   // smoke-test inputs can produce.
   private def collectIdents(t: Tree): List[String] =
     t match
-      case Trees.Ident(n, _) => List(n)
-      case Trees.CompilationUnit(items, _) => items.flatMap(collectIdents)
+      case Trees.Ident(n, _)                           => List(n)
+      case Trees.CompilationUnit(items, _)             => items.flatMap(collectIdents)
       case Trees.FnDecl(_, _, params, ret, _, body, _) =>
         params.flatMap(p => collectIdents(p.typeAnn) ++ p.default.toList.flatMap(collectIdents)) ++
           collectIdents(ret) ++ body.toList.flatMap(collectIdents)
-      case Trees.Block(stmts, _) => stmts.flatMap(collectIdents)
-      case Trees.LetExpr(p, init, _) => collectIdents(p) ++ collectIdents(init)
-      case Trees.IfExpr(c, t1, e, _) => collectIdents(c) ++ collectIdents(t1) ++ collectIdents(e)
-      case Trees.BinOp(_, l, r, _) => collectIdents(l) ++ collectIdents(r)
-      case Trees.UnaryOp(_, op, _) => collectIdents(op)
-      case Trees.Apply(fn, args, _) => collectIdents(fn) ++ args.flatMap(collectIdents)
+      case Trees.Block(stmts, _)              => stmts.flatMap(collectIdents)
+      case Trees.LetExpr(p, init, _)          => collectIdents(p) ++ collectIdents(init)
+      case Trees.IfExpr(c, t1, e, _)          => collectIdents(c) ++ collectIdents(t1) ++ collectIdents(e)
+      case Trees.BinOp(_, l, r, _)            => collectIdents(l) ++ collectIdents(r)
+      case Trees.UnaryOp(_, op, _)            => collectIdents(op)
+      case Trees.Apply(fn, args, _)           => collectIdents(fn) ++ args.flatMap(collectIdents)
       case Trees.MethodCall(r, _, args, _, _) => collectIdents(r) ++ args.flatMap(collectIdents)
       case Trees.StaticCall(_, _, args, _, _) => args.flatMap(collectIdents)
-      case Trees.Error(rec, _) => rec.flatMap(collectIdents)
-      case _ => Nil
+      case Trees.Error(rec, _)                => rec.flatMap(collectIdents)
+      case _                                  => Nil
 
   // ---- M1 smoke: functional ParseResult API ----
 
@@ -1264,10 +1273,10 @@ class ParserSuite extends FunSuite:
     assert(pr.trivia.isEmpty, "no comments or blank lines in this input")
     pr.tree match
       case Trees.CompilationUnit(List(_: Trees.FnDecl), _) => ()
-      case other => fail(s"expected single FnDecl, got $other")
+      case other                                           => fail(s"expected single FnDecl, got $other")
 
   test("ParseResult: diagnostics surface without a caller Reporter"):
-    val src = SourceFile.fromString("<test>", "fn ()\n")  // missing name
+    val src = SourceFile.fromString("<test>", "fn ()\n") // missing name
     val pr = Parser.parse(src)
     assert(pr.hasErrors, "expected at least one error diagnostic")
     assert(pr.diagnostics.nonEmpty)

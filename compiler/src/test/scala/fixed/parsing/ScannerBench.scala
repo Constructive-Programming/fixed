@@ -1,3 +1,5 @@
+// scalafix:off DisableSyntax.var, DisableSyntax.while
+// Benchmark/test loops: mutable counters are deliberate here.
 package fixed.parsing
 
 import fixed.util.{Reporter, SourceFile}
@@ -9,9 +11,17 @@ import fixed.util.{Reporter, SourceFile}
 object ScannerBench:
 
   private val examples: List[String] = List(
-    "01_basics", "02_collections", "03_option_result", "04_json",
-    "05_phantom_types", "06_functor_monad", "07_recursive_data",
-    "08_effects_handlers", "09_interpreter", "10_geometry", "11_properties"
+    "01_basics",
+    "02_collections",
+    "03_option_result",
+    "04_json",
+    "05_phantom_types",
+    "06_functor_monad",
+    "07_recursive_data",
+    "08_effects_handlers",
+    "09_interpreter",
+    "10_geometry",
+    "11_properties"
   )
 
   def main(args: Array[String]): Unit =
@@ -61,7 +71,9 @@ object ScannerBench:
     val totalIters: Long = results.size.toLong * iters
 
     println(s"=== ScannerBench (iters=$iters, warmup=$warmup, captureTrivia=$captureTrivia) ===")
-    println(f"${"file"}%-22s ${"chars"}%6s ${"toks"}%5s ${"total ms"}%10s ${"µs/run"}%10s ${"ns/tok"}%10s ${"ns/char"}%10s")
+    println(
+      f"${"file"}%-22s ${"chars"}%6s ${"toks"}%5s ${"total ms"}%10s ${"µs/run"}%10s ${"ns/tok"}%10s ${"ns/char"}%10s"
+    )
     results.foreach { case (name, elapsed, srcLen, toks) =>
       val totalMs = elapsed / 1_000_000.0
       val usPerRun = elapsed / 1000.0 / iters
@@ -70,7 +82,9 @@ object ScannerBench:
       println(f"$name%-22s $srcLen%6d $toks%5d $totalMs%10.2f $usPerRun%10.2f $nsPerTok%10.1f $nsPerChar%10.1f")
     }
     println("---")
-    println(f"corpus total: ${totalElapsed / 1_000_000.0}%.2f ms over ${totalIters} runs (${tokenCountPerPass} tokens/pass)")
+    println(
+      f"corpus total: ${totalElapsed / 1_000_000.0}%.2f ms over ${totalIters} runs (${tokenCountPerPass} tokens/pass)"
+    )
     println(f"  mean per run:   ${totalElapsed / 1_000.0 / totalIters}%.2f µs")
     println(f"  mean per token: ${totalElapsed.toDouble / totalIters / tokenCountPerPass * results.size}%.1f ns")
 

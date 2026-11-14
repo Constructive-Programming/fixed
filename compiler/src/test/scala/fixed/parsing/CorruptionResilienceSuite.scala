@@ -1,11 +1,14 @@
+// scalafix:off DisableSyntax.var
+// Benchmark/test loops: mutable counters are deliberate here.
 package fixed.parsing
+
+import java.util.concurrent.{Executors, TimeUnit, TimeoutException}
+
+import scala.util.Random
 
 import fixed.ast.Trees
 import fixed.util.SourceFile
 import munit.FunSuite
-
-import java.util.concurrent.{Executors, TimeUnit, TimeoutException}
-import scala.util.Random
 
 /** Phase 2.1 M3.5 — corruption resilience property test.
   *
@@ -37,8 +40,8 @@ import scala.util.Random
   */
 class CorruptionResilienceSuite extends FunSuite:
 
-  private val Iterations = 200    // ~ 1s budget total
-  private val Seed = 0xF1ED_F1EDL     // "fixed" in hex; change to widen coverage
+  private val Iterations = 200 // ~ 1s budget total
+  private val Seed = 0xf1ed_f1edL // "fixed" in hex; change to widen coverage
   private val PerParseTimeoutMs = 2000L
   private val JunkChars: Vector[Char] = Vector('@', ';', '}', '?', '$', '\\')
 
@@ -51,10 +54,11 @@ class CorruptionResilienceSuite extends FunSuite:
   private val ExampleFiles: Vector[String] =
     val d = new java.io.File(ExampleDir)
     if !d.isDirectory then Vector.empty
-    else d.listFiles().toVector
-      .filter(f => f.isFile && f.getName.endsWith(".fixed"))
-      .map(_.getPath)
-      .sorted
+    else
+      d.listFiles().toVector
+        .filter(f => f.isFile && f.getName.endsWith(".fixed"))
+        .map(_.getPath)
+        .sorted
 
   private val executor = Executors.newSingleThreadExecutor()
 
@@ -75,7 +79,7 @@ class CorruptionResilienceSuite extends FunSuite:
 
   private def itemCount(t: fixed.ast.Tree): Int = t match
     case Trees.CompilationUnit(items, _) => items.length
-    case _ => -1
+    case _                               => -1
 
   test("parser terminates and degrades gracefully under random single-byte corruption"):
     assume(ExampleFiles.nonEmpty, "examples/ directory not found or empty — run from repo root")

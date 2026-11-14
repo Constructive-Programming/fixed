@@ -1,9 +1,11 @@
+// scalafix:off DisableSyntax.var, DisableSyntax.while
+// Benchmark/test loops: mutable counters are deliberate here.
 package fixed.parsing
+
+import scala.util.matching.Regex
 
 import fixed.util.SourceFile
 import munit.FunSuite
-
-import scala.util.matching.Regex
 
 /** Phase 2.1 M4 — trivia retention.
   *
@@ -27,7 +29,7 @@ class TriviaSuite extends FunSuite:
     assertEquals(leading.size, 1)
     leading.head match
       case Trivia.LineComment(_, text) => assertEquals(text, "// header")
-      case other => fail(s"expected LineComment, got $other")
+      case other                       => fail(s"expected LineComment, got $other")
 
   test("blank line between two decls is recorded against the second decl"):
     val src = """fn a() -> u64 = 1
@@ -132,9 +134,10 @@ class TriviaSuite extends FunSuite:
       // Re-tokenize directly so we get every real token's full span.
       val rep = new fixed.util.Reporter(src)
       val scanner = new Scanner(src, rep)
-      val tokens = scanner.tokenize().filter(t => t.kind match
-        case TokenKind.Indent | TokenKind.Dedent | TokenKind.Newline | TokenKind.Eof => false
-        case _ => true
+      val tokens = scanner.tokenize().filter(t =>
+        t.kind match
+          case TokenKind.Indent | TokenKind.Dedent | TokenKind.Newline | TokenKind.Eof => false
+          case _                                                                       => true
       )
       val trivia = scanner.triviaTable
       val rebuilt = reconstruct(src.content, tokens, trivia)
@@ -168,7 +171,7 @@ class TriviaSuite extends FunSuite:
         for ev <- leading do
           val (start, end) = ev match
             case Trivia.LineComment(s, _) => (s.start, s.end)
-            case Trivia.BlankLines(s, _) => (s.start, s.end)
+            case Trivia.BlankLines(s, _)  => (s.start, s.end)
           // Whitespace before the trivia event.
           sb.append(content.substring(cursor, start))
           sb.append(content.substring(start, end))
@@ -178,7 +181,7 @@ class TriviaSuite extends FunSuite:
         sb.append(content.substring(gapStart, gapEnd))
       sb.append(content.substring(tok.span.start, tok.span.end))
       prevEnd = tok.span.end
-    sb.append(content.substring(prevEnd))  // tail (typically a final \n)
+    sb.append(content.substring(prevEnd)) // tail (typically a final \n)
     sb.toString
 
   // Replace runs of horizontal spaces/tabs that follow non-whitespace
@@ -205,9 +208,10 @@ class TriviaSuite extends FunSuite:
   private def examplePaths(): List[String] =
     val dir = new java.io.File("examples")
     if !dir.isDirectory then Nil
-    else dir.listFiles().toList
-      .filter(f => f.isFile && f.getName.endsWith(".fixed"))
-      .map(_.getPath)
-      .sorted
+    else
+      dir.listFiles().toList
+        .filter(f => f.isFile && f.getName.endsWith(".fixed"))
+        .map(_.getPath)
+        .sorted
 
 end TriviaSuite

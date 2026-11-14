@@ -1,7 +1,7 @@
 package fixed.parsing
 
-import scala.collection.immutable.Queue
 import scala.annotation.tailrec
+import scala.collection.immutable.Queue
 
 import fixed.util.{Reporter, SourceFile, Span}
 
@@ -19,7 +19,7 @@ object Scanner:
       pos: Int,
       indentStack: List[Int],
       bracketStack: List[(Char, Int)],
-      lastKind: TokenKind,                // TokenKind.NoStart before first emit
+      lastKind: TokenKind, // TokenKind.NoStart before first emit
       eofEmitted: Boolean,
       pending: Queue[Token]
   ):
@@ -112,7 +112,7 @@ object Scanner:
       reporter: Reporter
   ): (ScannerState, Boolean) =
     val packed = advanceTrivia(state.pos, source, reporter, if crossedNewline then 1 else 0)
-    val newPos = (packed & 0xFFFFFFFFL).toInt
+    val newPos = (packed & 0xffffffffL).toInt
     val crossed = (packed >>> 32) != 0
     if newPos == state.pos then (state, crossed)
     else (state.copy(pos = newPos), crossed)
@@ -124,7 +124,7 @@ object Scanner:
       reporter: Reporter,
       crossed: Int
   ): Long =
-    if pos >= source.length then (crossed.toLong << 32) | (pos.toLong & 0xFFFFFFFFL)
+    if pos >= source.length then (crossed.toLong << 32) | (pos.toLong & 0xffffffffL)
     else
       val c = source.content.charAt(pos)
       if c == ' ' then advanceTrivia(pos + 1, source, reporter, crossed)
@@ -141,7 +141,7 @@ object Scanner:
       else if c == '\r' then advanceTrivia(pos + 1, source, reporter, crossed)
       else if c == '/' && peekChar(source, pos + 1) == '/' then
         advanceTrivia(skipUntilNewline(source, pos), source, reporter, crossed)
-      else (crossed.toLong << 32) | (pos.toLong & 0xFFFFFFFFL)
+      else (crossed.toLong << 32) | (pos.toLong & 0xffffffffL)
 
   @tailrec
   private def skipUntilNewline(source: SourceFile, i: Int): Int =
@@ -174,7 +174,8 @@ object Scanner:
 
     val isDualMode =
       lastKind == TokenKind.Eq || lastKind == TokenKind.Arrow
-      || lastKind == TokenKind.FatArrow || lastKind == TokenKind.Colon
+        || lastKind == TokenKind.FatArrow || lastKind == TokenKind.Colon
+    // Opens every INDENT, including the `:` block case.
     if isDualMode && newIndent > state.currentIndent then
       state
         .copy(indentStack = newIndent :: state.indentStack)
@@ -182,20 +183,16 @@ object Scanner:
     else if state.isInsideSuppressedBrackets then
       state
     else if lastKind != TokenKind.NoStart && lastKind != TokenKind.Newline
-            && peekKindIsLeadingContinuation(source, state.pos)
+      && peekKindIsLeadingContinuation(source, state.pos)
     then
       state
     else if Tokens.trailingContinuationKinds.contains(lastKind) then
       state
     else
       val curIndent = state.currentIndent
-      if newIndent > curIndent then
-        if lastKind == TokenKind.Colon then
-          state
-            .copy(indentStack = newIndent :: state.indentStack)
-            .enqueue(Token(TokenKind.Indent, Span(pos, pos)))
-        else
-          state.enqueue(Token(TokenKind.Newline, Span(pos, pos)))
+      // A deeper line after `:` (or `=`/`->`/`=>`) already opened an INDENT
+      // above, so here a deeper line is a plain continuation NEWLINE.
+      if newIndent > curIndent then state.enqueue(Token(TokenKind.Newline, Span(pos, pos)))
       else if newIndent < curIndent then
         val st1 = popIndents(state, newIndent)
         if st1.isInsideSuppressedBrackets then st1
@@ -230,7 +227,7 @@ object Scanner:
   private def peekKindIsLeadingContinuation(source: SourceFile, pos: Int): Boolean =
     val content = source.content
     val len = source.length
-    val i = skipSpacesAndTabs(content, pos, len)
+    val i = skipWhile(content, pos, len)(isSpaceOrTab)
     if i >= len then false
     else
       val c = content.charAt(i)
@@ -239,26 +236,18 @@ object Scanner:
       else if c == '|' && peekChar(source, i + 1) == '>' then true
       else if c == '+' then true
       else if c.isLetter || c == '_' then
-        val j = skipIdentPart(content, i, len)
+        val j = skipWhile(content, i, len)(isIdentPart)
         val word = content.substring(i, j)
         Tokens.keywords.get(word).exists(Tokens.leadingContinuationKinds.contains)
       else false
 
-  @tailrec
-  private def skipSpacesAndTabs(content: String, i: Int, len: Int): Int =
-    if i >= len then i
-    else
-      val c = content.charAt(i)
-      if c == ' ' || c == '\t' then skipSpacesAndTabs(content, i + 1, len)
-      else i
+  // First index at or after `i0` (capped at `len`) whose char fails `p`.
+  private inline def skipWhile(content: String, i0: Int, len: Int)(inline p: Char => Boolean): Int =
+    @tailrec def loop(i: Int): Int = if i < len && p(content.charAt(i)) then loop(i + 1) else i
+    loop(i0)
 
-  @tailrec
-  private def skipIdentPart(content: String, i: Int, len: Int): Int =
-    if i >= len then i
-    else
-      val c = content.charAt(i)
-      if c.isLetterOrDigit || c == '_' then skipIdentPart(content, i + 1, len)
-      else i
+  private inline def isSpaceOrTab(c: Char): Boolean = c == ' ' || c == '\t'
+  private inline def isIdentPart(c: Char): Boolean = c.isLetterOrDigit || c == '_'
 
   // ---- scanToken: dispatch on first character ----
 
@@ -295,9 +284,9 @@ object Scanner:
         (st, Token(TokenKind.LBrace, Span(start, st.pos)))
       case '}' => closeBracket(state, start, TokenKind.RBrace, '{', reporter)
 
-      case ',' => single(state, start, TokenKind.Comma)
-      case ';' => single(state, start, TokenKind.Semicolon)
-      case '@' => single(state, start, TokenKind.At)
+      case ','                                       => single(state, start, TokenKind.Comma)
+      case ';'                                       => single(state, start, TokenKind.Semicolon)
+      case '@'                                       => single(state, start, TokenKind.At)
       case '_' if !isIdentStartAt(source, start + 1) =>
         single(state, start, TokenKind.Underscore)
 
@@ -329,10 +318,7 @@ object Scanner:
           case _   => single(state, start, TokenKind.Pipe)
       case '&' =>
         if peekChar(source, start + 1) == '&' then double(state, start, TokenKind.AndAnd)
-        else
-          reporter.error("E003", Span(start, start + 1), "stray `&` (did you mean `&&`?)")
-          val st = state.copy(pos = start + 1, lastKind = TokenKind.Error)
-          (st, Token(TokenKind.Error, Span(start, st.pos)))
+        else errorChar(state, start, "E003", "stray `&` (did you mean `&&`?)", reporter)
       case '+' => single(state, start, TokenKind.Plus)
       case '*' => single(state, start, TokenKind.Star)
       case '/' => single(state, start, TokenKind.Slash)
@@ -340,25 +326,30 @@ object Scanner:
 
       case ch if isIdentStart(ch) => scanIdent(state, source, start)
       case ch if ch.isDigit       => scanNumber(state, source, start)
-      case '"'                    => scanString(state, source, start, reporter)
-      case '\''                   => scanChar(state, source, start, reporter)
+      case '"'                    => scanQuoted(state, source, start, reporter, Quote.Str)
+      case '\''                   => scanQuoted(state, source, start, reporter, Quote.Chr)
 
-      case other =>
-        reporter.error("E004", Span(start, start + 1), s"unexpected character ${describeChar(other)}")
-        val st = state.copy(pos = start + 1, lastKind = TokenKind.Error)
-        (st, Token(TokenKind.Error, Span(start, st.pos)))
+      case other => errorChar(state, start, "E004", s"unexpected character ${describeChar(other)}", reporter)
 
-  private def single(
-      state: ScannerState, start: Int, kind: TokenKind
-  ): (ScannerState, Token) =
-    val st = state.copy(pos = start + 1, lastKind = kind)
+  // Fixed-width token of `len` chars at `start`.
+  private def emit(state: ScannerState, start: Int, len: Int, kind: TokenKind): (ScannerState, Token) =
+    val st = state.copy(pos = start + len, lastKind = kind)
     (st, Token(kind, Span(start, st.pos)))
 
-  private def double(
-      state: ScannerState, start: Int, kind: TokenKind
+  private def single(state: ScannerState, start: Int, kind: TokenKind) = emit(state, start, 1, kind)
+
+  private def double(state: ScannerState, start: Int, kind: TokenKind) = emit(state, start, 2, kind)
+
+  // Report `code` at the char at `start` and emit it as a one-char Error token.
+  private def errorChar(
+      state: ScannerState,
+      start: Int,
+      code: String,
+      msg: String,
+      reporter: Reporter
   ): (ScannerState, Token) =
-    val st = state.copy(pos = start + 2, lastKind = kind)
-    (st, Token(kind, Span(start, st.pos)))
+    reporter.error(code, Span(start, start + 1), msg)
+    single(state, start, TokenKind.Error)
 
   // Close-bracket production. Folds pos / lastKind / bracketStack into
   // one `state.copy` per token.
@@ -371,7 +362,7 @@ object Scanner:
   ): (ScannerState, Token) =
     val nextStack = state.bracketStack match
       case (top, _) :: rest if top == expected => rest
-      case _ =>
+      case _                                   =>
         val tag = state.bracketStack match
           case (top, _) :: _ => s"`$top`"
           case Nil           => "empty"
@@ -387,20 +378,24 @@ object Scanner:
   // ---- Identifiers, numbers, strings, chars ----
 
   private def scanIdent(
-      state: ScannerState, source: SourceFile, start: Int
+      state: ScannerState,
+      source: SourceFile,
+      start: Int
   ): (ScannerState, Token) =
-    val end = skipIdentPart(source.content, start, source.length)
+    val end = skipWhile(source.content, start, source.length)(isIdentPart)
     val text = source.slice(start, end)
     val kind = Tokens.keywords.get(text) match
       case Some(kw) => kw
-      case None =>
+      case None     =>
         if text.charAt(0).isUpper then TokenKind.UpperIdent
         else TokenKind.LowerIdent
     val st = state.copy(pos = end, lastKind = kind)
     (st, Token(kind, Span(start, end), text))
 
   private def scanNumber(
-      state: ScannerState, source: SourceFile, start: Int
+      state: ScannerState,
+      source: SourceFile,
+      start: Int
   ): (ScannerState, Token) =
     val intEnd = skipDigits(source, start)
     // Float? '.' followed by another digit. Don't eat `5.foo` — that's
@@ -427,7 +422,7 @@ object Scanner:
   // both the normal terminator-found case AND the bail-out cases (newline
   // mid-literal). EOF mid-literal returns `closed = false` so callers can
   // emit the "at end of input" variant of the error.
-  private final case class QuotedBody(pos: Int, lexeme: String, closed: Boolean)
+  final private case class QuotedBody(pos: Int, lexeme: String, closed: Boolean)
 
   // The local StringBuilder never escapes `loop`; it's a lexeme
   // accumulator frozen via `.toString` at each terminating branch. The
@@ -484,38 +479,53 @@ object Scanner:
     case '0'  => Some(' ')
     case _    => None
 
-  private def scanString(
-      state: ScannerState, source: SourceFile, start: Int, reporter: Reporter
-  ): (ScannerState, Token) =
-    val body = scanQuotedBody(
-      source, start, i0 = start + 1, terminator = '"', reporter = reporter,
-      unterminatedCode = "E007",
-      unterminatedLineMessage = "unterminated string literal — closing `\"` missing on this line",
-      unterminatedLineSuggestion = Some("string literals must close on the same line in v0.4.5")
-    )
-    if !body.closed then
-      reporter.error("E007", Span(start, body.pos), "unterminated string literal at end of input")
-    val st = state.copy(pos = body.pos, lastKind = TokenKind.StringLit)
-    (st, Token(TokenKind.StringLit, Span(start, body.pos), body.lexeme))
+  /** Per-literal settings for quoted tokens. */
+  private enum Quote(
+      val terminator: Char,
+      val kind: TokenKind,
+      val code: String,
+      val noun: String,
+      val lineMessage: String,
+      val lineSuggestion: Option[String]
+  ):
+    case Str
+        extends Quote(
+          '"',
+          TokenKind.StringLit,
+          "E007",
+          "string",
+          "unterminated string literal — closing `\"` missing on this line",
+          Some("string literals must close on the same line in v0.4.5")
+        )
+    case Chr extends Quote('\'', TokenKind.CharLit, "E008", "char", "unterminated char literal", None)
 
-  private def scanChar(
-      state: ScannerState, source: SourceFile, start: Int, reporter: Reporter
+  private def scanQuoted(
+      state: ScannerState,
+      source: SourceFile,
+      start: Int,
+      reporter: Reporter,
+      q: Quote
   ): (ScannerState, Token) =
     val body = scanQuotedBody(
-      source, start, i0 = start + 1, terminator = '\'', reporter = reporter,
-      unterminatedCode = "E008",
-      unterminatedLineMessage = "unterminated char literal",
-      unterminatedLineSuggestion = None
+      source,
+      start,
+      i0 = start + 1,
+      terminator = q.terminator,
+      reporter = reporter,
+      unterminatedCode = q.code,
+      unterminatedLineMessage = q.lineMessage,
+      unterminatedLineSuggestion = q.lineSuggestion
     )
     if !body.closed then
-      reporter.error("E008", Span(start, body.pos), "unterminated char literal at end of input")
-    if body.lexeme.length != 1 then
+      reporter.error(q.code, Span(start, body.pos), s"unterminated ${q.noun} literal at end of input")
+    if q == Quote.Chr && body.lexeme.length != 1 then
       reporter.error(
-        "E009", Span(start, body.pos),
+        "E009",
+        Span(start, body.pos),
         s"char literal must contain exactly one character (got ${body.lexeme.length})"
       )
-    val st = state.copy(pos = body.pos, lastKind = TokenKind.CharLit)
-    (st, Token(TokenKind.CharLit, Span(start, body.pos), body.lexeme))
+    val st = state.copy(pos = body.pos, lastKind = q.kind)
+    (st, Token(q.kind, Span(start, body.pos), body.lexeme))
 
   // ---- Char-class helpers ----
 
@@ -588,7 +598,7 @@ final class Scanner(
         case ((prevEnd, acc), tok) =>
           val s = tok.span.start
           val e = tok.span.end
-          if s >= e then (prevEnd, acc)  // synthetic
+          if s >= e then (prevEnd, acc) // synthetic
           else if s - prevEnd >= 2 then
             val events = collectTrivia(content, prevEnd, s, Nil)
             val acc1 = if events.nonEmpty then acc.updated(s, events) else acc
@@ -613,11 +623,11 @@ final class Scanner(
     else
       val c = content.charAt(i)
       if c == '/' && i + 1 < end && content.charAt(i + 1) == '/' then
-        val cmtEnd = scanLineCommentEnd(content, i, end)
+        val cmtEnd = Scanner.skipWhile(content, i, end)(_ != '\n')
         val ev = Trivia.LineComment(Span(i, cmtEnd), content.substring(i, cmtEnd))
         collectTrivia(content, cmtEnd, end, ev :: acc)
       else if c == '\n' then
-        val nlEnd = scanNewlineRunEnd(content, i, end)
+        val nlEnd = Scanner.skipWhile(content, i, end)(_ == '\n')
         val nlCount = nlEnd - i
         // Blank lines = newlines minus the one already represented by
         // the NEWLINE / DEDENT token. >= 1 blank line is worth recording.
@@ -627,15 +637,5 @@ final class Scanner(
         collectTrivia(content, nlEnd, end, acc1)
       else
         collectTrivia(content, i + 1, end, acc)
-
-  @tailrec
-  private def scanLineCommentEnd(content: String, i: Int, end: Int): Int =
-    if i >= end || content.charAt(i) == '\n' then i
-    else scanLineCommentEnd(content, i + 1, end)
-
-  @tailrec
-  private def scanNewlineRunEnd(content: String, i: Int, end: Int): Int =
-    if i >= end || content.charAt(i) != '\n' then i
-    else scanNewlineRunEnd(content, i + 1, end)
 
 end Scanner

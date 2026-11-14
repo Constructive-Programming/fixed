@@ -40,36 +40,71 @@ class ScannerSuite extends FunSuite:
     val ks = kinds("( ) [ ] , : ;")
     assertEquals(
       ks,
-      Seq(TokenKind.LParen, TokenKind.RParen, TokenKind.LBracket, TokenKind.RBracket,
-          TokenKind.Comma, TokenKind.Colon, TokenKind.Semicolon, TokenKind.Eof)
+      Seq(
+        TokenKind.LParen,
+        TokenKind.RParen,
+        TokenKind.LBracket,
+        TokenKind.RBracket,
+        TokenKind.Comma,
+        TokenKind.Colon,
+        TokenKind.Semicolon,
+        TokenKind.Eof
+      )
     )
 
   test("multi-char operators"):
     val ks = kinds("-> => == != <= >= |> && || <-")
     assertEquals(
       ks,
-      Seq(TokenKind.Arrow, TokenKind.FatArrow, TokenKind.EqEq, TokenKind.Neq,
-          TokenKind.Le, TokenKind.Ge, TokenKind.PipeForward, TokenKind.AndAnd,
-          TokenKind.OrOr, TokenKind.BackArrow, TokenKind.Eof)
+      Seq(
+        TokenKind.Arrow,
+        TokenKind.FatArrow,
+        TokenKind.EqEq,
+        TokenKind.Neq,
+        TokenKind.Le,
+        TokenKind.Ge,
+        TokenKind.PipeForward,
+        TokenKind.AndAnd,
+        TokenKind.OrOr,
+        TokenKind.BackArrow,
+        TokenKind.Eof
+      )
     )
 
   test("single-char operators"):
     val ks = kinds("+ - * / % < > = . | !")
     assertEquals(
       ks,
-      Seq(TokenKind.Plus, TokenKind.Minus, TokenKind.Star, TokenKind.Slash,
-          TokenKind.Percent, TokenKind.Lt, TokenKind.Gt, TokenKind.Eq,
-          TokenKind.Dot, TokenKind.Pipe, TokenKind.Bang, TokenKind.Eof)
+      Seq(
+        TokenKind.Plus,
+        TokenKind.Minus,
+        TokenKind.Star,
+        TokenKind.Slash,
+        TokenKind.Percent,
+        TokenKind.Lt,
+        TokenKind.Gt,
+        TokenKind.Eq,
+        TokenKind.Dot,
+        TokenKind.Pipe,
+        TokenKind.Bang,
+        TokenKind.Eof
+      )
     )
 
   // ---- Identifiers ----
 
   test("lower vs upper ident"):
     val (toks, _) = scan("foo Bar baz_42 _under")
-    assertEquals(toks.map(_.kind), Seq(
-      TokenKind.LowerIdent, TokenKind.UpperIdent, TokenKind.LowerIdent,
-      TokenKind.LowerIdent, TokenKind.Eof
-    ))
+    assertEquals(
+      toks.map(_.kind),
+      Seq(
+        TokenKind.LowerIdent,
+        TokenKind.UpperIdent,
+        TokenKind.LowerIdent,
+        TokenKind.LowerIdent,
+        TokenKind.Eof
+      )
+    )
     assertEquals(toks.take(4).map(_.lexeme), Seq("foo", "Bar", "baz_42", "_under"))
 
   // ---- Literals ----
@@ -131,8 +166,15 @@ class ScannerSuite extends FunSuite:
     // fn f : INDENT x DEDENT EOF — note no NEWLINE between INDENT and x.
     assertEquals(
       ks,
-      Seq(TokenKind.KwFn, TokenKind.LowerIdent, TokenKind.Colon,
-          TokenKind.Indent, TokenKind.LowerIdent, TokenKind.Dedent, TokenKind.Eof)
+      Seq(
+        TokenKind.KwFn,
+        TokenKind.LowerIdent,
+        TokenKind.Colon,
+        TokenKind.Indent,
+        TokenKind.LowerIdent,
+        TokenKind.Dedent,
+        TokenKind.Eof
+      )
     )
 
   test("nested blocks"):
@@ -148,9 +190,13 @@ class ScannerSuite extends FunSuite:
     assertEquals(
       ks,
       Seq(
-        TokenKind.KwFn, TokenKind.LowerIdent, TokenKind.Colon,
+        TokenKind.KwFn,
+        TokenKind.LowerIdent,
+        TokenKind.Colon,
         TokenKind.Indent,
-        TokenKind.KwIf, TokenKind.LowerIdent, TokenKind.Colon,
+        TokenKind.KwIf,
+        TokenKind.LowerIdent,
+        TokenKind.Colon,
         TokenKind.Indent,
         TokenKind.LowerIdent,
         TokenKind.Dedent,
@@ -199,10 +245,14 @@ class ScannerSuite extends FunSuite:
     assertEquals(
       ks,
       Seq(
-        TokenKind.LowerIdent, TokenKind.LParen,
-        TokenKind.LowerIdent, TokenKind.Comma,
-        TokenKind.LowerIdent, TokenKind.Comma,
-        TokenKind.RParen, TokenKind.Eof
+        TokenKind.LowerIdent,
+        TokenKind.LParen,
+        TokenKind.LowerIdent,
+        TokenKind.Comma,
+        TokenKind.LowerIdent,
+        TokenKind.Comma,
+        TokenKind.RParen,
+        TokenKind.Eof
       )
     )
 
@@ -215,8 +265,15 @@ class ScannerSuite extends FunSuite:
     // fn f = INDENT x DEDENT EOF (no NEWLINE between `=` and INDENT).
     assertEquals(
       ks,
-      Seq(TokenKind.KwFn, TokenKind.LowerIdent, TokenKind.Eq,
-          TokenKind.Indent, TokenKind.LowerIdent, TokenKind.Dedent, TokenKind.Eof)
+      Seq(
+        TokenKind.KwFn,
+        TokenKind.LowerIdent,
+        TokenKind.Eq,
+        TokenKind.Indent,
+        TokenKind.LowerIdent,
+        TokenKind.Dedent,
+        TokenKind.Eof
+      )
     )
 
   // ---- Error handling ----
@@ -239,9 +296,17 @@ class ScannerSuite extends FunSuite:
   // with balanced INDENT/DEDENT and no scanner errors. (Parser-level
   // validation is Phase 2.M3+; this just exercises the scanner.)
   private val exampleNames = Seq(
-    "01_basics", "02_collections", "03_option_result", "04_json",
-    "05_phantom_types", "06_functor_monad", "07_recursive_data",
-    "08_effects_handlers", "09_interpreter", "10_geometry", "11_properties"
+    "01_basics",
+    "02_collections",
+    "03_option_result",
+    "04_json",
+    "05_phantom_types",
+    "06_functor_monad",
+    "07_recursive_data",
+    "08_effects_handlers",
+    "09_interpreter",
+    "10_geometry",
+    "11_properties"
   )
 
   for name <- exampleNames do
@@ -261,7 +326,8 @@ class ScannerSuite extends FunSuite:
       val indents = toks.count(_.kind == TokenKind.Indent)
       val dedents = toks.count(_.kind == TokenKind.Dedent)
       assertEquals(
-        indents, dedents,
+        indents,
+        dedents,
         s"$name has unbalanced INDENT/DEDENT: $indents vs $dedents"
       )
 
