@@ -116,6 +116,7 @@ lazy val bench = (project in file("bench"))
 
 lazy val root = (project in file("."))
   .aggregate(compiler, `scalafix-tests`)
+  .dependsOn(`scalafix-rules` % ScalafixConfig)
   .configs(Cpd)
   .settings(
     name := "fixed",

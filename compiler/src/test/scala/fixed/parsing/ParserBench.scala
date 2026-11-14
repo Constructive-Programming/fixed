@@ -1,17 +1,18 @@
 // scalafix:off DisableSyntax.var, DisableSyntax.while
-// Benchmark/test loops: mutable counters are deliberate here.
+/** Benchmark/test loops: mutable counters are deliberate here. */
 package fixed.parsing
 
 import fixed.util.SourceFile
 
-// Throwaway parser micro-bench; not JMH. Run via `compiler/Test/runMain
-// fixed.parsing.ParserBench [iters]`. Loads every example, warms up the
-// JIT, then parses each file `iters` times and prints per-file and
-// corpus-aggregate means in microseconds-per-run and ns-per-token.
-//
-// Mirrors ScannerBench so refactors of the Parser can be measured the
-// same way the Scanner ones were. The ns/token figure is computed
-// against the Scanner's token count for the same source.
+/** Throwaway parser micro-bench; not JMH. Run via `compiler/Test/runMain
+  * fixed.parsing.ParserBench [iters]`. Loads every example, warms up the
+  * JIT, then parses each file `iters` times and prints per-file and
+  * corpus-aggregate means in microseconds-per-run and ns-per-token.
+  *
+  * Mirrors ScannerBench so refactors of the Parser can be measured the
+  * same way the Scanner ones were. The ns/token figure is computed
+  * against the Scanner's token count for the same source.
+  */
 object ParserBench:
 
   private val examples: List[String] = List(
@@ -40,7 +41,7 @@ object ParserBench:
     def parseOnce(src: SourceFile): Unit =
       val _ = Parser.parse(src)
 
-    // Token count for ns/token reporting.
+    /** Token count for ns/token reporting. */
     def tokenCount(src: SourceFile): Int =
       val rep = new fixed.util.Reporter(src)
       new Scanner(src, rep).tokenize().length

@@ -18,8 +18,6 @@ class ParserSuite extends FunSuite:
     val tree = Parser.parse(src, rep)
     (tree, rep)
 
-  // ---- Smoke tests for individual productions ----
-
   test("empty file parses to empty CompilationUnit"):
     val (t, rep) = parse("")
     assert(!rep.hasErrors)
@@ -166,8 +164,6 @@ class ParserSuite extends FunSuite:
         assertEquals(s, "hello")
       case _ => fail(s"expected FnDecl with StringLit body, got $t")
 
-  // ---- M4.8: parseHandleExpr ----
-
   test("M4.8: handle with effect arm and return arm"):
     val src = SourceFile.fromString(
       "<test>",
@@ -225,8 +221,6 @@ class ParserSuite extends FunSuite:
           case other                 => fail(s"expected Block body, got $other")
       case other => fail(s"expected HandleExpr, got $other")
 
-  // ---- M4.7: parseDoExpr ----
-
   test("M4.7: do-block with binds and a pure-style tail"):
     val src = SourceFile.fromString(
       "<test>",
@@ -251,9 +245,10 @@ class ParserSuite extends FunSuite:
       case other => fail(s"expected DoExpr in fn body, got $other")
 
   test("M4.7: nested calls with `<-` inside a sub-expression are not bind"):
-    // Here the `<-` appears inside a parenthesised sub-expression — it
-    // doesn't make the outer statement a DoBind. (Synthetic shape: a
-    // tuple element bound shouldn't match.)
+    /** Here the `<-` appears inside a parenthesised sub-expression — it
+      * doesn't make the outer statement a DoBind. (Synthetic shape: a
+      * tuple element bound shouldn't match.)
+      */
     val src = SourceFile.fromString(
       "<test>",
       """fn f() -> u64 = do:
@@ -269,8 +264,6 @@ class ParserSuite extends FunSuite:
           case _: Trees.StaticCall => ()
           case other               => fail(s"expected StaticCall, got $other")
       case other => fail(s"expected DoExpr, got $other")
-
-  // ---- Triage fixes (M4 chase-down) ----
 
   test("triage: `()` accepted as `of` argument (UnitType)"):
     val pr = Parser.parse(SourceFile.fromString(
@@ -316,9 +309,10 @@ class ParserSuite extends FunSuite:
     assert(!pr.hasErrors, pr.diagnostics.toString)
 
   test("triage: multi-line do-block inside an arg list closes at the outer comma"):
-    // `do:` is a `:`-introduced block; it only re-engages off-side
-    // *inside* an already-re-engaged context (e.g. a lambda body),
-    // mirroring the real-world pattern from example 06.
+    /** `do:` is a `:`-introduced block; it only re-engages off-side
+      * *inside* an already-re-engaged context (e.g. a lambda body),
+      * mirroring the real-world pattern from example 06.
+      */
     val pr = Parser.parse(SourceFile.fromString(
       "<test>",
       """fn f() -> u64 = call(
@@ -342,13 +336,11 @@ class ParserSuite extends FunSuite:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(Trees.Block(stmts, _)), _)), _) =>
-        // First stmt is the nested fn; second is the call to inner.
+        /** First stmt is the nested fn; second is the call to inner. */
         stmts.head match
           case fn: Trees.FnDecl => assertEquals(fn.name, "inner")
           case other            => fail(s"expected nested FnDecl, got $other")
       case other => fail(s"expected outer FnDecl with Block body, got $other")
-
-  // ---- M5 triage ----
 
   test("M5: else-if chain"):
     val pr = Parser.parse(SourceFile.fromString(
@@ -462,10 +454,11 @@ class ParserSuite extends FunSuite:
     assert(!pr.hasErrors, pr.diagnostics.toString)
 
   test("M5: deeply nested handle (do: ...)"):
-    // This was the chase-down case for owedDedents — multi-line
-    // lambda body inside multi-line lambda body inside do-block
-    // inside handle subject, all collapsing to a single closing
-    // `)` at the outer indent.
+    /** This was the chase-down case for owedDedents — multi-line
+      * lambda body inside multi-line lambda body inside do-block
+      * inside handle subject, all collapsing to a single closing
+      * `)` at the outer indent.
+      */
     val pr = Parser.parse(SourceFile.fromString(
       "<test>",
       """fn main() -> () =
@@ -481,8 +474,6 @@ class ParserSuite extends FunSuite:
         |""".stripMargin
     ))
     assert(!pr.hasErrors, pr.diagnostics.toString)
-
-  // ---- M4.6: parseEffectDecl ----
 
   test("M4.6: simple effect with one op"):
     val src = SourceFile.fromString(
@@ -537,8 +528,6 @@ class ParserSuite extends FunSuite:
             assertEquals(im.params, Nil)
           case other => fail(s"expected InstanceMethod, got $other")
       case other => fail(s"expected EffectDecl, got $other")
-
-  // ---- M4.5: parseSatisfiesDecl ----
 
   test("M4.5: simple satisfies with constructor mappings"):
     val src = SourceFile.fromString(
@@ -609,8 +598,6 @@ class ParserSuite extends FunSuite:
         assertEquals(s.mappings, Nil)
       case other => fail(s"expected SatisfiesDecl, got $other")
 
-  // ---- M4.4: parseMatchExpr ----
-
   test("M4.4: simple match on data variants"):
     val src = SourceFile.fromString(
       "<test>",
@@ -664,7 +651,7 @@ class ParserSuite extends FunSuite:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
-        // First arm should be OrPat(OrPat(N, S), E).
+        /** First arm should be OrPat(OrPat(N, S), E). */
         m.arms.head.pattern match
           case Trees.OrPat(Trees.OrPat(_, _, _), _, _) => ()
           case other                                   => fail(s"expected nested OrPat, got $other")
@@ -703,8 +690,6 @@ class ParserSuite extends FunSuite:
           case Trees.Block(stmts, _) => assert(stmts.length >= 2)
           case other                 => fail(s"expected Block body for first arm, got $other")
       case other => fail(s"expected MatchExpr, got $other")
-
-  // ---- M4.3: parseTypeAlias ----
 
   test("M4.3: simple chain alias"):
     val pr = Parser.parse(SourceFile.fromString(
@@ -752,8 +737,6 @@ class ParserSuite extends FunSuite:
               case other                                    => fail(s"expected RefinementCall, got $other")
           case other => fail(s"expected IsBound chain, got $other")
       case other => fail(s"expected TypeAlias, got $other")
-
-  // ---- M4.2: parseCapDecl ----
 
   test("M4.2: cap with instance and static methods"):
     val src = SourceFile.fromString(
@@ -841,8 +824,6 @@ class ParserSuite extends FunSuite:
           case other             => fail(s"expected PropDecl, got $other")
       case other => fail(s"expected single CapDecl, got $other")
 
-  // ---- M4.1: parseDataDecl ----
-
   test("M4.1: simple unit-only enum"):
     val src = SourceFile.fromString(
       "<test>",
@@ -881,7 +862,8 @@ class ParserSuite extends FunSuite:
         assertEquals(vs.map(_.name), List("Red", "Green", "RGB"))
         val rgb = vs.find(_.name == "RGB").get
         assertEquals(rgb.fields.map(_.name), List("red", "green", "blue"))
-        // The first field's type carries the `is Numeric` named alias.
+
+        /** The first field's type carries the `is Numeric` named alias. */
         rgb.fields.head.typeAnn match
           case Trees.NamedAlias("N", caps, _) =>
             assert(caps.exists {
@@ -954,8 +936,10 @@ class ParserSuite extends FunSuite:
     pr.tree match
       case Trees.CompilationUnit(List(d: Trees.DataDecl), _) =>
         assertEquals(d.ofParams.length, 3)
-        // First is a NamedAlias type expression (`N is Numeric`); the
-        // other two are FnParam (lowered OfValueParam).
+
+        /** First is a NamedAlias type expression (`N is Numeric`); the
+          * other two are FnParam (lowered OfValueParam).
+          */
         d.ofParams.head match
           case _: Trees.NamedAlias => ()
           case other               => fail(s"expected NamedAlias, got $other")
@@ -983,8 +967,6 @@ class ParserSuite extends FunSuite:
           case other                         => fail(s"expected TypeRef('Nat'), got $other")
       case other => fail(s"expected single DataDecl, got $other")
 
-  // ---- M3.4: type-expression recovery ----
-
   test("M3.4: malformed param type leaves param shape and body intact"):
     val src = SourceFile.fromString("<test>", "fn f(x: @ @ @) -> u64 = 0\n")
     val pr = Parser.parse(src)
@@ -996,7 +978,8 @@ class ParserSuite extends FunSuite:
         fn.params.head.typeAnn match
           case _: Trees.Error => ()
           case other          => fail(s"expected Error type annotation, got $other")
-        // Return type and body must NOT have been swallowed by the bad type.
+
+        /** Return type and body must NOT have been swallowed by the bad type. */
         fn.returnType match
           case Some(Trees.PrimitiveType("u64", _)) => ()
           case other                               => fail(s"expected u64 return, got $other")
@@ -1019,8 +1002,6 @@ class ParserSuite extends FunSuite:
           case other                    => fail(s"expected IntLit body, got $other")
       case other => fail(s"expected single FnDecl, got $other")
 
-  // ---- M3.3: delimited-list recovery (args, lists, tuples) ----
-
   test("M3.3: junk arg in middle of a call yields N args with one Error"):
     val src = SourceFile.fromString("<test>", "fn f() -> u64 = g(1, @, 3)\n")
     val pr = Parser.parse(src)
@@ -1041,8 +1022,9 @@ class ParserSuite extends FunSuite:
       case other => fail(s"expected FnDecl, got $other")
 
   test("M3.3: extra tokens between an arg and `,` are absorbed into Error"):
-    // `g(1 @ @, 3)`: parseExpr returns `1`; the post-item check sees `@`
-    // (not `,` or `)`), syncs to `,`, wraps in Error.
+    /** `g(1 @ @, 3)`: parseExpr returns `1`; the post-item check sees `@`
+      * (not `,` or `)`), syncs to `,`, wraps in Error.
+      */
     val src = SourceFile.fromString("<test>", "fn f() -> u64 = g(1 @ @, 3)\n")
     val pr = Parser.parse(src)
     assert(pr.hasErrors)
@@ -1074,8 +1056,9 @@ class ParserSuite extends FunSuite:
     val errs = collectAllErrors(pr.tree)
     assert(errs.nonEmpty)
 
-  // Walk the tree gathering every Trees.Error. Used by the recovery tests
-  // above; the flattening-vs-shape distinction is tested elsewhere.
+  /** Walk the tree gathering every Trees.Error. Used by the recovery tests
+    * above; the flattening-vs-shape distinction is tested elsewhere.
+    */
   private def collectAllErrors(t: Tree): List[Trees.Error] =
     t match
       case e: Trees.Error =>
@@ -1096,8 +1079,6 @@ class ParserSuite extends FunSuite:
       case Trees.ListExpr(es, _)           => es.flatMap(collectAllErrors)
       case _                               => Nil
 
-  // ---- M3.2: block-body recovery ----
-
   test("M3.2: garbage statement is wrapped in Error; surrounding lets parse"):
     val src = SourceFile.fromString(
       "<test>",
@@ -1112,13 +1093,15 @@ class ParserSuite extends FunSuite:
     assert(pr.hasErrors)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(Trees.Block(stmts, _)), _)), _) =>
-        // Expect: 4 statements — let x, Error, let y, ident y.
-        // (Pre-M3.2 behaviour produced one Error per `@`, i.e. 6
-        // statements; the test below pins the collapsed count.)
+        /** Expect: 4 statements — let x, Error, let y, ident y.
+          * (Pre-M3.2 behaviour produced one Error per `@`, i.e. 6
+          * statements; the test below pins the collapsed count.)
+          */
         assertEquals(stmts.length, 4, s"expected 4 statements, got: $stmts")
         val errs = stmts.collect { case e: Trees.Error => e }
         assertEquals(errs.length, 1, s"expected exactly one Error among statements: $stmts")
-        // Lets remain parseable on either side.
+
+        /** Lets remain parseable on either side. */
         val lets = stmts.collect { case l: Trees.LetExpr => l }
         assertEquals(lets.length, 2)
       case other => fail(s"expected FnDecl with Block body, got $other")
@@ -1135,21 +1118,21 @@ class ParserSuite extends FunSuite:
     assert(pr.hasErrors)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(Trees.Block(stmts, _)), _)), _) =>
-        // First statement is the broken let (wrapped in Error); second
-        // is the bare `x` ident.
+        /** First statement is the broken let (wrapped in Error); second
+          * is the bare `x` ident.
+          */
         assertEquals(stmts.length, 2)
         stmts.last match
           case Trees.Ident("x", _) => ()
           case other               => fail(s"expected trailing Ident('x'), got $other")
       case other => fail(s"expected FnDecl with Block body, got $other")
 
-  // ---- M3.1: top-level recovery ----
-
   test("M3.1: junk between decls collapses into a single Error item"):
-    // Two valid fns sandwich three stray punctuation tokens. The
-    // pre-M3 behaviour produced one Error per stray token (3 extra
-    // items); after anchor-based sync we get exactly one Error
-    // covering the run, plus the two FnDecls.
+    /** Two valid fns sandwich three stray punctuation tokens. The
+      * pre-M3 behaviour produced one Error per stray token (3 extra
+      * items); after anchor-based sync we get exactly one Error
+      * covering the run, plus the two FnDecls.
+      */
     val src = SourceFile.fromString(
       "<test>",
       """fn a() -> u64 = 1
@@ -1168,7 +1151,7 @@ class ParserSuite extends FunSuite:
       case other => fail(s"expected CompilationUnit, got $other")
 
   test("M3.1: unknown token before a real decl recovers without consuming the decl head"):
-    // A leading `@` must be skipped; the following `fn foo` must parse.
+    /** A leading `@` must be skipped; the following `fn foo` must parse. */
     val src = SourceFile.fromString("<test>", "@\nfn foo() -> u64 = 0\n")
     val pr = Parser.parse(src)
     assert(pr.hasErrors)
@@ -1195,8 +1178,6 @@ class ParserSuite extends FunSuite:
         assertEquals(errs.length, 1, s"expected one Error after the fn, got: $items")
       case other => fail(s"expected CompilationUnit, got $other")
 
-  // ---- M2: gap nodes ----
-
   test("M2: unexpected top-level token produces a Trees.Error item"):
     val src = SourceFile.fromString("<test>", "@@@\n")
     val pr = Parser.parse(src)
@@ -1213,8 +1194,9 @@ class ParserSuite extends FunSuite:
       case other => fail(s"expected CompilationUnit, got $other")
 
   test("M2: stub `mod` declaration produces a Trees.Error item"):
-    // `mod` is still unimplemented; the stub calls `unsupported(...)`
-    // which returns a Trees.Error gap node.
+    /** `mod` is still unimplemented; the stub calls `unsupported(...)`
+      * which returns a Trees.Error gap node.
+      */
     val pr = Parser.parse(SourceFile.fromString("<test>", "mod foo\n"))
     assert(pr.hasErrors)
     pr.tree match
@@ -1242,9 +1224,10 @@ class ParserSuite extends FunSuite:
         s"placeholder ident leaked into tree for input `${s.trim}`: $flat"
       )
 
-  // Walk the tree and collect every Ident's name. Used by the no-leak
-  // test above; deliberately exhaustive over the productions the
-  // smoke-test inputs can produce.
+  /** Walk the tree and collect every Ident's name. Used by the no-leak
+    * test above; deliberately exhaustive over the productions the
+    * smoke-test inputs can produce.
+    */
   private def collectIdents(t: Tree): List[String] =
     t match
       case Trees.Ident(n, _)                           => List(n)
@@ -1263,8 +1246,6 @@ class ParserSuite extends FunSuite:
       case Trees.Error(rec, _)             => rec.flatMap(collectIdents)
       case _                               => Nil
 
-  // ---- M1 smoke: functional ParseResult API ----
-
   test("ParseResult: happy path returns tree and empty diagnostics"):
     val src = SourceFile.fromString("<test>", "fn id(x: u64) -> u64 = x\n")
     val pr = Parser.parse(src)
@@ -1276,7 +1257,8 @@ class ParserSuite extends FunSuite:
       case other                                           => fail(s"expected single FnDecl, got $other")
 
   test("ParseResult: diagnostics surface without a caller Reporter"):
-    val src = SourceFile.fromString("<test>", "fn ()\n") // missing name
+    /** missing name */
+    val src = SourceFile.fromString("<test>", "fn ()\n")
     val pr = Parser.parse(src)
     assert(pr.hasErrors, "expected at least one error diagnostic")
     assert(pr.diagnostics.nonEmpty)
@@ -1289,8 +1271,6 @@ class ParserSuite extends FunSuite:
     assertEquals(rep.diagnostics.toList, pr.diagnostics)
     assertEquals(tree.toString, pr.tree.toString)
 
-  // ---- Integration: example 01 ----
-
   test("parse examples/01_basics.fixed (M3 milestone)"):
     val (tree, rep) = parseFile("examples/01_basics.fixed")
     val errors = rep.diagnostics.filter(_.isError)
@@ -1299,7 +1279,7 @@ class ParserSuite extends FunSuite:
       else "\n" + errors.map(rep.format).mkString("\n")
     assert(errors.isEmpty, s"01_basics.fixed produced ${errors.size} parse errors:$errorReport")
 
-    // Top-level: 1 use + 4 fns (greet, fib_iter, print_fibs, main).
+    /** Top-level: 1 use + 4 fns (greet, fib_iter, print_fibs, main). */
     tree match
       case Trees.CompilationUnit(items, _) =>
         val uses = items.collect { case u: Trees.UseDecl => u }

@@ -32,9 +32,10 @@ import fixed.util.{DiagCode, Reporter, SourceFile, Span}
 final class Parser(scanner: Scanner, reporter: Reporter):
   import Parser.initialState
 
-  // The Scanner's token array, shared (not copied): `current`/`peek`
-  // index it on every cursor advance. Logically immutable — nothing
-  // writes to it after the scanner builds it.
+  /** The Scanner's token array, shared (not copied): `current`/`peek`
+    * index it on every cursor advance. Logically immutable — nothing
+    * writes to it after the scanner builds it.
+    */
   private val tokens: Array[Token] = scanner.tokenArray
 
   /** Parse the whole compilation unit. */
@@ -55,8 +56,6 @@ final class Parser(scanner: Scanner, reporter: Reporter):
 end Parser
 
 object Parser:
-
-  // ---- State ----
 
   /** Parser state. All mutation is replaced by `copy` of this case
     * class. `tokens` is the full materialised token stream; `idx` is
@@ -130,8 +129,6 @@ object Parser:
   def initialState(tokens: Array[Token]): ParserState =
     ParserState(tokens = tokens, idx = 0, anchors = Nil, owedDedents = 0)
 
-  // ---- Cursor primitives ----
-
   private inline def consume(s: ParserState): Parsed[Token] =
     (s.advance, s.current)
 
@@ -151,7 +148,7 @@ object Parser:
       val (s1, tok) = expect(s, kind, what)
       rest(s1, tok)
 
-  // Optional pieces that default to the monoid's empty value (e.g. `Nil`).
+  /** Optional pieces that default to the monoid's empty value (e.g. `Nil`). */
   extension [A: Monoid](s: ParserState)
     /** `kind p`?, consuming `kind`; empty when `kind` is absent. */
     private inline def optionalOrEmpty(kind: TokenKind)(inline p: Rule[A]): Parsed[A] =
@@ -241,8 +238,6 @@ object Parser:
   private def span(start: Span, end: Span): Span =
     Span(start.start, end.end)
 
-  // ---- Helpers ----
-
   /** Skip zero or more NEWLINEs at the current position. */
   @tailrec
   private def skipNewlines(s: ParserState): ParserState =
@@ -267,14 +262,15 @@ object Parser:
         if s.current.kind == TokenKind.Eof || inner.contains(s.current.kind) then s
         else syncToAnchors(s.advance)
 
-  // Count of DEDENT tokens that an inner block-style parser exited
-  // bracket-aware (without consuming a matching DEDENT). The scanner
-  // will eventually emit those DEDENTs when the indent stack collapses
-  // — typically several blocks later, when a less-indented physical
-  // line fires the line-end transition. Block-style parsers drain
-  // these owed DEDENTs *before* expecting their own, otherwise the
-  // owed DEDENTs masquerade as the wrong block's terminator and a
-  // real DEDENT leaks out into a paren-expecting context.
+  /** Count of DEDENT tokens that an inner block-style parser exited
+    * bracket-aware (without consuming a matching DEDENT). The scanner
+    * will eventually emit those DEDENTs when the indent stack collapses
+    * — typically several blocks later, when a less-indented physical
+    * line fires the line-end transition. Block-style parsers drain
+    * these owed DEDENTs *before* expecting their own, otherwise the
+    * owed DEDENTs masquerade as the wrong block's terminator and a
+    * real DEDENT leaks out into a paren-expecting context.
+    */
   @tailrec
   private def absorbOwedDedents(s: ParserState): ParserState =
     if s.owedDedents > 0 && s.current.kind == TokenKind.Dedent then
@@ -359,12 +355,10 @@ object Parser:
     )
   end Anchors
 
-  // ---- Compilation unit ----
-
   def parseCompilationUnit(s0: ParserState)(using Reporter): Parsed[Tree] =
     val s1 = skipNewlines(s0)
     val (s2, items) = withAnchors(s1, Anchors.topLevel) { st =>
-      // Items at top level are separated by NEWLINE; allow blank lines.
+      /** Items at top level are separated by NEWLINE; allow blank lines. */
       @tailrec
       def loop(state: ParserState, acc: List[Tree]): Parsed[List[Tree]] =
         if state.current.kind == TokenKind.Eof then (state, acc.reverse)
@@ -377,8 +371,6 @@ object Parser:
     val endSpan = s2.current.span
     (s2, Trees.CompilationUnit(items, span(s0.current.span, endSpan)))
 
-  // ---- Top items ----
-
   private def parseTopItem(s: ParserState)(using reporter: Reporter): Parsed[Tree] = s.current.kind match
     case TokenKind.KwUse      => parseUseDecl(s)
     case TokenKind.KwFn       => parseFnLike(s, FnKind.Free)
@@ -390,14 +382,17 @@ object Parser:
     case TokenKind.KwMod      => parseModDecl(s)
     case TokenKind.KwPub      => unsupported(s, "`pub` modifier")
     case TokenKind.UpperIdent => parseSatisfiesDecl(s)
-    // A primitive (LowerIdent) followed by `satisfies` is also a
-    // satisfaction declaration (e.g. `u64 satisfies Optional of Self`).
+
+    /** A primitive (LowerIdent) followed by `satisfies` is also a
+      * satisfaction declaration (e.g. `u64 satisfies Optional of Self`).
+      */
     case TokenKind.LowerIdent if s.peek(1).kind == TokenKind.KwSatisfies =>
       parseSatisfiesDecl(s)
     case _ =>
-      // Unknown token at top level. Emit a diagnostic, then synchronise
-      // to the next decl introducer (or EOF). This collapses runs of
-      // junk into a single Error item rather than one per stray token.
+      /** Unknown token at top level. Emit a diagnostic, then synchronise
+        * to the next decl introducer (or EOF). This collapses runs of
+        * junk into a single Error item rather than one per stray token.
+        */
       val startSpan = s.current.span
       reporter.error(
         DiagCode.P002,
@@ -405,9 +400,11 @@ object Parser:
         s"unexpected token at top level: ${s.current.kind}${describeLexeme(s.current)}",
         Some("expected `use`, `fn`, `cap`, `data`, `effect`, `type`, `mod`, or `<TypeName> satisfies …`")
       )
-      // syncToAnchors stops at the next anchor (top-level keyword or EOF)
-      // without consuming it, so the outer loop dispatches that token to
-      // its proper handler.
+
+      /** syncToAnchors stops at the next anchor (top-level keyword or EOF)
+        * without consuming it, so the outer loop dispatches that token to
+        * its proper handler.
+        */
       val s1 = syncToAnchors(s)
       (s1, Trees.Error(Nil, span(startSpan, s1.current.span)))
 
@@ -421,16 +418,16 @@ object Parser:
     val (s1, tok) = consume(s)
     (s1, Trees.Error(Nil, tok.span))
 
-  // ---- UseDecl ----
-
-  // UseDecl ::= "use" Path ("satisfies" CapBound)?
-  // Path     ::= Ident ("." Ident)* ("." "{" Ident ("," Ident)* ","? "}")?
-  // The trailing brace-group is sugar for one import per listed name
-  // sharing the dotted prefix; the parser stores them in `selectors`.
+  /** UseDecl ::= "use" Path ("satisfies" CapBound)?
+    * Path     ::= Ident ("." Ident)* ("." "{" Ident ("," Ident)* ","? "}")?
+    * The trailing brace-group is sugar for one import per listed name
+    * sharing the dotted prefix; the parser stores them in `selectors`.
+    */
   private def parseUseDecl(s0: ParserState)(using Reporter): Parsed[Tree] =
     s0.afterKeyword(TokenKind.KwUse, "`use`") { (s1, startTok) =>
       val (s2, head) = parseIdentTextEither(s1)
-      // Walk `.Ident` segments, optionally terminated by `.{ name, ... }`.
+
+      /** Walk `.Ident` segments, optionally terminated by `.{ name, ... }`. */
       @tailrec
       def loop(st: ParserState, path: List[String]): (ParserState, List[String], List[String]) =
         if st.current.kind != TokenKind.Dot then (st, path.reverse, Nil)
@@ -457,11 +454,10 @@ object Parser:
         reportExpected(s, DiagCode.P003, "an identifier", None)
         (s, "<error>")
 
-  // ---- FnDecl (free fns and cap/effect/satisfies methods) ----
-
-  // FnDecl ::= "fn" LOWER_IDENT TypeParamsHint? FnParamList FnSigTail          (Free)
-  // InstanceMethod ::= "fn" LOWER_IDENT TypeParamsHint? FnParamList? FnSigTail (Instance)
-  // StaticMethod ::= "Self" "." "fn" LOWER_IDENT TypeParamsHint? FnParamList? FnSigTail (Static)
+  /** FnDecl ::= "fn" LOWER_IDENT TypeParamsHint? FnParamList FnSigTail          (Free)
+    * InstanceMethod ::= "fn" LOWER_IDENT TypeParamsHint? FnParamList? FnSigTail (Instance)
+    * StaticMethod ::= "Self" "." "fn" LOWER_IDENT TypeParamsHint? FnParamList? FnSigTail (Static)
+    */
   /** Which function-shaped declaration to parse, with its diagnostic noun and the node to build. */
   private enum FnKind(
       val nameWhat: String,
@@ -510,7 +506,7 @@ object Parser:
   private def parseFnParam(s0: ParserState)(using Reporter): Parsed[Trees.FnParam] =
     parseBinder(s0, "parameter name")(Trees.FnParam.apply)
 
-  // `name : Type (= default)?`
+  /** `name : Type (= default)?` */
   private def parseBinder[B <: Trees.Binder](s0: ParserState, what: String)(
       mk: (Trees.Binding, Span) => B
   )(using Reporter): Parsed[B] =
@@ -518,14 +514,14 @@ object Parser:
     val (s4, (ty, default)) = parseTypedBinderTail(s1)
     (s4, mk(Trees.Binding(nameTok.lexeme, ty, default), span(nameTok.span, s4.current.span)))
 
-  // Shared tail of fn decls and cap methods: `(-> TypeExpr)? WithClause? (= FnBody)?`. FnBody is an inline-or-block expression.
+  /** Shared tail of fn decls and cap methods: `(-> TypeExpr)? WithClause? (= FnBody)?`. FnBody is an inline-or-block expression. */
   private def parseFnSigTail(s0: ParserState)(using Reporter): Parsed[(Option[Tree], Option[Tree], Option[Tree])] =
     val (s1, returnType) = s0.optionally(TokenKind.Arrow)(parseTypeExpr)
     val (s2, withClause) = parseOptionalWithClause(s1)
     val (s3, body) = s2.optionally(TokenKind.Eq)(parseInlineOrBlockExpr)
     (s3, (returnType, withClause, body))
 
-  // Shared tail of fn params, `of (...)` value params and data fields: `: TypeExpr (= Expr)?`.
+  /** Shared tail of fn params, `of (...)` value params and data fields: `: TypeExpr (= Expr)?`. */
   private def parseTypedBinderTail(s0: ParserState)(using Reporter): Parsed[(Tree, Option[Tree])] =
     val (s1, _) = expect(s0, TokenKind.Colon, "`:`")
     val (s2, ty) = parseTypeExpr(s1)
@@ -541,8 +537,6 @@ object Parser:
     val (s1, bounds) = parseSepBy1(s0, TokenKind.Plus)(parseEffectBound)
     if bounds.tail.isEmpty then (s1, bounds.head)
     else (s1, Trees.EffectRow(bounds.toList, span(bounds.head.span, bounds.last.span)))
-
-  // ---- Block ----
 
   /** Parse `INDENT stmt (NEWLINE stmt)* DEDENT` as a Block. Two ways
     * the block can end:
@@ -599,20 +593,20 @@ object Parser:
     }
     (s1, stmts.reverse)
 
-  // Fixed has no statements — every block element is an Expr, with two
-  // exceptions admissible in any block:
-  //   - `fn name(...) = body` — nested local function.
-  //   - `prop name: body` — invariant (used in `fn -> cap` bodies).
+  /** Fixed has no statements — every block element is an Expr, with two
+    * exceptions admissible in any block:
+    *   - `fn name(...) = body` — nested local function.
+    *   - `prop name: body` — invariant (used in `fn -> cap` bodies).
+    */
   private def parseStatement(s: ParserState)(using Reporter): Parsed[Tree] = s.current.kind match
     case TokenKind.KwFn   => parseFnLike(s, FnKind.Free)
     case TokenKind.KwProp => parsePropDecl(s)
     case _                => parseExpr(s)
 
-  // ---- Type expressions ----
-
-  // TypeExpr ::= ArrowType ::= ArrowLhs ("->" ArrowType WithClause?)?
-  // The anchor frame lets a failed `parseTypeAtom` sync to whatever
-  // plausibly follows a type.
+  /** TypeExpr ::= ArrowType ::= ArrowLhs ("->" ArrowType WithClause?)?
+    * The anchor frame lets a failed `parseTypeAtom` sync to whatever
+    * plausibly follows a type.
+    */
   def parseTypeExpr(s: ParserState)(using Reporter): Parsed[Tree] =
     withAnchors(s, Anchors.typeExpr) { st => parseArrowType(st) }
 
@@ -631,8 +625,9 @@ object Parser:
     case One(t: Tree)
     case Many(ts: List[Tree], span: Span)
 
-  // `)` | item `)` | item `,` items `)`. Always consumes the closing paren
-  // (or reports it missing); `start` is the span of the opening `(`.
+  /** `)` | item `)` | item `,` items `)`. Always consumes the closing paren
+    * (or reports it missing); `start` is the span of the opening `(`.
+    */
   private inline def parseParenBody(s1: ParserState, start: Span)(
       inline item: Rule[Tree]
   )(using Reporter): Parsed[Paren] =
@@ -642,8 +637,9 @@ object Parser:
         val (s3, first) = item(s2)
         accept(s3, TokenKind.Comma) match
           case (s4, Some(_)) =>
-            // `first` is already past the first comma; the tail uses
-            // parseDelimited for recovery and is prepended.
+            /** `first` is already past the first comma; the tail uses
+              * parseDelimited for recovery and is prepended.
+              */
             val (s5, tail) = parseDelimited(s4, TokenKind.RParen, ")")(item)
             val (s6, _) = expect(s5, TokenKind.RParen, "`)`")
             (s6, Paren.Many(first :: tail, span(start, s6.current.span)))
@@ -653,9 +649,10 @@ object Parser:
 
   private def parseArrowLhs(s0: ParserState)(using Reporter): Parsed[Tree] =
     if s0.current.kind == TokenKind.LParen then
-      // Either: `(T1, T2, ...)` → TupleArrowLhs/UnitType
-      //         `(T)` → just T (parenthesised)
-      //         `(T) of OfArg` → ParenTypeApp
+      /** Either: `(T1, T2, ...)` → TupleArrowLhs/UnitType
+        *         `(T)` → just T (parenthesised)
+        *         `(T) of OfArg` → ParenTypeApp
+        */
       val startSpan = s0.current.span
       val s1 = s0.advance
       val (s2, p) = parseParenBody(s1, startSpan)(parseTypeExpr)
@@ -683,10 +680,11 @@ object Parser:
     case TokenKind.KwCap =>
       s.afterKeyword(TokenKind.KwCap, "`cap`")(parseCapTypeRest)
     case TokenKind.KwPart | TokenKind.UpperIdent =>
-      // NamedAlias (`N is C`) or TypeRef (`T`, `T of A`). `Part` is the cap's
-      // element-type pseudo-parameter (Rule 5.3): it behaves like a TypeRef,
-      // and `Part is C` lifts it into a NamedAlias so callers can constrain
-      // Part by a capability chain (`cap Sorted of (Part is Ord)`).
+      /** NamedAlias (`N is C`) or TypeRef (`T`, `T of A`). `Part` is the cap's
+        * element-type pseudo-parameter (Rule 5.3): it behaves like a TypeRef,
+        * and `Part is C` lifts it into a NamedAlias so callers can constrain
+        * Part by a capability chain (`cap Sorted of (Part is Ord)`).
+        */
       val (s1, tok) = consume(s)
       val name = if tok.kind == TokenKind.KwPart then "Part" else tok.lexeme
       if s1.current.kind == TokenKind.KwIs then
@@ -710,17 +708,18 @@ object Parser:
     val (s1, caps) = parseSepBy1(s0, TokenKind.Plus)(parseCapBound)
     (s1, caps.toList)
 
-  // `name(args)` with `name` already consumed and `current` at `(`.
+  /** `name(args)` with `name` already consumed and `current` at `(`. */
   private def parseRefinementCall(s1: ParserState, nameTok: Token)(using Reporter): Parsed[Tree] =
     val (s2, args) = parseArgList(s1)
     (s2, Trees.RefinementCall(nameTok.lexeme, args, span(nameTok.span, s2.current.span)))
 
   private def parseCapBound(s: ParserState)(using Reporter): Parsed[Tree] = s.current.kind match
     case TokenKind.UpperIdent =>
-      // `Name(args)` — invocation of a parameterised type alias or
-      // cap-generating function whose name happens to be uppercase.
-      // Same shape as `lower(args)` below; the typer disambiguates by
-      // resolving the binding.
+      /** `Name(args)` — invocation of a parameterised type alias or
+        * cap-generating function whose name happens to be uppercase.
+        * Same shape as `lower(args)` below; the typer disambiguates by
+        * resolving the binding.
+        */
       if s.peek(1).kind == TokenKind.LParen then
         val (s1, nameTok) = consume(s)
         parseRefinementCall(s1, nameTok)
@@ -739,7 +738,7 @@ object Parser:
   private def parseEffectBound(s0: ParserState)(using Reporter): Parsed[Tree] =
     parseNamedRef(s0, "effect name")(Trees.EffectBound.apply)
 
-  // `Name (of OfArg)?`; `what` names the expected identifier in diagnostics.
+  /** `Name (of OfArg)?`; `what` names the expected identifier in diagnostics. */
   private def parseNamedRef(s0: ParserState, what: String)(mk: (String, Option[Tree], Span) => Trees.NamedRef)(using
       Reporter
   ): Parsed[Tree] =
@@ -747,19 +746,22 @@ object Parser:
     val (s2, ofArg) = s1.optionally(TokenKind.KwOf)(parseOfArg)
     (s2, mk(nameTok.lexeme, ofArg, span(nameTok.span, s2.current.span)))
 
-  // OfArg ::= OfValueParam (decl-site) | LiteralExpr | TypeExpr. The
-  // parser admits any TypeExpr or a parenthesised comma-list (for the
-  // tuple-of-TypeExpr form `BiFunctor of (A, B)`); decl-site value
-  // params and literal-expression OfArgs are disambiguated by the
-  // typer.
+  /** OfArg ::= OfValueParam (decl-site) | LiteralExpr | TypeExpr. The
+    * parser admits any TypeExpr or a parenthesised comma-list (for the
+    * tuple-of-TypeExpr form `BiFunctor of (A, B)`); decl-site value
+    * params and literal-expression OfArgs are disambiguated by the
+    * typer.
+    */
   private def parseOfArg(s: ParserState)(using Reporter): Parsed[Tree] =
     if s.current.kind == TokenKind.LParen then
       val startSpan = s.current.span
       val s1 = s.advance
-      // `()` is the unit type as `of` argument (e.g. `M is Monad of ()`).
-      // Items use parseDataOfItem so literal arguments like `Bounded of (N,
-      // 0, 10)` and OfValueParam-shaped forms work in any of-arg
-      // position, not just on data declarations.
+
+      /** `()` is the unit type as `of` argument (e.g. `M is Monad of ()`).
+        * Items use parseDataOfItem so literal arguments like `Bounded of (N,
+        * 0, 10)` and OfValueParam-shaped forms work in any of-arg
+        * position, not just on data declarations.
+        */
       val (s2, p) = parseParenBody(s1, startSpan)(parseDataOfItem)
       p match
         case Paren.Empty(sp)    => (s2, Trees.UnitType(sp))
@@ -767,13 +769,14 @@ object Parser:
         case Paren.Many(ts, sp) => (s2, Trees.TupleArrowLhs(ts, sp))
     else parseTypeExpr(s)
 
-  // CapType ::= "cap" CapReturnSpec?
-  // CapReturnSpec ::= "of" OfArg
-  //                 | "extends" CapBound ("+" CapBound)*
-  // The grammar makes the two arms exclusive (spec/syntax_grammar.ebnf
-  // §CapReturnSpec): a `cap` is followed by either `of …` or
-  // `extends …`, never both — so `Option[CapReturnSpec]` fits.
-  // After `cap` in type position: `of OfArg`, `extends CapBound (+ CapBound)*`, or bare.
+  /** CapType ::= "cap" CapReturnSpec?
+    * CapReturnSpec ::= "of" OfArg
+    *                 | "extends" CapBound ("+" CapBound)*
+    * The grammar makes the two arms exclusive (spec/syntax_grammar.ebnf
+    * §CapReturnSpec): a `cap` is followed by either `of …` or
+    * `extends …`, never both — so `Option[CapReturnSpec]` fits.
+    * After `cap` in type position: `of OfArg`, `extends CapBound (+ CapBound)*`, or bare.
+    */
   private def parseCapTypeRest(s1: ParserState, startTok: Token)(using Reporter): Parsed[Tree] =
     val (s2, spec) = accept(s1, TokenKind.KwOf) match
       case (st, Some(_)) =>
@@ -786,8 +789,6 @@ object Parser:
             (st2, Some(Trees.CapReturnSpec.Extends(caps)))
           case (st1, None) => (st1, None)
     (s2, Trees.CapType(spec, span(startTok.span, s2.current.span)))
-
-  // ---- Expressions ----
 
   def parseExpr(s: ParserState)(using Reporter): Parsed[Tree] = s.current.kind match
     case TokenKind.KwLet => parseLetExpr(s)
@@ -835,11 +836,12 @@ object Parser:
       case _                => None
     }(Trees.BinOp.apply)
 
-  // Non-chaining: at most one comparison operator per expression.
-  // `a < b < c` parses as `(a < b) < c`'s LHS rejected by the typer
-  // (no `<` at boolean type), not as `a < b && b < c`. The grammar
-  // marks CmpExpr non-associative; that's why this production has no
-  // outer loop, unlike its peers `parseAddExpr` / `parseMulExpr`.
+  /** Non-chaining: at most one comparison operator per expression.
+    * `a < b < c` parses as `(a < b) < c`'s LHS rejected by the typer
+    * (no `<` at boolean type), not as `a < b && b < c`. The grammar
+    * marks CmpExpr non-associative; that's why this production has no
+    * outer loop, unlike its peers `parseAddExpr` / `parseMulExpr`.
+    */
   private def parseCmpExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
     val (s1, lhs) = parseAddExpr(s0)
     val cmpOp = s1.current.kind match
@@ -912,8 +914,9 @@ object Parser:
             else (st2, None)
           val selection = Trees.Selection(nameTok.lexeme, args)
           val next = receiver match
-            // `T.member(...)`, or bare `T.Variant` / static-method-no-args
-            // (`args` = None); the typer disambiguates.
+            /** `T.member(...)`, or bare `T.Variant` / static-method-no-args
+              * (`args` = None); the typer disambiguates.
+              */
             case Trees.Ident(qual, qspan) if qual.nonEmpty && qual.charAt(0).isUpper =>
               Trees.StaticCall(qual, selection, span(qspan, st3.current.span))
             case _ =>
@@ -1046,7 +1049,8 @@ object Parser:
       else
         val (st1, items) = parseSepBy1Until(st, TokenKind.Comma)(parseOne)(
           drainListSeparators,
-          _.current.kind == closeKind // trailing comma
+          /** trailing comma */
+          _.current.kind == closeKind
         )
         (st1, items.toList)
     }
@@ -1104,8 +1108,10 @@ object Parser:
       (s1, Trees.Ident(tok.lexeme, tok.span))
     case TokenKind.UpperIdent =>
       val (s1, tok) = consume(s)
-      // `T { field: value, ... }` — struct literal for single-variant
-      // data types (`data Point(x: N, y: N)`-style).
+
+      /** `T { field: value, ... }` — struct literal for single-variant
+        * data types (`data Point(x: N, y: N)`-style).
+        */
       if s1.current.kind == TokenKind.LBrace then parseStructLit(s1, tok)
       else (s1, Trees.Ident(tok.lexeme, tok.span))
     case _ =>
@@ -1119,9 +1125,11 @@ object Parser:
       val (s4, thenBranch) = parseInlineOrBlockExpr(s3)
       val s5 = skipNewlines(s4)
       val (s6, _) = expect(s5, TokenKind.KwElse, "`else`")
-      // `else if cond: ...` chains the next conditional as the else branch
-      // — a right-associative if/else-if/else cascade. `else: ...` is the
-      // base case.
+
+      /** `else if cond: ...` chains the next conditional as the else branch
+        * — a right-associative if/else-if/else cascade. `else: ...` is the
+        * base case.
+        */
       val (s7, elseBranch) =
         if s6.current.kind == TokenKind.KwIf then parseIfExpr(s6)
         else
@@ -1130,8 +1138,9 @@ object Parser:
       (s7, Trees.IfExpr(cond, thenBranch, elseBranch, span(startTok.span, elseBranch.span)))
     }
 
-  // MatchExpr ::= "match" Expr ":" INDENT MatchArm+ DEDENT
-  // MatchArm  ::= OrPattern ("if" Expr)? "=>" InlineOrBlockExpr
+  /** MatchExpr ::= "match" Expr ":" INDENT MatchArm+ DEDENT
+    * MatchArm  ::= OrPattern ("if" Expr)? "=>" InlineOrBlockExpr
+    */
   private def parseMatchExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
     s0.afterKeyword(TokenKind.KwMatch, "`match`") { (s1, startTok) =>
       val (s2, scrutinee) = parseExpr(s1)
@@ -1165,9 +1174,10 @@ object Parser:
         case (st1, None) => (st1, acc)
     loop(s1, head)
 
-  // DoExpr ::= "do" ":" INDENT DoStmt+ DEDENT
-  // DoStmt ::= Pattern "<-" Expr   (DoBind)
-  //          | Expr
+  /** DoExpr ::= "do" ":" INDENT DoStmt+ DEDENT
+    * DoStmt ::= Pattern "<-" Expr   (DoBind)
+    *          | Expr
+    */
   private def parseDoExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
     s0.afterKeyword(TokenKind.KwDo, "`do`") { (s1, startTok) =>
       val (s2, _) = expect(s1, TokenKind.Colon, "`:` after `do`")
@@ -1178,7 +1188,7 @@ object Parser:
   private def parseDoStmts(s0: ParserState)(using Reporter): Parsed[List[Tree]] =
     parseStatementList(s0, DiagCode.P018, "do statement")(parseDoStmt)
 
-  // `pat <- expr` bind, or a plain expression.
+  /** `pat <- expr` bind, or a plain expression. */
   private def parseDoStmt(s: ParserState)(using Reporter): Parsed[Tree] =
     if isDoBindAhead(s) then
       val (s1, pat) = parsePattern(s)
@@ -1187,11 +1197,12 @@ object Parser:
       (s3, Trees.DoBind(pat, rhs, span(pat.span, rhs.span)))
     else parseExpr(s)
 
-  // True iff the current statement contains a top-level `<-` before
-  // its terminating NEWLINE/DEDENT/EOF — i.e. it's a `pat <- expr`
-  // bind rather than a plain expression. Tracks paren/bracket/brace
-  // depth so a `<-` inside a nested expression is not mistaken for
-  // the bind arrow.
+  /** True iff the current statement contains a top-level `<-` before
+    * its terminating NEWLINE/DEDENT/EOF — i.e. it's a `pat <- expr`
+    * bind rather than a plain expression. Tracks paren/bracket/brace
+    * depth so a `<-` inside a nested expression is not mistaken for
+    * the bind arrow.
+    */
   /** Opening / closing bracket kinds, for depth-tracking lookahead. */
   private object Opener:
     def unapply(k: TokenKind): Boolean = k match
@@ -1223,8 +1234,9 @@ object Parser:
         case _ => loop(i + 1, depth)
     loop(0, 0)
 
-  // ForallExpr ::= "forall" "(" FnParam ("," FnParam)* ")"
-  //                ("suchThat" Expr)? "->" InlineOrBlockExpr
+  /** ForallExpr ::= "forall" "(" FnParam ("," FnParam)* ")"
+    *                ("suchThat" Expr)? "->" InlineOrBlockExpr
+    */
   private def parseForallExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
     s0.afterKeyword(TokenKind.KwForall, "`forall`") { (s1, startTok) =>
       val (s2, binders) = parseFnParamList(s1)
@@ -1234,13 +1246,14 @@ object Parser:
       (s5, Trees.ForallExpr(binders, suchThat, body, span(startTok.span, body.span)))
     }
 
-  // HandleExpr ::= "handle" Expr ":" INDENT HandlerArm+ DEDENT
-  // HandlerArm ::= EffectArm | ReturnArm
-  //   EffectArm ::= UPPER_IDENT "." LOWER_IDENT ("(" PatternList ")")? "=>" Body
-  //   ReturnArm ::= "return" "(" Pattern ")" "=>" Body
-  // The optional return arm is partitioned out at parse time; multiple
-  // return arms are admitted by the grammar but only the last one
-  // survives (well-formed programs have at most one).
+  /** HandleExpr ::= "handle" Expr ":" INDENT HandlerArm+ DEDENT
+    * HandlerArm ::= EffectArm | ReturnArm
+    *   EffectArm ::= UPPER_IDENT "." LOWER_IDENT ("(" PatternList ")")? "=>" Body
+    *   ReturnArm ::= "return" "(" Pattern ")" "=>" Body
+    * The optional return arm is partitioned out at parse time; multiple
+    * return arms are admitted by the grammar but only the last one
+    * survives (well-formed programs have at most one).
+    */
   private def parseHandleExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
     s0.afterKeyword(TokenKind.KwHandle, "`handle`") { (s1, startTok) =>
       val (s2, subject) = parseExpr(s1)
@@ -1249,9 +1262,10 @@ object Parser:
       (s4, Trees.HandleExpr(subject, arms, returnArm, span(startTok.span, s4.current.span)))
     }
 
-  // Internal accumulator for handler-arms parsing: we collect normal
-  // arms and (possibly) a single return arm in lockstep so the body
-  // loop stays a single fold over `parseIndentedBody`.
+  /** Internal accumulator for handler-arms parsing: we collect normal
+    * arms and (possibly) a single return arm in lockstep so the body
+    * loop stays a single fold over `parseIndentedBody`.
+    */
   final private case class HandlerAcc(
       arms: List[Trees.HandlerArm],
       returnArm: Option[Trees.ReturnArm]
@@ -1265,8 +1279,10 @@ object Parser:
       val acc1 = armOpt match
         case ra: Trees.ReturnArm  => acc.copy(returnArm = Some(ra))
         case ha: Trees.HandlerArm => acc.copy(arms = ha :: acc.arms)
-        case _: Trees.Error       => acc // recovery; diagnostic already emitted
-        case _                    => acc
+
+        /** recovery; diagnostic already emitted */
+        case _: Trees.Error => acc
+        case _              => acc
       (st1, acc1)
     }
     (s1, acc.arms.reverse, acc.returnArm)
@@ -1306,10 +1322,11 @@ object Parser:
     val (s1, (elements, sp)) = bracketed(s0, Bracket.Square)(parseExpr)
     (s1, Trees.ListExpr(elements, sp))
 
-  // StructLit ::= UPPER_IDENT "{" Field ("," Field)* ","? "}"
-  //   Field   ::= LOWER_IDENT ":" Expr
-  // The leading `UPPER_IDENT` has already been consumed; `typeNameTok`
-  // carries it.
+  /** StructLit ::= UPPER_IDENT "{" Field ("," Field)* ","? "}"
+    *   Field   ::= LOWER_IDENT ":" Expr
+    * The leading `UPPER_IDENT` has already been consumed; `typeNameTok`
+    * carries it.
+    */
   private def parseStructLit(
       s0: ParserState,
       typeNameTok: Token
@@ -1355,7 +1372,7 @@ object Parser:
     val found = loop(0, 0)
     if found < 0 then false
     else
-      // Skip a NEWLINE between `)` and `->` (multi-line lambda).
+      /** Skip a NEWLINE between `)` and `->` (multi-line lambda). */
       val afterIdx = found + 1
       val nextKind =
         if s.peek(afterIdx).kind == TokenKind.Newline then s.peek(afterIdx + 1).kind
@@ -1389,8 +1406,6 @@ object Parser:
       case Paren.One(e)       => (s2, e)
       case Paren.Many(es, sp) => (s2, Trees.TupleExpr(es, sp))
 
-  // ---- Patterns ----
-
   private def parsePattern(s: ParserState)(using Reporter): Parsed[Tree] = s.current.kind match
     case TokenKind.Underscore =>
       val (s1, tok) = consume(s)
@@ -1399,12 +1414,13 @@ object Parser:
       val (s1, tok) = consume(s)
       (s1, Trees.BinderPat(tok.lexeme, tok.span))
     case TokenKind.UpperIdent =>
-      // Forms:
-      //   `T.Variant(p1, ...)`  qualified data-variant pattern
-      //   `T.Variant`           qualified unit-variant pattern
-      //   `T(p1, ...)`          single-ctor sugar pattern (typical for
-      //                         `data Point(x: N, y: N)`-style decls)
-      //   `T`                   no-qualifier variant pattern (Rule 3.4.a)
+      /** Forms:
+        *   `T.Variant(p1, ...)`  qualified data-variant pattern
+        *   `T.Variant`           qualified unit-variant pattern
+        *   `T(p1, ...)`          single-ctor sugar pattern (typical for
+        *                         `data Point(x: N, y: N)`-style decls)
+        *   `T`                   no-qualifier variant pattern (Rule 3.4.a)
+        */
       val (s1, nameTok) = consume(s)
       accept(s1, TokenKind.Dot) match
         case (s2, Some(_)) =>
@@ -1440,7 +1456,7 @@ object Parser:
           else
             (s2, Trees.DataVariantPat(None, nameTok.lexeme, None, nameTok.span))
     case TokenKind.LParen =>
-      // Tuple pattern.
+      /** Tuple pattern. */
       val (s1, (elements, sp)) = bracketed(s, Bracket.Paren)(parsePattern)
       (s1, Trees.TuplePat(elements, sp))
     case LiteralStart() =>
@@ -1455,22 +1471,21 @@ object Parser:
     val (s1, (pats, _)) = bracketed(s0, Bracket.Paren)(parsePattern)
     (s1, pats)
 
-  // ---- DataDecl ----
-
-  // DataDecl ::= "data" UPPER_IDENT OfClause? (DataBody | CtorSugar)?
-  //   OfClause   ::= "of" (TypeExpr | "(" TypeExpr ("," TypeExpr)* ")")
-  //   DataBody   ::= ":" INDENT DataVariant+ DEDENT
-  //   CtorSugar  ::= "(" FieldList ")"   — single-variant shorthand
-  //
-  //   DataVariant ::= UPPER_IDENT ("(" FieldList ")")?
-  //   FieldList   ::= FieldDecl ("," FieldDecl)* ","?
-  //   FieldDecl   ::= LOWER_IDENT ":" TypeExpr ("=" Expr)?
+  /** DataDecl ::= "data" UPPER_IDENT OfClause? (DataBody | CtorSugar)?
+    *   OfClause   ::= "of" (TypeExpr | "(" TypeExpr ("," TypeExpr)* ")")
+    *   DataBody   ::= ":" INDENT DataVariant+ DEDENT
+    *   CtorSugar  ::= "(" FieldList ")"   — single-variant shorthand
+    *
+    *   DataVariant ::= UPPER_IDENT ("(" FieldList ")")?
+    *   FieldList   ::= FieldDecl ("," FieldDecl)* ","?
+    *   FieldDecl   ::= LOWER_IDENT ":" TypeExpr ("=" Expr)?
+    */
   private def parseDataDecl(s0: ParserState)(using reporter: Reporter): Parsed[Tree] =
     val (s1, startTok) = expect(s0, TokenKind.KwData, "`data`")
     val (s2, nameTok) = expect(s1, TokenKind.UpperIdent, "data type name")
     val (s3, ofParams) = parseOptionalDataOfClause(s2)
     if s3.current.kind == TokenKind.LParen then
-      // Single-ctor sugar — synthesise one variant with the type's name.
+      /** Single-ctor sugar — synthesise one variant with the type's name. */
       val (s4, fields) = parseFieldList(s3)
       val variant = Trees.DataVariant(nameTok.lexeme, fields, span(nameTok.span, s4.current.span))
       (s4, Trees.DataDecl(nameTok.lexeme, ofParams, List(variant), Nil, span(startTok.span, s4.current.span)))
@@ -1495,18 +1510,20 @@ object Parser:
           val (s2, (params, _)) = bracketed(s1, Bracket.Paren)(parseDataOfItem)
           (s2, params)
         else
-          // Single-item form `of T` — just a TypeExpr; no need to
-          // disambiguate OfValueParam (which only appears inside the
-          // paren list).
+          /** Single-item form `of T` — just a TypeExpr; no need to
+            * disambiguate OfValueParam (which only appears inside the
+            * paren list).
+            */
           val (s2, ty) = parseTypeExpr(s1)
           (s2, List(ty))
       case (s1, None) => (s1, Nil)
 
-  // Inside an `of (...)` clause, each item is one of:
-  //   - OfValueParam: `name : TypeExpr (= default)?` — lowered to FnParam.
-  //   - LiteralExpr: an Int / Float / String / Char / Bool literal
-  //     used as a compile-time argument (e.g. `Bounded of (N, 0, 10)`).
-  //   - TypeExpr: any of the type forms (incl. NamedAlias `N is C`).
+  /** Inside an `of (...)` clause, each item is one of:
+    *   - OfValueParam: `name : TypeExpr (= default)?` — lowered to FnParam.
+    *   - LiteralExpr: an Int / Float / String / Char / Bool literal
+    *     used as a compile-time argument (e.g. `Bounded of (N, 0, 10)`).
+    *   - TypeExpr: any of the type forms (incl. NamedAlias `N is C`).
+    */
   private def parseDataOfItem(s: ParserState)(using Reporter): Parsed[Tree] =
     if s.current.kind == TokenKind.LowerIdent && s.peek(1).kind == TokenKind.Colon then parseFnParam(s)
     else
@@ -1516,16 +1533,18 @@ object Parser:
         case _ =>
           parseTypeExpr(s)
 
-  // Internal accumulator for data-body parsing: variants and props are
-  // partitioned at dispatch time so consumers never need to re-classify.
+  /** Internal accumulator for data-body parsing: variants and props are
+    * partitioned at dispatch time so consumers never need to re-classify.
+    */
   final private case class DataBodyAcc(
       variants: List[Trees.DataVariant],
       props: List[Trees.PropDecl]
   )
 
-  // Data bodies admit `DataVariant`s and `PropDecl`s. The parser
-  // partitions them into separate lists at dispatch time so consumers
-  // never need to re-classify.
+  /** Data bodies admit `DataVariant`s and `PropDecl`s. The parser
+    * partitions them into separate lists at dispatch time so consumers
+    * never need to re-classify.
+    */
   private def parseDataBody(
       s0: ParserState
   )(using Reporter): (ParserState, List[Trees.DataVariant], List[Trees.PropDecl]) =
@@ -1553,20 +1572,19 @@ object Parser:
     val (s2, fields) = s1.whenAtOrEmpty(TokenKind.LParen)(parseFieldList)
     (s2, Trees.DataVariant(nameTok.lexeme, fields, span(nameTok.span, s2.current.span)))
 
-  // ---- CapDecl ----
-
-  // CapDecl   ::= "cap" UPPER_IDENT ValueParams? OfClause? ExtendsClause?
-  //               (":" INDENT CapBody DEDENT)?
-  //   ValueParams  ::= "(" FnParam ("," FnParam)* ","? ")"
-  //   OfClause     ::= "of" (TypeExpr | "(" OfItem ("," OfItem)* ")")
-  //   ExtendsClause::= "extends" CapBound ("+" CapBound)*
-  //   CapBody      ::= CapMember+
-  //   CapMember    ::= InstanceMethod | StaticMethod | PropDecl
-  //
-  // ValueParams is the `cap Between(min: N, max: N) of N: ...` sugar
-  // form, which desugars to `fn between(min, max) -> cap of N: ...`.
-  // Per v0.3: empty bodies omit the `:` entirely (`cap Locked`).
-  // `UPPER_IDENT ValueParams?` — the head of `cap` and `type` declarations.
+  /** CapDecl   ::= "cap" UPPER_IDENT ValueParams? OfClause? ExtendsClause?
+    *               (":" INDENT CapBody DEDENT)?
+    *   ValueParams  ::= "(" FnParam ("," FnParam)* ","? ")"
+    *   OfClause     ::= "of" (TypeExpr | "(" OfItem ("," OfItem)* ")")
+    *   ExtendsClause::= "extends" CapBound ("+" CapBound)*
+    *   CapBody      ::= CapMember+
+    *   CapMember    ::= InstanceMethod | StaticMethod | PropDecl
+    *
+    * ValueParams is the `cap Between(min: N, max: N) of N: ...` sugar
+    * form, which desugars to `fn between(min, max) -> cap of N: ...`.
+    * Per v0.3: empty bodies omit the `:` entirely (`cap Locked`).
+    * `UPPER_IDENT ValueParams?` — the head of `cap` and `type` declarations.
+    */
   private def parseNameAndValueParams(s1: ParserState, what: String)(using
       Reporter
   ): Parsed[(Token, List[Trees.FnParam])] =
@@ -1574,7 +1592,7 @@ object Parser:
     val (s3, valueParams) = s2.whenAtOrEmpty(TokenKind.LParen)(parseFnParamList)
     (s3, (nameTok, valueParams))
 
-  // After `cap` at top level: `Name ValueParams? OfClause? ExtendsClause? (: CapBody)?`.
+  /** After `cap` at top level: `Name ValueParams? OfClause? ExtendsClause? (: CapBody)?`. */
   private def parseCapDeclRest(s1: ParserState, startTok: Token)(using Reporter): Parsed[Tree] =
     val (s3, (nameTok, valueParams)) = parseNameAndValueParams(s1, "capability name")
     val (s4, ofParams) = parseOptionalDataOfClause(s3)
@@ -1600,11 +1618,12 @@ object Parser:
           (syncToAnchors(state), None)
     }
 
-  // TypeParamsHint ::= "<" UPPER_IDENT ("," UPPER_IDENT)* ","? ">"
-  // Per Rule 4.1, Fixed type params are normally introduced at first
-  // use; the explicit hint is only required when a method's type
-  // parameters can't be inferred from its parameters or return type
-  // (e.g. a fold whose result type R appears only in callbacks).
+  /** TypeParamsHint ::= "<" UPPER_IDENT ("," UPPER_IDENT)* ","? ">"
+    * Per Rule 4.1, Fixed type params are normally introduced at first
+    * use; the explicit hint is only required when a method's type
+    * parameters can't be inferred from its parameters or return type
+    * (e.g. a fold whose result type R appears only in callbacks).
+    */
   private def parseOptionalTypeParamsHint(s0: ParserState)(using Reporter): Parsed[List[String]] =
     if s0.current.kind != TokenKind.Lt then (s0, Nil)
     else
@@ -1622,12 +1641,11 @@ object Parser:
       (s4, Trees.PropDecl(nameTok.lexeme, body, span(startTok.span, body.span)))
     }
 
-  // ---- TypeAlias ----
-
-  // TypeAlias ::= "type" UPPER_IDENT ValueParams? "=" CapBoundChain
-  //   ValueParams ::= "(" FnParam ("," FnParam)* ","? ")"
-  // The RHS chain is wrapped in `IsBound(caps)` when there are multiple
-  // caps; a single-cap RHS is the cap node itself.
+  /** TypeAlias ::= "type" UPPER_IDENT ValueParams? "=" CapBoundChain
+    *   ValueParams ::= "(" FnParam ("," FnParam)* ","? ")"
+    * The RHS chain is wrapped in `IsBound(caps)` when there are multiple
+    * caps; a single-cap RHS is the cap node itself.
+    */
   private def parseTypeAlias(s0: ParserState)(using Reporter): Parsed[Tree] =
     s0.afterKeyword(TokenKind.KwType, "`type`") { (s1, startTok) =>
       val (s3, (nameTok, valueParams)) = parseNameAndValueParams(s1, "type alias name")
@@ -1639,15 +1657,14 @@ object Parser:
       (s5, Trees.TypeAlias(nameTok.lexeme, valueParams, rhs, span(startTok.span, s5.current.span)))
     }
 
-  // ---- SatisfiesDecl ----
-
-  // SatisfiesDecl ::= TypeName "satisfies" CapBound (":" INDENT SatisfiesItem+ DEDENT)?
-  //   TypeName    ::= UPPER_IDENT | LOWER_IDENT          (primitives)
-  //   SatisfiesItem ::= ConstructorMapping
-  //                  | ImpossibleMapping
-  //                  | InstanceMethod | StaticMethod | PropDecl
-  //   ConstructorMapping ::= (UPPER_IDENT | "Self") "as" LOWER_IDENT   (Self → SelfMapping)
-  //   ImpossibleMapping  ::= "impossible" "as" LOWER_IDENT
+  /** SatisfiesDecl ::= TypeName "satisfies" CapBound (":" INDENT SatisfiesItem+ DEDENT)?
+    *   TypeName    ::= UPPER_IDENT | LOWER_IDENT          (primitives)
+    *   SatisfiesItem ::= ConstructorMapping
+    *                  | ImpossibleMapping
+    *                  | InstanceMethod | StaticMethod | PropDecl
+    *   ConstructorMapping ::= (UPPER_IDENT | "Self") "as" LOWER_IDENT   (Self → SelfMapping)
+    *   ImpossibleMapping  ::= "impossible" "as" LOWER_IDENT
+    */
   private def parseSatisfiesDecl(s0: ParserState)(using Reporter): Parsed[Tree] =
     val (s1, typeName) = s0.current.kind match
       case TokenKind.UpperIdent | TokenKind.LowerIdent =>
@@ -1672,14 +1689,17 @@ object Parser:
     }
     (s1, items.reverse)
 
-  // Head of a `<head> as ctor` satisfies item, paired with the tree it builds
-  // from (capCtor, span). `Self` is a head only when followed by `as`;
-  // otherwise it starts a `Self.fn` static method.
+  /** Head of a `<head> as ctor` satisfies item, paired with the tree it builds
+    * from (capCtor, span). `Self` is a head only when followed by `as`;
+    * otherwise it starts a `Self.fn` static method.
+    */
   private object AsMappingHead:
     def unapply(s: ParserState): Option[(String, Span) => Tree] = s.current.kind match
       case TokenKind.KwImpossible => Some(Trees.ImpossibleMapping(_, _))
-      // `Self as ctor` — identity-shape mapping for primitives that are
-      // themselves the cap's value (`u64 satisfies Optional of Self: Self as some`).
+
+      /** `Self as ctor` — identity-shape mapping for primitives that are
+        * themselves the cap's value (`u64 satisfies Optional of Self: Self as some`).
+        */
       case TokenKind.KwSelf if s.peek(1).kind == TokenKind.KwAs => Some(Trees.SelfMapping(_, _))
       case TokenKind.UpperIdent => Some(Trees.ConstructorMapping(s.current.lexeme, _, _))
       case _                    => None
@@ -1709,11 +1729,10 @@ object Parser:
         Some("items are `Variant as ctor`, `impossible as ctor`, `fn ...`, `Self.fn ...`, or `prop ...`")
       )
 
-  // ---- EffectDecl ----
-
-  // EffectDecl ::= "linear"? "effect" UPPER_IDENT OfClause? (":" INDENT EffectMember+ DEDENT)?
-  //   EffectMember ::= "fn" LOWER_IDENT FnParamList? ("->" TypeExpr)? WithClause?
-  // (Effect ops never have bodies; their semantics are supplied by handlers.)
+  /** EffectDecl ::= "linear"? "effect" UPPER_IDENT OfClause? (":" INDENT EffectMember+ DEDENT)?
+    *   EffectMember ::= "fn" LOWER_IDENT FnParamList? ("->" TypeExpr)? WithClause?
+    * (Effect ops never have bodies; their semantics are supplied by handlers.)
+    */
   private def parseEffectDecl(s0: ParserState)(using Reporter): Parsed[Tree] =
     val (s1, linOpt) = accept(s0, TokenKind.KwLinear)
     val isLinear = linOpt.isDefined
@@ -1737,12 +1756,8 @@ object Parser:
         (syncToAnchors(state), None)
     }
 
-  // ---- Stub productions still pending ----
-
   private def parseModDecl(s: ParserState)(using Reporter): Parsed[Tree] =
     unsupported(s, "`mod` declaration")
-
-  // ---- Public entry-point convenience overloads ----
 
   /** Functional entry point: parse a whole source file and return its
     * tree, diagnostics, and trivia together. The parser does not
@@ -1761,9 +1776,11 @@ object Parser:
     val scanner = new Scanner(source, privateReporter)
     val parser = new Parser(scanner, privateReporter)
     val tree = parser.parseCompilationUnit()
-    // Scanner's trivia builder is populated incrementally as the parser
-    // pulls tokens; by the time parseCompilationUnit returns it has
-    // observed every real token and the table is complete.
+
+    /** Scanner's trivia builder is populated incrementally as the parser
+      * pulls tokens; by the time parseCompilationUnit returns it has
+      * observed every real token and the table is complete.
+      */
     ParseResult(tree, privateReporter.diagnostics.toList, scanner.triviaTable)
 
   /** Adapter: parse and push diagnostics into the supplied reporter.

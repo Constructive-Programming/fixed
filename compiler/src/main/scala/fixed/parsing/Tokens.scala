@@ -11,49 +11,69 @@ import fixed.util.Span
   * See `spec/syntax_grammar.ebnf` v0.4.5 §"KEYWORDS" for the canonical list.
   */
 enum TokenKind:
-  // ---- Reserved words (alphabetical) ----
   case KwAs, KwCap, KwData, KwDo, KwEffect, KwElse, KwExtends, KwFalse,
     KwFn, KwForall, KwHandle, KwIf, KwImplies, KwImpossible, KwIn, KwIs,
     KwLet, KwLinear, KwMatch, KwMod, KwOf, KwPart, KwProp, KwPub,
     KwResume, KwReturn, KwSatisfies, KwSelf, KwSelfLower, KwSuchThat,
     KwTrue, KwType, KwUnreachable, KwUse, KwWith
 
-  // ---- Identifiers ----
-  case LowerIdent // [a-z_][a-zA-Z_0-9]*
-  case UpperIdent // [A-Z][a-zA-Z_0-9]*
+  /** [a-z_][a-zA-Z_0-9]* */
+  case LowerIdent
 
-  // ---- Literals ----
+  /** [A-Z][a-zA-Z_0-9]* */
+  case UpperIdent
+
   case IntLit
   case FloatLit
   case StringLit
   case CharLit
-  // Bool literals are KwTrue / KwFalse — no separate BoolLit kind.
 
-  // ---- Punctuation / structural ----
+  /** Bool literals are KwTrue / KwFalse — no separate BoolLit kind. */
+
   case LParen, RParen, LBrace, RBrace, LBracket, RBracket
   case Comma, Colon, Semicolon, Dot
 
-  // ---- Operators ----
-  case Eq // =
-  case Arrow // ->
-  case FatArrow // =>
-  case BackArrow // <- (bind in `do:`)
-  case Pipe // |   (or-pattern separator)
-  case PipeForward // |>
+  /** = */
+  case Eq
+
+  /** -> */
+  case Arrow
+
+  /** => */
+  case FatArrow
+
+  /** <- (bind in `do:`) */
+  case BackArrow
+
+  /** |   (or-pattern separator) */
+  case Pipe
+
+  /** |> */
+  case PipeForward
   case Plus, Minus, Star, Slash, Percent
   case Lt, Le, Gt, Ge, EqEq, Neq
   case AndAnd, OrOr
   case Bang
   case Underscore
-  case At // @ — reserved; not yet used
 
-  // ---- Synthetic (scanner-emitted, not literal source text) ----
-  case Newline // logical newline (between same-indent lines)
-  case Indent // entering a more-indented block
-  case Dedent // closing one indent level
+  /** @ — reserved; not yet used */
+  case At
+
+  /** logical newline (between same-indent lines) */
+  case Newline
+
+  /** entering a more-indented block */
+  case Indent
+
+  /** closing one indent level */
+  case Dedent
   case Eof
-  case Error // lex error — accompanied by a Reporter entry
-  case NoStart // sentinel: scanner has not yet emitted a token
+
+  /** lex error — accompanied by a Reporter entry */
+  case Error
+
+  /** sentinel: scanner has not yet emitted a token */
+  case NoStart
 
 end TokenKind
 
@@ -245,8 +265,10 @@ object Token:
     case TokenKind.Dedent        => Dedent(span)
     case TokenKind.Eof           => Eof(span)
     case TokenKind.Error         => Error(span)
-    // `NoStart` tags scanner state before the first emit and is never a
-    // token; asking for one is a scanner bug, surfaced as a lex error.
+
+    /** `NoStart` tags scanner state before the first emit and is never a
+      * token; asking for one is a scanner bug, surfaced as a lex error.
+      */
     case TokenKind.NoStart => Error(span)
 
 object Tokens:
@@ -299,8 +321,9 @@ object Tokens:
   /** A reserved word: its spelling, kind and token constructor. */
   final case class Keyword(spelling: String, kind: TokenKind, make: Span => Token)
 
-  // Keywords bucketed by first (ASCII) character, so a lookup compares a
-  // handful of candidates in place instead of slicing and hashing a String.
+  /** Keywords bucketed by first (ASCII) character, so a lookup compares a
+    * handful of candidates in place instead of slicing and hashing a String.
+    */
   private val keywordsByFirstChar: Array[List[Keyword]] =
     val all = keywordTokens.toList.map((w, mk) => Keyword(w, mk(Span(0, 0)).kind, mk))
     val grouped = all.groupBy(_.spelling.charAt(0))

@@ -5,15 +5,14 @@ import scala.collection.immutable.Queue
 
 import fixed.util.{DiagCode, Reporter, SourceFile, Span}
 
-// Single-pass lexer. The `Scanner` object holds the pure-functional
-// state and `step`; the `class Scanner` wrapper below adapts it to the
-// parser's pull `nextToken()` API. The only impurity is error emission
-// via the supplied `Reporter`. Indentation, line-continuation, and
-// bracket-suppression rules are normative in `spec/syntax_grammar.ebnf`.
+/** Single-pass lexer. The `Scanner` object holds the pure-functional
+  * state and `step`; the `class Scanner` wrapper below adapts it to the
+  * parser's pull `nextToken()` API. The only impurity is error emission
+  * via the supplied `Reporter`. Indentation, line-continuation, and
+  * bracket-suppression rules are normative in `spec/syntax_grammar.ebnf`.
+  */
 
 object Scanner:
-
-  // ---- State ----
 
   /** An open bracket and the indent-stack depth at which it opened. A case
     * class rather than a `(Char, Int)` tuple so neither field is boxed.
@@ -29,13 +28,15 @@ object Scanner:
       pos: Int,
       indentStack: List[Int],
       bracketStack: List[OpenBracket],
-      lastKind: TokenKind, // TokenKind.NoStart before first emit
+      /** TokenKind.NoStart before first emit */
+      lastKind: TokenKind,
       eofEmitted: Boolean,
       pending: Queue[Token]
   ):
-    // True iff we're inside a bracket whose recorded indent depth still
-    // equals `indentStack.length` — no body has been engaged since the
-    // bracket opened, so off-side rule is suppressed.
+    /** True iff we're inside a bracket whose recorded indent depth still
+      * equals `indentStack.length` — no body has been engaged since the
+      * bracket opened, so off-side rule is suppressed.
+      */
     def isInsideSuppressedBrackets: Boolean = bracketStack match
       case OpenBracket(_, depth) :: _ => indentStack.length == depth
       case Nil                        => false
@@ -57,22 +58,19 @@ object Scanner:
       pending = Queue.empty
     )
 
-  // ---- Public API ----
-
   def tokenize(source: SourceFile, reporter: Reporter): Seq[Token] =
     new Scanner(source, reporter).tokenize()
 
-  // ---- Transitions ----
-
-  // Advance by one token. Idempotent at EOF.
-  //
-  // Allocation invariant: code paths that end with a real token return
-  // a state whose `lastKind` already matches the token's kind —
-  // `scanToken` folds it into its own one `state.copy`, so `step`
-  // returns that state directly without a wrapping copy. The
-  // synthetic-pending paths still copy because the emitted token
-  // (a synthetic INDENT/DEDENT/NEWLINE) differs from the one just
-  // scanned.
+  /** Advance by one token. Idempotent at EOF.
+    *
+    * Allocation invariant: code paths that end with a real token return
+    * a state whose `lastKind` already matches the token's kind —
+    * `scanToken` folds it into its own one `state.copy`, so `step`
+    * returns that state directly without a wrapping copy. The
+    * synthetic-pending paths still copy because the emitted token
+    * (a synthetic INDENT/DEDENT/NEWLINE) differs from the one just
+    * scanned.
+    */
   def step(
       state: ScannerState,
       source: SourceFile,
@@ -82,8 +80,9 @@ object Scanner:
       case Some((tok, rest)) =>
         (state.copy(pending = rest, lastKind = tok.kind), tok)
       case None =>
-        // Field reads, not `val Skipped(a, b) = …`: that pattern desugars through
-        // a Tuple2 and would box the Boolean again.
+        /** Field reads, not `val Skipped(a, b) = …`: that pattern desugars through
+          * a Tuple2 and would box the Boolean again.
+          */
         val skipped = skipTrivia(state, source, crossedNewline = false, reporter)
         val st1 = skipped.state
         val crossedNewline = skipped.crossedNewline
@@ -98,8 +97,9 @@ object Scanner:
           val st2 = if crossedNewline then handleNewline(st1, source, reporter) else st1
           val (st3, tok) = scanToken(st2, source, reporter)
           if st3.pending.nonEmpty then
-            // A synthetic INDENT/DEDENT/NEWLINE was queued during indent
-            // handling; emit it now and re-queue the real token at the tail.
+            /** A synthetic INDENT/DEDENT/NEWLINE was queued during indent
+              * handling; emit it now and re-queue the real token at the tail.
+              */
             val synth = st3.pending.head
             val rest = st3.pending.tail
             (st3.copy(pending = rest.enqueue(tok), lastKind = synth.kind), synth)
@@ -115,10 +115,11 @@ object Scanner:
     val withEof = withDedents.enqueue(Token.Eof(Span(pos, pos)))
     state.copy(indentStack = poppedStack, pending = withEof, eofEmitted = true)
 
-  // Trivia consumption only mutates `pos`; `advanceTrivia` recurses
-  // over a primitive Int and packs `(pos, crossedNewline)` into a Long
-  // so the loop allocates nothing. One `state.copy` happens at the
-  // boundary if pos changed.
+  /** Trivia consumption only mutates `pos`; `advanceTrivia` recurses
+    * over a primitive Int and packs `(pos, crossedNewline)` into a Long
+    * so the loop allocates nothing. One `state.copy` happens at the
+    * boundary if pos changed.
+    */
   private def skipTrivia(
       state: ScannerState,
       source: SourceFile,
@@ -143,7 +144,7 @@ object Scanner:
       val c = source.content.charAt(pos)
       if c == ' ' then advanceTrivia(pos + 1, source, reporter, crossed)
       else if c == '\t' then
-        // Tabs are forbidden as whitespace per the grammar.
+        /** Tabs are forbidden as whitespace per the grammar. */
         reporter.error(
           DiagCode.E001,
           Span(pos, pos + 1),
@@ -162,20 +163,19 @@ object Scanner:
     if i >= source.length || source.content.charAt(i) == '\n' then i
     else skipUntilNewline(source, i + 1)
 
-  // ---- Indentation ----
-
-  // Called after crossing one or more '\n's. Decision order (top to bottom
-  // — first match wins):
-  //   1. dual-mode (= / -> / =>) + deeper indent  → push, INDENT (also
-  //      re-engages off-side inside parens)
-  //   2. inside un-engaged brackets               → suppressed, no token
-  //   3. next line starts with leading-cont       → continuation, no token
-  //   4. previous line ended with trailing-cont   → continuation, no token
-  //   5. off-side: deeper + previous `:`          → push, INDENT
-  //                shallower                      → pop levels, DEDENT(s)
-  //                                                 (or collapse into
-  //                                                 bracket-suppressed)
-  //                same                           → NEWLINE
+  /** Called after crossing one or more '\n's. Decision order (top to bottom
+    * — first match wins):
+    *   1. dual-mode (= / -> / =>) + deeper indent  → push, INDENT (also
+    *      re-engages off-side inside parens)
+    *   2. inside un-engaged brackets               → suppressed, no token
+    *   3. next line starts with leading-cont       → continuation, no token
+    *   4. previous line ended with trailing-cont   → continuation, no token
+    *   5. off-side: deeper + previous `:`          → push, INDENT
+    *                shallower                      → pop levels, DEDENT(s)
+    *                                                 (or collapse into
+    *                                                 bracket-suppressed)
+    *                same                           → NEWLINE
+    */
   private def handleNewline(
       state: ScannerState,
       source: SourceFile,
@@ -189,7 +189,8 @@ object Scanner:
     val isDualMode =
       lastKind == TokenKind.Eq || lastKind == TokenKind.Arrow
         || lastKind == TokenKind.FatArrow || lastKind == TokenKind.Colon
-    // Opens every INDENT, including the `:` block case.
+
+    /** Opens every INDENT, including the `:` block case. */
     if isDualMode && newIndent > state.currentIndent then
       state
         .copy(indentStack = newIndent :: state.indentStack)
@@ -204,8 +205,10 @@ object Scanner:
       state
     else
       val curIndent = state.currentIndent
-      // A deeper line after `:` (or `=`/`->`/`=>`) already opened an INDENT
-      // above, so here a deeper line is a plain continuation NEWLINE.
+
+      /** A deeper line after `:` (or `=`/`->`/`=>`) already opened an INDENT
+        * above, so here a deeper line is a plain continuation NEWLINE.
+        */
       if newIndent > curIndent then state.enqueue(Token.Newline(Span(pos, pos)))
       else if newIndent < curIndent then
         val st1 = popIndents(state, newIndent)
@@ -234,10 +237,11 @@ object Scanner:
         popIndents(st1, newIndent)
       case _ => state
 
-  // Stateless lookahead from `pos`. Skip horizontal whitespace, then check
-  // whether the next significant character starts a leading-continuation
-  // token: `->`, `.`, `|>`, `+`, or a keyword in
-  // `leadingContinuationKinds`.
+  /** Stateless lookahead from `pos`. Skip horizontal whitespace, then check
+    * whether the next significant character starts a leading-continuation
+    * token: `->`, `.`, `|>`, `+`, or a keyword in
+    * `leadingContinuationKinds`.
+    */
   private def peekKindIsLeadingContinuation(source: SourceFile, pos: Int): Boolean =
     val content = source.content
     val len = source.length
@@ -254,15 +258,13 @@ object Scanner:
         Tokens.keywordAt(content, i, j).exists(kw => Tokens.leadingContinuationKinds.contains(kw.kind))
       else false
 
-  // First index at or after `i0` (capped at `len`) whose char fails `p`.
+  /** First index at or after `i0` (capped at `len`) whose char fails `p`. */
   private inline def skipWhile(content: String, i0: Int, len: Int)(inline p: Char => Boolean): Int =
     @tailrec def loop(i: Int): Int = if i < len && p(content.charAt(i)) then loop(i + 1) else i
     loop(i0)
 
   private inline def isSpaceOrTab(c: Char): Boolean = c == ' ' || c == '\t'
   private inline def isIdentPart(c: Char): Boolean = c.isLetterOrDigit || c == '_'
-
-  // ---- scanToken: dispatch on first character ----
 
   private def scanToken(
       state: ScannerState,
@@ -284,8 +286,9 @@ object Scanner:
       case '\''                                      => scanQuoted(state, source, start, reporter, Quote.Chr)
       case _                                         => scanOperator(state, source, start, reporter)
 
-  // Punctuation and operators. Split out of `scanToken` to keep that method
-  // small enough for the JIT to compile and inline it well.
+  /** Punctuation and operators. Split out of `scanToken` to keep that method
+    * small enough for the JIT to compile and inline it well.
+    */
   private def scanOperator(
       state: ScannerState,
       source: SourceFile,
@@ -331,13 +334,13 @@ object Scanner:
       case '%'   => single(state, start)(Token.Percent(_))
       case other => errorChar(state, start, DiagCode.E004, s"unexpected character ${describeChar(other)}", reporter)
 
-  // Open-bracket production: push the bracket with the current indent depth.
+  /** Open-bracket production: push the bracket with the current indent depth. */
   private def openBracket(state: ScannerState, start: Int, ch: Char, mk: Span => Token): (ScannerState, Token) =
     val tok = mk(Span(start, start + 1))
     val bracket = OpenBracket(ch, state.indentStack.length)
     (state.copy(pos = start + 1, bracketStack = bracket :: state.bracketStack, lastKind = tok.kind), tok)
 
-  // Fixed-width token of `len` chars at `start`.
+  /** Fixed-width token of `len` chars at `start`. */
   private inline def emit(state: ScannerState, start: Int, len: Int)(inline mk: Span => Token): (ScannerState, Token) =
     val tok = mk(Span(start, start + len))
     (state.copy(pos = start + len, lastKind = tok.kind), tok)
@@ -346,7 +349,7 @@ object Scanner:
 
   private inline def double(state: ScannerState, start: Int)(inline mk: Span => Token) = emit(state, start, 2)(mk)
 
-  // Report `code` at the char at `start` and emit it as a one-char Error token.
+  /** Report `code` at the char at `start` and emit it as a one-char Error token. */
   private def errorChar(
       state: ScannerState,
       start: Int,
@@ -357,8 +360,9 @@ object Scanner:
     reporter.error(code, Span(start, start + 1), msg)
     single(state, start)(Token.Error(_))
 
-  // Close-bracket production. Folds pos / lastKind / bracketStack into
-  // one `state.copy` per token.
+  /** Close-bracket production. Folds pos / lastKind / bracketStack into
+    * one `state.copy` per token.
+    */
   private def closeBracket(
       state: ScannerState,
       start: Int,
@@ -381,8 +385,6 @@ object Scanner:
     val tok = mk(Span(start, start + 1))
     (state.copy(pos = start + 1, lastKind = tok.kind, bracketStack = nextStack), tok)
 
-  // ---- Identifiers, numbers, strings, chars ----
-
   private def scanIdent(
       state: ScannerState,
       source: SourceFile,
@@ -403,8 +405,10 @@ object Scanner:
       start: Int
   ): (ScannerState, Token) =
     val intEnd = skipDigits(source, start)
-    // Float? '.' followed by another digit. Don't eat `5.foo` — that's
-    // an integer 5 followed by `.foo`, not a float "5." followed by `foo`.
+
+    /** Float? '.' followed by another digit. Don't eat `5.foo` — that's
+      * an integer 5 followed by `.foo`, not a float "5." followed by `foo`.
+      */
     val sawDot =
       intEnd < source.length
         && source.content.charAt(intEnd) == '.'
@@ -423,17 +427,19 @@ object Scanner:
     if i >= source.length || !source.content.charAt(i).isDigit then i
     else skipDigits(source, i + 1)
 
-  // Result of scanning a quoted (string or char) body. `closed = true` for
-  // both the normal terminator-found case AND the bail-out cases (newline
-  // mid-literal). EOF mid-literal returns `closed = false` so callers can
-  // emit the "at end of input" variant of the error.
+  /** Result of scanning a quoted (string or char) body. `closed = true` for
+    * both the normal terminator-found case AND the bail-out cases (newline
+    * mid-literal). EOF mid-literal returns `closed = false` so callers can
+    * emit the "at end of input" variant of the error.
+    */
   final private case class QuotedBody(pos: Int, lexeme: String, closed: Boolean)
 
-  // The local StringBuilder never escapes `loop`; it's a lexeme
-  // accumulator frozen via `.toString` at each terminating branch. The
-  // `(c :: acc).reverse.mkString` shape is equivalent but allocates a
-  // List cell per character, which dominated the literal-heavy
-  // benchmark before this hand-rolled accumulator.
+  /** The local StringBuilder never escapes `loop`; it's a lexeme
+    * accumulator frozen via `.toString` at each terminating branch. The
+    * `(c :: acc).reverse.mkString` shape is equivalent but allocates a
+    * List cell per character, which dominated the literal-heavy
+    * benchmark before this hand-rolled accumulator.
+    */
   private def scanQuotedBody(
       source: SourceFile,
       start: Int,
@@ -538,8 +544,6 @@ object Scanner:
     val tok = q.make(Span(start, body.pos), body.lexeme)
     (state.copy(pos = body.pos, lastKind = tok.kind), tok)
 
-  // ---- Char-class helpers ----
-
   private def peekChar(source: SourceFile, i: Int): Char =
     if i < source.length then source.content.charAt(i) else ' '
 
@@ -554,18 +558,19 @@ object Scanner:
 
 end Scanner
 
-// Pull-style adapter over the pure functional core. The token stream
-// is produced once at construction by `Iterator.unfold` over
-// `ScannerState`, materialised eagerly into an immutable
-// `Vector[Token]`; an `Iterator[Token]` over that Vector serves the
-// parser's pull API. The iterator is the one documented boundary
-// mutation — it owns Scala's internal cursor and is required to
-// satisfy the `def nextToken(): Token` contract without redesigning
-// the Parser. Trivia extraction is a pure fold over the same Vector.
-//
-// Eager materialisation keeps reporter side effects firing exactly
-// once and gives `tokenize` and `triviaTable` a shared source of
-// truth.
+/** Pull-style adapter over the pure functional core. The token stream
+  * is produced once at construction by `Iterator.unfold` over
+  * `ScannerState`, materialised eagerly into an immutable
+  * `Vector[Token]`; an `Iterator[Token]` over that Vector serves the
+  * parser's pull API. The iterator is the one documented boundary
+  * mutation — it owns Scala's internal cursor and is required to
+  * satisfy the `def nextToken(): Token` contract without redesigning
+  * the Parser. Trivia extraction is a pure fold over the same Vector.
+  *
+  * Eager materialisation keeps reporter side effects firing exactly
+  * once and gives `tokenize` and `triviaTable` a shared source of
+  * truth.
+  */
 final class Scanner(
     val source: SourceFile,
     val reporter: Reporter,
@@ -573,16 +578,18 @@ final class Scanner(
 ):
   import Scanner.{ScannerState, initialState, step}
 
-  // Termination: once a step has emitted EOF, the resulting state
-  // carries `lastKind = TokenKind.Eof`, so the next iteration short-
-  // circuits. Encoding "done" in the state itself avoids the per-step
-  // `Option[ScannerState]` boxing the unfold would otherwise incur.
-  // Materialised straight into an Array: the parser indexes it directly,
-  // so a Vector would only be built to be copied. Never mutated after
-  // construction; `tokenize()` exposes it through a read-only ArraySeq view.
+  /** Termination: once a step has emitted EOF, the resulting state
+    * carries `lastKind = TokenKind.Eof`, so the next iteration short-
+    * circuits. Encoding "done" in the state itself avoids the per-step
+    * `Option[ScannerState]` boxing the unfold would otherwise incur.
+    * Materialised straight into an Array: the parser indexes it directly,
+    * so a Vector would only be built to be copied. Never mutated after
+    * construction; `tokenize()` exposes it through a read-only ArraySeq view.
+    */
   private val tokens: Array[Token] =
-    // Presized (the examples corpus averages ~6.4 chars per token) so the
-    // builder does not regrow while scanning.
+    /** Presized (the examples corpus averages ~6.4 chars per token) so the
+      * builder does not regrow while scanning.
+      */
     val buf = Array.newBuilder[Token]
     buf.sizeHint(source.length / 5 + 16)
     Iterator
@@ -595,9 +602,10 @@ final class Scanner(
       .foreach(buf.addOne)
     buf.result()
 
-  // The single boundary mutation: Scala's `Iterator` owns an internal
-  // cursor over `tokens`. Past the materialised end we synthesise
-  // further EOFs so `nextToken` is idempotent at EOF.
+  /** The single boundary mutation: Scala's `Iterator` owns an internal
+    * cursor over `tokens`. Past the materialised end we synthesise
+    * further EOFs so `nextToken` is idempotent at EOF.
+    */
   private val iter: Iterator[Token] = tokens.iterator
 
   def nextToken(): Token =
@@ -620,7 +628,9 @@ final class Scanner(
         case ((prevEnd, acc), tok) =>
           val s = tok.span.start
           val e = tok.span.end
-          if s >= e then (prevEnd, acc) // synthetic
+
+          /** synthetic */
+          if s >= e then (prevEnd, acc)
           else if s - prevEnd >= 2 then
             val events = collectTrivia(content, prevEnd, s, Nil)
             val acc1 = if events.nonEmpty then acc.updated(s, events) else acc
@@ -629,11 +639,12 @@ final class Scanner(
       }
       TriviaTable.from(table)
 
-  // Walk `[i, end)` of `content` collecting `//`-comments and runs of
-  // two or more `\n`s. Inline whitespace is ignored (recoverable from
-  // token spans). Single newlines are already represented by
-  // NEWLINE / DEDENT tokens. The accumulator is reversed at the
-  // terminating branch so events come out in source order.
+  /** Walk `[i, end)` of `content` collecting `//`-comments and runs of
+    * two or more `\n`s. Inline whitespace is ignored (recoverable from
+    * token spans). Single newlines are already represented by
+    * NEWLINE / DEDENT tokens. The accumulator is reversed at the
+    * terminating branch so events come out in source order.
+    */
   @tailrec
   private def collectTrivia(
       content: String,
@@ -651,8 +662,10 @@ final class Scanner(
       else if c == '\n' then
         val nlEnd = Scanner.skipWhile(content, i, end)(_ == '\n')
         val nlCount = nlEnd - i
-        // Blank lines = newlines minus the one already represented by
-        // the NEWLINE / DEDENT token. >= 1 blank line is worth recording.
+
+        /** Blank lines = newlines minus the one already represented by
+          * the NEWLINE / DEDENT token. >= 1 blank line is worth recording.
+          */
         val acc1 =
           if nlCount >= 2 then Trivia.BlankLines(Span(i, nlEnd), nlCount - 1) :: acc
           else acc

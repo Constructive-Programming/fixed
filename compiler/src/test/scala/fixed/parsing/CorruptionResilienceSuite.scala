@@ -1,5 +1,5 @@
 // scalafix:off DisableSyntax.var
-// Benchmark/test loops: mutable counters are deliberate here.
+/** Benchmark/test loops: mutable counters are deliberate here. */
 package fixed.parsing
 
 import java.util.concurrent.{Executors, TimeUnit, TimeoutException}
@@ -40,14 +40,18 @@ import munit.FunSuite
   */
 class CorruptionResilienceSuite extends FunSuite:
 
-  private val Iterations = 200 // ~ 1s budget total
-  private val Seed = 0xf1ed_f1edL // "fixed" in hex; change to widen coverage
+  /** ~ 1s budget total */
+  private val Iterations = 200
+
+  /** "fixed" in hex; change to widen coverage */
+  private val Seed = 0xf1ed_f1edL
   private val PerParseTimeoutMs = 2000L
   private val JunkChars: Vector[Char] = Vector('@', ';', '}', '?', '$', '\\')
 
-  // Aspirational target: 1. Current best after M3.0..M3.4: empirically
-  // around 50 (corruption inside a fn signature can split into many
-  // items). Tighten as recovery lands in patterns / arms / props.
+  /** Aspirational target: 1. Current best after M3.0..M3.4: empirically
+    * around 50 (corruption inside a fn signature can split into many
+    * items). Tighten as recovery lands in patterns / arms / props.
+    */
   private val MaxItemDrift = 80
 
   private val ExampleDir = "examples"
@@ -65,8 +69,9 @@ class CorruptionResilienceSuite extends FunSuite:
   override def afterAll(): Unit =
     val _ = executor.shutdownNow()
 
-  // Run `body` with a wall-clock timeout. Returns Right(value) or
-  // Left(reason). Used to catch any future infinite-loop regression.
+  /** Run `body` with a wall-clock timeout. Returns Right(value) or
+    * Left(reason). Used to catch any future infinite-loop regression.
+    */
   private def withTimeout[T](ms: Long)(body: => T): Either[String, T] =
     val fut = executor.submit(() => body)
     try Right(fut.get(ms, TimeUnit.MILLISECONDS))
@@ -106,8 +111,9 @@ class CorruptionResilienceSuite extends FunSuite:
           val brN = itemCount(br.tree)
           val drift = math.abs(refN - brN)
           if br.diagnostics.isEmpty && refN != brN then
-            // Hard fail: tree shape changed but no diagnostic — silent
-            // corruption is the worst possible outcome.
+            /** Hard fail: tree shape changed but no diagnostic — silent
+              * corruption is the worst possible outcome.
+              */
             hardFailures += s"i=$i $path pos=$pos ch='$ch': silent shape change ($refN -> $brN)"
           else if drift >= MaxItemDrift then
             hardFailures += s"i=$i $path pos=$pos ch='$ch': extreme drift ($refN -> $brN), diags=${br.diagnostics.size}"
@@ -116,17 +122,20 @@ class CorruptionResilienceSuite extends FunSuite:
             totalDrift += drift
             if drift > maxDrift then maxDrift = drift
         case (_, Left(reason)) =>
-          // Hard fail: timeout or exception during parsing — the parser
-          // must always terminate gracefully.
+          /** Hard fail: timeout or exception during parsing — the parser
+            * must always terminate gracefully.
+            */
           hardFailures += s"i=$i $path pos=$pos ch='$ch': $reason"
         case (Left(reason), _) =>
-          // Reference parse couldn't complete — examples corpus issue,
-          // not a parser regression. Still hard-fail so we notice.
+          /** Reference parse couldn't complete — examples corpus issue,
+            * not a parser regression. Still hard-fail so we notice.
+            */
           hardFailures += s"i=$i $path: reference $reason"
 
-    // Soft-contract digest — printed even on success so the trend is
-    // visible. Tighten `MaxItemDrift` as recovery lands in more
-    // productions; ideal final state is `driftSamples == 0`.
+    /** Soft-contract digest — printed even on success so the trend is
+      * visible. Tighten `MaxItemDrift` as recovery lands in more
+      * productions; ideal final state is `driftSamples == 0`.
+      */
     val avgDrift = if driftSamples == 0 then 0.0 else totalDrift.toDouble / driftSamples
     println(
       f"[CorruptionResilienceSuite] iterations=$Iterations " +

@@ -14,8 +14,6 @@ class ScannerSuite extends FunSuite:
   private def kinds(input: String): Seq[TokenKind] =
     scan(input)._1.map(_.kind)
 
-  // ---- Trivial cases ----
-
   test("empty input yields just EOF"):
     assertEquals(kinds(""), Seq(TokenKind.Eof))
 
@@ -33,8 +31,6 @@ class ScannerSuite extends FunSuite:
   test("Part as a keyword"):
     val ks = kinds("Part Other")
     assertEquals(ks, Seq(TokenKind.KwPart, TokenKind.UpperIdent, TokenKind.Eof))
-
-  // ---- Punctuation and operators ----
 
   test("simple punctuation"):
     val ks = kinds("( ) [ ] , : ;")
@@ -91,8 +87,6 @@ class ScannerSuite extends FunSuite:
       )
     )
 
-  // ---- Identifiers ----
-
   test("lower vs upper ident"):
     val (toks, _) = scan("foo Bar baz_42 _under")
     assertEquals(
@@ -107,8 +101,6 @@ class ScannerSuite extends FunSuite:
     )
     assertEquals(toks.take(4).map(_.lexeme), Seq("foo", "Bar", "baz_42", "_under"))
 
-  // ---- Literals ----
-
   test("integer literal"):
     val (toks, _) = scan("42 0 1024")
     assertEquals(toks.take(3).map(_.kind), Seq(TokenKind.IntLit, TokenKind.IntLit, TokenKind.IntLit))
@@ -120,7 +112,7 @@ class ScannerSuite extends FunSuite:
     assertEquals(toks.take(2).map(_.lexeme), Seq("3.14", "0.0"))
 
   test("integer-dot-method (no float)"):
-    // `5.foo` should NOT lex as a float; it's `5`, `.`, `foo`.
+    /** `5.foo` should NOT lex as a float; it's `5`, `.`, `foo`. */
     val ks = kinds("5.foo")
     assertEquals(ks, Seq(TokenKind.IntLit, TokenKind.Dot, TokenKind.LowerIdent, TokenKind.Eof))
 
@@ -143,8 +135,6 @@ class ScannerSuite extends FunSuite:
     val ks = kinds("true false")
     assertEquals(ks, Seq(TokenKind.KwTrue, TokenKind.KwFalse, TokenKind.Eof))
 
-  // ---- Comments ----
-
   test("line comment is skipped"):
     val ks = kinds("foo // this is ignored\nbar")
     assertEquals(ks, Seq(TokenKind.LowerIdent, TokenKind.Newline, TokenKind.LowerIdent, TokenKind.Eof))
@@ -152,10 +142,9 @@ class ScannerSuite extends FunSuite:
   test("comment-only line still produces no extra newlines beyond the structural one"):
     val (toks, _) = scan("foo\n// just a comment\nbar")
     val ks = toks.map(_.kind)
-    // Expectation: foo NEWLINE bar EOF (the comment line produces no token).
-    assertEquals(ks, Seq(TokenKind.LowerIdent, TokenKind.Newline, TokenKind.LowerIdent, TokenKind.Eof))
 
-  // ---- Indentation ----
+    /** Expectation: foo NEWLINE bar EOF (the comment line produces no token). */
+    assertEquals(ks, Seq(TokenKind.LowerIdent, TokenKind.Newline, TokenKind.LowerIdent, TokenKind.Eof))
 
   test("simple block: colon opens, newline closes"):
     val input =
@@ -163,7 +152,8 @@ class ScannerSuite extends FunSuite:
         |  x
         |""".stripMargin
     val ks = kinds(input)
-    // fn f : INDENT x DEDENT EOF — note no NEWLINE between INDENT and x.
+
+    /** fn f : INDENT x DEDENT EOF — note no NEWLINE between INDENT and x. */
     assertEquals(
       ks,
       Seq(
@@ -185,8 +175,10 @@ class ScannerSuite extends FunSuite:
         |  b
         |""".stripMargin
     val ks = kinds(input)
-    // Expected sequence (stylized):
-    //   fn f : INDENT if x : INDENT a DEDENT NEWLINE b DEDENT EOF
+
+    /** Expected sequence (stylized):
+      *   fn f : INDENT if x : INDENT a DEDENT NEWLINE b DEDENT EOF
+      */
     assertEquals(
       ks,
       Seq(
@@ -208,7 +200,7 @@ class ScannerSuite extends FunSuite:
     )
 
   test("trailing-continuation suppresses newline"):
-    // Line ending in `+` should fold into the next physical line (no NEWLINE).
+    /** Line ending in `+` should fold into the next physical line (no NEWLINE). */
     val input =
       """a +
         |b
@@ -220,14 +212,16 @@ class ScannerSuite extends FunSuite:
     )
 
   test("leading-continuation suppresses newline"):
-    // Next line starting with `with` continues the previous logical line.
+    /** Next line starting with `with` continues the previous logical line. */
     val input =
       """fn f
         |  with C
         |""".stripMargin
     val ks = kinds(input)
-    // No NEWLINE between `f` and `with`; no INDENT either (leading-continuation
-    // takes precedence over the apparent indent).
+
+    /** No NEWLINE between `f` and `with`; no INDENT either (leading-continuation
+      * takes precedence over the apparent indent).
+      */
     assertEquals(
       ks,
       Seq(TokenKind.KwFn, TokenKind.LowerIdent, TokenKind.KwWith, TokenKind.UpperIdent, TokenKind.Eof)
@@ -241,7 +235,8 @@ class ScannerSuite extends FunSuite:
         |)
         |""".stripMargin
     val ks = kinds(input)
-    // Inside ( ... ) indentation is suppressed entirely — no INDENT/DEDENT/NEWLINE.
+
+    /** Inside ( ... ) indentation is suppressed entirely — no INDENT/DEDENT/NEWLINE. */
     assertEquals(
       ks,
       Seq(
@@ -262,7 +257,8 @@ class ScannerSuite extends FunSuite:
         |  x
         |""".stripMargin
     val ks = kinds(input)
-    // fn f = INDENT x DEDENT EOF (no NEWLINE between `=` and INDENT).
+
+    /** fn f = INDENT x DEDENT EOF (no NEWLINE between `=` and INDENT). */
     assertEquals(
       ks,
       Seq(
@@ -276,8 +272,6 @@ class ScannerSuite extends FunSuite:
       )
     )
 
-  // ---- Error handling ----
-
   test("unterminated string emits an error"):
     val (_, rep) = scan("\"open")
     assert(rep.hasErrors)
@@ -290,11 +284,10 @@ class ScannerSuite extends FunSuite:
     val (_, rep) = scan("a & b")
     assert(rep.hasErrors)
 
-  // ---- Example corpus integration ----
-
-  // Each example file in examples/*.fixed should scan to a token stream
-  // with balanced INDENT/DEDENT and no scanner errors. (Parser-level
-  // validation is Phase 2.M3+; this just exercises the scanner.)
+  /** Each example file in examples/<name>.fixed should scan to a token stream
+    * with balanced INDENT/DEDENT and no scanner errors. (Parser-level
+    * validation is Phase 2.M3+; this just exercises the scanner.)
+    */
   private val exampleNames = Seq(
     "01_basics",
     "02_collections",
@@ -322,7 +315,7 @@ class ScannerSuite extends FunSuite:
         else "\n" + errors.map(rep.format).mkString("\n")
       assert(errors.isEmpty, s"$name produced ${errors.size} scanner errors:$errorReport")
 
-      // Indent/dedent balance: total INDENTs must equal total DEDENTs.
+      /** Indent/dedent balance: total INDENTs must equal total DEDENTs. */
       val indents = toks.count(_.kind == TokenKind.Indent)
       val dedents = toks.count(_.kind == TokenKind.Dedent)
       assertEquals(
@@ -331,7 +324,7 @@ class ScannerSuite extends FunSuite:
         s"$name has unbalanced INDENT/DEDENT: $indents vs $dedents"
       )
 
-      // Last token must be EOF (and only one).
+      /** Last token must be EOF (and only one). */
       assertEquals(toks.last.kind, TokenKind.Eof, s"$name does not end in EOF")
       assertEquals(toks.count(_.kind == TokenKind.Eof), 1, s"$name has multiple EOFs")
 

@@ -20,8 +20,6 @@ sealed trait Tree:
 
 object Trees:
 
-  // ---- Recovery gap nodes (Phase 2.1) ----
-
   /** A production that began but could not complete. `recovered` holds
     * whatever subtrees were built before the parser bailed; often empty.
     * The matching diagnostic carries the human-readable explanation.
@@ -37,11 +35,7 @@ object Trees:
     * See spec/syntax_grammar.ebnf Appendix A.1.1. */
   final case class Missing(expected: String, span: Span) extends Tree
 
-  // ---- Compilation unit ----
-
   final case class CompilationUnit(items: List[Tree], span: Span) extends Tree
-
-  // ---- Top-level declarations ----
 
   /** `use <dotted path> [satisfies <CapRef>]`. The path is a list of
     * identifier segments (not yet resolved). */
@@ -143,8 +137,6 @@ object Trees:
       span: Span
   ) extends Tree
 
-  // ---- Function-related ----
-
   /** `name : Type (= default)?` — the shape shared by parameters and fields. */
   sealed trait Binder extends Tree:
     def binding: Binding
@@ -163,8 +155,6 @@ object Trees:
   final case class FnParam(binding: Binding, span: Span) extends Binder
   object FnParam extends BinderCompanion[FnParam]
 
-  // ---- Cap members ----
-
   /** `fn` member of a cap, effect or satisfies block. */
   final case class InstanceMethod(sig: FnSig, span: Span) extends FnLike
   object InstanceMethod extends FnLikeCompanion[InstanceMethod]
@@ -179,8 +169,6 @@ object Trees:
       span: Span
   ) extends Tree
 
-  // ---- Data variants ----
-
   final case class DataVariant(
       name: String,
       fields: List[FieldDecl],
@@ -190,8 +178,6 @@ object Trees:
   /** A data-variant field. */
   final case class FieldDecl(binding: Binding, span: Span) extends Binder
   object FieldDecl extends BinderCompanion[FieldDecl]
-
-  // ---- Satisfaction mappings ----
 
   /** A `<source> as capCtor` item in a satisfies block; the type says what the source is. */
   sealed trait SatisfiesMapping extends Tree:
@@ -205,8 +191,6 @@ object Trees:
 
   /** `impossible as capCtor` — the cap constructor has no counterpart. */
   final case class ImpossibleMapping(capCtor: String, span: Span) extends SatisfiesMapping
-
-  // ---- Expressions ----
 
   final case class Block(stmts: List[Tree], span: Span) extends Tree
 
@@ -369,8 +353,6 @@ object Trees:
       span: Span
   ) extends Tree
 
-  // ---- Patterns ----
-
   final case class WildcardPat(span: Span) extends Tree
   final case class BinderPat(name: String, span: Span) extends Tree
   final case class LiteralPat(value: Tree, span: Span) extends Tree
@@ -395,8 +377,6 @@ object Trees:
 
   final case class OrPat(left: Tree, right: Tree, span: Span) extends Tree
   final case class GuardedPat(pat: Tree, cond: Tree, span: Span) extends Tree
-
-  // ---- Type expressions ----
 
   /** `is C + D + ...` (anonymous capability bound). */
   final case class IsBound(caps: List[Tree], span: Span) extends Tree
@@ -470,8 +450,6 @@ object Trees:
       span: Span
   ) extends Tree
 
-  // ---- Effect-related ----
-
   final case class WithClause(row: Tree, span: Span) extends Tree
 
   /** `E + F + G` — a row of effects. */
@@ -479,9 +457,10 @@ object Trees:
 
 end Trees
 
-// Convenience type aliases that mirror dotc's untpd / tpd split. In Phase 2
-// every produced tree is "untyped"; the typer (Phase 3) will populate type
-// slots through a side mechanism, leaving these aliases unchanged.
+/** Convenience type aliases that mirror dotc's untpd / tpd split. In Phase 2
+  * every produced tree is "untyped"; the typer (Phase 3) will populate type
+  * slots through a side mechanism, leaving these aliases unchanged.
+  */
 object untpd:
   type Tree = fixed.ast.Tree
 

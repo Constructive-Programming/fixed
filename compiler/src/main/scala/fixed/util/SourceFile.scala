@@ -19,7 +19,8 @@ final class SourceFile(val path: String, val content: String):
   /** Returns the (line, column) pair for an offset, both 1-indexed. */
   def lineColumn(offset: Int): (Int, Int) =
     require(offset >= 0 && offset <= content.length, s"offset $offset out of bounds for $path")
-    // Binary search the line: last table entry <= offset.
+
+    /** Binary search the line: last table entry <= offset. */
     val table = lineOffsets
     val lo = table.search(offset) match
       case Searching.Found(i)          => i

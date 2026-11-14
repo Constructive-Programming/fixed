@@ -1,5 +1,5 @@
 // scalafix:off DisableSyntax.var, DisableSyntax.while
-// Benchmark/test loops: mutable counters are deliberate here.
+/** Benchmark/test loops: mutable counters are deliberate here. */
 package fixed.parsing
 
 import scala.util.matching.Regex
@@ -16,8 +16,6 @@ class TriviaSuite extends FunSuite:
 
   private def parse(input: String): ParseResult =
     Parser.parse(SourceFile.fromString("<test>", input))
-
-  // ---- Hand-crafted shape tests ----
 
   test("leading line comment is recorded against the first real token"):
     val src = """// header
@@ -59,8 +57,9 @@ class TriviaSuite extends FunSuite:
     assertEquals(blanks.size, 1, s"expected one blank-lines event, got $leading")
 
   test("trivia between method-call dots stays attached to the next ident"):
-    // `.concat` chained over multiple lines — the comment should attach
-    // to `concat`, not be silently dropped.
+    /** `.concat` chained over multiple lines — the comment should attach
+      * to `concat`, not be silently dropped.
+      */
     val src = """fn f(s: String) -> String =
                 |    s
                 |        // a chained call
@@ -68,8 +67,10 @@ class TriviaSuite extends FunSuite:
                 |""".stripMargin
     val pr = parse(src)
     val concatStart = src.indexOf("concat")
-    // The dot precedes `concat` immediately, so leading-trivia keys on
-    // the dot's start offset, not concat's. Walk both candidates.
+
+    /** The dot precedes `concat` immediately, so leading-trivia keys on
+      * the dot's start offset, not concat's. Walk both candidates.
+      */
     val dotStart = src.indexOf(".concat")
     val merged = pr.trivia.leadingFor(dotStart) ++ pr.trivia.leadingFor(concatStart)
     val comments = merged.collect { case c: Trivia.LineComment => c.text }
@@ -78,8 +79,6 @@ class TriviaSuite extends FunSuite:
   test("source with no comments and no blank lines yields an empty table"):
     val pr = parse("fn id(x: u64) -> u64 = x\n")
     assert(pr.trivia.isEmpty)
-
-  // ---- Coverage check across examples ----
 
   test("trivia table captures every // comment in every example file"):
     val files = examplePaths()
@@ -95,16 +94,20 @@ class TriviaSuite extends FunSuite:
         pr.trivia.all.flatMap(_._2).collect { case c: Trivia.LineComment => c }.toList
       totalSourceComments += sourceComments.size
       totalCapturedComments += capturedComments.size
-      // Per-file assertion: every comment in the source is captured.
-      // (We compare counts; deeper text equality is asserted on a
-      // smaller hand-crafted input above.)
+
+      /** Per-file assertion: every comment in the source is captured.
+        * (We compare counts; deeper text equality is asserted on a
+        * smaller hand-crafted input above.)
+        */
       assertEquals(
         capturedComments.size,
         sourceComments.size,
         s"$path: comment count mismatch (source $sourceComments vs captured $capturedComments)"
       )
-    // Sanity: the corpus has comments to capture; if we ever drop to 0
-    // something has clearly broken upstream.
+
+    /** Sanity: the corpus has comments to capture; if we ever drop to 0
+      * something has clearly broken upstream.
+      */
     assert(totalSourceComments > 0)
     assertEquals(totalCapturedComments, totalSourceComments)
 
@@ -124,14 +127,13 @@ class TriviaSuite extends FunSuite:
         s"$path: blank-run count mismatch (source ${sourceRuns.size} vs captured ${capturedRuns.size})"
       )
 
-  // ---- Round-trip: reconstruct source from real-token spans + trivia ----
-
   test("byte-equivalent reconstruction of every example modulo inline whitespace"):
     val files = examplePaths()
     assume(files.nonEmpty, "examples/ not found — run from repo root")
     for path <- files do
       val src = SourceFile.fromPath(path)
-      // Re-tokenize directly so we get every real token's full span.
+
+      /** Re-tokenize directly so we get every real token's full span. */
       val rep = new fixed.util.Reporter(src)
       val scanner = new Scanner(src, rep)
       val tokens = scanner.tokenize().filter(t =>
@@ -141,18 +143,21 @@ class TriviaSuite extends FunSuite:
       )
       val trivia = scanner.triviaTable
       val rebuilt = reconstruct(src.content, tokens, trivia)
-      // Normalise inline whitespace: collapse runs of spaces/tabs that
-      // are NOT at the start of a line. Comments, newlines, and indents
-      // are preserved exactly.
+
+      /** Normalise inline whitespace: collapse runs of spaces/tabs that
+        * are NOT at the start of a line. Comments, newlines, and indents
+        * are preserved exactly.
+        */
       assertEquals(
         normaliseInlineWs(rebuilt),
         normaliseInlineWs(src.content),
         s"$path: reconstructed source diverges from original after inline-ws normalisation"
       )
 
-  // Pull every real token's source slice plus its leading trivia.
-  // Inline whitespace is whatever lies in the gap and is *not* trivia;
-  // we replace it with a single space below in `normaliseInlineWs`.
+  /** Pull every real token's source slice plus its leading trivia.
+    * Inline whitespace is whatever lies in the gap and is *not* trivia;
+    * we replace it with a single space below in `normaliseInlineWs`.
+    */
   private def reconstruct(
       content: String,
       tokens: Seq[Token],
@@ -163,8 +168,10 @@ class TriviaSuite extends FunSuite:
     for tok <- tokens do
       val gapStart = prevEnd
       val gapEnd = tok.span.start
-      // Emit any leading trivia for this token, in source order, with
-      // the inter-event whitespace lifted from the original gap.
+
+      /** Emit any leading trivia for this token, in source order, with
+        * the inter-event whitespace lifted from the original gap.
+        */
       val leading = trivia.leadingFor(tok.span.start)
       if leading.nonEmpty then
         var cursor = gapStart
@@ -172,7 +179,8 @@ class TriviaSuite extends FunSuite:
           val (start, end) = ev match
             case Trivia.LineComment(s, _) => (s.start, s.end)
             case Trivia.BlankLines(s, _)  => (s.start, s.end)
-          // Whitespace before the trivia event.
+
+          /** Whitespace before the trivia event. */
           sb.append(content.substring(cursor, start))
           sb.append(content.substring(start, end))
           cursor = end
@@ -181,13 +189,16 @@ class TriviaSuite extends FunSuite:
         sb.append(content.substring(gapStart, gapEnd))
       sb.append(content.substring(tok.span.start, tok.span.end))
       prevEnd = tok.span.end
-    sb.append(content.substring(prevEnd)) // tail (typically a final \n)
+
+    /** tail (typically a final \n) */
+    sb.append(content.substring(prevEnd))
     sb.toString
 
-  // Replace runs of horizontal spaces/tabs that follow non-whitespace
-  // on the same line with a single space. Leading-line whitespace
-  // (indentation) is left untouched. This lets the round-trip ignore
-  // *inline* whitespace which we deliberately don't capture as trivia.
+  /** Replace runs of horizontal spaces/tabs that follow non-whitespace
+    * on the same line with a single space. Leading-line whitespace
+    * (indentation) is left untouched. This lets the round-trip ignore
+    * *inline* whitespace which we deliberately don't capture as trivia.
+    */
   private def normaliseInlineWs(s: String): String =
     val sb = new StringBuilder
     var i = 0
@@ -197,7 +208,7 @@ class TriviaSuite extends FunSuite:
       if c == '\n' then
         sb.append('\n'); atLineStart = true; i += 1
       else if (c == ' ' || c == '\t') && !atLineStart then
-        // Collapse a run of inline spaces to one.
+        /** Collapse a run of inline spaces to one. */
         while i < s.length && (s.charAt(i) == ' ' || s.charAt(i) == '\t') do
           i += 1
         sb.append(' ')

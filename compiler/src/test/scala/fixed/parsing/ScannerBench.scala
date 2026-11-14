@@ -1,13 +1,14 @@
 // scalafix:off DisableSyntax.var, DisableSyntax.while
-// Benchmark/test loops: mutable counters are deliberate here.
+/** Benchmark/test loops: mutable counters are deliberate here. */
 package fixed.parsing
 
 import fixed.util.{Reporter, SourceFile}
 
-// Throwaway scanner micro-bench; not JMH. Run via `compiler/Test/runMain
-// fixed.parsing.ScannerBench [iters]`. Loads every example, warms up the
-// JIT, then tokenizes each file `iters` times and prints per-file and
-// corpus-aggregate means in microseconds-per-run and ns-per-token.
+/** Throwaway scanner micro-bench; not JMH. Run via `compiler/Test/runMain
+  * fixed.parsing.ScannerBench [iters]`. Loads every example, warms up the
+  * JIT, then tokenizes each file `iters` times and prints per-file and
+  * corpus-aggregate means in microseconds-per-run and ns-per-token.
+  */
 object ScannerBench:
 
   private val examples: List[String] = List(
@@ -27,34 +28,37 @@ object ScannerBench:
   def main(args: Array[String]): Unit =
     val iters: Int = args.headOption.flatMap(_.toIntOption).getOrElse(2000)
     val warmup: Int = (iters / 10).max(50)
-    // Second arg toggles trivia capture so the bench can report both
-    // the lexer core (`false`, default — what previous baselines
-    // measured) and the Parser-API cost (`true`).
+
+    /** Second arg toggles trivia capture so the bench can report both
+      * the lexer core (`false`, default — what previous baselines
+      * measured) and the Parser-API cost (`true`).
+      */
     val captureTrivia: Boolean = args.lift(1).map(_.toBoolean).getOrElse(false)
 
-    // Load once.
+    /** Load once. */
     val loaded: List[(String, SourceFile)] = examples.map { name =>
       val src = SourceFile.fromPath(s"examples/$name.fixed")
       (name, src)
     }
 
-    // Trivia capture is gated behind a flag (default-on for
-    // Parser.parse); see docs/plans/phase-2.1-incremental-parser.md §4.2.
-    // The bench's `captureTrivia` flag picks which side to measure.
+    /** Trivia capture is gated behind a flag (default-on for
+      * Parser.parse); see docs/plans/phase-2.1-incremental-parser.md §4.2.
+      * The bench's `captureTrivia` flag picks which side to measure.
+      */
     def scan(src: SourceFile): Seq[Token] =
       val rep = new Reporter(src)
       new Scanner(src, rep, captureTrivia).tokenize()
 
-    // Total token count for one full corpus pass.
+    /** Total token count for one full corpus pass. */
     val tokenCountPerPass: Long = loaded.map { case (_, src) => scan(src).length.toLong }.sum
 
-    // Warmup.
+    /** Warmup. */
     var w = 0
     while w < warmup do
       loaded.foreach { case (_, src) => val _ = scan(src) }
       w += 1
 
-    // Measure per-file means.
+    /** Measure per-file means. */
     val results: List[(String, Long, Long, Int)] = loaded.map { case (name, src) =>
       val srcLen = src.length
       val tokenCount = scan(src).length

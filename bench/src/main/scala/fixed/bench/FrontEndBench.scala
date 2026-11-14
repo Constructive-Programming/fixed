@@ -1,5 +1,5 @@
 // scalafix:off DisableSyntax.var, DisableSyntax.while, DisableSyntax.asInstanceOf
-// JMH state and hot loops: mutable fields and while loops are deliberate.
+/** JMH state and hot loops: mutable fields and while loops are deliberate. */
 package fixed.bench
 
 import java.nio.file.{Files, Path, Paths}
