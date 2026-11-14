@@ -262,23 +262,22 @@ object Trees:
       span: Span
   ) extends Tree
 
-  /** `x.method(args)`, or `x.method` with no `(...)` (`hasArgList` false) —
+  /** `x.method(args)` (`args` = `Some(...)`), or `x.method` with no `(...)` (`args` = `None`) —
     * the grammar's zero-arg member form. The concrete type says what `x` is.
     */
   sealed trait MemberCall extends Tree:
     def selection: Selection
     def method: String = selection.method
-    def args: List[Tree] = selection.args
-    def hasArgList: Boolean = selection.hasArgList
+    def args: Option[List[Tree]] = selection.args
 
   /** The fields every `MemberCall` shares: `.method(args)`. */
-  final case class Selection(method: String, args: List[Tree], hasArgList: Boolean)
+  final case class Selection(method: String, args: Option[List[Tree]])
 
   /** Flat extractor over `Selection`, given what the call is made on (`H`):
-    * `case MethodCall(receiver, method, args, hasArgList, span) =>`.
+    * `case MethodCall(receiver, method, args, span) =>`.
     */
   sealed abstract class MemberCallCompanion[H, T <: MemberCall](target: T => H):
-    def unapply(t: T): (H, String, List[Tree], Boolean, Span) = (target(t), t.method, t.args, t.hasArgList, t.span)
+    def unapply(t: T): (H, String, Option[List[Tree]], Span) = (target(t), t.method, t.args, t.span)
 
   /** `recv.method(args)` / `recv.method` — a value receiver. */
   final case class MethodCall(receiver: Tree, selection: Selection, span: Span) extends MemberCall
@@ -356,8 +355,7 @@ object Trees:
   final case class DataVariantPat(
       qualifier: Option[String],
       variant: String,
-      fields: List[Tree],
-      hasArgList: Boolean,
+      fields: Option[List[Tree]],
       span: Span
   ) extends Tree
 

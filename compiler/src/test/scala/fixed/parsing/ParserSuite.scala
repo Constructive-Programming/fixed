@@ -110,8 +110,8 @@ class ParserSuite extends FunSuite:
     t match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(body), _)), _) =>
         body match
-          case Trees.MethodCall(_, "concat", _, _, _) => ()
-          case other                                  => fail(s"expected MethodCall, got $other")
+          case Trees.MethodCall(_, "concat", _, _) => ()
+          case other                               => fail(s"expected MethodCall, got $other")
       case _ => fail(s"expected FnDecl, got $t")
 
   test("static call"):
@@ -122,7 +122,7 @@ class ParserSuite extends FunSuite:
     t match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(body), _)), _) =>
         body match
-          case Trees.StaticCall("Nat", "unfold", _, true, _) => ()
+          case Trees.StaticCall("Nat", "unfold", Some(_), _) => ()
           case other                                         => fail(s"expected StaticCall, got $other")
       case _ => fail(s"expected FnDecl, got $t")
 
@@ -628,7 +628,7 @@ class ParserSuite extends FunSuite:
             assertEquals(m.arms.length, 2)
             assertEquals(
               m.arms.map(_.pattern).collect {
-                case Trees.DataVariantPat(Some(q), v, _, _, _) => s"$q.$v"
+                case Trees.DataVariantPat(Some(q), v, _, _) => s"$q.$v"
               },
               List("Direction.North", "Direction.South")
             )
@@ -1084,17 +1084,17 @@ class ParserSuite extends FunSuite:
       case Trees.FnDecl(_, _, params, ret, _, body, _) =>
         params.flatMap(p => collectAllErrors(p.typeAnn)) ++
           collectAllErrors(ret) ++ body.toList.flatMap(collectAllErrors)
-      case Trees.Block(stmts, _)              => stmts.flatMap(collectAllErrors)
-      case Trees.LetExpr(p, init, _)          => collectAllErrors(p) ++ collectAllErrors(init)
-      case Trees.IfExpr(c, t1, e, _)          => collectAllErrors(c) ++ collectAllErrors(t1) ++ collectAllErrors(e)
-      case Trees.BinOp(_, l, r, _)            => collectAllErrors(l) ++ collectAllErrors(r)
-      case Trees.UnaryOp(_, op, _)            => collectAllErrors(op)
-      case Trees.Apply(fn, args, _)           => collectAllErrors(fn) ++ args.flatMap(collectAllErrors)
-      case Trees.MethodCall(r, _, args, _, _) => collectAllErrors(r) ++ args.flatMap(collectAllErrors)
-      case Trees.StaticCall(_, _, args, _, _) => args.flatMap(collectAllErrors)
-      case Trees.TupleExpr(es, _)             => es.flatMap(collectAllErrors)
-      case Trees.ListExpr(es, _)              => es.flatMap(collectAllErrors)
-      case _                                  => Nil
+      case Trees.Block(stmts, _)           => stmts.flatMap(collectAllErrors)
+      case Trees.LetExpr(p, init, _)       => collectAllErrors(p) ++ collectAllErrors(init)
+      case Trees.IfExpr(c, t1, e, _)       => collectAllErrors(c) ++ collectAllErrors(t1) ++ collectAllErrors(e)
+      case Trees.BinOp(_, l, r, _)         => collectAllErrors(l) ++ collectAllErrors(r)
+      case Trees.UnaryOp(_, op, _)         => collectAllErrors(op)
+      case Trees.Apply(fn, args, _)        => collectAllErrors(fn) ++ args.flatMap(collectAllErrors)
+      case Trees.MethodCall(r, _, args, _) => collectAllErrors(r) ++ args.toList.flatten.flatMap(collectAllErrors)
+      case Trees.StaticCall(_, _, args, _) => args.toList.flatten.flatMap(collectAllErrors)
+      case Trees.TupleExpr(es, _)          => es.flatMap(collectAllErrors)
+      case Trees.ListExpr(es, _)           => es.flatMap(collectAllErrors)
+      case _                               => Nil
 
   // ---- M3.2: block-body recovery ----
 
@@ -1252,16 +1252,16 @@ class ParserSuite extends FunSuite:
       case Trees.FnDecl(_, _, params, ret, _, body, _) =>
         params.flatMap(p => collectIdents(p.typeAnn) ++ p.default.toList.flatMap(collectIdents)) ++
           collectIdents(ret) ++ body.toList.flatMap(collectIdents)
-      case Trees.Block(stmts, _)              => stmts.flatMap(collectIdents)
-      case Trees.LetExpr(p, init, _)          => collectIdents(p) ++ collectIdents(init)
-      case Trees.IfExpr(c, t1, e, _)          => collectIdents(c) ++ collectIdents(t1) ++ collectIdents(e)
-      case Trees.BinOp(_, l, r, _)            => collectIdents(l) ++ collectIdents(r)
-      case Trees.UnaryOp(_, op, _)            => collectIdents(op)
-      case Trees.Apply(fn, args, _)           => collectIdents(fn) ++ args.flatMap(collectIdents)
-      case Trees.MethodCall(r, _, args, _, _) => collectIdents(r) ++ args.flatMap(collectIdents)
-      case Trees.StaticCall(_, _, args, _, _) => args.flatMap(collectIdents)
-      case Trees.Error(rec, _)                => rec.flatMap(collectIdents)
-      case _                                  => Nil
+      case Trees.Block(stmts, _)           => stmts.flatMap(collectIdents)
+      case Trees.LetExpr(p, init, _)       => collectIdents(p) ++ collectIdents(init)
+      case Trees.IfExpr(c, t1, e, _)       => collectIdents(c) ++ collectIdents(t1) ++ collectIdents(e)
+      case Trees.BinOp(_, l, r, _)         => collectIdents(l) ++ collectIdents(r)
+      case Trees.UnaryOp(_, op, _)         => collectIdents(op)
+      case Trees.Apply(fn, args, _)        => collectIdents(fn) ++ args.flatMap(collectIdents)
+      case Trees.MethodCall(r, _, args, _) => collectIdents(r) ++ args.toList.flatten.flatMap(collectIdents)
+      case Trees.StaticCall(_, _, args, _) => args.toList.flatten.flatMap(collectIdents)
+      case Trees.Error(rec, _)             => rec.flatMap(collectIdents)
+      case _                               => Nil
 
   // ---- M1 smoke: functional ParseResult API ----
 

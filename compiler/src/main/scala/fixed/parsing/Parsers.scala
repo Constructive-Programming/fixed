@@ -919,28 +919,19 @@ object Parser:
             case _                                           =>
               reportExpected(st1, "P006", "method or field name after `.`", None)
               consume(st1)
-          val (st3, args, hasArgList) =
+          val (st3, args) =
             if st2.current.kind == TokenKind.LParen then
               val (st21, as) = parseArgList(st2)
-              (st21, as, true)
-            else (st2, Nil, false)
+              (st21, Some(as))
+            else (st2, None)
+          val selection = Trees.Selection(nameTok.lexeme, args)
           val next = receiver match
-            case Trees.Ident(qual, qspan) if qual.headOption.exists(_.isUpper) && hasArgList =>
-              Trees.StaticCall(qual, Trees.Selection(nameTok.lexeme, args, hasArgList), span(qspan, st3.current.span))
-            case Trees.Ident(qual, qspan) if qual.headOption.exists(_.isUpper) && !hasArgList =>
-              // Bare `T.Variant` (or static-method-no-args). Encoded as
-              // StaticCall with empty args; the typer disambiguates.
-              Trees.StaticCall(
-                qual,
-                Trees.Selection(nameTok.lexeme, Nil, hasArgList = false),
-                span(qspan, st3.current.span)
-              )
+            // `T.member(...)`, or bare `T.Variant` / static-method-no-args
+            // (`args` = None); the typer disambiguates.
+            case Trees.Ident(qual, qspan) if qual.headOption.exists(_.isUpper) =>
+              Trees.StaticCall(qual, selection, span(qspan, st3.current.span))
             case _ =>
-              Trees.MethodCall(
-                receiver,
-                Trees.Selection(nameTok.lexeme, args, hasArgList),
-                span(receiver.span, st3.current.span)
-              )
+              Trees.MethodCall(receiver, selection, span(receiver.span, st3.current.span))
           loop(st3, next)
         case _ => (st, receiver)
     loop(s1, recv)
@@ -1440,8 +1431,7 @@ object Parser:
               Trees.DataVariantPat(
                 Some(nameTok.lexeme),
                 variantTok.lexeme,
-                fields,
-                hasArgList = true,
+                Some(fields),
                 span(nameTok.span, s4.current.span)
               )
             )
@@ -1451,8 +1441,7 @@ object Parser:
               Trees.DataVariantPat(
                 Some(nameTok.lexeme),
                 variantTok.lexeme,
-                Nil,
-                hasArgList = false,
+                None,
                 span(nameTok.span, variantTok.span)
               )
             )
@@ -1461,10 +1450,10 @@ object Parser:
             val (s3, fields) = parseInnerPatternList(s2)
             (
               s3,
-              Trees.DataVariantPat(None, nameTok.lexeme, fields, hasArgList = true, span(nameTok.span, s3.current.span))
+              Trees.DataVariantPat(None, nameTok.lexeme, Some(fields), span(nameTok.span, s3.current.span))
             )
           else
-            (s2, Trees.DataVariantPat(None, nameTok.lexeme, Nil, hasArgList = false, nameTok.span))
+            (s2, Trees.DataVariantPat(None, nameTok.lexeme, None, nameTok.span))
     case TokenKind.LParen =>
       // Tuple pattern.
       val (s1, (elements, sp)) = bracketed(s, Bracket.Paren)(parsePattern)
