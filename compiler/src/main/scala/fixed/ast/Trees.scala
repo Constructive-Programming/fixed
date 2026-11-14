@@ -292,15 +292,36 @@ object Trees:
   /** Plain `f(args)` — a value-level function call. */
   final case class Apply(fn: Tree, args: List[Tree], span: Span) extends Tree
 
+  /** Binary operators, by precedence level (lowest first). `symbol` is the source spelling. */
+  enum BinOperator(val symbol: String):
+    case Or extends BinOperator("||")
+    case And extends BinOperator("&&")
+    case Eq extends BinOperator("==")
+    case Neq extends BinOperator("!=")
+    case Lt extends BinOperator("<")
+    case Le extends BinOperator("<=")
+    case Gt extends BinOperator(">")
+    case Ge extends BinOperator(">=")
+    case Add extends BinOperator("+")
+    case Sub extends BinOperator("-")
+    case Mul extends BinOperator("*")
+    case Div extends BinOperator("/")
+    case Mod extends BinOperator("%")
+
+  /** Prefix operators. `symbol` is the source spelling. */
+  enum UnaryOperator(val symbol: String):
+    case Neg extends UnaryOperator("-")
+    case Not extends UnaryOperator("!")
+
   final case class BinOp(
-      op: String,
+      op: BinOperator,
       lhs: Tree,
       rhs: Tree,
       span: Span
   ) extends Tree
 
   final case class UnaryOp(
-      op: String,
+      op: UnaryOperator,
       operand: Tree,
       span: Span
   ) extends Tree

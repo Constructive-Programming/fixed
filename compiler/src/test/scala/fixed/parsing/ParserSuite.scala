@@ -146,8 +146,8 @@ class ParserSuite extends FunSuite:
     t match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(body), _)), _) =>
         body match
-          case Trees.UnaryOp("-", _, _) => ()
-          case other                    => fail(s"expected UnaryOp, got $other")
+          case Trees.UnaryOp(Trees.UnaryOperator.Neg, _, _) => ()
+          case other                                        => fail(s"expected UnaryOp, got $other")
       case _ => fail(s"expected FnDecl, got $t")
 
   test("integer literal"):

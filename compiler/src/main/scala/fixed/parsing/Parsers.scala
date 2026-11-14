@@ -816,11 +816,9 @@ object Parser:
   /** operand (op operand)*, folded left. `opOf` picks out this level's
     * operators; `mk` builds the node.
     */
-  private inline def parseLeftAssoc(s0: ParserState)(
-      inline operand: Rule[Tree]
-  )(inline opOf: TokenKind => Option[String])(
-      inline mk: (String, Tree, Tree, Span) => Tree
-  ): Parsed[Tree] =
+  private inline def parseLeftAssoc[Op](s0: ParserState)(inline operand: Rule[Tree])(
+      inline opOf: TokenKind => Option[Op]
+  )(inline mk: (Op, Tree, Tree, Span) => Tree): Parsed[Tree] =
     val (s1, lhs) = operand(s0)
     @tailrec
     def loop(st: ParserState, acc: Tree): Parsed[Tree] =
@@ -833,19 +831,19 @@ object Parser:
 
   private def parsePipeExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
     parseLeftAssoc(s0)(parseOrExpr) {
-      case TokenKind.PipeForward => Some("|>")
+      case TokenKind.PipeForward => Some(())
       case _                     => None
     }((_, lhs, rhs, sp) => Trees.Pipe(lhs, rhs, sp))
 
   private def parseOrExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
     parseLeftAssoc(s0)(parseAndExpr) {
-      case TokenKind.OrOr => Some("||")
+      case TokenKind.OrOr => Some(Trees.BinOperator.Or)
       case _              => None
     }(Trees.BinOp.apply)
 
   private def parseAndExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
     parseLeftAssoc(s0)(parseCmpExpr) {
-      case TokenKind.AndAnd => Some("&&")
+      case TokenKind.AndAnd => Some(Trees.BinOperator.And)
       case _                => None
     }(Trees.BinOp.apply)
 
@@ -857,12 +855,12 @@ object Parser:
   private def parseCmpExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
     val (s1, lhs) = parseAddExpr(s0)
     val cmpOp = s1.current.kind match
-      case TokenKind.EqEq => Some("==")
-      case TokenKind.Neq  => Some("!=")
-      case TokenKind.Lt   => Some("<")
-      case TokenKind.Le   => Some("<=")
-      case TokenKind.Gt   => Some(">")
-      case TokenKind.Ge   => Some(">=")
+      case TokenKind.EqEq => Some(Trees.BinOperator.Eq)
+      case TokenKind.Neq  => Some(Trees.BinOperator.Neq)
+      case TokenKind.Lt   => Some(Trees.BinOperator.Lt)
+      case TokenKind.Le   => Some(Trees.BinOperator.Le)
+      case TokenKind.Gt   => Some(Trees.BinOperator.Gt)
+      case TokenKind.Ge   => Some(Trees.BinOperator.Ge)
       case _              => None
     cmpOp match
       case Some(op) =>
@@ -873,27 +871,27 @@ object Parser:
 
   private def parseAddExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
     parseLeftAssoc(s0)(parseMulExpr) {
-      case TokenKind.Plus  => Some("+")
-      case TokenKind.Minus => Some("-")
+      case TokenKind.Plus  => Some(Trees.BinOperator.Add)
+      case TokenKind.Minus => Some(Trees.BinOperator.Sub)
       case _               => None
     }(Trees.BinOp.apply)
 
   private def parseMulExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
     parseLeftAssoc(s0)(parseUnaryExpr) {
-      case TokenKind.Star    => Some("*")
-      case TokenKind.Slash   => Some("/")
-      case TokenKind.Percent => Some("%")
+      case TokenKind.Star    => Some(Trees.BinOperator.Mul)
+      case TokenKind.Slash   => Some(Trees.BinOperator.Div)
+      case TokenKind.Percent => Some(Trees.BinOperator.Mod)
       case _                 => None
     }(Trees.BinOp.apply)
 
-  private object UnaryOperator:
-    def unapply(k: TokenKind): Option[String] = k match
-      case TokenKind.Minus => Some("-")
-      case TokenKind.Bang  => Some("!")
+  private object UnaryPrefix:
+    def unapply(k: TokenKind): Option[Trees.UnaryOperator] = k match
+      case TokenKind.Minus => Some(Trees.UnaryOperator.Neg)
+      case TokenKind.Bang  => Some(Trees.UnaryOperator.Not)
       case _               => None
 
   private def parseUnaryExpr(s: ParserState)(using Reporter): Parsed[Tree] = s.current.kind match
-    case UnaryOperator(op) =>
+    case UnaryPrefix(op) =>
       val (s1, tok) = consume(s)
       val (s2, operand) = parseAppExpr(s1)
       (s2, Trees.UnaryOp(op, operand, span(tok.span, operand.span)))
