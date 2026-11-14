@@ -10,6 +10,8 @@
 //   - Auto-derived fold, map, flat_map, pure from data structure
 //   - match for data types (List), fold for capabilities (Optional)
 
+use std.io.Console
+
 // --- The capability hierarchy ---
 
 // Functor: structure-preserving transformation.

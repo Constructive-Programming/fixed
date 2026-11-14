@@ -1,0 +1,74 @@
+package fixed.typer
+
+import fixed.core.{SymKind, SymbolId, SymbolTable, render}
+import fixed.parsing.Parser
+import fixed.util.{DiagCode, Diagnostic, SourceFile}
+
+class NamerSuite extends munit.FunSuite:
+
+  private def index(src: SourceFile): (SymbolTable, List[Diagnostic]) =
+    val parsed = Parser.parse(src)
+    assert(!parsed.hasErrors, parsed.diagnostics)
+    Namer.index(parsed.tree)
+
+  /** Every non-prelude symbol as `(name, kind, signature)`, in entry order. */
+  private def triples(table: SymbolTable): List[(String, SymKind, String)] =
+    table.denotations.filter(_.owner != SymbolId.Prelude).map(d => (d.name, d.kind, table.render(d.info)))
+
+  private def indexString(code: String) = index(SourceFile.fromString("<test>", code))
+
+  test("M2: 01_basics symbol table"):
+    val (table, diags) = index(SourceFile.fromPath("examples/01_basics.fixed"))
+    assertEquals(diags, Nil)
+    assertEquals(
+      triples(table),
+      List(
+        ("Console", SymKind.Import, "()"),
+        ("greet", SymKind.Fn, "String -> () with Console"),
+        ("fib_iter", SymKind.Fn, "N -> N"),
+        ("print_fibs", SymKind.Fn, "u64 -> () with Console"),
+        ("main", SymKind.Fn, "() -> () with Console"),
+        ("name", SymKind.ValueParam, "String"),
+        ("N", SymKind.TypeParam, "is Numeric"),
+        ("n", SymKind.ValueParam, "N"),
+        ("count", SymKind.ValueParam, "u64")
+      )
+    )
+
+  test("M2: every example indexes without diagnostics"):
+    new java.io.File("examples").listFiles(_.getName.endsWith(".fixed")).sorted.foreach { f =>
+      assertEquals(index(SourceFile.fromPath(f.getPath))._2, Nil, f.getName)
+    }
+
+  test("Rule 4.1: re-stating a signature's own variable adds bounds"):
+    val (table, diags) =
+      indexString("fn abs(n: N is Numeric + Ord) -> N is positive() = n\nfn positive() -> cap of N = 0\n")
+    assertEquals(diags, Nil)
+    assert(triples(table).contains(("N", SymKind.TypeParam, "is Numeric + Ord + positive()")), triples(table))
+
+  test("Rule 4.1: free names introduce variables; of-params scope over the body"):
+    val (table, diags) = indexString("cap Functor of A:\n    fn map(f: A -> B) -> Self of B\n")
+    assertEquals(diags, Nil)
+    assert(triples(table).contains(("map", SymKind.Method, "(A -> B) -> Self of B")), triples(table))
+
+  test("Rule 4.1: re-binding an enclosing variable is an error"):
+    val (_, diags) = indexString("cap C of (N is Numeric):\n    fn f(x: N is Ord) -> N\n")
+    assertEquals(diags.map(_.code), List(DiagCode.T004))
+
+  test("data variants are constructors of the data type"):
+    val (table, diags) = indexString("data Pair2 of (A, B):\n    Both(a: A, b: B)\n    Neither\n")
+    assertEquals(diags, Nil)
+    val t = triples(table)
+    assert(t.contains(("Both", SymKind.Variant, "(A, B) -> Pair2 of (A, B)")), t)
+    assert(t.contains(("Neither", SymKind.Variant, "Pair2 of (A, B)")), t)
+
+  test("refinement calls and value args resolve to symbols"):
+    val (table, diags) = indexString(
+      "type Clamped(lo: N is Numeric + Ord, hi: N) = N + between(lo, hi)\nfn between(min: N is Ord, max: N) -> cap of N = 0\n"
+    )
+    assertEquals(diags, Nil)
+    assert(triples(table).contains(("Clamped", SymKind.TypeAlias, "is N + between(lo, hi)")), triples(table))
+
+  test("unknown capabilities and effects are T001; duplicate definitions are T003"):
+    val (_, diags) = indexString("fn f(x: is Nope) -> () with Nada = ()\nfn f() -> () = ()\n")
+    assertEquals(diags.map(_.code), List(DiagCode.T003, DiagCode.T001, DiagCode.T001))

@@ -7,7 +7,7 @@ class CompilerSuite extends munit.FunSuite:
 
   private def compileFile(path: String) = Compiler.compile(CompilationUnit(SourceFile.fromPath(path)))
 
-  test("M1: every example runs parser then stub typer with only the typer-not-implemented note"):
+  test("M1: every example runs parser then stub typer with only the T000 body-typing note"):
     val examples = new java.io.File("examples").listFiles(_.getName.endsWith(".fixed")).sorted.toList
     assert(examples.nonEmpty)
     examples.foreach { f =>

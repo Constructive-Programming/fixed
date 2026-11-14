@@ -4,11 +4,16 @@ import fixed.CompilationUnit
 import fixed.core.Phase
 import fixed.util.{DiagCode, Diagnostic, Severity, Span}
 
-/** Placeholder for the Namer + Typer subphases (Phase 3 M2–M5): reports that typing is not yet
-  * implemented and leaves the unit unchanged otherwise.
+/** Namer + Typer. M2 runs the Namer (signature pass); body typing (M3–M5) is not implemented yet
+  * and is reported as an info diagnostic.
   */
 object TyperPhase extends Phase:
   val name: String = "typer"
 
   def run(unit: CompilationUnit): CompilationUnit =
-    unit.report(List(Diagnostic(Severity.Info, DiagCode.T000, Span.NoSpan, "typer not yet implemented")))
+    unit.tree.fold(unit) { tree =>
+      val (symbols, diagnostics) = Namer.index(tree)
+      unit
+        .copy(symbols = symbols)
+        .report(diagnostics :+ Diagnostic(Severity.Info, DiagCode.T000, Span.NoSpan, "body typing not yet implemented"))
+    }

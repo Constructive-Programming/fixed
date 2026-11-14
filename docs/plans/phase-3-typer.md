@@ -1,6 +1,6 @@
 # Fixed Compiler — Phase 3: Type Checker (Implementation Plan)
 
-**Status:** In progress — M1 done
+**Status:** In progress — M1, M2 done
 **Scope:** Scala 3 implementation of the typer pipeline. Untyped AST (Phase 2 output) → typed AST → typed AST refined by capability closure / effect inference / quantity check / representation selection.
 **Prerequisite:** Phase 2 + 2.1 complete (parser produces a usable AST with diagnostics, gap nodes, and trivia for every `examples/*.fixed`, even on syntactically broken input).
 **Reference:** `docs/references/scala3-compiler-reference.md` §4 (typer pipeline) and §5.4 (recheck pattern). Read both end-to-end before starting M1.
@@ -46,7 +46,7 @@ Phase 3 is split into two parts: **Part A — Base typer (M1–M5, this plan)** 
 | # | Milestone | Verification |
 |---|---|---|
 | M1 ✅ | Phase scaffolding compiles. `Compiler` runs `ParserPhase` → stub `TyperPhase` end-to-end. `Main` accepts file paths on argv. (No tree-id field: §3 adopts option B, the span-keyed side table.) | `sbt run -- examples/01_basics.fixed` exits 0; stub typer emits one diagnostic noting "typer not yet implemented" and the parsed tree is reported. `CompilerSuite` covers every example. |
-| M2 | `Names`/`Symbols`/`Denotations`/`Phases`/`Contexts`/`Types`/`ProtoTypes` machinery in place. `Namer` types every top-level decl's **signature** in `examples/01_basics.fixed`. `TyperBench` introduced and baselined. Perf checkpoint: corpus ≤ 2× the parser's per-token cost. | A test asserts the symbol table for `01_basics.fixed` matches an expected list of `(name, kind, signature-Type)` triples. `TyperBench` reports a corpus mean. |
+| M2 ✅ | `Symbols` (with `Denotation`), `Types` and `Phases` in place; `Names`, `Contexts` and `ProtoTypes` deferred to M3, their first consumer. `Namer` types every top-level decl's **signature** — and every member, parameter and type variable — across the whole corpus (see §3.6). `FrontEndBench.namer` (the TyperBench) baselined. Perf checkpoint: corpus ≤ 2× the parser's cost. | `NamerSuite` asserts the `(name, kind, signature)` triples for `01_basics.fixed` and that all 11 examples index with no diagnostics. Baseline (JMH, 1 fork): `namer` 128 µs/corpus vs `parseOnly` 316 µs/corpus — 0.4×. |
 | M3 | Type ADT + ProtoTypes + Typer skeleton + Unifier. Literals, identifiers, arithmetic, function calls, and `let` bindings type-check in isolation. | `typedExpr("1 + 2 * 3")` yields a tpd tree whose root is `BinOp("+")` with children typed `i64`. Idents in scope resolve to their symbols. |
 | M4 | Decl body typing — `fn`, `cap`, `data`, `type`, `effect`, `satisfies` declaration bodies all type-check. Mutual recursion across decls works (signatures from M2's Namer pass cover it). | `examples/01_basics.fixed` and `02_collections.fixed` type-check end-to-end with no diagnostics; symbol table has correct types for every binding. |
 | M5 | Expression typing — `if`, `match` (with in-tree top-level-variant exhaustiveness — see §5.5.1 for the conformance gaps deferred to Phase 3.x), `handle`, `do`, `forall`, `implies`, `lambda`, struct literals, method calls, static calls, `Resume`, `Unreachable`. Pattern typing — variant patterns, literal patterns, or-patterns, guards, struct-destructure (top-level only). Perf checkpoint: corpus mean within 2× of M2 baseline. | `examples/03_option_result.fixed` through `examples/06_functor_monad.fixed` type-check with no diagnostics. `TyperBench` reports a corpus mean. |
@@ -87,17 +87,16 @@ compiler/src/main/scala/fixed/
     tpd.scala                       — type alias for typed trees
     Desugar.scala                   — (Phase 4) match → fold lowering, etc.
   core/
-    Names.scala                     — interned identifiers (NEW)
-    Symbols.scala                   — symbol table (NEW)
-    Denotations.scala               — phase-indexed symbol info (NEW)
-    Types.scala                     — Type ADT, prototype types (NEW)
+    Names.scala                     — interned identifiers (deferred: plain String until profiling says otherwise)
+    Symbols.scala                   — SymbolId, Denotation, SymbolTable, `render` (M2)
+    Types.scala                     — Type ADT (M2)
     Phases.scala                    — Phase trait (M1) + base classes
-    Contexts.scala                  — Context object, `using Context` plumbing (NEW)
+    Contexts.scala                  — Context object, `using Context` plumbing (M3; the Namer threads its own state)
   parsing/
     ParserPhase.scala               — wraps Parser as a Phase (M1)
   typer/
     TyperPhase.scala                — Namer + Typer subphases (M1 stub)
-    Namer.scala                     — index pass (NEW)
+    Namer.scala                     — signature pass (M2)
     Typer.scala                     — bidirectional typer (NEW)
     ProtoTypes.scala                — prototype types (NEW)
     Inferencing.scala               — type variable instantiation (NEW)
@@ -216,7 +215,7 @@ final case class Denotation(
     id: SymbolId,
     name: Names.Name,
     owner: SymbolId,           // enclosing decl, or RootSymbol for top-level
-    flags: Long,               // is_method | is_static | is_data_variant | …
+    kind: SymKind,             // Fn | Method | StaticMethod | Cap | Data | Variant | Effect | Operation | TypeAlias | Import | TypeParam | ValueParam
     info: Type,                // base type after typer; refined by Recheck phases
     span: Span                 // declaration source span
 )
@@ -325,6 +324,17 @@ Promote to a separate ADR document only when a second cross-cutting decision war
 
 `Type` is `enum` (Scala 3 ADT) — exhaustively pattern-matchable. Recheck phases extend with refinements via separate side tables; `Type` itself stays at this size.
 
+#### As implemented (M2)
+
+The M2 `Type` differs from the sketch above where the corpus demanded it; this subsection is normative for the code:
+
+- `IsBound(bounds: List[Type])` replaces `IsBound(caps: List[CapBound])`. Chains mix capabilities, refinement calls, primitives and type variables (`N is Numeric + between(0, 150)`, `type Port = u16 + between(1, 65535)`, `type Clamped(...) = N + between(lo, hi)`), so each entry is a `Type`: `CapRef`, `RefinementType`, `PrimType` or `TypeRef`. `CapBound` is dropped; prop obligations attach at M9.
+- `ValueArg(term: SymbolicTerm)` is added for compile-time values in `of` lists (`Bounded of (N, 0, 10)`). `SymbolicTerm` gains `LitFloat` and `LitChar`.
+- `CapGeneratorType` is dropped: `(N, N) -> cap of N` is an `ArrowType` whose result is a `CapType`.
+- `CapType(Some(IsBound(...)))` represents `cap extends C + D`.
+- Deferred to their first consumer: `TypeVar` (M3 unifier), `ListType` (no list type syntax exists; `List of A` is a `TypeRef`), `EffectRow.rest` (M7).
+- `Denotation` carries a `kind: SymKind` enum instead of a `flags: Long` bit set.
+
 ### 3.4 Prototypes (bidirectional typing)
 
 Per dotc `typer/ProtoTypes.scala`, every recursive call to the typer carries an expected type ("prototype"). Fixed adopts the same idea, with one canonical signature for every typer routine:
@@ -389,6 +399,15 @@ The Scanner and Parser are hard-FP (zero `var`, zero `while`, zero `mutable.*`).
 **Future-Phase entry to watch**: Tree-node synthesis in Phase 4 desugaring — when `match → fold` lowering creates new tree nodes, those nodes need spans that don't collide with parser-allocated ones (per §3.1's load-bearing constraint). The simplest discipline is sentinel-span synthesis; if it bites, a Phase 4 ADR adds a counter-based variant.
 
 **Perf-recovery milestones** are budgeted at M2 (post-Namer) and M5 (post-base typer) — the two points where the FP-vs-perf cost is most likely to bite in Part A. Each runs `TyperBench` (a typer-level analogue of `ParserBench`, introduced in M2) and applies JFR-driven tuning until corpus mean is within 2× of the equivalent dotc throughput per typed AST node. Part B sub-plans (M9 prop verifier, M11 representation selector) carry their own perf-recovery checkpoints in their respective sub-plan documents.
+
+### 3.6 Namer rules (M2)
+
+- **Two passes, no SCC yet.** Pass 1 enters the prelude, the `use` imports and every top-level name; pass 2 types each signature against that scope. Because references are by `SymbolId`, declaration order never matters. The §4.2.3 SCC pass becomes necessary only for cycle diagnostics (`T050`) and module-`let` folding; neither occurs in the corpus, so it is deferred.
+- **Prelude.** `String`, `List`, `Json`, `Tuple`, `Nat` (data); `Optional`, `Result`, `Pair`, `Ordering`, `Boolean`, `Empty`, `Eq`, `Ord`, `Numeric`, `Show`, `Clone`, `Sequencing`, `Folding`, `Functor`, `Filtering`, `Sized` (caps); `Fail` (effect). User declarations shadow prelude names. `Console` and other I/O effects come only through `use std.io...`.
+- **Type variables** follow `spec/type_system.md` Rule 4.1: a bare unbound `UPPER_IDENT` introduces one; `of` parameters scope over the whole `cap` / `data` / `effect` body; restating a variable of the *current* signature (`fn abs(n: N is Numeric + Ord) -> N is positive()`) adds bounds to it; rebinding an enclosing or global name is `error[T004]`.
+- **Signatures.** A `fn`, method or operation is `ArrowType(params, ret, with-row)` (zero params = `()`, several = `TupleType`). A data type is `TypeRef(self, typeParams)`; each variant is a constructor `fields -> Self`, or `Self` when it has no fields. A cap's info is its `extends` chain. Parameters are `ValueParam` symbols, in scope for the rest of the signature so refinement calls (`between(lo, hi)`) resolve them.
+- **Diagnostics.** `T001` not found (capability, effect, refinement generator or value), `T003` duplicate top-level definition, `T004` type-variable rebinding, `T005` construct not supported in type position yet.
+- **Not yet indexed:** `satisfies` declarations (M6), `mod` declarations, `prop` declarations (M9).
 
 ## 4. Phase pipeline
 
