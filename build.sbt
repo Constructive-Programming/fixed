@@ -12,6 +12,26 @@ ThisBuild / scalacOptions ++= Seq(
   "-source:3.10"
 )
 
+// Point git at the committed hooks in .githooks/ whenever the build loads,
+// so the pre-commit gate (`sbt check test`) is active for anyone using sbt.
+Global / onLoad := {
+  val previous = (Global / onLoad).value
+  val base = (LocalRootProject / baseDirectory).value
+  previous.andThen { state =>
+    import scala.sys.process._
+    val hooks = base / ".githooks"
+    if (hooks.isDirectory && (base / ".git").exists) {
+      val current = scala.util.Try(Process(Seq("git", "config", "--get", "core.hooksPath"), base).!!.trim).getOrElse("")
+      if (current != ".githooks") {
+        val rc = Process(Seq("git", "config", "core.hooksPath", ".githooks"), base).!
+        if (rc == 0) state.log.info(s"git hooks: core.hooksPath set to .githooks (was '${current}')")
+        else state.log.warn("git hooks: could not set core.hooksPath; run `git config core.hooksPath .githooks`")
+      }
+    }
+    state
+  }
+}
+
 // Scalafix semantic rules (RemoveUnused, OrganizeImports) read SemanticDB.
 ThisBuild / semanticdbEnabled := true
 

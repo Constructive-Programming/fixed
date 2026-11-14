@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+# Pre-commit quality gate: formatting, scalafix lint, copy-paste detection
+# (CPD) and the test suite — the same gate CI runs.
+#
+# Installed automatically: loading the sbt build sets
+# `git config core.hooksPath .githooks`.
+# Bypass only in an emergency: `git commit --no-verify`.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+echo "pre-commit: running 'sbt check test' (bypass with --no-verify)" >&2
+sbt check test < /dev/null

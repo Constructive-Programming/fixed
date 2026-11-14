@@ -256,6 +256,10 @@ sbt check   # scalafmt + scalafix (lint, unused, import order) + PMD CPD (copy-p
 sbt fix     # apply scalafix rewrites and scalafmt formatting
 ```
 
+The same gate (`sbt check test`) runs as a **pre-commit hook** (`.githooks/pre-commit`;
+loading the sbt build sets `git config core.hooksPath .githooks` automatically) and in
+**CI** (`.github/workflows/ci.yml`, on pushes to `main` and on pull requests).
+
 Config: `.scalafmt.conf`, `.scalafix.conf`; CPD threshold is `cpdMinTokens` in `build.sbt`.
 
 Benchmarks (JMH, `bench/`): `sbt "bench/Jmh/run -prof gc fixed.bench.FrontEndBench"` —
