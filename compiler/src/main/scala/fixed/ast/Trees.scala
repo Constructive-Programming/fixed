@@ -66,16 +66,16 @@ object Trees:
     def name: String = sig.name
     def typeParamsHint: List[String] = sig.typeParamsHint
     def params: List[FnParam] = sig.params
-    def returnType: Tree = sig.returnType
+    def returnType: Option[Tree] = sig.returnType
     def withClause: Option[Tree] = sig.withClause
     def body: Option[Tree] = sig.body
 
-  /** The fields every `FnLike` shares. */
+  /** The fields every `FnLike` shares. `returnType` is `None` when `-> T` is omitted (the typer defaults it to Unit). */
   final case class FnSig(
       name: String,
       typeParamsHint: List[String],
       params: List[FnParam],
-      returnType: Tree,
+      returnType: Option[Tree],
       withClause: Option[Tree],
       body: Option[Tree]
   )
@@ -84,7 +84,7 @@ object Trees:
     * `case FnDecl(name, hints, params, ret, w, body, span) =>`.
     */
   sealed abstract class FnLikeCompanion[T <: FnLike]:
-    def unapply(t: T): (String, List[String], List[FnParam], Tree, Option[Tree], Option[Tree], Span) =
+    def unapply(t: T): (String, List[String], List[FnParam], Option[Tree], Option[Tree], Option[Tree], Span) =
       (t.name, t.typeParamsHint, t.params, t.returnType, t.withClause, t.body, t.span)
 
   /** Top-level or block-local `fn`. */

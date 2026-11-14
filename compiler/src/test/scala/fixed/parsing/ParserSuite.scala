@@ -998,8 +998,8 @@ class ParserSuite extends FunSuite:
           case other          => fail(s"expected Error type annotation, got $other")
         // Return type and body must NOT have been swallowed by the bad type.
         fn.returnType match
-          case Trees.PrimitiveType("u64", _) => ()
-          case other                         => fail(s"expected u64 return, got $other")
+          case Some(Trees.PrimitiveType("u64", _)) => ()
+          case other                               => fail(s"expected u64 return, got $other")
         fn.body match
           case Some(Trees.IntLit(n, _)) => assertEquals(n, BigInt(0))
           case other                    => fail(s"expected IntLit body, got $other")
@@ -1012,8 +1012,8 @@ class ParserSuite extends FunSuite:
     pr.tree match
       case Trees.CompilationUnit(List(fn: Trees.FnDecl), _) =>
         fn.returnType match
-          case _: Trees.Error => ()
-          case other          => fail(s"expected Error return type, got $other")
+          case Some(_: Trees.Error) => ()
+          case other                => fail(s"expected Error return type, got $other")
         fn.body match
           case Some(Trees.IntLit(n, _)) => assertEquals(n, BigInt(0))
           case other                    => fail(s"expected IntLit body, got $other")
@@ -1083,7 +1083,7 @@ class ParserSuite extends FunSuite:
       case Trees.CompilationUnit(items, _)             => items.flatMap(collectAllErrors)
       case Trees.FnDecl(_, _, params, ret, _, body, _) =>
         params.flatMap(p => collectAllErrors(p.typeAnn)) ++
-          collectAllErrors(ret) ++ body.toList.flatMap(collectAllErrors)
+          ret.toList.flatMap(collectAllErrors) ++ body.toList.flatMap(collectAllErrors)
       case Trees.Block(stmts, _)           => stmts.flatMap(collectAllErrors)
       case Trees.LetExpr(p, init, _)       => collectAllErrors(p) ++ collectAllErrors(init)
       case Trees.IfExpr(c, t1, e, _)       => collectAllErrors(c) ++ collectAllErrors(t1) ++ collectAllErrors(e)
@@ -1251,7 +1251,7 @@ class ParserSuite extends FunSuite:
       case Trees.CompilationUnit(items, _)             => items.flatMap(collectIdents)
       case Trees.FnDecl(_, _, params, ret, _, body, _) =>
         params.flatMap(p => collectIdents(p.typeAnn) ++ p.default.toList.flatMap(collectIdents)) ++
-          collectIdents(ret) ++ body.toList.flatMap(collectIdents)
+          ret.toList.flatMap(collectIdents) ++ body.toList.flatMap(collectIdents)
       case Trees.Block(stmts, _)           => stmts.flatMap(collectIdents)
       case Trees.LetExpr(p, init, _)       => collectIdents(p) ++ collectIdents(init)
       case Trees.IfExpr(c, t1, e, _)       => collectIdents(c) ++ collectIdents(t1) ++ collectIdents(e)

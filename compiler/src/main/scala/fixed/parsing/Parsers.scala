@@ -158,15 +158,6 @@ object Parser:
       val (s1, tok) = expect(s, kind, what)
       rest(s1, tok)
 
-  /** `kind p`?, with `default` (built at the current state) when `kind` is absent. */
-  extension (s: ParserState)
-    private inline def optionalOr[A](kind: TokenKind)(inline p: Rule[A])(
-        inline default: ParserState => A
-    ): Parsed[A] =
-      accept(s, kind) match
-        case (s1, Some(_)) => p(s1)
-        case (s1, None)    => (s1, default(s1))
-
   // Optional pieces that default to the monoid's empty value (e.g. `Nil`).
   extension [A: Monoid](s: ParserState)
     /** `kind p`?, consuming `kind`; empty when `kind` is absent. */
@@ -535,9 +526,8 @@ object Parser:
     (s4, mk(Trees.Binding(nameTok.lexeme, ty, default), span(nameTok.span, s4.current.span)))
 
   // Shared tail of fn decls and cap methods: `(-> TypeExpr)? WithClause? (= FnBody)?`. FnBody is an inline-or-block expression.
-  private def parseFnSigTail(s0: ParserState)(using Reporter): Parsed[(Tree, Option[Tree], Option[Tree])] =
-    val (s1, returnType) =
-      s0.optionalOr(TokenKind.Arrow)(parseTypeExpr)(st => Trees.UnitType(st.current.span))
+  private def parseFnSigTail(s0: ParserState)(using Reporter): Parsed[(Option[Tree], Option[Tree], Option[Tree])] =
+    val (s1, returnType) = s0.optionally(TokenKind.Arrow)(parseTypeExpr)
     val (s2, withClause) = parseOptionalWithClause(s1)
     val (s3, body) = s2.optionally(TokenKind.Eq)(parseInlineOrBlockExpr)
     (s3, (returnType, withClause, body))
