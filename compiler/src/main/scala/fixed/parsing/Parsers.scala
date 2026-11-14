@@ -1380,7 +1380,7 @@ object Parser:
     val (s3, body) = parseInlineOrBlockExpr(s2)
     (s3, Trees.LambdaExpr(params, body, span(sp, body.span)))
 
-  private def parseLambdaParam(s0: ParserState)(using Reporter): Parsed[Trees.FnParam] =
+  private def parseLambdaParam(s0: ParserState)(using Reporter): Parsed[Trees.LambdaParam] =
     val (s1, name, startSpan) = s0.current.kind match
       case TokenKind.LowerIdent =>
         val (st, tok) = consume(s0); (st, tok.lexeme, tok.span)
@@ -1389,10 +1389,9 @@ object Parser:
       case _ =>
         reportExpected(s0, DiagCode.P008, "lambda parameter name", None)
         val (st, tok) = consume(s0); (st, "<error>", tok.span)
-    val (s2, typeAnn) =
-      s1.optionalOr(TokenKind.Colon)(parseTypeExpr)(st => Trees.Ident("<inferred>", st.current.span))
+    val (s2, typeAnn) = s1.optionally(TokenKind.Colon)(parseTypeExpr)
     val (s3, default) = s2.optionally(TokenKind.Eq)(parseExpr)
-    (s3, Trees.FnParam(Trees.Binding(name, typeAnn, default), span(startSpan, s3.current.span)))
+    (s3, Trees.LambdaParam(name, typeAnn, default, span(startSpan, s3.current.span)))
 
   private def parseParenExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
     val (s1, startTok) = expect(s0, TokenKind.LParen, "`(`")

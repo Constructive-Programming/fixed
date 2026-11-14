@@ -257,10 +257,15 @@ object Trees:
 
   /** Lambda. Params may carry optional type annotations and defaults. */
   final case class LambdaExpr(
-      params: List[FnParam],
+      params: List[LambdaParam],
       body: Tree,
       span: Span
   ) extends Tree
+
+  /** `name (: Type)? (= default)?` — a lambda parameter; `typeAnn` is `None`
+    * when the type is left to inference.
+    */
+  final case class LambdaParam(name: String, typeAnn: Option[Tree], default: Option[Tree], span: Span) extends Tree
 
   /** `x.method(args)` (`args` = `Some(...)`), or `x.method` with no `(...)` (`args` = `None`) —
     * the grammar's zero-arg member form. The concrete type says what `x` is.
