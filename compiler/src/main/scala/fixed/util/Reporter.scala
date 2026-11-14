@@ -5,11 +5,12 @@ enum Severity:
   case Error, Warning, Info
 
 /** Diagnostic codes. The case name is the rendered code. `E*`: lexical
-  * (scanner); `P*`: syntactic (parser).
+  * (scanner); `P*`: syntactic (parser); `T*`: typer.
   */
 enum DiagCode:
   case E001, E002, E003, E004, E005, E006, E007, E008, E009
   case P001, P002, P003, P004, P005, P006, P007, P008, P010, P011, P012, P013, P014, P015, P016, P017, P018, P019, P099
+  case T000
 
 /** A diagnostic: code, source span, explanation and an optional copy-pasteable suggestion. */
 final case class Diagnostic(

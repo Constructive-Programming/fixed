@@ -1,6 +1,6 @@
 # Fixed Compiler — Phase 3: Type Checker (Implementation Plan)
 
-**Status:** Draft v0.1 — pre-implementation planning
+**Status:** In progress — M1 done
 **Scope:** Scala 3 implementation of the typer pipeline. Untyped AST (Phase 2 output) → typed AST → typed AST refined by capability closure / effect inference / quantity check / representation selection.
 **Prerequisite:** Phase 2 + 2.1 complete (parser produces a usable AST with diagnostics, gap nodes, and trivia for every `examples/*.fixed`, even on syntactically broken input).
 **Reference:** `docs/references/scala3-compiler-reference.md` §4 (typer pipeline) and §5.4 (recheck pattern). Read both end-to-end before starting M1.
@@ -45,7 +45,7 @@ Phase 3 is split into two parts: **Part A — Base typer (M1–M5, this plan)** 
 
 | # | Milestone | Verification |
 |---|---|---|
-| M1 | Phase scaffolding compiles. `Compiler` runs `ParserPhase` → stub `TyperPhase` end-to-end. `Driver`/`Main` accept a file path on argv. Tree-id field added to every `Trees.X` (per §3 option D). | `sbt run -- examples/01_basics.fixed` exits 0; stub typer emits one diagnostic noting "typer not yet implemented" and the parsed tree is reported. Parser tests still pass with the `id` field added. |
+| M1 ✅ | Phase scaffolding compiles. `Compiler` runs `ParserPhase` → stub `TyperPhase` end-to-end. `Main` accepts file paths on argv. (No tree-id field: §3 adopts option B, the span-keyed side table.) | `sbt run -- examples/01_basics.fixed` exits 0; stub typer emits one diagnostic noting "typer not yet implemented" and the parsed tree is reported. `CompilerSuite` covers every example. |
 | M2 | `Names`/`Symbols`/`Denotations`/`Phases`/`Contexts`/`Types`/`ProtoTypes` machinery in place. `Namer` types every top-level decl's **signature** in `examples/01_basics.fixed`. `TyperBench` introduced and baselined. Perf checkpoint: corpus ≤ 2× the parser's per-token cost. | A test asserts the symbol table for `01_basics.fixed` matches an expected list of `(name, kind, signature-Type)` triples. `TyperBench` reports a corpus mean. |
 | M3 | Type ADT + ProtoTypes + Typer skeleton + Unifier. Literals, identifiers, arithmetic, function calls, and `let` bindings type-check in isolation. | `typedExpr("1 + 2 * 3")` yields a tpd tree whose root is `BinOp("+")` with children typed `i64`. Idents in scope resolve to their symbols. |
 | M4 | Decl body typing — `fn`, `cap`, `data`, `type`, `effect`, `satisfies` declaration bodies all type-check. Mutual recursion across decls works (signatures from M2's Namer pass cover it). | `examples/01_basics.fixed` and `02_collections.fixed` type-check end-to-end with no diagnostics; symbol table has correct types for every binding. |
@@ -78,11 +78,9 @@ Carving Part B into sub-plans up front (rather than at "the cut" later) buys thr
 
 ```
 compiler/src/main/scala/fixed/
-  Main.scala                        — entry point (currently absent)
-  Driver.scala                      — argv parsing, settings (currently absent)
-  Compiler.scala                    — phase plan: List[List[Phase]] (currently absent)
-  Run.scala                         — one execution of the phase plan (currently absent)
-  CompilationUnit.scala             — per-unit tree + diagnostics (currently absent)
+  Main.scala                        — entry point + argv handling (M1; split out a Driver when settings appear)
+  Compiler.scala                    — phase plan: List[List[Phase]] + compile(unit) (M1; split out a Run when runs carry state)
+  CompilationUnit.scala             — per-unit tree + diagnostics (M1)
   ast/
     Trees.scala                     — extend with typed-tree slot (see §3)
     untpd.scala                     — type alias for parser-output trees
@@ -93,12 +91,12 @@ compiler/src/main/scala/fixed/
     Symbols.scala                   — symbol table (NEW)
     Denotations.scala               — phase-indexed symbol info (NEW)
     Types.scala                     — Type ADT, prototype types (NEW)
-    Phases.scala                    — Phase trait + base classes (NEW)
+    Phases.scala                    — Phase trait (M1) + base classes
     Contexts.scala                  — Context object, `using Context` plumbing (NEW)
   parsing/
-    ParserPhase.scala               — wraps Parser as a Phase (NEW; today Parser is bare)
+    ParserPhase.scala               — wraps Parser as a Phase (M1)
   typer/
-    TyperPhase.scala                — Namer + Typer subphases (NEW)
+    TyperPhase.scala                — Namer + Typer subphases (M1 stub)
     Namer.scala                     — index pass (NEW)
     Typer.scala                     — bidirectional typer (NEW)
     ProtoTypes.scala                — prototype types (NEW)

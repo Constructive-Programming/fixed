@@ -1,6 +1,6 @@
 # Fixed Compiler — Phase 2: Parser + AST (Implementation Plan)
 
-**Status:** Draft v0.1 — pre-implementation planning
+**Status:** Implemented (M1–M5; the whole example corpus parses with 0 diagnostics)
 **Scope:** Scala 3 bootstrap of the front-end. Lex Fixed source → tokens → AST.
 **Prerequisite:** Spec frozen at v0.4.5 (commit `c7fbe8c`). Phase 1 complete.
 **Reference:** `docs/references/scala3-compiler-reference.md` for dotc patterns.

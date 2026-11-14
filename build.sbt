@@ -99,7 +99,10 @@ lazy val compiler = (project in file("compiler"))
     // example files resolve.
     Test / fork := true,
     Test / javaOptions += "-Xmx2g",
-    Test / baseDirectory := (ThisBuild / baseDirectory).value
+    Test / baseDirectory := (ThisBuild / baseDirectory).value,
+    // `Main` calls sys.exit, so run it in a forked JVM rooted at the repo (example paths resolve).
+    run / fork := true,
+    run / baseDirectory := (ThisBuild / baseDirectory).value
   )
 
 // JMH benchmarks for the front end. Not aggregated: run explicitly with
@@ -121,6 +124,7 @@ lazy val root = (project in file("."))
   .settings(
     name := "fixed",
     publish / skip := true,
+    Compile / run := (compiler / Compile / run).evaluated,
     libraryDependencies ++= Seq(
       "net.sourceforge.pmd" % "pmd-cli" % pmdVersion % Cpd,
       "net.sourceforge.pmd" % "pmd-scala_2.13" % pmdVersion % Cpd

@@ -1,6 +1,6 @@
 # Fixed Compiler — Phase 2.1: Incremental & Resilient Parsing
 
-**Status:** Draft v0.1 — pre-implementation
+**Status:** Implemented (2.1.M1–M5)
 **Scope:** Make the parser functional, error-tolerant, and trivia-preserving so it can serve as the front-end for an LSP/IDE and the substrate for later incremental work.
 **Prerequisite:** Phase 2 (Parser + AST, M5 milestone) — i.e. all 11 examples parse on a happy path.
 **Position:** Inserted between Phase 2 (parser produces an AST) and Phase 3 (typer consumes it). Layer 1 of a two-layer plan; Layer 2 (lossless syntax tree + on-edit incremental reparse) is deferred to Phase 2.2.
