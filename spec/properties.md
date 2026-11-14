@@ -162,7 +162,7 @@ cap Sorted extends Sequencing:
         Optional.some(_) => fold(true, (acc, prev, curr) -> acc && prev <= curr)
 ```
 
-Match arms inside prop bodies are checked at quantity 0, but the same exhaustiveness rules (Rule M6.1, Rule M6.2) apply — props must be total expressions producing a `bool`.
+Match cases inside prop bodies are checked at quantity 0, but the same exhaustiveness rules (Rule M6.1, Rule M6.2) apply — props must be total expressions producing a `bool`.
 
 ## 5. The `forall` quantifier
 
@@ -422,7 +422,7 @@ fn median(collection: C is SortedNonEmpty of (N is Numeric)) -> N =
     )
 ```
 
-Per `prop non_empty: size > 0` on `NonEmpty`, the typer proves `collection.get(mid)` is `Optional.some(_)` for `mid < size`; the `Optional.none` arm is unreachable and the call to `unreachable` is dead code. The compiler emits no runtime check for this case.
+Per `prop non_empty: size > 0` on `NonEmpty`, the typer proves `collection.get(mid)` is `Optional.some(_)` for `mid < size`; the `Optional.none` case is unreachable and the call to `unreachable` is dead code. The compiler emits no runtime check for this case.
 
 PBT-verified props do **not** discharge `unreachable` (PBT is incomplete; a counterexample at runtime would convert dead-code elision into undefined behavior). Only statically-proven props gain this capability.
 

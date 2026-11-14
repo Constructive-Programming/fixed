@@ -343,7 +343,7 @@ Use `satisfies` to **bridge** between data and capabilities — mapping data con
 | **Constructor casing** | Capitalized: `Json.Null`, `List.Cons` | lowercase: `Optional.some`, `Expr.lit` |
 
 Rules:
-1. **`match` arms may only use data-qualified patterns** — `Json.Null`, `List.Cons(h, t)`, `Direction.North`, `Tuple(a, b)`, etc.
+1. **`match` cases may only use data-qualified patterns** — `Json.Null`, `List.Cons(h, t)`, `Direction.North`, `Tuple(a, b)`, etc.
 2. **Capability destruction uses `fold`** — `opt.fold(on_some, on_none)`, `expr.fold(on_lit, on_var, ...)`, `result.fold(on_ok, on_err)`, `ord.fold(on_lt, on_eq, on_gt)`
 3. **Construction through a cap's constructor *requirement* is valid** — `Optional.some(x)` is resolved via `satisfies` to a satisfying type's actual constructor (e.g., `Maybe.Just(x)`) at compile time
 4. **Data constructors are Capitalized** — `List.Cons`, `List.Nil`, `Tuple`, `Json.Null`
@@ -726,7 +726,7 @@ Every `examples/*.fixed` corrupted with one syntactic error per top-level decl p
 | **Data type analyzer** (`typer/DataAnalyzer.scala`) | Analyze `data` declarations: variant shapes, auto-derive capabilities, GADT type parameter constraints. Validate `satisfies` declarations: verify constructor arity/type compatibility, check `impossible` soundness (no reachable code path invokes the marked constructor) |
 | **Capability closure** (`caps/CapClosure.scala`) | Recheck phase: close capability sets under `extends`, resolve `satisfies` mappings in scope, verify coherence |
 | **Effect inference** (`effects/EffectChecker.scala`) | Infer and propagate effect rows, verify all effects handled |
-| **Exhaustiveness checker** (`typer/Exhaustiveness.scala`) | Verify `match` arms cover all constructors of the matched data type |
+| **Exhaustiveness checker** (`typer/Exhaustiveness.scala`) | Verify `match` cases cover all constructors of the matched data type |
 | **Property verifier** (`caps/PropVerifier.scala`) | Static verification of `prop` invariants; generate property-based tests for those that can't be proven statically. Resolves value params in refinement capability props (e.g., `Between(lo, hi)` binds `min`/`max` to `lo`/`hi` in prop expressions) |
 | **Quantity checker** (`qtt/QuantityChecker.scala`) | Recheck phase: infer QTT quantities (0/1/ω) for all bindings. Verify erasure: 0-quantity bindings used only in type/prop/inferred-phantom positions. Verify linearity: 1-quantity bindings used exactly once. Feed quantities into Perceus insertion (Phase 4) |
 | **Representation selector** (`repr/RepresentationSelector.scala`) | Recheck phase: analyze capability sets → narrow to viable concrete representations |

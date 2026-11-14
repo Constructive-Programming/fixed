@@ -94,7 +94,7 @@ Anchors, by context (closed sets — every Phase 2 production declares which it 
 | Argument list / tuple / list literal | `Comma`, matching `RParen` / `RBracket` / `RBrace` |
 | Type expression | `Comma`, `RParen`, `Newline`, `Eq`, `Arrow`, `KwWith` |
 | Pattern | `FatArrow`, `Comma`, `RParen` |
-| Match / handle arms | `FatArrow` (recover the body), `Newline` at the arm's indent |
+| Match cases / handler clauses | `FatArrow` (recover the body), `Newline` at the case's or clause's indent |
 | `prop` / `forall` / `implies` body | `Newline` at the body's indent, `Dedent` |
 
 Anchors are **ranked**: the parser bails to the highest-ranked anchor in scope, never deeper. This prevents a missing `)` from eating the rest of the file — the `Comma` and matching `RParen` inside the call beat the outer `KwFn`.
@@ -120,7 +120,7 @@ final case class Missing(
 ) extends Tree
 ```
 
-The current `Trees.Ident("<error>", _)` and `Trees.Ident("<unsupported>", _)` placeholders are removed; every site that produces them produces an `Error` or `Missing` instead. Existing match arms in tests and the (future) typer must add cases for both.
+The current `Trees.Ident("<error>", _)` and `Trees.Ident("<unsupported>", _)` placeholders are removed; every site that produces them produces an `Error` or `Missing` instead. Existing match cases in tests and the (future) typer must add cases for both.
 
 ### 3.3 Recovery contract
 
@@ -210,7 +210,7 @@ for every (good, broken) pair:
 Plus per-context tests:
 
 - Missing `)` in a fn signature recovers at NEWLINE; the following `fn` parses cleanly.
-- Garbage inside a match arm recovers at next `=>` or NEWLINE; the following arms parse cleanly.
+- Garbage inside a match case recovers at next `=>` or NEWLINE; the following cases parse cleanly.
 - Unknown keyword at top level recovers at next decl-introducer.
 - A comment between two consecutive `fn`s appears in `trivia.leadingFor(secondFnNameStart)`.
 

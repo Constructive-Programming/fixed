@@ -4,31 +4,31 @@
 **Specifies:** pattern syntax, type rules, exhaustiveness/redundancy checking, and match-expression semantics for Fixed v0.4.3 source.
 **Last revised:** 2026-04-30
 
-**Changes from v0.1.** Resolves OQ-M1 (`..` field elision in struct-destructure patterns → §3.6), OQ-M3 (or-patterns → §5.5), OQ-M4 (guards → §5.6); strengthens Rule M6.2 from "may use refinement caps" to "must use refinement caps". Closes OQ-M2 (refutable handler arm parameters), OQ-M5 (view patterns), OQ-M6 (range patterns — subsumed by guards).
+**Changes from v0.1.** Resolves OQ-M1 (`..` field elision in struct-destructure patterns → §3.6), OQ-M3 (or-patterns → §5.5), OQ-M4 (guards → §5.6); strengthens Rule M6.2 from "may use refinement caps" to "must use refinement caps". Closes OQ-M2 (refutable handler clause parameters), OQ-M5 (view patterns), OQ-M6 (range patterns — subsumed by guards).
 
 ## 1. Scope
 
-This document specifies pattern matching end-to-end — what a pattern is, where patterns can appear, how the typer assigns types and binds names, and how the compiler verifies that match expressions are exhaustive and that no arm is unreachable. Concretely:
+This document specifies pattern matching end-to-end — what a pattern is, where patterns can appear, how the typer assigns types and binds names, and how the compiler verifies that match expressions are exhaustive and that no case is unreachable. Concretely:
 
 - The pattern algebra (§3): wildcard, binder, literal, data-variant (qualified / bare / `Self.`), tuple, struct-destructure.
 - Pattern type rules and binding semantics (§4).
-- Match expressions (§5): scrutinee typing, arm-body unification, scoping.
+- Match expressions (§5): scrutinee typing, case-body unification, scoping.
 - Exhaustiveness checking (§6) and redundancy/reachability checking (§7).
 - The semantic relationship between `match` and the auto-derived `fold` of §7.4.a in type_system.md (§8) — they are *distinct* operations even though both are auto-derived for `data`.
-- Pattern uses outside `match`: `let Pat = Expr` bindings (§9) and handler arm patterns (§10).
+- Pattern uses outside `match`: `let Pat = Expr` bindings (§9) and handler clause patterns (§10).
 
 It does **not** specify:
 
 - The compilation algorithm for the decision tree itself, beyond noting that Maranget's algorithm is the reference (the compiler implementation is free to choose any equivalent algorithm).
 - Pattern matching on capability-bounded values (forbidden: caps don't expose variants — see §3.4 and `docs/plans/implementation-plan.md` "match vs fold").
-- GADT-style per-arm type narrowing — deferred per `spec/type_system.md` §7.6.
+- GADT-style per-case type narrowing — deferred per `spec/type_system.md` §7.6.
 
 ## 2. Dependencies and theoretical basis
 
-- `spec/syntax_grammar.ebnf` v0.4.2 — `Pattern`, `LiteralPattern`, `DataVariantPattern`, `TuplePattern`, `StructDestructurePattern`, `FieldPattern`, `MatchExpr`, `MatchArm`, `HandlerArm`.
+- `spec/syntax_grammar.ebnf` v0.4.2 — `Pattern`, `LiteralPattern`, `DataVariantPattern`, `TuplePattern`, `StructDestructurePattern`, `FieldPattern`, `MatchExpr`, `MatchCase`, `HandlerClause`.
 - `spec/type_system.md` v0.4.1 — Rule 4.1 (typevar introduction), §7.4.a (auto-derived `fold`), §7.6 (GADT deferred).
 - `spec/quantities.md` v0.1 — Rule Q5.8 (pattern bindings).
-- `spec/effects.md` v0.2 — handler arm patterns share the same algebra (§10).
+- `spec/effects.md` v0.2 — handler clause patterns share the same algebra (§10).
 - Maranget, *"Compiling Pattern Matching to Good Decision Trees"*, ML Workshop 2008 — the reference compilation algorithm for exhaustiveness and decision trees.
 - Krauss, *"Pattern Matching in Theorem Proving"* — the reference for nested-pattern reasoning that informs §6.
 - Pierce, *"Types and Programming Languages"*, ch. 11 — pattern-typing rules used in §4.
@@ -54,7 +54,7 @@ match opt:
     Maybe.Nothing => 0
 ```
 
-A binder shadows enclosing-scope names of the same identifier inside the arm body. **Rule M3.2 (Binder uniqueness):** within a single pattern, the same binder name may not appear twice (`Maybe.Pair(x, x)` is a compile error). Linearity within a single pattern forces this.
+A binder shadows enclosing-scope names of the same identifier inside the case body. **Rule M3.2 (Binder uniqueness):** within a single pattern, the same binder name may not appear twice (`Maybe.Pair(x, x)` is a compile error). Linearity within a single pattern forces this.
 
 ### 3.3 Literal patterns
 
@@ -130,7 +130,7 @@ Every pattern has a **pattern type** equal to the scrutinee position's type. The
 
 ## 4. Pattern type rules
 
-**Rule M4.1 (Pattern bindings carry quantity).** Every binder introduced by a pattern receives a quantity per `spec/quantities.md` Rule Q5.8 — its quantity is the sum of its usages in the arm body (or, for `let`-bindings, the rest of the enclosing block).
+**Rule M4.1 (Pattern bindings carry quantity).** Every binder introduced by a pattern receives a quantity per `spec/quantities.md` Rule Q5.8 — its quantity is the sum of its usages in the case body (or, for `let`-bindings, the rest of the enclosing block).
 
 **Rule M4.2 (Refutability).** A pattern is **refutable** if some value of the scrutinee type does not match it. A pattern is **irrefutable** if every value matches.
 
@@ -155,34 +155,34 @@ match SCRUTINEE:
     Pattern_n => Body_n
 ```
 
-Per `spec/syntax_grammar.ebnf` §13, arms are NEWLINE-separated (no commas), and each arm's `=>` may introduce a multi-line indented `BlockTail` body.
+Per `spec/syntax_grammar.ebnf` §13, cases are NEWLINE-separated (no commas), and each case's `=>` may introduce a multi-line indented `BlockTail` body.
 
 ### 5.2 Scrutinee typing (Rule M5.2)
 
 The scrutinee `SCRUTINEE` is type-checked under no expected type (synthesis mode). Its type must be a concrete `data` type (or a primitive type whose values can be enumerated as literal patterns: `bool`, finite-domain integers in special cases). Capability-bounded scrutinees are an error per Rule M3.4.c.
 
-### 5.3 Arm-body type unification (Rule M5.3)
+### 5.3 Case-body type unification (Rule M5.3)
 
-Every arm body must produce a value of the same type (or unifiable types). The match expression's type is the join of the arm bodies' types. The match expression's effect row is the union of:
+Every case body must produce a value of the same type (or unifiable types). The match expression's type is the join of the case bodies' types. The match expression's effect row is the union of:
 
-- Each arm body's effect row.
+- Each case body's effect row.
 - The scrutinee's effect row.
 
-Arms whose bodies have type `!` (the never type, e.g., `Fail.fail(...)` or `unreachable`) do not contribute to the result type — they are valid in any expression position per type_system.md §5.6.
+Cases whose bodies have type `!` (the never type, e.g., `Fail.fail(...)` or `unreachable`) do not contribute to the result type — they are valid in any expression position per type_system.md §5.6.
 
-### 5.4 Arm scoping (Rule M5.4)
+### 5.4 Case scoping (Rule M5.4)
 
-A pattern's binders are in scope only within that arm's body. Each arm has its own binding scope; binders do not leak between arms or to the surrounding context.
+A pattern's binders are in scope only within that case's body. Each case has its own binding scope; binders do not leak between cases or to the surrounding context.
 
 ```
 match x:
     Maybe.Just(v) => v + 1     // v in scope here
-    Maybe.Nothing => v          // ERROR: v not in scope (different arm)
+    Maybe.Nothing => v          // ERROR: v not in scope (different case)
 ```
 
 ### 5.5 Or-patterns (Rule M5.5)
 
-A match arm's pattern position is an `OrPattern`: one or more `Pattern` alternatives separated by `|`. The arm fires when the scrutinee matches **any** alternative.
+A match case's pattern position is an `OrPattern`: one or more `Pattern` alternatives separated by `|`. The case fires when the scrutinee matches **any** alternative.
 
 ```
 match pair:
@@ -208,11 +208,11 @@ match opt:
 
 **Rule M5.5.b (Quantity composition).** Each binder's quantity in an or-pattern is the **join** (`⊔`, per `spec/quantities.md` §3.3) over the binder's quantities in each alternative. Since alternatives are mutually exclusive (only one matches per evaluation), the join is the correct combinator — same rule as for `if`/`match` branches (Q5.9).
 
-**Rule M5.5.c (Arity).** Or-patterns are not patterns (they cannot appear in `let`, struct-destructure field positions, or handler arms). They appear only at the top level of a `MatchArm` per the grammar.
+**Rule M5.5.c (Arity).** Or-patterns are not patterns (they cannot appear in `let`, struct-destructure field positions, or handler clauses). They appear only at the top level of a `MatchCase` per the grammar.
 
 ### 5.6 Guards (Rule M5.6)
 
-A match arm may carry an optional **guard** — an `if`-suffixed boolean expression that the arm requires to be true after the pattern matches:
+A match case may carry an optional **guard** — an `if`-suffixed boolean expression that the case requires to be true after the pattern matches:
 
 ```
 match value:
@@ -223,17 +223,17 @@ match value:
 
 **Rule M5.6.a (Type).** A guard's expression has type `bool`. Any other type is `error[E094]: guard expression must be of type bool`.
 
-**Rule M5.6.b (Scoping).** A guard sees the binders introduced by its arm's pattern (and outer-scope bindings); it does not see binders from other arms. The guard is evaluated **after** the pattern matches and **before** the arm body runs.
+**Rule M5.6.b (Scoping).** A guard sees the binders introduced by its case's pattern (and outer-scope bindings); it does not see binders from other cases. The guard is evaluated **after** the pattern matches and **before** the case body runs.
 
-**Rule M5.6.c (Fall-through).** If the pattern matches but the guard evaluates `false`, control falls through to the next arm — the same scrutinee is tried against subsequent patterns.
+**Rule M5.6.c (Fall-through).** If the pattern matches but the guard evaluates `false`, control falls through to the next case — the same scrutinee is tried against subsequent patterns.
 
-**Rule M5.6.d (Effects in guards).** Guards may perform effects, contributing them to the match expression's effect row (per Rule M5.3). However, guards run during pattern dispatch, before the arm body — implementations should keep guards inexpensive. There is no compiler restriction on guard effects in v0.4.3, but stylistic guidance is to use guards for pure boolean conditions.
+**Rule M5.6.d (Effects in guards).** Guards may perform effects, contributing them to the match expression's effect row (per Rule M5.3). However, guards run during pattern dispatch, before the case body — implementations should keep guards inexpensive. There is no compiler restriction on guard effects in v0.4.3, but stylistic guidance is to use guards for pure boolean conditions.
 
-**Rule M5.6.e (Exhaustiveness interaction).** A guarded arm does **not** fully cover its pattern for exhaustiveness purposes — some values matching the pattern might fail the guard. The exhaustiveness check (§6) treats guarded arms conservatively: a guarded arm contributes nothing to the covered space; the residual uncovered space must be covered by subsequent arms (typically a wildcard or unguarded fallback).
+**Rule M5.6.e (Exhaustiveness interaction).** A guarded case does **not** fully cover its pattern for exhaustiveness purposes — some values matching the pattern might fail the guard. The exhaustiveness check (§6) treats guarded cases conservatively: a guarded case contributes nothing to the covered space; the residual uncovered space must be covered by subsequent cases (typically a wildcard or unguarded fallback).
 
 ### 5.7 Or-pattern + guard composition
 
-When a match arm has both an or-pattern and a guard, the guard sees the common binders of the or-pattern's alternatives and is evaluated once for whichever alternative matched:
+When a match case has both an or-pattern and a guard, the guard sees the common binders of the or-pattern's alternatives and is evaluated once for whichever alternative matched:
 
 ```
 match pair:
@@ -241,30 +241,30 @@ match pair:
     (a, b) => a + b
 ```
 
-### 5.8 Arms match in declaration order (informational)
+### 5.8 Cases match in declaration order (informational)
 
-Arms are matched **in declaration order**. The first arm whose pattern matches the scrutinee — and whose guard, if any, is true — fires; subsequent arms are not tried for this match. This means an earlier wildcard arm can shadow later specific arms (which then become unreachable per §7).
+Cases are matched **in declaration order**. The first case whose pattern matches the scrutinee — and whose guard, if any, is true — fires; subsequent cases are not tried for this match. This means an earlier wildcard case can shadow later specific cases (which then become unreachable per §7).
 
 ## 6. Exhaustiveness checking
 
-**Rule M6.1 (Exhaustiveness).** A match expression's set of arm patterns must cover every possible value of the scrutinee type. A match that is not exhaustive is a compile error: `error[E091]: non-exhaustive match` with at least one counterexample value (a value of the scrutinee type not matched by any arm).
+**Rule M6.1 (Exhaustiveness).** A match expression's set of case patterns must cover every possible value of the scrutinee type. A match that is not exhaustive is a compile error: `error[E091]: non-exhaustive match` with at least one counterexample value (a value of the scrutinee type not matched by any case).
 
-The typer uses a standard *pattern-matrix algorithm* (Maranget 2008): the residual *uncovered space* after each arm is the complement of the arm's pattern within the previous uncovered space; if the final uncovered space is non-empty, the match is non-exhaustive and the algorithm constructs a witness.
+The typer uses a standard *pattern-matrix algorithm* (Maranget 2008): the residual *uncovered space* after each case is the complement of the case's pattern within the previous uncovered space; if the final uncovered space is non-empty, the match is non-exhaustive and the algorithm constructs a witness.
 
 ### 6.1 Type-specific exhaustiveness
 
 | Scrutinee type | Exhaustiveness check |
 |---|---|
-| `bool` | `true` and `false` both covered, or a wildcard arm. |
-| `()` | A single arm matching `()` or a wildcard. |
+| `bool` | `true` and `false` both covered, or a wildcard case. |
+| `()` | A single case matching `()` or a wildcard. |
 | `data T` (single-variant) | The variant's fields' patterns are jointly exhaustive at their types. |
-| `data T` (multi-variant) | Every variant has an arm (or the variant's pattern is implied by a wildcard / binder). For each variant, its field patterns are jointly exhaustive. |
-| Tuple `(T1, ..., Tn)` | Element-wise: each position's patterns across arms are jointly exhaustive at `Ti`. |
-| Integer / float / string / char | A wildcard or binder arm is required (the value space is too large for literal coverage). |
+| `data T` (multi-variant) | Every variant has a case (or the variant's pattern is implied by a wildcard / binder). For each variant, its field patterns are jointly exhaustive. |
+| Tuple `(T1, ..., Tn)` | Element-wise: each position's patterns across cases are jointly exhaustive at `Ti`. |
+| Integer / float / string / char | A wildcard or binder case is required (the value space is too large for literal coverage). |
 
 ### 6.2 Exhaustiveness with refinement caps
 
-**Rule M6.2 (Refinement-aided exhaustiveness, required).** The typer **must** apply in-scope refinement caps to compute the *reachable value-domain* of the scrutinee. Patterns are matched against this domain rather than the unrefined type. Exhaustiveness is satisfied iff the union of arm patterns covers the reachable domain.
+**Rule M6.2 (Refinement-aided exhaustiveness, required).** The typer **must** apply in-scope refinement caps to compute the *reachable value-domain* of the scrutinee. Patterns are matched against this domain rather than the unrefined type. Exhaustiveness is satisfied iff the union of case patterns covers the reachable domain.
 
 When a refinement cap (per type_system.md §6.4 Marker class — e.g., `between(1, 3)`, `multiple_of(2)`, `between(0, 10) + multiple_of(2)`) restricts the scrutinee's domain to a finite set, exhaustiveness checks against that narrowed set. Literal patterns covering the narrowed set certify exhaustiveness without a wildcard:
 
@@ -277,34 +277,34 @@ fn name(d: u8 is between(1, 3)) -> String =
     // exhaustive — refinement cap proves d ∈ {1, 2, 3}; no wildcard needed
 ```
 
-For open-ended refinements (e.g., `n is positive()` allowing infinitely many positive values), the reachable domain is still infinite — a wildcard or binder arm is still required for exhaustive coverage. The benefit shows up in **redundancy** checks: an arm matching `0` (per Rule M7.1) is redundant when the refinement excludes `0`, and the typer is required to detect that.
+For open-ended refinements (e.g., `n is positive()` allowing infinitely many positive values), the reachable domain is still infinite — a wildcard or binder case is still required for exhaustive coverage. The benefit shows up in **redundancy** checks: a case matching `0` (per Rule M7.1) is redundant when the refinement excludes `0`, and the typer is required to detect that.
 
 The check is required (not optional): an implementation that ignores refinement-cap evidence and demands wildcards even when the reachable domain is fully covered by literals is non-conformant.
 
 ### 6.3 Counterexamples
 
-The error message for a non-exhaustive match must include at least one **uncovered value** — a concrete value of the scrutinee type that is not matched by any arm. Per `docs/plans/implementation-plan.md` "Agent-Friendly CLI and Compiler Output", error messages include copy-pasteable suggestions; a non-exhaustive-match error suggests adding the missing arm verbatim.
+The error message for a non-exhaustive match must include at least one **uncovered value** — a concrete value of the scrutinee type that is not matched by any case. Per `docs/plans/implementation-plan.md` "Agent-Friendly CLI and Compiler Output", error messages include copy-pasteable suggestions; a non-exhaustive-match error suggests adding the missing case verbatim.
 
 ### 6.4 Coverage as a unified obligation (Rule M6.4) — resolves X3
 
-The exhaustiveness obligation specified in §6.1–6.3 is one instance of a more general **constructor-coverage obligation**: every arm-list whose dispatch is by constructor name must cover every constructor of the discriminator. The two instances in Fixed v0.4.5 are:
+The exhaustiveness obligation specified in §6.1–6.3 is one instance of a more general **constructor-coverage obligation**: every case or clause list whose dispatch is by constructor name must cover every constructor of the discriminator. The two instances in Fixed v0.4.5 are:
 
-1. **`match` arms** (this section) — the discriminator is a `data` type; the constructors are its variants; the algorithm is the pattern-matrix / Maranget machinery of §6.1–6.3.
-2. **Handler arms** (`spec/effects.md` §5.3) — the discriminator is the set of effects handled by a `handle` block; the "constructors" are the operation names of those effects (plus an optional `return(...)` arm for normal completion); coverage requires that every operation of every handled effect appear as an arm.
+1. **`match` cases** (this section) — the discriminator is a `data` type; the constructors are its variants; the algorithm is the pattern-matrix / Maranget machinery of §6.1–6.3.
+2. **Handler clauses** (`spec/effects.md` §5.3) — the discriminator is the set of effects handled by a `handle` block; the "constructors" are the operation names of those effects (plus an optional `return(...)` case for normal completion); coverage requires that every operation of every handled effect appear as a case.
 
 Both are checked by the same algorithm at the implementation level — the constructor-set matrix is identical in shape; the only difference is the discriminator's source (a data declaration vs an effect declaration). Implementations are required to maintain a single coverage pass that consumes either kind of input.
 
-**Rule M6.4.a (Coverage shape).** Given a discriminator `D` with constructor set `K(D) = {k_1, ..., k_n}` and an arm list `A = [a_1, ..., a_m]` where each arm dispatches on a constructor name, define `cover(A) = ⋃_i constructors_matched(a_i)`. The arm list is **covering** iff `K(D) ⊆ cover(A)`. Wildcards in `match` and `return(...)` in handlers contribute the residual constructor set.
+**Rule M6.4.a (Coverage shape).** Given a discriminator `D` with constructor set `K(D) = {k_1, ..., k_n}` and a case or clause list `A = [a_1, ..., a_m]` where each entry dispatches on a constructor name, define `cover(A) = ⋃_i constructors_matched(a_i)`. The list is **covering** iff `K(D) ⊆ cover(A)`. Wildcards in `match` and `return(...)` in handlers contribute the residual constructor set.
 
-**Rule M6.4.b (Refinement-aided coverage).** Refinement caps (§6.2 Rule M6.2) narrow the data discriminator's reachable variant set; the same narrowing applies in handler-arm coverage when the SUBJECT's type is refined (rare in practice; effect rows do not carry refinement caps in v0.4.5). The conformance requirement is the union of M6.2 + M6.4.
+**Rule M6.4.b (Refinement-aided coverage).** Refinement caps (§6.2 Rule M6.2) narrow the data discriminator's reachable variant set; the same narrowing applies in handler-clause coverage when the SUBJECT's type is refined (rare in practice; effect rows do not carry refinement caps in v0.4.5). The conformance requirement is the union of M6.2 + M6.4.
 
-**Rule M6.4.c (Error reporting parity).** A non-exhaustive match emits `error[E091]`; a handler block missing one or more operation arms emits `error[E093]`. Both errors must include a copy-pasteable suggestion adding the missing arm(s), per `docs/plans/implementation-plan.md` "Agent-Friendly CLI and Compiler Output".
+**Rule M6.4.c (Error reporting parity).** A non-exhaustive match emits `error[E091]`; a handler block missing one or more operation clauses emits `error[E093]`. Both errors must include a copy-pasteable suggestion adding the missing case(s) or clause(s), per `docs/plans/implementation-plan.md` "Agent-Friendly CLI and Compiler Output".
 
 ## 7. Redundancy / reachability
 
-**Rule M7.1 (Reachability).** Each arm must be **reachable**: at least one value of the scrutinee type matches the arm's pattern but no earlier arm's pattern. An unreachable arm is a compile error: `error[E092]: unreachable match arm`. The error names the arm's pattern and points to the earlier arm(s) that subsume it.
+**Rule M7.1 (Reachability).** Each case must be **reachable**: at least one value of the scrutinee type matches the case's pattern but no earlier case's pattern. An unreachable case is a compile error: `error[E092]: unreachable match case`. The error names the case's pattern and points to the earlier case(s) that subsume it.
 
-The check is the dual of exhaustiveness: an arm `K` is unreachable iff the *uncovered space before arm K* (per the pattern-matrix algorithm) is empty. Implementation re-uses the matrix machinery from §6.
+The check is the dual of exhaustiveness: a case `K` is unreachable iff the *uncovered space before case K* (per the pattern-matrix algorithm) is empty. Implementation re-uses the matrix machinery from §6.
 
 ```
 match x:
@@ -319,7 +319,7 @@ Both `match` and the auto-derived `fold` of type_system.md §7.4.a destructure a
 
 ### 8.1 Match semantics
 
-A match arm receives the **raw fields** of the matched variant. For recursive types, recursive subtrees are *not* pre-folded — the user can recurse manually if they choose:
+A match case receives the **raw fields** of the matched variant. For recursive types, recursive subtrees are *not* pre-folded — the user can recurse manually if they choose:
 
 ```
 fn count(t: Tree of A) -> u64 =
@@ -393,22 +393,22 @@ let Pair { first: key, second: value } = pair
 
 **Rule M9.2.** A `let Pat = Expr` binding's quantities are inferred per Rule Q5.8 in `spec/quantities.md`: each binder's quantity is the sum of its usages in the rest of the block.
 
-## 10. Pattern bindings in handler arms
+## 10. Pattern bindings in handler clauses
 
-Per `spec/effects.md` §6, handler arms have their own pattern syntax distinct from match arms but sharing the binder rules:
+Per `spec/effects.md` §6, handler clauses have their own pattern syntax distinct from match cases but sharing the binder rules:
 
 ```
-HandlerArm
+HandlerClause
     = UPPER_IDENT "." LOWER_IDENT "(" PatternList? ")" "=>" BlockTail
     | "return" "(" Pattern ")" "=>" BlockTail
 ```
 
-The `(p1, p2, ...)` parameter list of an effect-operation arm uses the same pattern algebra as match arms, but with two restrictions:
+The `(p1, p2, ...)` parameter list of an effect-operation clause uses the same pattern algebra as match cases, but with two restrictions:
 
 - Each `pi` is matched against the operation's i-th declared parameter type (synthesised from the effect declaration).
-- The patterns must be **irrefutable** — handler arms intercept *every* call to the operation, so refutable patterns make no semantic sense. (`Eff.op(0)` as a handler arm matching only when the arg is `0` is not supported in v0.4.2 — see OQ-M2.)
+- The patterns must be **irrefutable** — handler clauses intercept *every* call to the operation, so refutable patterns make no semantic sense. (`Eff.op(0)` as a handler clause matching only when the arg is `0` is not supported in v0.4.2 — see OQ-M2.)
 
-The `return(Pat) => ...` arm's `Pat` is similarly irrefutable, matching the SUBJECT's normal-completion value.
+The `return(Pat) => ...` clause's `Pat` is similarly irrefutable, matching the SUBJECT's normal-completion value.
 
 ## 11. Open questions
 
@@ -416,12 +416,12 @@ The `return(Pat) => ...` arm's `Pat` is similarly irrefutable, matching the SUBJ
 
 - **OQ-M1 — Field elision via `..`.** Resolved → §3.6 Rule M3.6.a. Struct-destructure patterns may end with `..` to ignore unmentioned fields.
 - **OQ-M3 — Or-patterns.** Resolved → §5.5. `Pat1 | Pat2 => body` with binder-agreement (M5.5.a) and quantity-by-join (M5.5.b).
-- **OQ-M4 — Guards.** Resolved → §5.6. `Pat if cond => body` with bool-typed guard (M5.6.a), arm-scoped binders (M5.6.b), fall-through on false (M5.6.c), exhaustiveness-conservative treatment (M5.6.e).
+- **OQ-M4 — Guards.** Resolved → §5.6. `Pat if cond => body` with bool-typed guard (M5.6.a), case-scoped binders (M5.6.b), fall-through on false (M5.6.c), exhaustiveness-conservative treatment (M5.6.e).
 
 **Closed (decided not to add):**
 
-- **OQ-M2 — Refutable handler arm parameters.** Decision: handler arm parameters remain irrefutable. Handlers intercept *every* call to the operation; refutable arm parameters would silently leave some calls unhandled (or require a fall-through that complicates the dispatch model). Closed in v0.2 — handler arms continue to use only irrefutable patterns per §10.
-- **OQ-M5 — View patterns / smart constructors.** Decision: not added. View patterns interact non-trivially with exhaustiveness checking — the compiler cannot reason about arbitrary user code, so guarded arms (§5.6) cover the same use cases without breaking exhaustiveness analysis. Use guards instead. Closed in v0.2.
+- **OQ-M2 — Refutable handler clause parameters.** Decision: handler clause parameters remain irrefutable. Handlers intercept *every* call to the operation; refutable clause parameters would silently leave some calls unhandled (or require a fall-through that complicates the dispatch model). Closed in v0.2 — handler clauses continue to use only irrefutable patterns per §10.
+- **OQ-M5 — View patterns / smart constructors.** Decision: not added. View patterns interact non-trivially with exhaustiveness checking — the compiler cannot reason about arbitrary user code, so guarded cases (§5.6) cover the same use cases without breaking exhaustiveness analysis. Use guards instead. Closed in v0.2.
 - **OQ-M6 — Range patterns for literals.** Decision: not added. Guards (§5.6) provide range-matching cleanly: `n if n >= 1 && n <= 10 => "low"`. The cost of dedicated range syntax is not justified when guards cover the use case with no special parser support. Closed in v0.2.
 
 **Resolved by reference (cross-document):**
@@ -432,11 +432,11 @@ The `return(Pat) => ...` arm's `Pat` is similarly irrefutable, matching the SUBJ
 
 | Document | Relationship |
 |---|---|
-| `spec/syntax_grammar.ebnf` | All pattern syntax (Pattern, MatchArm, HandlerArm) |
+| `spec/syntax_grammar.ebnf` | All pattern syntax (Pattern, MatchCase, HandlerClause) |
 | `spec/type_system.md` | Rule 4.1 (typevars), §5.7 (numeric literal polymorphism in literal patterns), §7.4.a (auto-derived fold), §7.6 (GADT deferred) |
 | `spec/quantities.md` | Rule Q5.8 (pattern binder quantities), Rule Q5.9 (branching uses `⊔`) |
-| `spec/effects.md` | §6, §10 — handler arm pattern algebra |
-| `spec/properties.md` (TBD) | Match arms inside `prop` bodies are checked at quantity 0 — same rules apply |
-| `spec/perceus.md` (TBD) | Match-bound values' RC: each arm's binders consume the scrutinee per their inferred quantity |
+| `spec/effects.md` | §6, §10 — handler clause pattern algebra |
+| `spec/properties.md` (TBD) | Match cases inside `prop` bodies are checked at quantity 0 — same rules apply |
+| `spec/perceus.md` (TBD) | Match-bound values' RC: each case's binders consume the scrutinee per their inferred quantity |
 | `docs/references/scala3-compiler-reference.md` | The dotc PatternMatcher transform (`transform/PatternMatcher.scala`) — Maranget's algorithm; reference implementation |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `typer/Exhaustiveness.scala`; Phase 4: `transform/MatchDesugar.scala` |

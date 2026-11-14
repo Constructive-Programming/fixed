@@ -62,7 +62,7 @@ Phase 3 is split into two parts: **Part A — Base typer (M1–M5, this plan)** 
 | M9 | Property verifier recheck | `phase-3.3-properties.md` | Princess (per §5.6.1) discharges QF_LIA + propositional; rest queued as PBT obligations |
 | M10 | QTT recheck | `phase-3.4-qtt.md` | 0/1/ω inference; linearity + erasure check; runs **before** M9 to feed it |
 | M11 | Representation selector recheck | `phase-3.5-repr.md` | `ReprMap` per `spec/type_system.md` §6.5; consumes M6 + M10 |
-| M8' | Conformance gaps for exhaustiveness | `phase-3.x-exhaustiveness.md` | Nested-pattern + refinement-cap-aided + handler-arm coverage per `spec/pattern_matching.md` §6 |
+| M8' | Conformance gaps for exhaustiveness | `phase-3.x-exhaustiveness.md` | Nested-pattern + refinement-cap-aided + handler-clause coverage per `spec/pattern_matching.md` §6 |
 
 **Phase 3 (overall) success criterion:** every example in `examples/01..11.fixed` type-checks AND has a complete capability/effect/quantity/representation picture ready for Phase 4 codegen.
 
@@ -169,7 +169,7 @@ This makes `Map[Tree, Type]` work as identity-equivalent: two structurally-equal
 | `BinOp`, `UnaryOp`, `Pipe`, `Apply`, `MethodCall`, `StaticCall` | `span` covers the operator and its operands — distinct call sites have distinct ranges. |
 | `IfExpr`, `MatchExpr`, `LetExpr`, `LambdaExpr`, `Block`, `DoExpr`, `HandleExpr`, `ForallExpr`, `Implies` | Distinct keyword positions → distinct spans. |
 | `TupleExpr`, `ListExpr`, `StructLit` | Distinct opening bracket positions. |
-| `MatchCase`, `OperationClause`, `ReturnClause`, `DoBind`, `FnParam`, `FieldDecl`, `DataVariant`, etc. | Each arm/binding/field/variant is at a distinct position within its parent. |
+| `MatchCase`, `OperationClause`, `ReturnClause`, `DoBind`, `FnParam`, `FieldDecl`, `DataVariant`, etc. | Each case/clause/binding/field/variant is at a distinct position within its parent. |
 | Top-level decls (`FnDecl`, `CapDecl`, `DataDecl`, `EffectDecl`, `TypeAlias`, `SatisfiesDecl`, `UseDecl`, `ModDecl`) | Distinct decl positions. |
 | Recovery nodes (`Trees.Error`, `Trees.Missing`) | The parser advances at least one token per recovery emission (per `syncToAnchors` semantics), so two recovery nodes never share a position. The `Missing.expected` string differs between distinct missing-production sites; `Error.recovered` differs by content. |
 
@@ -441,7 +441,7 @@ The milestone numbering (M6–M11) is the **implementation order** — but execu
 | M6 → M10 | QTT needs the **closed extends chain** to count uses through transitively-inherited cap methods (a single `m()` call may invoke a method declared in any super-cap; without closure M10 would miscount linearity). Cap-vs-value classification alone is a Namer fact, NOT what M6 contributes here. |
 | M6 → M11 | Representation selection consumes the closed cap set per `spec/type_system.md` §6.5. |
 | M6 → M9 | Prop verifier needs the closed cap set to translate `Self` in prop bodies into a solver domain (Sum cap → finite enumeration; Refinement cap → numeric range; Recursive cap → inductively-defined). Without M6's classification (per `spec/type_system.md` §6.4), `prop nonneg: Self >= 0` cannot be cast as a Princess formula. |
-| M7 → M11 | Effect-row info determines whether a fn body needs a continuation slot (handler-arm reentry). |
+| M7 → M11 | Effect-row info determines whether a fn body needs a continuation slot (handler-clause reentry). |
 | M10 → M9 (PBT branch only) | M9 has two **execution branches** (see §5.6): (a) **static-discharge** — Princess attempts compile-time discharge; the three prop *forms* §5.6 lists (Static-decidable / Compile-time-undecidable / Trivially-false) all enter through this branch and are routed by Princess's reply (`Unsat` / `Unknown` / `Sat`); (b) **PBT-queue** — `Unknown` results are deferred to codegen-time property-based testing. The PBT branch should skip 0-quantity bindings (no runtime PBT for erased terms). The **static-discharge branch runs unconditionally** — a 0-quantity binding can carry a soundness-relevant compile-time prop (e.g. `prop nonneg: phantom-N >= 0`) whose discharge guarantees a type-level invariant even though no runtime value exists. |
 | M10 → M11 | Representation selection elides 0-quantity bindings entirely. |
 
@@ -586,7 +586,7 @@ The Namer does **not** look at expression bodies. It does look at signatures —
 
 ### 5.2 Typer (M3–M5)
 
-Per dotc, one `typedX` per node kind. Four dispatchers — one each for expressions, patterns, type expressions, declarations — keep each routine focused on its category. Trees that are arms or sub-bindings (MatchCase, OperationClause, ReturnClause, DoBind, FnParam, FieldDecl, DataVariant, ConstructorMapping, ImpossibleMapping, InstanceMethod, StaticMethod, PropDecl) are handled directly by the parent's `typedX` rather than as top-level dispatch — they have no meaning outside their parent.
+Per dotc, one `typedX` per node kind. Four dispatchers — one each for expressions, patterns, type expressions, declarations — keep each routine focused on its category. Trees that are cases, clauses or sub-bindings (MatchCase, OperationClause, ReturnClause, DoBind, FnParam, FieldDecl, DataVariant, ConstructorMapping, ImpossibleMapping, InstanceMethod, StaticMethod, PropDecl) are handled directly by the parent's `typedX` rather than as top-level dispatch — they have no meaning outside their parent.
 
 ```scala
 // typer/Typer.scala — expression dispatcher
@@ -623,7 +623,7 @@ def typedExpr(s: TyperState, tree: Tree, pt: Proto)
   // Specials
   case t: Trees.ForallExpr     => typedForall(s, t, pt)            // prop bodies only
   case t: Trees.Implies        => typedImplies(s, t, pt)           // prop bodies only
-  case t: Trees.Resume         => typedResume(s, t, pt)            // handler arms only
+  case t: Trees.Resume         => typedResume(s, t, pt)            // handler clauses only
   case t: Trees.Unreachable    => typedUnreachable(s, t, pt)
   // Recovery
   case t: Trees.Error          => typedError(s, t, pt)             // pass-through (gap node)
@@ -712,22 +712,22 @@ Per `spec/effects.md`, every expression has an effect row. The inference rules:
 - A primitive operation has empty effect row.
 - A function call has effect row = callee's `with` clause + args' effect rows.
 - A `do { ... }` block has effect row = union of stmts' effect rows.
-- A `handle e: { Op.x => ...; return(p) => ... }` removes effect `Op` from `e`'s row, adding any effects raised by handler arms.
+- A `handle e: { Op.x => ...; return(p) => ... }` removes effect `Op` from `e`'s row, adding any effects raised by handler clauses.
 - An unhandled effect at `main` (or in a non-cap-of-returning fn body) is `error[T015]`.
 
 Recheck pass; per-node `recheckX` methods compute the row and store it in the M7-keyed `TypeMap`. The base typer (M3–M5) treats `with` clauses as opaque type slots — M7 fills them in.
 
 ### 5.5 Exhaustiveness check (M8 — in-tree at M5, not a Phase)
 
-**Naming convention.** `M8` denotes the **in-tree top-level variant coverage** check that runs as part of M5's `typedMatch`. The `phase-3.x-exhaustiveness.md` sub-plan covering nested-pattern, refinement-cap-aided, and unified handler-arm coverage is referred to as `M8'` (M8-prime) — that work is Part B and ships only after M7 (so its handler-arm coverage can consume effect-row info). Two distinct things, two distinct names.
+**Naming convention.** `M8` denotes the **in-tree top-level variant coverage** check that runs as part of M5's `typedMatch`. The `phase-3.x-exhaustiveness.md` sub-plan covering nested-pattern, refinement-cap-aided, and unified handler-clause coverage is referred to as `M8'` (M8-prime) — that work is Part B and ships only after M7 (so its handler-clause coverage can consume effect-row info). Two distinct things, two distinct names.
 
 Per `spec/pattern_matching.md`, every `match` must cover every variant of the scrutinee's data type. The check uses dotc's Space algebra (`transform/patmat/Space.scala`):
 
 1. Classify the scrutinee's typed type → set of variants.
-2. Each arm contributes a "covered space" (the set of values it accepts).
+2. Each case contributes a "covered space" (the set of values it accepts).
 3. Union the covered spaces; if the result is not the full scrutinee space, list the missing variants.
 
-Because this check requires only the M5 type information (not closure / effects / quantities), it runs in-tree as part of M5's `typedMatch` — `ExhaustivenessPhase` is **not** in the §4.1 phase list. M8 remains as a milestone gating the diagnostic quality of the in-tree check (the assertion in §1.3 is that `examples/09_interpreter.fixed` type-checks AND deleting one match arm produces the expected diagnostic). The `Exhaustiveness.scala` module is its own file for testability.
+Because this check requires only the M5 type information (not closure / effects / quantities), it runs in-tree as part of M5's `typedMatch` — `ExhaustivenessPhase` is **not** in the §4.1 phase list. M8 remains as a milestone gating the diagnostic quality of the in-tree check (the assertion in §1.3 is that `examples/09_interpreter.fixed` type-checks AND deleting one match case produces the expected diagnostic). The `Exhaustiveness.scala` module is its own file for testability.
 
 #### 5.5.1 Conformance gaps in v1 (deferred)
 
@@ -737,7 +737,7 @@ Because this check requires only the M5 type information (not closure / effects 
 |---|---|---|
 | §6.1 | Nested-pattern jointly-exhaustive coverage (`Pair(Some(_), Some(_))` must consider all four `Some/None` quadrants) | **Deferred** to Phase 3.x — v1 ships top-level variant coverage only |
 | §6.2 (M6.2) | Refinement-cap-aided exhaustiveness (a `match` on `Bounded(0, 3)` need only cover 0/1/2/3, not the full `u64`) | **Deferred** — v1 demands wildcards for refinement-narrowed scrutinees |
-| §6.4 (M6.4) | Unified match-arm and handler-arm coverage under one Space algorithm | **Deferred** — v1 handler-arm coverage runs inside M7 EffectChecker with its own per-effect check |
+| §6.4 (M6.4) | Unified match-case and handler-clause coverage under one Space algorithm | **Deferred** — v1 handler-clause coverage runs inside M7 EffectChecker with its own per-effect check |
 
 A v1 typer that ships only top-level variant coverage is **non-conformant** per Rule M6.4.b ("an implementation that ignores refinement-cap evidence and demands wildcards even when the reachable domain is fully covered by literals is non-conformant"). This plan accepts the non-conformance for v1 and creates `docs/plans/phase-3.x-exhaustiveness.md` as the closing sub-plan. Authoring that plan is itself a Phase 3.x milestone (estimated 2–3 weeks of design + implementation).
 
@@ -963,7 +963,7 @@ Earlier Phase 2 + 2.1 milestones each took 1–2 weeks of calendar time when mea
 | `phase-3.3-properties.md` (M9) | 2–3 weeks | Princess integration + counterexample formatting + the `forall (bindings). pre ==> body` translation |
 | `phase-3.4-qtt.md` (M10) | 1.5–2 weeks | Linearity + erasure check, 0-quantity inference for phantom params |
 | `phase-3.5-repr.md` (M11) | 1 week | Mostly mechanical given the 6 classifier cases |
-| `phase-3.x-exhaustiveness.md` (M8') | 2–3 weeks | Maranget-style nested + refinement-cap-aided + handler-arm unification |
+| `phase-3.x-exhaustiveness.md` (M8') | 2–3 weeks | Maranget-style nested + refinement-cap-aided + handler-clause unification |
 
 **Part B subtotal: ~10–14 weeks** if executed sequentially. Some sub-plans (M9, M10) can run in parallel after M6 + M7 land.
 

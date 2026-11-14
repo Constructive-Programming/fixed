@@ -905,7 +905,7 @@ Fixed v0.2 `data` declarations are **strictly parametric**: every variant of a `
 
 If a variant field's type uses a non-parametric `of` argument (e.g., a `data Expr of A:` declaration whose `Add` variant is `Add(left: Expr of i64, right: Expr of i64)`), the field's type is interpreted **literally** — the variant constructs `Expr of A` containing an `Expr of i64` child, regardless of `A`. The typer does **not** narrow `A` to `i64` when matching the `Add` variant.
 
-Per-variant type narrowing in pattern arms (the GADT feature in Haskell, OCaml, and similar languages) is queued for v0.3. When introduced, it will require explicit syntax distinguishing parametric from existentially-narrowed parameters (proposed direction: `data Expr where { LitInt :: Int -> Expr Int; ... }`-style or equivalent Fixed-flavoured syntax).
+Per-variant type narrowing in match cases (the GADT feature in Haskell, OCaml, and similar languages) is queued for v0.3. When introduced, it will require explicit syntax distinguishing parametric from existentially-narrowed parameters (proposed direction: `data Expr where { LitInt :: Int -> Expr Int; ... }`-style or equivalent Fixed-flavoured syntax).
 
 ## 8. `satisfies`
 

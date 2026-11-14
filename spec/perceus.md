@@ -122,7 +122,7 @@ Input invariants:
 
 - Every binding is annotated with its inferred quantity.
 - Every value has a chosen representation (heap struct, stack struct, primitive, etc., per `spec/type_system.md` §6.5).
-- Match expressions are decision trees, not pattern arms.
+- Match expressions are decision trees, not match cases.
 
 ### 5.2 A-normal form (Rule PR5.2)
 
@@ -225,9 +225,9 @@ For quantity-1 bindings, reuse is **unconditional** — linearity guarantees `rc
 
 For quantity-ω bindings, reuse is **conditional** — the runtime check `rc == 1` decides; if false, the new constructor allocates fresh.
 
-### 6.4 Cross-arm reuse
+### 6.4 Cross-case reuse
 
-A match arm may reuse the matched value's memory iff the arm's body constructs a value of a matching fingerprint. If the arm doesn't, the compiler still emits `drop` for the matched value at arm entry.
+A match case may reuse the matched value's memory iff the case's body constructs a value of a matching fingerprint. If the case doesn't, the compiler still emits `drop` for the matched value at case entry.
 
 ## 7. Drop specialization
 
@@ -322,18 +322,18 @@ A linear effect (`spec/effects.md` §3.5) imposes a usage budget of ≤ 1 op per
 
 Memory implication: the handler-frame for a linear effect has lifetime bounded by the SUBJECT's evaluation. After the handler exits, the frame is freed (no residual continuation references can outlive the handler since linearity prevents capturing an unused permission).
 
-**Quantity-1 captures across linear arm bodies (Rule PR9.2.a).** Per `spec/quantities.md` Rule Q7.4, a linear-effect arm body has quantity 1 (the at-most-once invariant of the effect propagates to the arm). Quantity-1 outer bindings captured into a linear arm body therefore generate **no `dup`** at the capture site — the binding's last-use is consumed by the arm exactly once across all paths reaching the handler. This is consistent with Rule PR3.5 (quantity-1 → no RC overhead) and Rule PR3.6 (no `dup`/`drop` for quantity-1 bindings).
+**Quantity-1 captures across linear clause bodies (Rule PR9.2.a).** Per `spec/quantities.md` Rule Q7.4, a linear-effect clause body has quantity 1 (the at-most-once invariant of the effect propagates to the clause). Quantity-1 outer bindings captured into a linear clause body therefore generate **no `dup`** at the capture site — the binding's last-use is consumed by the clause exactly once across all paths reaching the handler. This is consistent with Rule PR3.5 (quantity-1 → no RC overhead) and Rule PR3.6 (no `dup`/`drop` for quantity-1 bindings).
 
-Non-linear arm bodies (`Console`, `FileSystem`, etc.) remain quantity-ω closures per Rule Q5.7; capturing a quantity-1 outer binding into one is a Rule Q7.1 violation rejected at type-check time, never reaching Perceus.
+Non-linear clause bodies (`Console`, `FileSystem`, etc.) remain quantity-ω closures per Rule Q5.7; capturing a quantity-1 outer binding into one is a Rule Q7.1 violation rejected at type-check time, never reaching Perceus.
 
 Both Rule Q7.4 and Rule PR9.2.a are contingent on `OQ-Q5` (`spec/quantities.md`). Implementations should gate them behind the same flag that gates `linear effect` per `spec/effects.md` §3.5.
 
 ### 9.3 Tail-resume optimization (Rule PR9.3)
 
-Per `spec/effects.md` §7.5, when an arm body's `resume(expr)` is in tail position, the compiler emits a tail-resume that avoids the full continuation roundtrip. From a memory perspective:
+Per `spec/effects.md` §7.5, when a clause body's `resume(expr)` is in tail position, the compiler emits a tail-resume that avoids the full continuation roundtrip. From a memory perspective:
 
 - The continuation is **not heap-allocated**; the stack is preserved across the operation interception.
-- The arm body executes "in place" of the operation call.
+- The clause body executes "in place" of the operation call.
 - No RC traffic on the continuation.
 
 This is why tail-resume is the common case in practice (`Console.print_line(s) => emit(s); resume(())`) and is important for performance.

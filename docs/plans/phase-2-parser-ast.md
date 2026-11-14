@@ -140,7 +140,7 @@ Note: `self` (lowercase) and `Part` (capital) are contextual — `self` is the r
 | `DOT` | `.` | Method call, type qualifier; line-continuation per v0.3.1 |
 | `EQUALS` | `=` | Definition introducer |
 | `ARROW` | `->` | Function-type/lambda body |
-| `FAT_ARROW` | `=>` | Match/handler arm body |
+| `FAT_ARROW` | `=>` | Match case / handler clause body |
 | `PIPE` | `\|` | Or-patterns (M5.5) |
 | `PIPE_FORWARD` | `\|>` | Pipe operator |
 | `PLUS` | `+` | Capability composition AND numeric add |
@@ -246,8 +246,8 @@ Each node carries:
 |---|---|---|
 | `LetExpr` | `LetExpr` | `let p = e` (introduces a binding into the rest of the block). |
 | `IfExpr` | `IfExpr` | `if cond: thenBranch else: elseBranch` — both branches required (no statement form). |
-| `MatchExpr` | `MatchExpr` | Scrutinee + arms (each arm is `Pattern => body`, with optional guard or or-pattern). |
-| `HandleExpr` | `HandleExpr` | Subject + handler arms. |
+| `MatchExpr` | `MatchExpr` | Scrutinee + cases (each case is `Pattern => body`, with optional guard or or-pattern). |
+| `HandleExpr` | `HandleExpr` | Subject + handler clauses. |
 | `DoExpr` | `DoExpr` | Sequencing in monadic / effect-do contexts. |
 | `BlockExpr` | `BlockTail` | Indented sequence of expressions, returns last. |
 | `LambdaExpr` | `LambdaExpr` | `(p1, ...) -> body` — body may be single-expr or indented block. |
@@ -266,7 +266,7 @@ Each node carries:
 | `Forall` | `ForallExpr` | Inside prop bodies only. |
 | `Implies` | `ImpliesExpr` | Inside prop bodies only. |
 | `SuchThat` | (clause on Forall) | Filter expression. |
-| `Resume` | `resume(expr)` | Inside handler arms only. |
+| `Resume` | `resume(expr)` | Inside handler clauses only. |
 | `Unreachable` | `unreachable` | Per type_system §5.6. |
 
 ### 4.5 Patterns
@@ -322,7 +322,7 @@ Fixed is **indentation-sensitive**, like Python and Scala 3:
 - **Trailing continuation** — if the line ends with one of these tokens, the next physical line continues the same logical line: `+`, `-`, `*`, `/`, `%`, `&&`, `||`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `|>`, `->`, `=>`, `=`, `<-`, `.`, `is`, `extends`, `implies`. The dual-mode tokens `=`/`->`/`=>` are *also* block-introducers — see §5.3.
 - **Leading continuation** — if the next physical line begins with `with`, `extends`, or `->`, it continues the previous logical line.
 
-Inside `(...)`/`[...]`/`{...}`, indentation is suppressed by default; off-side resumes inside arm/lambda/fn/block bodies opened with `=>`/`->`/`=`/`:` respectively (grammar lines 173–181).
+Inside `(...)`/`[...]`/`{...}`, indentation is suppressed by default; off-side resumes inside case/clause/lambda/fn/block bodies opened with `=>`/`->`/`=`/`:` respectively (grammar lines 173–181).
 
 The scanner emits NEWLINE only when the previous line did NOT end with a trailing-continuation token, the next line does NOT start with a leading-continuation token, and no `(`/`[`/`{` is open without a matching close.
 
@@ -356,7 +356,7 @@ Full error recovery (parse-as-much-as-possible: synchronisation anchors, `Error`
 
 ### 6.1 The do-block in handle
 
-`handle (do: ... ): arms` — the `(do: ... )` form is a parenthesized `DoExpr`. Inside the parens, the `do:` opens an indented block, and the closing `)` matches the opening `(`. INDENT/DEDENT inside parens is handled normally (the indent stack tracks parens-open state separately).
+`handle (do: ... ): clauses` — the `(do: ... )` form is a parenthesized `DoExpr`. Inside the parens, the `do:` opens an indented block, and the closing `)` matches the opening `(`. INDENT/DEDENT inside parens is handled normally (the indent stack tracks parens-open state separately).
 
 Example:
 ```

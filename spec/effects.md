@@ -6,7 +6,7 @@
 
 **Changes from v0.2.** Re-opens OQ-E5: §3.5 (linear effects) is now marked **Proposal**, contingent on the resolution of OQ-Q5 in `spec/quantities.md` (whether effect rows participate in QTT quantity). The proposed semantics in §3.5 are unchanged in shape but no longer normative until OQ-Q5 is closed. No other semantic changes from v0.2; bump tracks the v0.4.4 source grammar.
 
-**Changes from v0.1.** Resolved OQ-E6 (effect aliasing → §4.5). Removed Rule E6.5 (wildcard handler arms) per OQ-E2 decision. OQ-E1, OQ-E3, OQ-E4 marked as deferred decisions.
+**Changes from v0.1.** Resolved OQ-E6 (effect aliasing → §4.5). Removed Rule E6.5 (wildcard handler clauses) per OQ-E2 decision. OQ-E1, OQ-E3, OQ-E4 marked as deferred decisions.
 
 ## 1. Scope
 
@@ -15,7 +15,7 @@ This document specifies Fixed's algebraic effect system end-to-end: declarations
 - How `effect E: fn op(...) -> T` declarations are typed (§3).
 - What an **effect row** is and how `+` composes them (§4).
 - The inference algorithm that derives a function's `with` clause from its body (§5).
-- The operational semantics of `handle SUBJECT: arms` (§6).
+- The operational semantics of `handle SUBJECT: clauses` (§6).
 - The runtime mechanism — explicit evidence vectors, indirect-call dispatch, continuation capture (§7).
 - How effect rows participate in polymorphism (§8).
 
@@ -28,7 +28,7 @@ It does **not** specify:
 
 ## 2. Dependencies and theoretical basis
 
-- `spec/syntax_grammar.ebnf` v0.4.4 — `EffectDecl`, `EffectMember`, `WithClause`, `EffectRow`, `EffectBound`, `HandleExpr`, `HandlerArm`, `resume` keyword.
+- `spec/syntax_grammar.ebnf` v0.4.4 — `EffectDecl`, `EffectMember`, `WithClause`, `EffectRow`, `EffectBound`, `HandleExpr`, `HandlerClause`, `resume` keyword.
 - `spec/type_system.md` v0.4.x — Rule 4.1 (typevar introduction), §5.6 (`!` type), §9 (brief reference forwarding to this doc).
 - `spec/quantities.md` v0.2 — Rule Q5.11 (resume single-shot), OQ-Q5 (open: effect-row × quantity interaction).
 - Plotkin & Pretnar, *"Handlers of Algebraic Effects"*, ESOP 2009. The model.
@@ -67,17 +67,17 @@ effect Console:
 
 ### 3.3 The `!` return type and abortive operations (Rule E3.3)
 
-An operation declared with return type `!` (the never type) is **abortive**: it transfers control to its handler arm and never returns to the call site.
+An operation declared with return type `!` (the never type) is **abortive**: it transfers control to its handler clause and never returns to the call site.
 
 ```
 effect Fail of E:
     fn fail(error: E) -> !
 ```
 
-A handler arm for an abortive operation **must not** call `resume` — there is no continuation to resume. The arm body's value becomes the result of the surrounding `handle` block. The typer enforces this:
+A handler clause for an abortive operation **must not** call `resume` — there is no continuation to resume. The clause body's value becomes the result of the surrounding `handle` block. The typer enforces this:
 
-- Inside the arm body for an abortive operation, `resume` is a compile error.
-- The arm body's value type must match the `handle` block's expected type.
+- Inside the clause body for an abortive operation, `resume` is a compile error.
+- The clause body's value type must match the `handle` block's expected type.
 
 This is what makes `Fail` ergonomically usable as exceptions: throwing transfers control directly; the handler returns a final value without re-entering the failing path.
 
@@ -136,17 +136,17 @@ linear effect Handle of R:
 
 **Compatibility.** A non-linear handler does not satisfy a linear-effect contract; declaring `linear effect E` requires every handler that handles E to be a `handle` block (handlers do not need to be marked `linear` — linearity is a property of the effect, not the handler).
 
-**Quantity-1 captures across linear arm bodies (resolves L6).** Because a linear effect's arm body runs at most once per `handle` block, the arm body itself has quantity 1 — see `spec/quantities.md` Rule Q7.4. A quantity-1 outer binding may therefore be captured into a linear-effect arm body without violating Rule Q7.1 (the standard "no quantity-1 capture into a quantity-ω closure" rule):
+**Quantity-1 captures across linear clause bodies (resolves L6).** Because a linear effect's clause body runs at most once per `handle` block, the clause body itself has quantity 1 — see `spec/quantities.md` Rule Q7.4. A quantity-1 outer binding may therefore be captured into a linear-effect clause body without violating Rule Q7.1 (the standard "no quantity-1 capture into a quantity-ω closure" rule):
 
 ```
 let lock_token = make_token()        // quantity 1
 handle (do: ... Lock.release):
     Lock.release =>
-        consume(lock_token)          // OK: arm body is quantity 1, see Rule Q7.4
+        consume(lock_token)          // OK: clause body is quantity 1, see Rule Q7.4
         resume(())
 ```
 
-The same capture into a *non-linear* arm body (e.g. `Console.print_line`) remains a Rule Q7.1 error.
+The same capture into a *non-linear* clause body (e.g. `Console.print_line`) remains a Rule Q7.1 error.
 
 ## 4. Effect rows
 
@@ -226,7 +226,7 @@ handle run():
     Console.print_line(s) => ...
     FileSystem.read_file(p) => ...
     return(v) => v
-// SUBJECT row expands to Console + FileSystem; arms cover both → outer row is empty
+// SUBJECT row expands to Console + FileSystem; clauses cover both → outer row is empty
 ```
 
 **Rule E4.5.d (Composition).** Aliases compose freely:
@@ -263,7 +263,7 @@ For each function definition `fn f(args) -> T with R = body`, the typer computes
 2. Walk the body's typed AST. For each:
    - Direct effect-operation call `E.op(args)`: add `E` (with its `of` args resolved at this call site) to the row.
    - Function call `g(args)` where `g`'s declared signature has `with R_g`: add `R_g` to the row.
-   - `handle SUBJECT: arms` block: compute SUBJECT's row, then **remove** every effect handled by the arms.
+   - `handle SUBJECT: clauses` block: compute SUBJECT's row, then **remove** every effect handled by the clauses.
    - Lambda body: the lambda's body has its own row; if the lambda is invoked at this position, its row is added.
 3. The result is `R_inferred`.
 
@@ -276,22 +276,22 @@ Errors:
 - `error[E080]: undeclared effect <E>`: an effect appears in `R_inferred` but not in `R`.
 - `error[E081]: unused declared effect <E>`: an effect is declared in `R` but does not appear in `R_inferred`. (Warning rather than error — unused declarations may be intentional for forward compatibility.)
 
-### 5.3 Handler arm coverage and subtraction (Rule E5.3)
+### 5.3 Handler clause coverage and subtraction (Rule E5.3)
 
-Handler-arm coverage — that every operation of every handled effect appears in the handler's arm list — is one instance of the unified constructor-coverage obligation defined in `spec/pattern_matching.md` Rule M6.4. The discriminator is the set of handled effects, the constructors are operation names (plus optional `return`), and the algorithm reuses the pattern-matrix machinery from `pattern_matching.md` §6.
+Handler-clause coverage — that every operation of every handled effect appears in the handler's clause list — is one instance of the unified constructor-coverage obligation defined in `spec/pattern_matching.md` Rule M6.4. The discriminator is the set of handled effects, the constructors are operation names (plus optional `return`), and the algorithm reuses the pattern-matrix machinery from `pattern_matching.md` §6.
 
-A handler block with missing arms emits `error[E093]: handler does not cover operations <list>` with a copy-pasteable suggestion adding the missing `Eff.op(args) => ...` arms.
+A handler block with missing clauses emits `error[E093]: handler does not cover operations <list>` with a copy-pasteable suggestion adding the missing `Eff.op(args) => ...` clauses.
 
-A `handle SUBJECT: arms` block subtracts effects from SUBJECT's inferred row. The subtraction set is the union of the effects mentioned by the arms:
+A `handle SUBJECT: clauses` block subtracts effects from SUBJECT's inferred row. The subtraction set is the union of the effects mentioned by the clauses:
 
-- An arm `E.op(args) => body` handles `E`.
-- An arm `return(v) => body` handles no effect (it intercepts normal completion).
+- A clause `E.op(args) => body` handles `E`.
+- A clause `return(v) => body` handles no effect (it intercepts normal completion).
 
-If SUBJECT's row contains `E1 + E2 + E3` and the arms handle `E1` and `E2`, the row outside the `handle` block is `E3`.
+If SUBJECT's row contains `E1 + E2 + E3` and the clauses handle `E1` and `E2`, the row outside the `handle` block is `E3`.
 
-Multiple arms for the same effect are permitted (one per operation of that effect); they all together "handle" the effect.
+Multiple clauses for the same effect are permitted (one per operation of that effect); they all together "handle" the effect.
 
-**Coverage:** a handler must provide an arm for every operation of each effect it claims to handle. Coverage is the unified constructor-coverage obligation per Rule M6.4 in `spec/pattern_matching.md`; missing arms emit `error[E093]: handler does not cover operations <list>` with a copy-pasteable suggestion (Rule E6.5 wildcard arms were removed per OQ-E2 in v0.2).
+**Coverage:** a handler must provide a clause for every operation of each effect it claims to handle. Coverage is the unified constructor-coverage obligation per Rule M6.4 in `spec/pattern_matching.md`; missing clauses emit `error[E093]: handler does not cover operations <list>` with a copy-pasteable suggestion (Rule E6.5 wildcard clauses were removed per OQ-E2 in v0.2).
 
 ### 5.4 Top-level handling (Rule E5.4)
 
@@ -316,26 +316,26 @@ handle SUBJECT:
     return(v) => body          // optional
 ```
 
-Per the grammar (`HandleExpr`), `SUBJECT` is a single `Expr`. For multi-line subject bodies, wrap in `do:` and parens: `handle (do: …): arms`.
+Per the grammar (`HandleExpr`), `SUBJECT` is a single `Expr`. For multi-line subject bodies, wrap in `do:` and parens: `handle (do: …): clauses`.
 
 ### 6.2 Operational semantics (Rule E6.2)
 
-Evaluating `handle SUBJECT: arms` proceeds:
+Evaluating `handle SUBJECT: clauses` proceeds:
 
 1. Evaluate SUBJECT.
 2. While SUBJECT runs, every `E.op(args)` call (where `E` is handled here) is **intercepted**:
    - The current continuation up to this `handle` block is captured.
-   - Control transfers to the matching arm `E.op(p1, ..., pn) => body` with `p_i = args[i]`.
-   - The arm body executes.
-   - Inside the arm body, `resume(v)` resumes the captured continuation with value `v`. The operation's call site receives `v` as its result.
+   - Control transfers to the matching clause `E.op(p1, ..., pn) => body` with `p_i = args[i]`.
+   - The clause body executes.
+   - Inside the clause body, `resume(v)` resumes the captured continuation with value `v`. The operation's call site receives `v` as its result.
 3. If SUBJECT completes normally with value `v`:
-   - If a `return(v) => body` arm is present, evaluate the body with `v` bound; the body's value is the result of the `handle` block.
+   - If a `return(v) => body` clause is present, evaluate the body with `v` bound; the body's value is the result of the `handle` block.
    - Otherwise, `v` is the result.
-4. If SUBJECT calls an abortive operation (op with return `!`) and the matching arm runs to completion, the arm body's value is the result of the `handle` block. (No `resume` is called.)
+4. If SUBJECT calls an abortive operation (op with return `!`) and the matching clause runs to completion, the clause body's value is the result of the `handle` block. (No `resume` is called.)
 
 ### 6.3 The `return` clause (Rule E6.3)
 
-An optional `return(v) => body` arm transforms the normal-completion value:
+An optional `return(v) => body` clause transforms the normal-completion value:
 
 ```
 handle compute(input):
@@ -349,13 +349,13 @@ Without a `return` clause, normal completion passes through unchanged.
 
 `resume(v)` resumes the captured continuation with value `v`, where `v: T` and `T` is the declared return type of the matching operation.
 
-Per Rule Q5.11 in `spec/quantities.md`, `resume` is **always quantity 1** in v0.4.1 — exactly zero or one call per arm-body code path. Multi-shot resume is deferred (OQ-Q1 there, OQ-E1 here).
+Per Rule Q5.11 in `spec/quantities.md`, `resume` is **always quantity 1** in v0.4.1 — exactly zero or one call per clause-body code path. Multi-shot resume is deferred (OQ-Q1 there, OQ-E1 here).
 
-For abortive operations (`-> !`), `resume` is never present in the arm — the typer rejects it as a compile error.
+For abortive operations (`-> !`), `resume` is never present in the clause — the typer rejects it as a compile error.
 
 ### 6.5 Nested handlers (Rule E6.5)
 
-`handle` blocks nest. Inner handlers run first; an effect bubbles outward until a handler claims it. Arms in an inner handler do not see outer handlers' arms — each `handle` has its own arm scope.
+`handle` blocks nest. Inner handlers run first; an effect bubbles outward until a handler claims it. Clauses in an inner handler do not see outer handlers' clauses — each `handle` has its own clause scope.
 
 ```
 handle outer_subject:
@@ -368,19 +368,19 @@ If `outer_subject` is itself `handle inner_subject: InnerEff.op() => ...`, then 
 
 **Result type.** The result type of a `handle` block is the join of:
 
-- The `return` arm's body type (if present), or SUBJECT's value type (if absent).
-- Each non-abortive arm's body type (after `resume`'s flow through the captured continuation).
-- Each abortive arm's body type (which becomes a direct `handle` result).
+- The `return` clause's body type (if present), or SUBJECT's value type (if absent).
+- Each non-abortive clause's body type (after `resume`'s flow through the captured continuation).
+- Each abortive clause's body type (which becomes a direct `handle` result).
 
 All of these must be the same type (or unifiable).
 
 **Result effect row.** The effect row of a `handle` block is the union of three sources, parallel to the type rule:
 
-- The `return` arm's body row (if present), or SUBJECT's value type's row (if absent) — the *happy-path* row contributed when SUBJECT completes normally.
-- Each arm body's row — effects performed by arm bodies running in the outer scope.
+- The `return` clause's body row (if present), or SUBJECT's value type's row (if absent) — the *happy-path* row contributed when SUBJECT completes normally.
+- Each clause body's row — effects performed by clause bodies running in the outer scope.
 - SUBJECT's declared row **minus the effects handled here** (Rule E5.3) — SUBJECT's unhandled effects that pass through to the outer scope.
 
-The first source mirrors the type rule's first bullet. The third source ensures effects performed *during* SUBJECT's evaluation that aren't intercepted by any arm still appear in the outer row.
+The first source mirrors the type rule's first bullet. The third source ensures effects performed *during* SUBJECT's evaluation that aren't intercepted by any clause still appear in the outer row.
 
 ## 7. Evidence-passing compilation
 
@@ -390,7 +390,7 @@ Fixed compiles handlers via the **evidence-passing** strategy of Leijen 2017 / X
 
 Each operation of each effect is compiled to an indirect call through a per-handler **evidence vector**. The evidence vector contains, for each operation:
 
-- A function pointer to the arm body.
+- A function pointer to the clause body.
 - A handler-frame reference (the captured continuation root).
 - Type information sufficient for boxing args / return value when needed.
 
@@ -404,13 +404,13 @@ A call `E.op(args)` compiles to:
 
 ### 7.3 Handler installation (Rule E7.3)
 
-`handle SUBJECT: arms` compiles to:
+`handle SUBJECT: clauses` compiles to:
 
-1. Allocate a handler frame on the stack (or arena), containing the arm-body pointers and a continuation root.
+1. Allocate a handler frame on the stack (or arena), containing the clause-body pointers and a continuation root.
 2. Install the frame into the calling function's evidence vector for the handled effects.
 3. Invoke SUBJECT (which now sees the new evidence).
-4. On normal completion: pop the frame and run the `return` arm (if present).
-5. On operation interception: the arm body runs with access to `resume`, which restores the continuation root.
+4. On normal completion: pop the frame and run the `return` clause (if present).
+5. On operation interception: the clause body runs with access to `resume`, which restores the continuation root.
 
 ### 7.4 Continuation capture (Rule E7.4)
 
@@ -420,7 +420,7 @@ Quantity-1 resume (Rule Q5.11) means each captured continuation is consumed exac
 
 ### 7.5 Tail resume optimization (Rule E7.5)
 
-When an arm body's only use of `resume` is a tail call — `resume(expr)` as the final expression of the body — the compiler may emit a *tail-resume* that avoids capturing and restoring the stack:
+When a clause body's only use of `resume` is a tail call — `resume(expr)` as the final expression of the body — the compiler may emit a *tail-resume* that avoids capturing and restoring the stack:
 
 ```
 handle f():
@@ -485,7 +485,7 @@ fn each<E>(list: is List of A, f: A -> () with E) -> () with E =
 
 **Closed (decided not to add):**
 
-- **OQ-E2 — Wildcard handler arms.** v0.4 specs no `_ => body` arm in `HandlerArm`. Decision: explicit per-op coverage is required; sandboxes/proxies that need wildcard catch-all should be expressed via effect aliasing (§4.5) or by an explicit list of arms. Closed in v0.2.
+- **OQ-E2 — Wildcard handler clauses.** v0.4 specs no `_ => body` clause in `HandlerClause`. Decision: explicit per-op coverage is required; sandboxes/proxies that need wildcard catch-all should be expressed via effect aliasing (§4.5) or by an explicit list of clauses. Closed in v0.2.
 - **OQ-E7 — Per-op linearity within a multi-op effect.** Decision: linearity stays at *effect* granularity. Multi-step resource lifecycles are expressed by splitting each linear operation into its own `linear effect`, each with its own usage budget. This keeps Rule E3.5 simple, preserves QTT-row semantics (§4.1), and makes the linearity contract visible in every signature that uses the resource. Closed in v0.2 — see §3.5's Use case for examples.
 
 ## 10. Worked examples
@@ -509,15 +509,15 @@ Inference walk:
 
 - `parse_u64`'s callback `(e) -> Fail.fail(e)` — the lambda's body calls abortive op `Fail.fail`, so its row is `Fail of String`.
 - `inner`'s body calls these lambdas via `fold`, which itself takes the row of its second argument. So `inner`'s `R_inferred = Fail of String`. Its declared `with Fail of String` matches.
-- `compute`'s body wraps `inner(input)` in a `handle` whose arms cover `Fail` (abortive — `Result.err(e)`) and `return` (transforms to `Result.ok(v)`). After subtraction, the row outside is empty. `compute` declares no `with` clause, which matches. ✓
+- `compute`'s body wraps `inner(input)` in a `handle` whose clauses cover `Fail` (abortive — `Result.err(e)`) and `return` (transforms to `Result.ok(v)`). After subtraction, the row outside is empty. `compute` declares no `with` clause, which matches. ✓
 - The `handle` block's result type joins:
-  - `return` arm's body: `Result.ok(v): is Result of (String, u64)`.
-  - `Fail.fail` arm's body: `Result.err(e): is Result of (String, u64)`.
+  - `return` clause's body: `Result.ok(v): is Result of (String, u64)`.
+  - `Fail.fail` clause's body: `Result.err(e): is Result of (String, u64)`.
 - Both unify to `is Result of (String, u64)`, matching `compute`'s declared return type.
 
 ### 10.2 `examples/08_effects_handlers.fixed` — main with nested handlers
 
-The deeply nested `handle (do: ... ): arms` chain in `main` removes one effect per nesting level: `Fail`, then `Log`, then `Console`. Each level subtracts its handled effect from the row that the next outer level sees. The outermost `handle` for `Console` reduces the row to empty — `main` declares no `with` clause, consistent with §5.4's rule that `main`'s row must be a subset of the runtime-installed stdlib effects (here, the runtime needn't install anything since `main` is fully self-handled).
+The deeply nested `handle (do: ... ): clauses` chain in `main` removes one effect per nesting level: `Fail`, then `Log`, then `Console`. Each level subtracts its handled effect from the row that the next outer level sees. The outermost `handle` for `Console` reduces the row to empty — `main` declares no `with` clause, consistent with §5.4's rule that `main`'s row must be a subset of the runtime-installed stdlib effects (here, the runtime needn't install anything since `main` is fully self-handled).
 
 ### 10.3 `examples/06_functor_monad.fixed` — `sequence` (effect-poly callback)
 
@@ -541,8 +541,8 @@ fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A) =
 | `spec/syntax_grammar.ebnf` | All effect-related syntax |
 | `spec/type_system.md` | Effect declarations as type-level constructs (§9 forwards here); `!` typing (§5.6) |
 | `spec/quantities.md` | Rule Q5.11 (`resume` quantity 1); OQ-Q1 ↔ OQ-E1 |
-| `spec/perceus.md` (TBD) | Continuation memory management; refcount interaction with captured arms |
+| `spec/perceus.md` (TBD) | Continuation memory management; refcount interaction with captured clauses |
 | `spec/properties.md` (TBD) | Effects in `prop` bodies are forbidden — props are checked at quantity 0 (Rule Q5.5), and `prop` bodies are compile-time only |
-| `spec/pattern_matching.md` (TBD) | Handler arms reuse pattern syntax; not effect-specific |
+| `spec/pattern_matching.md` (TBD) | Handler clauses reuse pattern syntax; not effect-specific |
 | `docs/references/scala3-compiler-reference.md` | Recheck pattern; effect inference is a Recheck pass like quantity inference |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `effects/EffectChecker.scala` (effect inference); Phase 4: `effects/EvidencePasser.scala` (evidence-passing compilation) |

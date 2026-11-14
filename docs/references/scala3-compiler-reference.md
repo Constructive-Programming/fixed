@@ -140,7 +140,7 @@ For Fixed: introduce equivalents early. We will need at minimum:
 
 ### 3.4 Significant indentation
 
-`Scanners.scala` handles Scala 3's optional indentation syntax with a stack of `Region` values. Fixed has chosen a brace-and-newline style without significant indentation per the examples — so we can drop most of this complexity. Keep the `Region` concept anyway: it's the right abstraction for tracking nested `{ }`, `( )`, `[ ]`, and the `match`-arm boundaries used for indented-style match.
+`Scanners.scala` handles Scala 3's optional indentation syntax with a stack of `Region` values. Fixed has chosen a brace-and-newline style without significant indentation per the examples — so we can drop most of this complexity. Keep the `Region` concept anyway: it's the right abstraction for tracking nested `{ }`, `( )`, `[ ]`, and the `match`-case boundaries used for indented-style match.
 
 ### 3.5 Single tree hierarchy, two type parameterizations
 

@@ -67,7 +67,7 @@ Identity: `1`. `0` is annihilator.
 
 ### 3.3 Join (combining usages across exclusive branches)
 
-`⊔` (lub) combines usages from mutually exclusive branches (the arms of an `if` or `match` — exactly one runs):
+`⊔` (lub) combines usages from mutually exclusive branches (the branches of an `if` or the cases of a `match` — exactly one runs):
 
 | `⊔` | 0 | 1 | ω |
 |---|---|---|---|
@@ -173,11 +173,11 @@ Because closures may be called arbitrarily many times by their own callers (thei
 
 Each binding introduced by a pattern (`let (a, b) = expr`, `match x: List.Cons(h, t) => …`) gets its quantity inferred per Rule Q5.1 from its usages in the scope of the binding.
 
-For match arms specifically: a binding's quantity within the arm body follows Q5.1; the binding does not exist outside the arm.
+For match cases specifically: a binding's quantity within the case body follows Q5.1; the binding does not exist outside the case.
 
 ### 5.9 Branching: `if`, `match`, `handle` (Rule Q5.9)
 
-For an expression with **mutually exclusive branches** — `if c: A else: B`, or `match e: pat1 => a1 | pat2 => a2 | …`, or handler arms in a `handle` — a free binding's contribution is the **join** (`⊔`, §3.3) over all branches, *not* the sum.
+For an expression with **mutually exclusive branches** — `if c: A else: B`, or `match e: pat1 => a1 | pat2 => a2 | …`, or handler clauses in a `handle` — a free binding's contribution is the **join** (`⊔`, §3.3) over all branches, *not* the sum.
 
 ```
 fn f(x: i64, c: bool) -> i64 =
@@ -204,7 +204,7 @@ fn g(x: i64) -> i64 =
 
 ### 5.11 `resume` in handlers (Rule Q5.11)
 
-`resume(v)` inside a handler arm body is **always quantity 1** (single-shot). The arm body must contain `resume(...)` exactly zero or one time on every code path; two or more `resume` calls reachable on a single path is a compile error.
+`resume(v)` inside a handler clause body is **always quantity 1** (single-shot). The clause body must contain `resume(...)` exactly zero or one time on every code path; two or more `resume` calls reachable on a single path is a compile error.
 
 ```
 handle action():
@@ -212,7 +212,7 @@ handle action():
         let v = compute(x)
         resume(v)              // exactly one resume → OK
     Eff.fail(e) =>
-        Result.err(e)          // zero resumes → OK; arm produces a final value
+        Result.err(e)          // zero resumes → OK; clause produces a final value
 ```
 
 Multi-shot handlers (where `resume` may be called any number of times) are not supported in v0.4.1. Adding them would require relaxing this rule to allow `resume` at quantity ω, with corresponding changes in the runtime continuation representation. Tracked as **OQ-Q1** below.
@@ -272,13 +272,13 @@ When a constructor is applied to a quantity-1 receiver of the same shape, Perceu
 
 A quantity-1 binding has no `dup`/`drop` operations inserted by Perceus. The single use consumes the value; there is no need to count references.
 
-### 7.4 Linear-effect handler arms (Rule Q7.4) — **Proposal, contingent on OQ-Q5; resolves L6**
+### 7.4 Linear-effect handler clauses (Rule Q7.4) — **Proposal, contingent on OQ-Q5; resolves L6**
 
 > **Status note.** Like `spec/effects.md` §3.5, this rule is a proposal contingent on OQ-Q5 closing in favor of effect rows participating in QTT quantity. Implementations should treat Rule Q7.4 as opt-in behind the same flag that gates §3.5.
 
-A handler arm body for a `linear effect` (per `spec/effects.md` §3.5) is itself a **quantity-1 closure**. The arm runs at most once per `handle` block (Rule E3.5.c — at-most-once semantics), so the body's quantity inherits from the effect's linearity rather than defaulting to ω as a regular closure body would.
+A handler clause body for a `linear effect` (per `spec/effects.md` §3.5) is itself a **quantity-1 closure**. The clause runs at most once per `handle` block (Rule E3.5.c — at-most-once semantics), so the body's quantity inherits from the effect's linearity rather than defaulting to ω as a regular closure body would.
 
-Consequence: a quantity-1 outer binding **may be captured** by a linear-effect arm body. The capture's contribution to the outer scope's usage of that binding is the join of (arm-body usage) and (other-paths usage), bounded above by 1 because the arm runs at most once.
+Consequence: a quantity-1 outer binding **may be captured** by a linear-effect clause body. The capture's contribution to the outer scope's usage of that binding is the join of (clause-body usage) and (other-paths usage), bounded above by 1 because the clause runs at most once.
 
 ```
 let lock_token = make_token()        // quantity 1
@@ -286,21 +286,21 @@ handle (do: ... Lock.release):
     Lock.release =>
         consume(lock_token)          // captured from outer scope — OK under Rule Q7.4
         resume(())
-// total quantity of lock_token across the handle block: 1 (consumed in the arm)
+// total quantity of lock_token across the handle block: 1 (consumed in the clause)
 ```
 
-The standard Rule Q7.1 prohibition ("quantity-1 binding may not be captured by a quantity-ω closure") **still applies** to non-linear handler arms. A capture across a non-linear arm boundary is rejected:
+The standard Rule Q7.1 prohibition ("quantity-1 binding may not be captured by a quantity-ω closure") **still applies** to non-linear handler clauses. A capture across a non-linear clause boundary is rejected:
 
 ```
 let lock_token = make_token()
 handle (do: ... Console.print_line):
     Console.print_line(msg) =>
-        consume(lock_token)          // error: Console is non-linear; arm body is quantity ω;
+        consume(lock_token)          // error: Console is non-linear; clause body is quantity ω;
                                       //        Rule Q7.1 forbids capture of a quantity-1 binding here.
         resume(())
 ```
 
-If OQ-Q5 closes the other way (effect rows do not participate in QTT quantity), Rule Q7.4 is withdrawn and Rule Q7.1 applies uniformly to all handler arms regardless of effect linearity.
+If OQ-Q5 closes the other way (effect rows do not participate in QTT quantity), Rule Q7.4 is withdrawn and Rule Q7.1 applies uniformly to all handler clauses regardless of effect linearity.
 
 ## 8. Unrestricted (quantity ω)
 

@@ -84,12 +84,12 @@
 
    Refinements in v0.4.3
    ---------------------
-   - **Or-patterns** in match arms: `Pat1 | Pat2 => body`. Alternatives
+   - **Or-patterns** in match cases: `Pat1 | Pat2 => body`. Alternatives
      must bind identical sets of names at identical types. (See
      spec/pattern_matching.md §5.5.)
-   - **Guards** in match arms: `Pat if cond => body`. The guard is a
+   - **Guards** in match cases: `Pat if cond => body`. The guard is a
      `bool` expression evaluated after the pattern matches; if false,
-     control falls through to the next arm. (See §5.6.)
+     control falls through to the next case. (See §5.6.)
    - **`..` field elision** in struct-destructure patterns:
      `let Pair { first: x, .. } = p` ignores unmentioned fields.
      (See §3.6.)
@@ -150,11 +150,11 @@
    - Multi-line lambda bodies use `->` as a block introducer. The
      canonical multi-line form is `(x) ->` followed by an indented
      body, replacing `(x) -> do: …`.
-   - Multi-line arm bodies use `=>` as a block introducer (match arms
-     and handler arms). Replaces the previous brace-block form.
+   - Multi-line case and clause bodies use `=>` as a block introducer (match cases
+     and handler clauses). Replaces the previous brace-block form.
    - Bracket-suppression rule clarified: inside `(…)`/`[…]`/`{…}` the
      off-side rule is suppressed by default, but is re-enabled within
-     a lambda body (after `->`), an arm body (after `=>`), or a
+     a lambda body (after `->`), a case or clause body (after `=>`), or a
      declaration/control-flow body (after `:`).
 
    Major change in v0.3
@@ -225,7 +225,7 @@
    is re-enabled within the body of:
      - a fn/method definition following `=` (fn body);
      - a lambda following `->` (lambda body);
-     - a match/handler arm following `=>` (arm body); or
+     - a match case or handler clause following `=>` (case or clause body); or
      - a cap/data/effect/satisfies/match/handle/do/if/else following `:`
        (block body).
    After the matching DEDENT closes the body, the surrounding bracket
@@ -930,7 +930,7 @@ LambdaBody
     ;
 
 (* Block tail used by every colon-introduced block: function bodies,
-   if/else branches, match arm RHS, do-block, lambda do-bodies. May be
+   if/else branches, match case RHS, do-block, lambda do-bodies. May be
    inline (single Expr on same line) or indented (NEWLINE then INDENT
    block). *)
 BlockTail
@@ -1059,7 +1059,7 @@ Whitespace       = (* space; tab is a v0.3 error *) ;
    N5 — Multi-line handle subjects (accepted)
         The canonical form is `handle (do: …): …`. If the parens-
         around-do pattern proves verbose at scale, revisit with a two-
-        block syntax such as `handle: SUBJECT  with: ARMS`.
+        block syntax such as `handle: SUBJECT  with: CLAUSES`.
 
    N6 — Tab handling (accepted)
         v0.3 errors on tab indentation. Revisit before bootstrap if
@@ -1136,8 +1136,8 @@ Whitespace       = (* space; tab is a v0.3 error *) ;
      Pattern:
        `=>`, `,`, `)`.
 
-     Match arm or handler arm body:
-       `=>` (recover the body), NEWLINE at the arm's indent.
+     Match case or handler clause body:
+       `=>` (recover the body), NEWLINE at the case's or clause's indent.
 
      `prop` / `forall` / `implies` body:
        NEWLINE at the body's indent, DEDENT.
@@ -1192,7 +1192,7 @@ Whitespace       = (* space; tab is a v0.3 error *) ;
    ---------------------------------------------
 
    When a re-engaged off-side body (lambda body, `match` block, `do`
-   block, handler-arm block) inside a paren-suppressed context is
+   block, handler-clause block) inside a paren-suppressed context is
    followed on the same indent by a token the enclosing bracketed
    production is waiting for — `,` / `)` / `]` / `}` — the body
    terminates at that token. The DEDENT the scanner emits at the next
