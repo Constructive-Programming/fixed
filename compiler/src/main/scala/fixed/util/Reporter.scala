@@ -4,6 +4,13 @@ package fixed.util
 enum Severity:
   case Error, Warning, Info
 
+/** Diagnostic codes. The case name is the rendered code. `E*`: lexical
+  * (scanner); `P*`: syntactic (parser).
+  */
+enum DiagCode:
+  case E001, E002, E003, E004, E005, E006, E007, E008, E009
+  case P001, P002, P003, P004, P005, P006, P007, P008, P010, P011, P012, P013, P014, P015, P016, P017, P018, P019, P099
+
 /** A single diagnostic message with location, code, and explanation.
   *
   * Per the project's "Agent-Friendly CLI and Compiler Output" guidelines,
@@ -15,7 +22,7 @@ enum Severity:
   */
 final case class Diagnostic(
     severity: Severity,
-    code: String,
+    code: DiagCode,
     span: Span,
     message: String,
     suggestion: Option[String] = None
@@ -28,7 +35,7 @@ final case class Diagnostic(
 final class Reporter(val source: SourceFile):
   private val buf = scala.collection.mutable.ArrayBuffer.empty[Diagnostic]
 
-  def error(code: String, span: Span, message: String, suggestion: Option[String] = None): Unit =
+  def error(code: DiagCode, span: Span, message: String, suggestion: Option[String] = None): Unit =
     buf += Diagnostic(Severity.Error, code, span, message, suggestion)
 
   /** Append a pre-built diagnostic. Used when a phase (e.g. the parser)

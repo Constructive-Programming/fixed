@@ -3,7 +3,7 @@ package fixed.parsing
 import scala.annotation.tailrec
 import scala.collection.immutable.Queue
 
-import fixed.util.{Reporter, SourceFile, Span}
+import fixed.util.{DiagCode, Reporter, SourceFile, Span}
 
 // Single-pass lexer. The `Scanner` object holds the pure-functional
 // state and `step`; the `class Scanner` wrapper below adapts it to the
@@ -131,7 +131,7 @@ object Scanner:
       else if c == '\t' then
         // Tabs are forbidden as whitespace per the grammar.
         reporter.error(
-          "E001",
+          DiagCode.E001,
           Span(pos, pos + 1),
           "tab character in source — Fixed v0.4.5 requires spaces for indentation",
           Some("replace this tab with spaces")
@@ -199,7 +199,7 @@ object Scanner:
         else
           if st1.currentIndent != newIndent then
             reporter.error(
-              "E002",
+              DiagCode.E002,
               Span(pos, pos + 1),
               s"inconsistent indentation; closing dedent does not match any opening indent (got $newIndent, stack=${st1.indentStack.reverse.mkString(",")})",
               Some("align this line to one of the enclosing block's indent levels")
@@ -318,7 +318,7 @@ object Scanner:
           case _   => single(state, start, TokenKind.Pipe)
       case '&' =>
         if peekChar(source, start + 1) == '&' then double(state, start, TokenKind.AndAnd)
-        else errorChar(state, start, "E003", "stray `&` (did you mean `&&`?)", reporter)
+        else errorChar(state, start, DiagCode.E003, "stray `&` (did you mean `&&`?)", reporter)
       case '+' => single(state, start, TokenKind.Plus)
       case '*' => single(state, start, TokenKind.Star)
       case '/' => single(state, start, TokenKind.Slash)
@@ -329,7 +329,7 @@ object Scanner:
       case '"'                    => scanQuoted(state, source, start, reporter, Quote.Str)
       case '\''                   => scanQuoted(state, source, start, reporter, Quote.Chr)
 
-      case other => errorChar(state, start, "E004", s"unexpected character ${describeChar(other)}", reporter)
+      case other => errorChar(state, start, DiagCode.E004, s"unexpected character ${describeChar(other)}", reporter)
 
   // Fixed-width token of `len` chars at `start`.
   private def emit(state: ScannerState, start: Int, len: Int, kind: TokenKind): (ScannerState, Token) =
@@ -344,7 +344,7 @@ object Scanner:
   private def errorChar(
       state: ScannerState,
       start: Int,
-      code: String,
+      code: DiagCode,
       msg: String,
       reporter: Reporter
   ): (ScannerState, Token) =
@@ -367,7 +367,7 @@ object Scanner:
           case (top, _) :: _ => s"`$top`"
           case Nil           => "empty"
         reporter.error(
-          "E005",
+          DiagCode.E005,
           Span(start, start + 1),
           s"unmatched closing bracket — expected to close `$expected` but bracket stack is $tag"
         )
@@ -435,7 +435,7 @@ object Scanner:
       i0: Int,
       terminator: Char,
       reporter: Reporter,
-      unterminatedCode: String,
+      unterminatedCode: DiagCode,
       unterminatedLineMessage: String,
       unterminatedLineSuggestion: Option[String]
   ): QuotedBody =
@@ -453,7 +453,7 @@ object Scanner:
               buf += translated
               loop(i + 2, buf)
             case None =>
-              reporter.error("E006", Span(i, i + 2), s"unknown escape sequence `\\$esc`")
+              reporter.error(DiagCode.E006, Span(i, i + 2), s"unknown escape sequence `\\$esc`")
               buf += esc
               loop(i + 2, buf)
         else if c == '\n' then
@@ -483,7 +483,7 @@ object Scanner:
   private enum Quote(
       val terminator: Char,
       val kind: TokenKind,
-      val code: String,
+      val code: DiagCode,
       val noun: String,
       val lineMessage: String,
       val lineSuggestion: Option[String]
@@ -492,12 +492,12 @@ object Scanner:
         extends Quote(
           '"',
           TokenKind.StringLit,
-          "E007",
+          DiagCode.E007,
           "string",
           "unterminated string literal — closing `\"` missing on this line",
           Some("string literals must close on the same line in v0.4.5")
         )
-    case Chr extends Quote('\'', TokenKind.CharLit, "E008", "char", "unterminated char literal", None)
+    case Chr extends Quote('\'', TokenKind.CharLit, DiagCode.E008, "char", "unterminated char literal", None)
 
   private def scanQuoted(
       state: ScannerState,
@@ -520,7 +520,7 @@ object Scanner:
       reporter.error(q.code, Span(start, body.pos), s"unterminated ${q.noun} literal at end of input")
     if q == Quote.Chr && body.lexeme.length != 1 then
       reporter.error(
-        "E009",
+        DiagCode.E009,
         Span(start, body.pos),
         s"char literal must contain exactly one character (got ${body.lexeme.length})"
       )

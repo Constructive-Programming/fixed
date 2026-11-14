@@ -5,7 +5,7 @@ import scala.annotation.tailrec
 import cats.Monoid
 import cats.data.NonEmptyList
 import fixed.ast.{Tree, Trees}
-import fixed.util.{Reporter, SourceFile, Span}
+import fixed.util.{DiagCode, Reporter, SourceFile, Span}
 
 /** Hand-written recursive-descent parser over the token stream produced
   * by [[Scanner]]. The pure-functional core lives in `object Parser`:
@@ -225,13 +225,13 @@ object Parser:
   )(using Reporter): Parsed[Token] =
     if s.current.kind == kind then consume(s)
     else
-      reportExpected(s, "P001", s"$what (token $kind)", None)
+      reportExpected(s, DiagCode.P001, s"$what (token $kind)", None)
       (s, Token(kind, Span(s.current.span.start, s.current.span.start)))
 
   /** Report "expected `what`, got …" at `current`. */
   private def reportExpected(
       s: ParserState,
-      code: String,
+      code: DiagCode,
       what: String,
       hint: Option[String]
   )(using reporter: Reporter): Unit =
@@ -239,13 +239,13 @@ object Parser:
 
   /** `reportExpected`, then skip that one token and return its span for the caller's placeholder node. */
   extension (s: ParserState)
-    private def errorSkip(code: String, what: String)(using Reporter): Parsed[Span] =
+    private def errorSkip(code: DiagCode, what: String)(using Reporter): Parsed[Span] =
       reportExpected(s, code, what, None)
       (s.advance, s.current.span)
 
   /** `reportExpected`, then sync to the next anchor and return an `Error` node spanning the skipped region. */
   extension (s: ParserState)
-    private def errorSync(code: String, what: String, hint: Option[String] = None)(using Reporter): Parsed[Tree] =
+    private def errorSync(code: DiagCode, what: String, hint: Option[String] = None)(using Reporter): Parsed[Tree] =
       reportExpected(s, code, what, hint)
       val s1 = syncToAnchors(s)
       (s1, Trees.Error(Nil, span(s.current.span, s1.current.span)))
@@ -416,7 +416,7 @@ object Parser:
       // junk into a single Error item rather than one per stray token.
       val startSpan = s.current.span
       reporter.error(
-        "P002",
+        DiagCode.P002,
         startSpan,
         s"unexpected token at top level: ${s.current.kind}${describeLexeme(s.current)}",
         Some("expected `use`, `fn`, `cap`, `data`, `effect`, `type`, `mod`, or `<TypeName> satisfies …`")
@@ -429,7 +429,7 @@ object Parser:
 
   private def unsupported(s: ParserState, what: String)(using reporter: Reporter): Parsed[Tree] =
     reporter.error(
-      "P099",
+      DiagCode.P099,
       s.current.span,
       s"$what is not yet implemented",
       Some("file an issue or extend Parsers.scala")
@@ -470,7 +470,7 @@ object Parser:
         val (s1, tok) = consume(s)
         (s1, tok.lexeme)
       case _ =>
-        reportExpected(s, "P003", "an identifier", None)
+        reportExpected(s, DiagCode.P003, "an identifier", None)
         (s, "<error>")
 
   // ---- FnDecl (free fns and cap/effect/satisfies methods) ----
@@ -570,7 +570,7 @@ object Parser:
     * non-bracket-waiter token gets a P011 diagnostic, syncs to the next
     * boundary, and is wrapped in `Trees.Error`. */
   private def parseBlock(s0: ParserState)(using Reporter): Parsed[Tree] =
-    val (s1, stmts) = parseStatementList(s0, "P011", "statement")(parseStatement)
+    val (s1, stmts) = parseStatementList(s0, DiagCode.P011, "statement")(parseStatement)
     (s1, Trees.Block(stmts, span(s0.current.span, s1.current.span)))
 
   /** Indented list in source order. `step` parses one entry, or returns
@@ -589,7 +589,7 @@ object Parser:
     * `what`"), skipped to the next anchor, and the item wrapped in
     * `Trees.Error`.
     */
-  private inline def parseStatementList(s0: ParserState, code: String, what: String)(
+  private inline def parseStatementList(s0: ParserState, code: DiagCode, what: String)(
       inline item: Rule[Tree]
   )(using reporter: Reporter): Parsed[List[Tree]] =
     val (s1, stmts) = parseIndentedBody(s0, List.empty[Tree]) { (state, acc) =>
@@ -710,7 +710,7 @@ object Parser:
     case TokenKind.LowerIdent =>
       val (s1, tok) = consume(s)
       (s1, Trees.PrimitiveType(tok.lexeme, tok.span))
-    case _ => s.errorSync("P004", "a type expression")
+    case _ => s.errorSync(DiagCode.P004, "a type expression")
 
   private def parseIsBound(s0: ParserState)(using Reporter): Parsed[Tree] =
     s0.afterKeyword(TokenKind.KwIs, "`is`") { (s1, startTok) =>
@@ -742,7 +742,7 @@ object Parser:
       if s1.current.kind == TokenKind.LParen then parseRefinementCall(s1, nameTok)
       else (s1, Trees.PrimitiveType(nameTok.lexeme, nameTok.span))
     case _ =>
-      val (s1, sp) = s.errorSkip("P005", "a capability bound")
+      val (s1, sp) = s.errorSkip(DiagCode.P005, "a capability bound")
       (s1, Trees.Error(Nil, sp))
 
   private def parseCapRef(s0: ParserState)(using Reporter): Parsed[Tree] =
@@ -917,7 +917,7 @@ object Parser:
           val (st2, nameTok) = st1.current.kind match
             case TokenKind.LowerIdent | TokenKind.UpperIdent => consume(st1)
             case _                                           =>
-              reportExpected(st1, "P006", "method or field name after `.`", None)
+              reportExpected(st1, DiagCode.P006, "method or field name after `.`", None)
               consume(st1)
           val (st3, args) =
             if st2.current.kind == TokenKind.LParen then
@@ -1047,7 +1047,7 @@ object Parser:
         (st2, ok)
       else
         reporter.error(
-          "P012",
+          DiagCode.P012,
           st2.current.span,
           s"unexpected ${st2.current.kind}${describeLexeme(st2.current)} in list; expected `,` or `$closeLexeme`",
           Some(s"add `,` to continue or `$closeLexeme` to close the list")
@@ -1123,7 +1123,7 @@ object Parser:
       if s1.current.kind == TokenKind.LBrace then parseStructLit(s1, tok)
       else (s1, Trees.Ident(tok.lexeme, tok.span))
     case _ =>
-      val (s1, sp) = s.errorSkip("P007", "an expression")
+      val (s1, sp) = s.errorSkip(DiagCode.P007, "an expression")
       (s1, Trees.Error(Nil, sp))
 
   private def parseIfExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
@@ -1190,7 +1190,7 @@ object Parser:
     }
 
   private def parseDoStmts(s0: ParserState)(using Reporter): Parsed[List[Tree]] =
-    parseStatementList(s0, "P018", "do statement")(parseDoStmt)
+    parseStatementList(s0, DiagCode.P018, "do statement")(parseDoStmt)
 
   // `pat <- expr` bind, or a plain expression.
   private def parseDoStmt(s: ParserState)(using Reporter): Parsed[Tree] =
@@ -1306,7 +1306,7 @@ object Parser:
         (s6, Trees.HandlerArm(effectTok.lexeme, opTok.lexeme, params, body, span(startSpan, body.span)))
       case _ =>
         s.errorSync(
-          "P019",
+          DiagCode.P019,
           "a handler arm",
           Some("each arm is `Effect.op(...) => body` or `return(p) => body`")
         )
@@ -1389,7 +1389,7 @@ object Parser:
       case TokenKind.Underscore =>
         val (st, tok) = consume(s0); (st, "_", tok.span)
       case _ =>
-        reportExpected(s0, "P008", "lambda parameter name", None)
+        reportExpected(s0, DiagCode.P008, "lambda parameter name", None)
         val (st, tok) = consume(s0); (st, "<error>", tok.span)
     val (s2, typeAnn) =
       s1.optionalOr(TokenKind.Colon)(parseTypeExpr)(st => Trees.Ident("<inferred>", st.current.span))
@@ -1463,7 +1463,7 @@ object Parser:
       val (s1, lit) = parseAtomExpr(s)
       (s1, Trees.LiteralPat(lit, sp))
     case _ =>
-      val (s1, sp) = s.errorSkip("P010", "a pattern")
+      val (s1, sp) = s.errorSkip(DiagCode.P010, "a pattern")
       (s1, Trees.WildcardPat(sp))
 
   private def parseInnerPatternList(s0: ParserState)(using Reporter): Parsed[List[Tree]] =
@@ -1496,7 +1496,7 @@ object Parser:
           (s5, Trees.DataDecl(nameTok.lexeme, ofParams, variants, props, span(startTok.span, s5.current.span)))
         case (s4, None) =>
           reporter.error(
-            "P013",
+            DiagCode.P013,
             s4.current.span,
             s"`data ${nameTok.lexeme}` needs either a `(field: T, ...)` ctor sugar or a `:` block of variants",
             Some("add `: ...` for variants or `(field: T, ...)` for a single ctor")
@@ -1555,7 +1555,7 @@ object Parser:
         case _ =>
           reportExpected(
             state,
-            "P013",
+            DiagCode.P013,
             "a variant name or `prop`",
             Some("data bodies hold `UpperIdent` variants and `prop` declarations")
           )
@@ -1608,7 +1608,7 @@ object Parser:
         case _ =>
           reportExpected(
             state,
-            "P014",
+            DiagCode.P014,
             "`fn`, `Self.fn`, or `prop`",
             Some("cap members are instance methods (`fn`), static methods (`Self.fn`), or `prop` declarations")
           )
@@ -1670,7 +1670,7 @@ object Parser:
       case _ =>
         reportExpected(
           s0,
-          "P015",
+          DiagCode.P015,
           "a type name to satisfy a capability",
           Some("`<TypeName> satisfies <CapName>: ...`")
         )
@@ -1719,7 +1719,7 @@ object Parser:
     case MethodMember(p) => p(s)
     case _               =>
       s.errorSync(
-        "P016",
+        DiagCode.P016,
         "a satisfies item",
         Some("items are `Variant as ctor`, `impossible as ctor`, `fn ...`, `Self.fn ...`, or `prop ...`")
       )
@@ -1745,7 +1745,7 @@ object Parser:
       else
         reportExpected(
           state,
-          "P017",
+          DiagCode.P017,
           "an effect op (`fn name(...) -> T`)",
           Some("each effect op is declared like an instance method, without a body")
         )
