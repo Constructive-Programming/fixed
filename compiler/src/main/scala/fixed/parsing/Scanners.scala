@@ -266,7 +266,7 @@ object Scanner:
           lastKind = TokenKind.LParen
         )
         (st, Token.LParen(Span(start, st.pos)))
-      case ')' => closeBracket(state, start, TokenKind.RParen, '(', reporter)
+      case ')' => closeBracket(state, start, Token.RParen(_), '(', reporter)
       case '[' =>
         val st = state.copy(
           pos = start + 1,
@@ -274,7 +274,7 @@ object Scanner:
           lastKind = TokenKind.LBracket
         )
         (st, Token.LBracket(Span(start, st.pos)))
-      case ']' => closeBracket(state, start, TokenKind.RBracket, '[', reporter)
+      case ']' => closeBracket(state, start, Token.RBracket(_), '[', reporter)
       case '{' =>
         val st = state.copy(
           pos = start + 1,
@@ -282,47 +282,47 @@ object Scanner:
           lastKind = TokenKind.LBrace
         )
         (st, Token.LBrace(Span(start, st.pos)))
-      case '}' => closeBracket(state, start, TokenKind.RBrace, '{', reporter)
+      case '}' => closeBracket(state, start, Token.RBrace(_), '{', reporter)
 
-      case ','                                       => single(state, start, TokenKind.Comma)
-      case ';'                                       => single(state, start, TokenKind.Semicolon)
-      case '@'                                       => single(state, start, TokenKind.At)
+      case ','                                       => single(state, start)(Token.Comma(_))
+      case ';'                                       => single(state, start)(Token.Semicolon(_))
+      case '@'                                       => single(state, start)(Token.At(_))
       case '_' if !isIdentStartAt(source, start + 1) =>
-        single(state, start, TokenKind.Underscore)
+        single(state, start)(Token.Underscore(_))
 
-      case ':' => single(state, start, TokenKind.Colon)
-      case '.' => single(state, start, TokenKind.Dot)
+      case ':' => single(state, start)(Token.Colon(_))
+      case '.' => single(state, start)(Token.Dot(_))
       case '=' =>
         peekChar(source, start + 1) match
-          case '>' => double(state, start, TokenKind.FatArrow)
-          case '=' => double(state, start, TokenKind.EqEq)
-          case _   => single(state, start, TokenKind.Eq)
+          case '>' => double(state, start)(Token.FatArrow(_))
+          case '=' => double(state, start)(Token.EqEq(_))
+          case _   => single(state, start)(Token.Eq(_))
       case '-' =>
-        if peekChar(source, start + 1) == '>' then double(state, start, TokenKind.Arrow)
-        else single(state, start, TokenKind.Minus)
+        if peekChar(source, start + 1) == '>' then double(state, start)(Token.Arrow(_))
+        else single(state, start)(Token.Minus(_))
       case '<' =>
         peekChar(source, start + 1) match
-          case '-' => double(state, start, TokenKind.BackArrow)
-          case '=' => double(state, start, TokenKind.Le)
-          case _   => single(state, start, TokenKind.Lt)
+          case '-' => double(state, start)(Token.BackArrow(_))
+          case '=' => double(state, start)(Token.Le(_))
+          case _   => single(state, start)(Token.Lt(_))
       case '>' =>
-        if peekChar(source, start + 1) == '=' then double(state, start, TokenKind.Ge)
-        else single(state, start, TokenKind.Gt)
+        if peekChar(source, start + 1) == '=' then double(state, start)(Token.Ge(_))
+        else single(state, start)(Token.Gt(_))
       case '!' =>
-        if peekChar(source, start + 1) == '=' then double(state, start, TokenKind.Neq)
-        else single(state, start, TokenKind.Bang)
+        if peekChar(source, start + 1) == '=' then double(state, start)(Token.Neq(_))
+        else single(state, start)(Token.Bang(_))
       case '|' =>
         peekChar(source, start + 1) match
-          case '>' => double(state, start, TokenKind.PipeForward)
-          case '|' => double(state, start, TokenKind.OrOr)
-          case _   => single(state, start, TokenKind.Pipe)
+          case '>' => double(state, start)(Token.PipeForward(_))
+          case '|' => double(state, start)(Token.OrOr(_))
+          case _   => single(state, start)(Token.Pipe(_))
       case '&' =>
-        if peekChar(source, start + 1) == '&' then double(state, start, TokenKind.AndAnd)
+        if peekChar(source, start + 1) == '&' then double(state, start)(Token.AndAnd(_))
         else errorChar(state, start, DiagCode.E003, "stray `&` (did you mean `&&`?)", reporter)
-      case '+' => single(state, start, TokenKind.Plus)
-      case '*' => single(state, start, TokenKind.Star)
-      case '/' => single(state, start, TokenKind.Slash)
-      case '%' => single(state, start, TokenKind.Percent)
+      case '+' => single(state, start)(Token.Plus(_))
+      case '*' => single(state, start)(Token.Star(_))
+      case '/' => single(state, start)(Token.Slash(_))
+      case '%' => single(state, start)(Token.Percent(_))
 
       case ch if isIdentStart(ch) => scanIdent(state, source, start)
       case ch if ch.isDigit       => scanNumber(state, source, start)
@@ -332,13 +332,13 @@ object Scanner:
       case other => errorChar(state, start, DiagCode.E004, s"unexpected character ${describeChar(other)}", reporter)
 
   // Fixed-width token of `len` chars at `start`.
-  private def emit(state: ScannerState, start: Int, len: Int, kind: TokenKind): (ScannerState, Token) =
-    val st = state.copy(pos = start + len, lastKind = kind)
-    (st, Token.of(kind, Span(start, st.pos)))
+  private inline def emit(state: ScannerState, start: Int, len: Int)(inline mk: Span => Token): (ScannerState, Token) =
+    val tok = mk(Span(start, start + len))
+    (state.copy(pos = start + len, lastKind = tok.kind), tok)
 
-  private def single(state: ScannerState, start: Int, kind: TokenKind) = emit(state, start, 1, kind)
+  private inline def single(state: ScannerState, start: Int)(inline mk: Span => Token) = emit(state, start, 1)(mk)
 
-  private def double(state: ScannerState, start: Int, kind: TokenKind) = emit(state, start, 2, kind)
+  private inline def double(state: ScannerState, start: Int)(inline mk: Span => Token) = emit(state, start, 2)(mk)
 
   // Report `code` at the char at `start` and emit it as a one-char Error token.
   private def errorChar(
@@ -349,14 +349,14 @@ object Scanner:
       reporter: Reporter
   ): (ScannerState, Token) =
     reporter.error(code, Span(start, start + 1), msg)
-    single(state, start, TokenKind.Error)
+    single(state, start)(Token.Error(_))
 
   // Close-bracket production. Folds pos / lastKind / bracketStack into
   // one `state.copy` per token.
   private def closeBracket(
       state: ScannerState,
       start: Int,
-      kind: TokenKind,
+      mk: Span => Token,
       expected: Char,
       reporter: Reporter
   ): (ScannerState, Token) =
@@ -372,8 +372,8 @@ object Scanner:
           s"unmatched closing bracket — expected to close `$expected` but bracket stack is $tag"
         )
         state.bracketStack
-    val st = state.copy(pos = start + 1, lastKind = kind, bracketStack = nextStack)
-    (st, Token.of(kind, Span(start, st.pos)))
+    val tok = mk(Span(start, start + 1))
+    (state.copy(pos = start + 1, lastKind = tok.kind, bracketStack = nextStack), tok)
 
   // ---- Identifiers, numbers, strings, chars ----
 
@@ -385,8 +385,8 @@ object Scanner:
     val end = skipWhile(source.content, start, source.length)(isIdentPart)
     val text = source.slice(start, end)
     val sp = Span(start, end)
-    val tok = Tokens.keywords.get(text) match
-      case Some(kw)                       => Token.of(kw, sp)
+    val tok = Tokens.keywordTokens.get(text) match
+      case Some(mk)                       => mk(sp)
       case None if text.charAt(0).isUpper => Token.UpperIdent(sp, text)
       case None                           => Token.LowerIdent(sp, text)
     (state.copy(pos = end, lastKind = tok.kind), tok)
@@ -481,7 +481,7 @@ object Scanner:
   /** Per-literal settings for quoted tokens. */
   private enum Quote(
       val terminator: Char,
-      val kind: TokenKind,
+      val make: (Span, String) => Token,
       val code: DiagCode,
       val noun: String,
       val lineMessage: String,
@@ -490,13 +490,13 @@ object Scanner:
     case Str
         extends Quote(
           '"',
-          TokenKind.StringLit,
+          Token.StringLit(_, _),
           DiagCode.E007,
           "string",
           "unterminated string literal — closing `\"` missing on this line",
           Some("string literals must close on the same line in v0.4.5")
         )
-    case Chr extends Quote('\'', TokenKind.CharLit, DiagCode.E008, "char", "unterminated char literal", None)
+    case Chr extends Quote('\'', Token.CharLit(_, _), DiagCode.E008, "char", "unterminated char literal", None)
 
     /** Literal-specific checks on the scanned body: a char literal holds exactly one character. */
     def checkBody(lexeme: String, span: Span, reporter: Reporter): Unit = this match
@@ -529,8 +529,8 @@ object Scanner:
     if !body.closed then
       reporter.error(q.code, Span(start, body.pos), s"unterminated ${q.noun} literal at end of input")
     q.checkBody(body.lexeme, Span(start, body.pos), reporter)
-    val st = state.copy(pos = body.pos, lastKind = q.kind)
-    (st, Token.of(q.kind, Span(start, body.pos), body.lexeme))
+    val tok = q.make(Span(start, body.pos), body.lexeme)
+    (state.copy(pos = body.pos, lastKind = tok.kind), tok)
 
   // ---- Char-class helpers ----
 

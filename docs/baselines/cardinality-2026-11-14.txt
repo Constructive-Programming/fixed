@@ -11,8 +11,11 @@
 #  5  stage 2  Diagnostic.code: String -> DiagCode enum (28 codes)
 #  6  stage 2  BinOp/UnaryOp op: String -> BinOperator / UnaryOperator enums
 #  7  stage 2  Severity: KEEP. 3 cases, only Error produced today; warnings/info are a planned need.
-#  8  stage 1  Token(kind, span, lexeme = "") -> enum Token, lexeme only on ident/literal cases.
-#              Row: ω -> 6ω + ≤2^135 (sum split surfaced; same tier). Cost: ScannerBench +14-17%.
+#  8  stage 1  Token(kind, span, lexeme = "") -> enum Token; only ident/literal cases take text
+#              (others fix lexeme = ""). span/kind/lexeme are base fields; the scanner builds
+#              cases directly (Token.of only for the parser's synthetic tokens).
+#              Accepted cost vs pre-enum (same-session A/B, 2000 iters): ScannerBench ~+14%,
+#              ParserBench ~+5.5% — mostly the per-case duplicate span field (larger tokens).
 #  9  stage 3  parseFnLike's FnKind branching -> FnKind.head / FnKind.params (no row movement, expected)
 # 10  stage 3  scanQuoted's q == Quote.Chr check -> Quote.checkBody (no row movement, expected)
 # 11  design   sealed trait Tree: AST stored-value rows resolved (~80 '?' -> 6 '?'),
@@ -24,7 +27,7 @@
 Generic method / constructor implementation cardinalities
   424 signatures: 104 finite · 154 countably infinite · 166 unresolved
   115 unresolved on: ambiguous sealed family
-  23 unresolved on: inline method
+  26 unresolved on: inline method
   20 unresolved on: declaration not supplied
   6 unresolved on: final class field not observable injectively
   6 unresolved on: sealed family construction not resolved
@@ -547,15 +550,18 @@ Generic method / constructor implementation cardinalities
     unresolved: inline method: selects isLetterOrDigit on scala.Char, which the library table does not list
 ?  fixed.parsing.Scanner.scanToken  scanToken(state: ScannerState, source: SourceFile, reporter: Reporter): (ScannerState, Token)  parsing/Scanners.scala:254  [method]
     unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
-?  fixed.parsing.Scanner.emit  emit(state: ScannerState, start: Int, len: Int, kind: TokenKind): (ScannerState, Token)  parsing/Scanners.scala:335  [method]
+?  fixed.parsing.Scanner.emit  emit(state: ScannerState, start: Int, len: Int)(inline mk: Span => Token): (ScannerState, Token)  parsing/Scanners.scala:335  [method]
     unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
-?  fixed.parsing.Scanner.single  single(state: ScannerState, start: Int, kind: TokenKind): <inferred>  parsing/Scanners.scala:339  [method]
+    unresolved: inline method: selects copy, no member of fixed.parsing.Scanner.ScannerState (an extension or conversion is not resolved)
+?  fixed.parsing.Scanner.single  single(state: ScannerState, start: Int)(inline mk: Span => Token): <inferred>  parsing/Scanners.scala:339  [method]
     unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
-?  fixed.parsing.Scanner.double  double(state: ScannerState, start: Int, kind: TokenKind): <inferred>  parsing/Scanners.scala:341  [method]
+    unresolved: inline method: calls inline method emit, which selects copy, no member of fixed.parsing.Scanner.ScannerState (an extension or conversion is not resolved)
+?  fixed.parsing.Scanner.double  double(state: ScannerState, start: Int)(inline mk: Span => Token): <inferred>  parsing/Scanners.scala:341  [method]
     unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+    unresolved: inline method: calls inline method emit, which selects copy, no member of fixed.parsing.Scanner.ScannerState (an extension or conversion is not resolved)
 ?  fixed.parsing.Scanner.errorChar  errorChar(state: ScannerState, start: Int, code: DiagCode, msg: String, reporter: Reporter): (ScannerState, Token)  parsing/Scanners.scala:344  [method]
     unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
-?  fixed.parsing.Scanner.closeBracket  closeBracket(state: ScannerState, start: Int, kind: TokenKind, expected: Char, reporter: Reporter): (ScannerState, Token)  parsing/Scanners.scala:356  [method]
+?  fixed.parsing.Scanner.closeBracket  closeBracket(state: ScannerState, start: Int, mk: Span => Token, expected: Char, reporter: Reporter): (ScannerState, Token)  parsing/Scanners.scala:356  [method]
     unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
 ?  fixed.parsing.Scanner.scanIdent  scanIdent(state: ScannerState, source: SourceFile, start: Int): (ScannerState, Token)  parsing/Scanners.scala:380  [method]
     unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
@@ -589,90 +595,89 @@ Generic method / constructor implementation cardinalities
     captures: captureTrivia, reporter, source
 ω  fixed.parsing.Scanner.collectTrivia  collectTrivia(content: String, i: Int, end: Int, acc: List[Trivia]): List[Trivia]  parsing/Scanners.scala:620  [method]
     captures: captureTrivia, reporter, source
-ω  fixed.parsing.Token.lexeme  lexeme: String  parsing/Tokens.scala:72  [method]
-    captures: <receiver fixed.parsing.Token>
-2^64  fixed.parsing.Token.KwAs.<init>  KwAs(at: Span)  parsing/Tokens.scala:74  [constructor]
-2^64  fixed.parsing.Token.KwCap.<init>  KwCap(at: Span)  parsing/Tokens.scala:75  [constructor]
-2^64  fixed.parsing.Token.KwData.<init>  KwData(at: Span)  parsing/Tokens.scala:76  [constructor]
-2^64  fixed.parsing.Token.KwDo.<init>  KwDo(at: Span)  parsing/Tokens.scala:77  [constructor]
-2^64  fixed.parsing.Token.KwEffect.<init>  KwEffect(at: Span)  parsing/Tokens.scala:78  [constructor]
-2^64  fixed.parsing.Token.KwElse.<init>  KwElse(at: Span)  parsing/Tokens.scala:79  [constructor]
-2^64  fixed.parsing.Token.KwExtends.<init>  KwExtends(at: Span)  parsing/Tokens.scala:80  [constructor]
-2^64  fixed.parsing.Token.KwFalse.<init>  KwFalse(at: Span)  parsing/Tokens.scala:81  [constructor]
-2^64  fixed.parsing.Token.KwFn.<init>  KwFn(at: Span)  parsing/Tokens.scala:82  [constructor]
-2^64  fixed.parsing.Token.KwForall.<init>  KwForall(at: Span)  parsing/Tokens.scala:83  [constructor]
-2^64  fixed.parsing.Token.KwHandle.<init>  KwHandle(at: Span)  parsing/Tokens.scala:84  [constructor]
-2^64  fixed.parsing.Token.KwIf.<init>  KwIf(at: Span)  parsing/Tokens.scala:85  [constructor]
-2^64  fixed.parsing.Token.KwImplies.<init>  KwImplies(at: Span)  parsing/Tokens.scala:86  [constructor]
-2^64  fixed.parsing.Token.KwImpossible.<init>  KwImpossible(at: Span)  parsing/Tokens.scala:87  [constructor]
-2^64  fixed.parsing.Token.KwIn.<init>  KwIn(at: Span)  parsing/Tokens.scala:88  [constructor]
-2^64  fixed.parsing.Token.KwIs.<init>  KwIs(at: Span)  parsing/Tokens.scala:89  [constructor]
-2^64  fixed.parsing.Token.KwLet.<init>  KwLet(at: Span)  parsing/Tokens.scala:90  [constructor]
-2^64  fixed.parsing.Token.KwLinear.<init>  KwLinear(at: Span)  parsing/Tokens.scala:91  [constructor]
-2^64  fixed.parsing.Token.KwMatch.<init>  KwMatch(at: Span)  parsing/Tokens.scala:92  [constructor]
-2^64  fixed.parsing.Token.KwMod.<init>  KwMod(at: Span)  parsing/Tokens.scala:93  [constructor]
-2^64  fixed.parsing.Token.KwOf.<init>  KwOf(at: Span)  parsing/Tokens.scala:94  [constructor]
-2^64  fixed.parsing.Token.KwPart.<init>  KwPart(at: Span)  parsing/Tokens.scala:95  [constructor]
-2^64  fixed.parsing.Token.KwProp.<init>  KwProp(at: Span)  parsing/Tokens.scala:96  [constructor]
-2^64  fixed.parsing.Token.KwPub.<init>  KwPub(at: Span)  parsing/Tokens.scala:97  [constructor]
-2^64  fixed.parsing.Token.KwResume.<init>  KwResume(at: Span)  parsing/Tokens.scala:98  [constructor]
-2^64  fixed.parsing.Token.KwReturn.<init>  KwReturn(at: Span)  parsing/Tokens.scala:99  [constructor]
-2^64  fixed.parsing.Token.KwSatisfies.<init>  KwSatisfies(at: Span)  parsing/Tokens.scala:100  [constructor]
-2^64  fixed.parsing.Token.KwSelf.<init>  KwSelf(at: Span)  parsing/Tokens.scala:101  [constructor]
-2^64  fixed.parsing.Token.KwSelfLower.<init>  KwSelfLower(at: Span)  parsing/Tokens.scala:102  [constructor]
-2^64  fixed.parsing.Token.KwSuchThat.<init>  KwSuchThat(at: Span)  parsing/Tokens.scala:103  [constructor]
-2^64  fixed.parsing.Token.KwTrue.<init>  KwTrue(at: Span)  parsing/Tokens.scala:104  [constructor]
-2^64  fixed.parsing.Token.KwType.<init>  KwType(at: Span)  parsing/Tokens.scala:105  [constructor]
-2^64  fixed.parsing.Token.KwUnreachable.<init>  KwUnreachable(at: Span)  parsing/Tokens.scala:106  [constructor]
-2^64  fixed.parsing.Token.KwUse.<init>  KwUse(at: Span)  parsing/Tokens.scala:107  [constructor]
-2^64  fixed.parsing.Token.KwWith.<init>  KwWith(at: Span)  parsing/Tokens.scala:108  [constructor]
-ω  fixed.parsing.Token.LowerIdent.<init>  LowerIdent(at: Span, override val lexeme: String)  parsing/Tokens.scala:109  [constructor]
-ω  fixed.parsing.Token.UpperIdent.<init>  UpperIdent(at: Span, override val lexeme: String)  parsing/Tokens.scala:110  [constructor]
-ω  fixed.parsing.Token.IntLit.<init>  IntLit(at: Span, override val lexeme: String)  parsing/Tokens.scala:111  [constructor]
-ω  fixed.parsing.Token.FloatLit.<init>  FloatLit(at: Span, override val lexeme: String)  parsing/Tokens.scala:112  [constructor]
-ω  fixed.parsing.Token.StringLit.<init>  StringLit(at: Span, override val lexeme: String)  parsing/Tokens.scala:113  [constructor]
-ω  fixed.parsing.Token.CharLit.<init>  CharLit(at: Span, override val lexeme: String)  parsing/Tokens.scala:114  [constructor]
-2^64  fixed.parsing.Token.LParen.<init>  LParen(at: Span)  parsing/Tokens.scala:115  [constructor]
-2^64  fixed.parsing.Token.RParen.<init>  RParen(at: Span)  parsing/Tokens.scala:116  [constructor]
-2^64  fixed.parsing.Token.LBrace.<init>  LBrace(at: Span)  parsing/Tokens.scala:117  [constructor]
-2^64  fixed.parsing.Token.RBrace.<init>  RBrace(at: Span)  parsing/Tokens.scala:118  [constructor]
-2^64  fixed.parsing.Token.LBracket.<init>  LBracket(at: Span)  parsing/Tokens.scala:119  [constructor]
-2^64  fixed.parsing.Token.RBracket.<init>  RBracket(at: Span)  parsing/Tokens.scala:120  [constructor]
-2^64  fixed.parsing.Token.Comma.<init>  Comma(at: Span)  parsing/Tokens.scala:121  [constructor]
-2^64  fixed.parsing.Token.Colon.<init>  Colon(at: Span)  parsing/Tokens.scala:122  [constructor]
-2^64  fixed.parsing.Token.Semicolon.<init>  Semicolon(at: Span)  parsing/Tokens.scala:123  [constructor]
-2^64  fixed.parsing.Token.Dot.<init>  Dot(at: Span)  parsing/Tokens.scala:124  [constructor]
-2^64  fixed.parsing.Token.Eq.<init>  Eq(at: Span)  parsing/Tokens.scala:125  [constructor]
-2^64  fixed.parsing.Token.Arrow.<init>  Arrow(at: Span)  parsing/Tokens.scala:126  [constructor]
-2^64  fixed.parsing.Token.FatArrow.<init>  FatArrow(at: Span)  parsing/Tokens.scala:127  [constructor]
-2^64  fixed.parsing.Token.BackArrow.<init>  BackArrow(at: Span)  parsing/Tokens.scala:128  [constructor]
-2^64  fixed.parsing.Token.Pipe.<init>  Pipe(at: Span)  parsing/Tokens.scala:129  [constructor]
-2^64  fixed.parsing.Token.PipeForward.<init>  PipeForward(at: Span)  parsing/Tokens.scala:130  [constructor]
-2^64  fixed.parsing.Token.Plus.<init>  Plus(at: Span)  parsing/Tokens.scala:131  [constructor]
-2^64  fixed.parsing.Token.Minus.<init>  Minus(at: Span)  parsing/Tokens.scala:132  [constructor]
-2^64  fixed.parsing.Token.Star.<init>  Star(at: Span)  parsing/Tokens.scala:133  [constructor]
-2^64  fixed.parsing.Token.Slash.<init>  Slash(at: Span)  parsing/Tokens.scala:134  [constructor]
-2^64  fixed.parsing.Token.Percent.<init>  Percent(at: Span)  parsing/Tokens.scala:135  [constructor]
-2^64  fixed.parsing.Token.Lt.<init>  Lt(at: Span)  parsing/Tokens.scala:136  [constructor]
-2^64  fixed.parsing.Token.Le.<init>  Le(at: Span)  parsing/Tokens.scala:137  [constructor]
-2^64  fixed.parsing.Token.Gt.<init>  Gt(at: Span)  parsing/Tokens.scala:138  [constructor]
-2^64  fixed.parsing.Token.Ge.<init>  Ge(at: Span)  parsing/Tokens.scala:139  [constructor]
-2^64  fixed.parsing.Token.EqEq.<init>  EqEq(at: Span)  parsing/Tokens.scala:140  [constructor]
-2^64  fixed.parsing.Token.Neq.<init>  Neq(at: Span)  parsing/Tokens.scala:141  [constructor]
-2^64  fixed.parsing.Token.AndAnd.<init>  AndAnd(at: Span)  parsing/Tokens.scala:142  [constructor]
-2^64  fixed.parsing.Token.OrOr.<init>  OrOr(at: Span)  parsing/Tokens.scala:143  [constructor]
-2^64  fixed.parsing.Token.Bang.<init>  Bang(at: Span)  parsing/Tokens.scala:144  [constructor]
-2^64  fixed.parsing.Token.Underscore.<init>  Underscore(at: Span)  parsing/Tokens.scala:145  [constructor]
-2^64  fixed.parsing.Token.At.<init>  At(at: Span)  parsing/Tokens.scala:146  [constructor]
-2^64  fixed.parsing.Token.Newline.<init>  Newline(at: Span)  parsing/Tokens.scala:147  [constructor]
-2^64  fixed.parsing.Token.Indent.<init>  Indent(at: Span)  parsing/Tokens.scala:148  [constructor]
-2^64  fixed.parsing.Token.Dedent.<init>  Dedent(at: Span)  parsing/Tokens.scala:149  [constructor]
-2^64  fixed.parsing.Token.Eof.<init>  Eof(at: Span)  parsing/Tokens.scala:150  [constructor]
-2^64  fixed.parsing.Token.Error.<init>  Error(at: Span)  parsing/Tokens.scala:151  [constructor]
-ω  fixed.parsing.Token.of  of(kind: TokenKind, span: Span, lexeme: String = ""): Token  parsing/Tokens.scala:155  [method]
-ω  fixed.parsing.Tokens.keywords  val keywords: Map[String, TokenKind]  parsing/Tokens.scala:244  [method]
-2^79  fixed.parsing.Tokens.trailingContinuationKinds  val trailingContinuationKinds: Set[TokenKind]  parsing/Tokens.scala:286  [method]
-2^79  fixed.parsing.Tokens.leadingContinuationKinds  val leadingContinuationKinds: Set[TokenKind]  parsing/Tokens.scala:322  [method]
+2^64  fixed.parsing.Token.KwAs.<init>  KwAs(at: Span)  parsing/Tokens.scala:72  [constructor]
+2^64  fixed.parsing.Token.KwCap.<init>  KwCap(at: Span)  parsing/Tokens.scala:73  [constructor]
+2^64  fixed.parsing.Token.KwData.<init>  KwData(at: Span)  parsing/Tokens.scala:74  [constructor]
+2^64  fixed.parsing.Token.KwDo.<init>  KwDo(at: Span)  parsing/Tokens.scala:75  [constructor]
+2^64  fixed.parsing.Token.KwEffect.<init>  KwEffect(at: Span)  parsing/Tokens.scala:76  [constructor]
+2^64  fixed.parsing.Token.KwElse.<init>  KwElse(at: Span)  parsing/Tokens.scala:77  [constructor]
+2^64  fixed.parsing.Token.KwExtends.<init>  KwExtends(at: Span)  parsing/Tokens.scala:78  [constructor]
+2^64  fixed.parsing.Token.KwFalse.<init>  KwFalse(at: Span)  parsing/Tokens.scala:79  [constructor]
+2^64  fixed.parsing.Token.KwFn.<init>  KwFn(at: Span)  parsing/Tokens.scala:80  [constructor]
+2^64  fixed.parsing.Token.KwForall.<init>  KwForall(at: Span)  parsing/Tokens.scala:81  [constructor]
+2^64  fixed.parsing.Token.KwHandle.<init>  KwHandle(at: Span)  parsing/Tokens.scala:82  [constructor]
+2^64  fixed.parsing.Token.KwIf.<init>  KwIf(at: Span)  parsing/Tokens.scala:83  [constructor]
+2^64  fixed.parsing.Token.KwImplies.<init>  KwImplies(at: Span)  parsing/Tokens.scala:84  [constructor]
+2^64  fixed.parsing.Token.KwImpossible.<init>  KwImpossible(at: Span)  parsing/Tokens.scala:85  [constructor]
+2^64  fixed.parsing.Token.KwIn.<init>  KwIn(at: Span)  parsing/Tokens.scala:86  [constructor]
+2^64  fixed.parsing.Token.KwIs.<init>  KwIs(at: Span)  parsing/Tokens.scala:87  [constructor]
+2^64  fixed.parsing.Token.KwLet.<init>  KwLet(at: Span)  parsing/Tokens.scala:88  [constructor]
+2^64  fixed.parsing.Token.KwLinear.<init>  KwLinear(at: Span)  parsing/Tokens.scala:89  [constructor]
+2^64  fixed.parsing.Token.KwMatch.<init>  KwMatch(at: Span)  parsing/Tokens.scala:90  [constructor]
+2^64  fixed.parsing.Token.KwMod.<init>  KwMod(at: Span)  parsing/Tokens.scala:91  [constructor]
+2^64  fixed.parsing.Token.KwOf.<init>  KwOf(at: Span)  parsing/Tokens.scala:92  [constructor]
+2^64  fixed.parsing.Token.KwPart.<init>  KwPart(at: Span)  parsing/Tokens.scala:93  [constructor]
+2^64  fixed.parsing.Token.KwProp.<init>  KwProp(at: Span)  parsing/Tokens.scala:94  [constructor]
+2^64  fixed.parsing.Token.KwPub.<init>  KwPub(at: Span)  parsing/Tokens.scala:95  [constructor]
+2^64  fixed.parsing.Token.KwResume.<init>  KwResume(at: Span)  parsing/Tokens.scala:96  [constructor]
+2^64  fixed.parsing.Token.KwReturn.<init>  KwReturn(at: Span)  parsing/Tokens.scala:97  [constructor]
+2^64  fixed.parsing.Token.KwSatisfies.<init>  KwSatisfies(at: Span)  parsing/Tokens.scala:98  [constructor]
+2^64  fixed.parsing.Token.KwSelf.<init>  KwSelf(at: Span)  parsing/Tokens.scala:99  [constructor]
+2^64  fixed.parsing.Token.KwSelfLower.<init>  KwSelfLower(at: Span)  parsing/Tokens.scala:100  [constructor]
+2^64  fixed.parsing.Token.KwSuchThat.<init>  KwSuchThat(at: Span)  parsing/Tokens.scala:101  [constructor]
+2^64  fixed.parsing.Token.KwTrue.<init>  KwTrue(at: Span)  parsing/Tokens.scala:102  [constructor]
+2^64  fixed.parsing.Token.KwType.<init>  KwType(at: Span)  parsing/Tokens.scala:103  [constructor]
+2^64  fixed.parsing.Token.KwUnreachable.<init>  KwUnreachable(at: Span)  parsing/Tokens.scala:104  [constructor]
+2^64  fixed.parsing.Token.KwUse.<init>  KwUse(at: Span)  parsing/Tokens.scala:105  [constructor]
+2^64  fixed.parsing.Token.KwWith.<init>  KwWith(at: Span)  parsing/Tokens.scala:106  [constructor]
+ω  fixed.parsing.Token.LowerIdent.<init>  LowerIdent(at: Span, text: String)  parsing/Tokens.scala:107  [constructor]
+ω  fixed.parsing.Token.UpperIdent.<init>  UpperIdent(at: Span, text: String)  parsing/Tokens.scala:108  [constructor]
+ω  fixed.parsing.Token.IntLit.<init>  IntLit(at: Span, text: String)  parsing/Tokens.scala:109  [constructor]
+ω  fixed.parsing.Token.FloatLit.<init>  FloatLit(at: Span, text: String)  parsing/Tokens.scala:110  [constructor]
+ω  fixed.parsing.Token.StringLit.<init>  StringLit(at: Span, text: String)  parsing/Tokens.scala:111  [constructor]
+ω  fixed.parsing.Token.CharLit.<init>  CharLit(at: Span, text: String)  parsing/Tokens.scala:112  [constructor]
+2^64  fixed.parsing.Token.LParen.<init>  LParen(at: Span)  parsing/Tokens.scala:113  [constructor]
+2^64  fixed.parsing.Token.RParen.<init>  RParen(at: Span)  parsing/Tokens.scala:114  [constructor]
+2^64  fixed.parsing.Token.LBrace.<init>  LBrace(at: Span)  parsing/Tokens.scala:115  [constructor]
+2^64  fixed.parsing.Token.RBrace.<init>  RBrace(at: Span)  parsing/Tokens.scala:116  [constructor]
+2^64  fixed.parsing.Token.LBracket.<init>  LBracket(at: Span)  parsing/Tokens.scala:117  [constructor]
+2^64  fixed.parsing.Token.RBracket.<init>  RBracket(at: Span)  parsing/Tokens.scala:118  [constructor]
+2^64  fixed.parsing.Token.Comma.<init>  Comma(at: Span)  parsing/Tokens.scala:119  [constructor]
+2^64  fixed.parsing.Token.Colon.<init>  Colon(at: Span)  parsing/Tokens.scala:120  [constructor]
+2^64  fixed.parsing.Token.Semicolon.<init>  Semicolon(at: Span)  parsing/Tokens.scala:121  [constructor]
+2^64  fixed.parsing.Token.Dot.<init>  Dot(at: Span)  parsing/Tokens.scala:122  [constructor]
+2^64  fixed.parsing.Token.Eq.<init>  Eq(at: Span)  parsing/Tokens.scala:123  [constructor]
+2^64  fixed.parsing.Token.Arrow.<init>  Arrow(at: Span)  parsing/Tokens.scala:124  [constructor]
+2^64  fixed.parsing.Token.FatArrow.<init>  FatArrow(at: Span)  parsing/Tokens.scala:125  [constructor]
+2^64  fixed.parsing.Token.BackArrow.<init>  BackArrow(at: Span)  parsing/Tokens.scala:126  [constructor]
+2^64  fixed.parsing.Token.Pipe.<init>  Pipe(at: Span)  parsing/Tokens.scala:127  [constructor]
+2^64  fixed.parsing.Token.PipeForward.<init>  PipeForward(at: Span)  parsing/Tokens.scala:128  [constructor]
+2^64  fixed.parsing.Token.Plus.<init>  Plus(at: Span)  parsing/Tokens.scala:129  [constructor]
+2^64  fixed.parsing.Token.Minus.<init>  Minus(at: Span)  parsing/Tokens.scala:130  [constructor]
+2^64  fixed.parsing.Token.Star.<init>  Star(at: Span)  parsing/Tokens.scala:131  [constructor]
+2^64  fixed.parsing.Token.Slash.<init>  Slash(at: Span)  parsing/Tokens.scala:132  [constructor]
+2^64  fixed.parsing.Token.Percent.<init>  Percent(at: Span)  parsing/Tokens.scala:133  [constructor]
+2^64  fixed.parsing.Token.Lt.<init>  Lt(at: Span)  parsing/Tokens.scala:134  [constructor]
+2^64  fixed.parsing.Token.Le.<init>  Le(at: Span)  parsing/Tokens.scala:135  [constructor]
+2^64  fixed.parsing.Token.Gt.<init>  Gt(at: Span)  parsing/Tokens.scala:136  [constructor]
+2^64  fixed.parsing.Token.Ge.<init>  Ge(at: Span)  parsing/Tokens.scala:137  [constructor]
+2^64  fixed.parsing.Token.EqEq.<init>  EqEq(at: Span)  parsing/Tokens.scala:138  [constructor]
+2^64  fixed.parsing.Token.Neq.<init>  Neq(at: Span)  parsing/Tokens.scala:139  [constructor]
+2^64  fixed.parsing.Token.AndAnd.<init>  AndAnd(at: Span)  parsing/Tokens.scala:140  [constructor]
+2^64  fixed.parsing.Token.OrOr.<init>  OrOr(at: Span)  parsing/Tokens.scala:141  [constructor]
+2^64  fixed.parsing.Token.Bang.<init>  Bang(at: Span)  parsing/Tokens.scala:142  [constructor]
+2^64  fixed.parsing.Token.Underscore.<init>  Underscore(at: Span)  parsing/Tokens.scala:143  [constructor]
+2^64  fixed.parsing.Token.At.<init>  At(at: Span)  parsing/Tokens.scala:144  [constructor]
+2^64  fixed.parsing.Token.Newline.<init>  Newline(at: Span)  parsing/Tokens.scala:145  [constructor]
+2^64  fixed.parsing.Token.Indent.<init>  Indent(at: Span)  parsing/Tokens.scala:146  [constructor]
+2^64  fixed.parsing.Token.Dedent.<init>  Dedent(at: Span)  parsing/Tokens.scala:147  [constructor]
+2^64  fixed.parsing.Token.Eof.<init>  Eof(at: Span)  parsing/Tokens.scala:148  [constructor]
+2^64  fixed.parsing.Token.Error.<init>  Error(at: Span)  parsing/Tokens.scala:149  [constructor]
+ω  fixed.parsing.Token.of  of(kind: TokenKind, span: Span, lexeme: String = ""): Token  parsing/Tokens.scala:153  [method]
+ω  fixed.parsing.Tokens.keywordTokens  val keywordTokens: Map[String, Span => Token]  parsing/Tokens.scala:245  [method]
+ω  fixed.parsing.Tokens.keywords  val keywords: Map[String, TokenKind]  parsing/Tokens.scala:284  [method]
+2^79  fixed.parsing.Tokens.trailingContinuationKinds  val trailingContinuationKinds: Set[TokenKind]  parsing/Tokens.scala:290  [method]
+2^79  fixed.parsing.Tokens.leadingContinuationKinds  val leadingContinuationKinds: Set[TokenKind]  parsing/Tokens.scala:326  [method]
 ω  fixed.parsing.Trivia.LineComment.<init>  LineComment(span: Span, text: String)  parsing/TriviaTable.scala:17  [constructor]
 2^96  fixed.parsing.Trivia.BlankLines.<init>  BlankLines(span: Span, count: Int)  parsing/TriviaTable.scala:18  [constructor]
 ω  fixed.parsing.TriviaTable.<init>  TriviaTable(private val byTokenStart: Map[Int, List[Trivia]])  parsing/TriviaTable.scala:25  [constructor]
@@ -740,7 +745,7 @@ Stored-value estimates (constructor inputs; `?` = unresolved)
 ?            fixed.parsing.Parser.Parsed[A]             alias     parsing/Parsers.scala:132  depends on its instantiation (A)
 ?            fixed.parsing.Parser.Rule[A]               alias     parsing/Parsers.scala:135  depends on its instantiation (A)
 ?            fixed.parsing.Scanner.ScannerState         class     parsing/Scanners.scala:18  unresolved: Queue (imported from scala.collection.immutable.Queue, not supplied)
-6ω + ≤2^135  fixed.parsing.Token                        enum      parsing/Tokens.scala:69
+6ω + ≤2^135  fixed.parsing.Token                        enum      parsing/Tokens.scala:70
 3ω           fixed.ast.Trees.FnLike                     abstract  ast/Trees.scala:63
 3ω           fixed.ast.Trees.SatisfiesMapping           abstract  ast/Trees.scala:197
 2ω + ≤2^64   fixed.parsing.Parser.Paren                 enum      parsing/Parsers.scala:636
@@ -870,8 +875,8 @@ Stored-value estimates (constructor inputs; `?` = unresolved)
 1            fixed.parsing.Parser.Opener                object    parsing/Parsers.scala:1203
 1            fixed.parsing.Parser.UnaryPrefix           object    parsing/Parsers.scala:882
 1            fixed.parsing.Scanner                      object    parsing/Scanners.scala:14
-1            fixed.parsing.Token                        object    parsing/Tokens.scala:153
-1            fixed.parsing.Tokens                       object    parsing/Tokens.scala:238
+1            fixed.parsing.Token                        object    parsing/Tokens.scala:151
+1            fixed.parsing.Tokens                       object    parsing/Tokens.scala:236
 1            fixed.parsing.TriviaTable                  object    parsing/TriviaTable.scala:35
 1            fixed.util.SourceFile                      object    util/SourceFile.scala:45
 1            fixed.util.Span                            object    util/SourceFile.scala:63

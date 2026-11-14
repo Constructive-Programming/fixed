@@ -61,94 +61,92 @@ end TokenKind
   * literals (`LowerIdent`, `UpperIdent`, `IntLit`, `FloatLit`, `StringLit`,
   * `CharLit`) carry their source text.
   *
-  * `span` and `kind` live in the base class: every case fixes its own
-  * `TokenKind` (callers never pass one), and hot-path reads are plain
-  * field loads instead of calls dispatched over every token case.
+  * `span`, `kind` and `lexeme` live in the base class: every case fixes its
+  * own `TokenKind`, and cases without text fix `lexeme` to `""` (callers
+  * cannot give them one). Hot-path reads stay plain field loads instead of
+  * calls dispatched over every token case.
   * `TokenSuite` pins that each case reports its own kind.
   */
-enum Token(val span: Span, val kind: TokenKind):
+enum Token(val span: Span, val kind: TokenKind, val lexeme: String):
 
-  /** Source text; empty for tokens that carry none. */
-  def lexeme: String = ""
-
-  case KwAs(at: Span) extends Token(at, TokenKind.KwAs)
-  case KwCap(at: Span) extends Token(at, TokenKind.KwCap)
-  case KwData(at: Span) extends Token(at, TokenKind.KwData)
-  case KwDo(at: Span) extends Token(at, TokenKind.KwDo)
-  case KwEffect(at: Span) extends Token(at, TokenKind.KwEffect)
-  case KwElse(at: Span) extends Token(at, TokenKind.KwElse)
-  case KwExtends(at: Span) extends Token(at, TokenKind.KwExtends)
-  case KwFalse(at: Span) extends Token(at, TokenKind.KwFalse)
-  case KwFn(at: Span) extends Token(at, TokenKind.KwFn)
-  case KwForall(at: Span) extends Token(at, TokenKind.KwForall)
-  case KwHandle(at: Span) extends Token(at, TokenKind.KwHandle)
-  case KwIf(at: Span) extends Token(at, TokenKind.KwIf)
-  case KwImplies(at: Span) extends Token(at, TokenKind.KwImplies)
-  case KwImpossible(at: Span) extends Token(at, TokenKind.KwImpossible)
-  case KwIn(at: Span) extends Token(at, TokenKind.KwIn)
-  case KwIs(at: Span) extends Token(at, TokenKind.KwIs)
-  case KwLet(at: Span) extends Token(at, TokenKind.KwLet)
-  case KwLinear(at: Span) extends Token(at, TokenKind.KwLinear)
-  case KwMatch(at: Span) extends Token(at, TokenKind.KwMatch)
-  case KwMod(at: Span) extends Token(at, TokenKind.KwMod)
-  case KwOf(at: Span) extends Token(at, TokenKind.KwOf)
-  case KwPart(at: Span) extends Token(at, TokenKind.KwPart)
-  case KwProp(at: Span) extends Token(at, TokenKind.KwProp)
-  case KwPub(at: Span) extends Token(at, TokenKind.KwPub)
-  case KwResume(at: Span) extends Token(at, TokenKind.KwResume)
-  case KwReturn(at: Span) extends Token(at, TokenKind.KwReturn)
-  case KwSatisfies(at: Span) extends Token(at, TokenKind.KwSatisfies)
-  case KwSelf(at: Span) extends Token(at, TokenKind.KwSelf)
-  case KwSelfLower(at: Span) extends Token(at, TokenKind.KwSelfLower)
-  case KwSuchThat(at: Span) extends Token(at, TokenKind.KwSuchThat)
-  case KwTrue(at: Span) extends Token(at, TokenKind.KwTrue)
-  case KwType(at: Span) extends Token(at, TokenKind.KwType)
-  case KwUnreachable(at: Span) extends Token(at, TokenKind.KwUnreachable)
-  case KwUse(at: Span) extends Token(at, TokenKind.KwUse)
-  case KwWith(at: Span) extends Token(at, TokenKind.KwWith)
-  case LowerIdent(at: Span, override val lexeme: String) extends Token(at, TokenKind.LowerIdent)
-  case UpperIdent(at: Span, override val lexeme: String) extends Token(at, TokenKind.UpperIdent)
-  case IntLit(at: Span, override val lexeme: String) extends Token(at, TokenKind.IntLit)
-  case FloatLit(at: Span, override val lexeme: String) extends Token(at, TokenKind.FloatLit)
-  case StringLit(at: Span, override val lexeme: String) extends Token(at, TokenKind.StringLit)
-  case CharLit(at: Span, override val lexeme: String) extends Token(at, TokenKind.CharLit)
-  case LParen(at: Span) extends Token(at, TokenKind.LParen)
-  case RParen(at: Span) extends Token(at, TokenKind.RParen)
-  case LBrace(at: Span) extends Token(at, TokenKind.LBrace)
-  case RBrace(at: Span) extends Token(at, TokenKind.RBrace)
-  case LBracket(at: Span) extends Token(at, TokenKind.LBracket)
-  case RBracket(at: Span) extends Token(at, TokenKind.RBracket)
-  case Comma(at: Span) extends Token(at, TokenKind.Comma)
-  case Colon(at: Span) extends Token(at, TokenKind.Colon)
-  case Semicolon(at: Span) extends Token(at, TokenKind.Semicolon)
-  case Dot(at: Span) extends Token(at, TokenKind.Dot)
-  case Eq(at: Span) extends Token(at, TokenKind.Eq)
-  case Arrow(at: Span) extends Token(at, TokenKind.Arrow)
-  case FatArrow(at: Span) extends Token(at, TokenKind.FatArrow)
-  case BackArrow(at: Span) extends Token(at, TokenKind.BackArrow)
-  case Pipe(at: Span) extends Token(at, TokenKind.Pipe)
-  case PipeForward(at: Span) extends Token(at, TokenKind.PipeForward)
-  case Plus(at: Span) extends Token(at, TokenKind.Plus)
-  case Minus(at: Span) extends Token(at, TokenKind.Minus)
-  case Star(at: Span) extends Token(at, TokenKind.Star)
-  case Slash(at: Span) extends Token(at, TokenKind.Slash)
-  case Percent(at: Span) extends Token(at, TokenKind.Percent)
-  case Lt(at: Span) extends Token(at, TokenKind.Lt)
-  case Le(at: Span) extends Token(at, TokenKind.Le)
-  case Gt(at: Span) extends Token(at, TokenKind.Gt)
-  case Ge(at: Span) extends Token(at, TokenKind.Ge)
-  case EqEq(at: Span) extends Token(at, TokenKind.EqEq)
-  case Neq(at: Span) extends Token(at, TokenKind.Neq)
-  case AndAnd(at: Span) extends Token(at, TokenKind.AndAnd)
-  case OrOr(at: Span) extends Token(at, TokenKind.OrOr)
-  case Bang(at: Span) extends Token(at, TokenKind.Bang)
-  case Underscore(at: Span) extends Token(at, TokenKind.Underscore)
-  case At(at: Span) extends Token(at, TokenKind.At)
-  case Newline(at: Span) extends Token(at, TokenKind.Newline)
-  case Indent(at: Span) extends Token(at, TokenKind.Indent)
-  case Dedent(at: Span) extends Token(at, TokenKind.Dedent)
-  case Eof(at: Span) extends Token(at, TokenKind.Eof)
-  case Error(at: Span) extends Token(at, TokenKind.Error)
+  case KwAs(at: Span) extends Token(at, TokenKind.KwAs, "")
+  case KwCap(at: Span) extends Token(at, TokenKind.KwCap, "")
+  case KwData(at: Span) extends Token(at, TokenKind.KwData, "")
+  case KwDo(at: Span) extends Token(at, TokenKind.KwDo, "")
+  case KwEffect(at: Span) extends Token(at, TokenKind.KwEffect, "")
+  case KwElse(at: Span) extends Token(at, TokenKind.KwElse, "")
+  case KwExtends(at: Span) extends Token(at, TokenKind.KwExtends, "")
+  case KwFalse(at: Span) extends Token(at, TokenKind.KwFalse, "")
+  case KwFn(at: Span) extends Token(at, TokenKind.KwFn, "")
+  case KwForall(at: Span) extends Token(at, TokenKind.KwForall, "")
+  case KwHandle(at: Span) extends Token(at, TokenKind.KwHandle, "")
+  case KwIf(at: Span) extends Token(at, TokenKind.KwIf, "")
+  case KwImplies(at: Span) extends Token(at, TokenKind.KwImplies, "")
+  case KwImpossible(at: Span) extends Token(at, TokenKind.KwImpossible, "")
+  case KwIn(at: Span) extends Token(at, TokenKind.KwIn, "")
+  case KwIs(at: Span) extends Token(at, TokenKind.KwIs, "")
+  case KwLet(at: Span) extends Token(at, TokenKind.KwLet, "")
+  case KwLinear(at: Span) extends Token(at, TokenKind.KwLinear, "")
+  case KwMatch(at: Span) extends Token(at, TokenKind.KwMatch, "")
+  case KwMod(at: Span) extends Token(at, TokenKind.KwMod, "")
+  case KwOf(at: Span) extends Token(at, TokenKind.KwOf, "")
+  case KwPart(at: Span) extends Token(at, TokenKind.KwPart, "")
+  case KwProp(at: Span) extends Token(at, TokenKind.KwProp, "")
+  case KwPub(at: Span) extends Token(at, TokenKind.KwPub, "")
+  case KwResume(at: Span) extends Token(at, TokenKind.KwResume, "")
+  case KwReturn(at: Span) extends Token(at, TokenKind.KwReturn, "")
+  case KwSatisfies(at: Span) extends Token(at, TokenKind.KwSatisfies, "")
+  case KwSelf(at: Span) extends Token(at, TokenKind.KwSelf, "")
+  case KwSelfLower(at: Span) extends Token(at, TokenKind.KwSelfLower, "")
+  case KwSuchThat(at: Span) extends Token(at, TokenKind.KwSuchThat, "")
+  case KwTrue(at: Span) extends Token(at, TokenKind.KwTrue, "")
+  case KwType(at: Span) extends Token(at, TokenKind.KwType, "")
+  case KwUnreachable(at: Span) extends Token(at, TokenKind.KwUnreachable, "")
+  case KwUse(at: Span) extends Token(at, TokenKind.KwUse, "")
+  case KwWith(at: Span) extends Token(at, TokenKind.KwWith, "")
+  case LowerIdent(at: Span, text: String) extends Token(at, TokenKind.LowerIdent, text)
+  case UpperIdent(at: Span, text: String) extends Token(at, TokenKind.UpperIdent, text)
+  case IntLit(at: Span, text: String) extends Token(at, TokenKind.IntLit, text)
+  case FloatLit(at: Span, text: String) extends Token(at, TokenKind.FloatLit, text)
+  case StringLit(at: Span, text: String) extends Token(at, TokenKind.StringLit, text)
+  case CharLit(at: Span, text: String) extends Token(at, TokenKind.CharLit, text)
+  case LParen(at: Span) extends Token(at, TokenKind.LParen, "")
+  case RParen(at: Span) extends Token(at, TokenKind.RParen, "")
+  case LBrace(at: Span) extends Token(at, TokenKind.LBrace, "")
+  case RBrace(at: Span) extends Token(at, TokenKind.RBrace, "")
+  case LBracket(at: Span) extends Token(at, TokenKind.LBracket, "")
+  case RBracket(at: Span) extends Token(at, TokenKind.RBracket, "")
+  case Comma(at: Span) extends Token(at, TokenKind.Comma, "")
+  case Colon(at: Span) extends Token(at, TokenKind.Colon, "")
+  case Semicolon(at: Span) extends Token(at, TokenKind.Semicolon, "")
+  case Dot(at: Span) extends Token(at, TokenKind.Dot, "")
+  case Eq(at: Span) extends Token(at, TokenKind.Eq, "")
+  case Arrow(at: Span) extends Token(at, TokenKind.Arrow, "")
+  case FatArrow(at: Span) extends Token(at, TokenKind.FatArrow, "")
+  case BackArrow(at: Span) extends Token(at, TokenKind.BackArrow, "")
+  case Pipe(at: Span) extends Token(at, TokenKind.Pipe, "")
+  case PipeForward(at: Span) extends Token(at, TokenKind.PipeForward, "")
+  case Plus(at: Span) extends Token(at, TokenKind.Plus, "")
+  case Minus(at: Span) extends Token(at, TokenKind.Minus, "")
+  case Star(at: Span) extends Token(at, TokenKind.Star, "")
+  case Slash(at: Span) extends Token(at, TokenKind.Slash, "")
+  case Percent(at: Span) extends Token(at, TokenKind.Percent, "")
+  case Lt(at: Span) extends Token(at, TokenKind.Lt, "")
+  case Le(at: Span) extends Token(at, TokenKind.Le, "")
+  case Gt(at: Span) extends Token(at, TokenKind.Gt, "")
+  case Ge(at: Span) extends Token(at, TokenKind.Ge, "")
+  case EqEq(at: Span) extends Token(at, TokenKind.EqEq, "")
+  case Neq(at: Span) extends Token(at, TokenKind.Neq, "")
+  case AndAnd(at: Span) extends Token(at, TokenKind.AndAnd, "")
+  case OrOr(at: Span) extends Token(at, TokenKind.OrOr, "")
+  case Bang(at: Span) extends Token(at, TokenKind.Bang, "")
+  case Underscore(at: Span) extends Token(at, TokenKind.Underscore, "")
+  case At(at: Span) extends Token(at, TokenKind.At, "")
+  case Newline(at: Span) extends Token(at, TokenKind.Newline, "")
+  case Indent(at: Span) extends Token(at, TokenKind.Indent, "")
+  case Dedent(at: Span) extends Token(at, TokenKind.Dedent, "")
+  case Eof(at: Span) extends Token(at, TokenKind.Eof, "")
+  case Error(at: Span) extends Token(at, TokenKind.Error, "")
 
 object Token:
   /** Build the token of `kind`. `lexeme` is kept only by kinds that carry text. */
@@ -241,43 +239,49 @@ object Tokens:
     * this table to decide if a `LowerIdent`/`UpperIdent` is actually a
     * keyword.
     */
-  val keywords: Map[String, TokenKind] = Map(
-    "as" -> TokenKind.KwAs,
-    "cap" -> TokenKind.KwCap,
-    "data" -> TokenKind.KwData,
-    "do" -> TokenKind.KwDo,
-    "effect" -> TokenKind.KwEffect,
-    "else" -> TokenKind.KwElse,
-    "extends" -> TokenKind.KwExtends,
-    "false" -> TokenKind.KwFalse,
-    "fn" -> TokenKind.KwFn,
-    "forall" -> TokenKind.KwForall,
-    "handle" -> TokenKind.KwHandle,
-    "if" -> TokenKind.KwIf,
-    "implies" -> TokenKind.KwImplies,
-    "impossible" -> TokenKind.KwImpossible,
-    "in" -> TokenKind.KwIn,
-    "is" -> TokenKind.KwIs,
-    "let" -> TokenKind.KwLet,
-    "linear" -> TokenKind.KwLinear,
-    "match" -> TokenKind.KwMatch,
-    "mod" -> TokenKind.KwMod,
-    "of" -> TokenKind.KwOf,
-    "Part" -> TokenKind.KwPart,
-    "prop" -> TokenKind.KwProp,
-    "pub" -> TokenKind.KwPub,
-    "resume" -> TokenKind.KwResume,
-    "return" -> TokenKind.KwReturn,
-    "satisfies" -> TokenKind.KwSatisfies,
-    "Self" -> TokenKind.KwSelf,
-    "self" -> TokenKind.KwSelfLower,
-    "suchThat" -> TokenKind.KwSuchThat,
-    "true" -> TokenKind.KwTrue,
-    "type" -> TokenKind.KwType,
-    "unreachable" -> TokenKind.KwUnreachable,
-    "use" -> TokenKind.KwUse,
-    "with" -> TokenKind.KwWith
+  /** Keyword spelling -> token constructor, so the scanner builds keyword
+    * tokens directly rather than dispatching through `Token.of`.
+    */
+  val keywordTokens: Map[String, Span => Token] = Map(
+    "as" -> (Token.KwAs(_)),
+    "cap" -> (Token.KwCap(_)),
+    "data" -> (Token.KwData(_)),
+    "do" -> (Token.KwDo(_)),
+    "effect" -> (Token.KwEffect(_)),
+    "else" -> (Token.KwElse(_)),
+    "extends" -> (Token.KwExtends(_)),
+    "false" -> (Token.KwFalse(_)),
+    "fn" -> (Token.KwFn(_)),
+    "forall" -> (Token.KwForall(_)),
+    "handle" -> (Token.KwHandle(_)),
+    "if" -> (Token.KwIf(_)),
+    "implies" -> (Token.KwImplies(_)),
+    "impossible" -> (Token.KwImpossible(_)),
+    "in" -> (Token.KwIn(_)),
+    "is" -> (Token.KwIs(_)),
+    "let" -> (Token.KwLet(_)),
+    "linear" -> (Token.KwLinear(_)),
+    "match" -> (Token.KwMatch(_)),
+    "mod" -> (Token.KwMod(_)),
+    "of" -> (Token.KwOf(_)),
+    "Part" -> (Token.KwPart(_)),
+    "prop" -> (Token.KwProp(_)),
+    "pub" -> (Token.KwPub(_)),
+    "resume" -> (Token.KwResume(_)),
+    "return" -> (Token.KwReturn(_)),
+    "satisfies" -> (Token.KwSatisfies(_)),
+    "Self" -> (Token.KwSelf(_)),
+    "self" -> (Token.KwSelfLower(_)),
+    "suchThat" -> (Token.KwSuchThat(_)),
+    "true" -> (Token.KwTrue(_)),
+    "type" -> (Token.KwType(_)),
+    "unreachable" -> (Token.KwUnreachable(_)),
+    "use" -> (Token.KwUse(_)),
+    "with" -> (Token.KwWith(_))
   )
+
+  /** Keyword spelling -> kind, derived from `keywordTokens`. */
+  val keywords: Map[String, TokenKind] = keywordTokens.view.mapValues(_(Span(0, 0)).kind).toMap
 
   /** Token kinds that, when appearing at the end of a logical line, suppress
     * the next physical newline (trailing line-continuation per
