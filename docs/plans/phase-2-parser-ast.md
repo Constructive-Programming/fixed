@@ -290,7 +290,7 @@ Each node carries:
 | `WithClause` | `with R` | Effect row attached to fn signature/lambda. |
 | `EffectRow` | `EffectRow` | `+`-composed effects. |
 | `EffectBound` | `EffectBound` | `E of OfArg?`. |
-| `HandlerArm` | `HandlerArm` | Op-name dispatch + `return(p) =>` arm. |
+| `OperationClause`, `ReturnClause` | `HandlerClause` | Op-name dispatch + `return(p) =>` clause. |
 
 ### 4.7 Untyped vs typed phasing
 

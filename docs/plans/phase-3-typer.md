@@ -169,7 +169,7 @@ This makes `Map[Tree, Type]` work as identity-equivalent: two structurally-equal
 | `BinOp`, `UnaryOp`, `Pipe`, `Apply`, `MethodCall`, `StaticCall` | `span` covers the operator and its operands — distinct call sites have distinct ranges. |
 | `IfExpr`, `MatchExpr`, `LetExpr`, `LambdaExpr`, `Block`, `DoExpr`, `HandleExpr`, `ForallExpr`, `Implies` | Distinct keyword positions → distinct spans. |
 | `TupleExpr`, `ListExpr`, `StructLit` | Distinct opening bracket positions. |
-| `MatchArm`, `HandlerArm`, `ReturnArm`, `DoBind`, `FnParam`, `FieldDecl`, `DataVariant`, etc. | Each arm/binding/field/variant is at a distinct position within its parent. |
+| `MatchCase`, `OperationClause`, `ReturnClause`, `DoBind`, `FnParam`, `FieldDecl`, `DataVariant`, etc. | Each arm/binding/field/variant is at a distinct position within its parent. |
 | Top-level decls (`FnDecl`, `CapDecl`, `DataDecl`, `EffectDecl`, `TypeAlias`, `SatisfiesDecl`, `UseDecl`, `ModDecl`) | Distinct decl positions. |
 | Recovery nodes (`Trees.Error`, `Trees.Missing`) | The parser advances at least one token per recovery emission (per `syncToAnchors` semantics), so two recovery nodes never share a position. The `Missing.expected` string differs between distinct missing-production sites; `Error.recovered` differs by content. |
 
@@ -586,7 +586,7 @@ The Namer does **not** look at expression bodies. It does look at signatures —
 
 ### 5.2 Typer (M3–M5)
 
-Per dotc, one `typedX` per node kind. Four dispatchers — one each for expressions, patterns, type expressions, declarations — keep each routine focused on its category. Trees that are arms or sub-bindings (MatchArm, HandlerArm, ReturnArm, DoBind, FnParam, FieldDecl, DataVariant, ConstructorMapping, ImpossibleMapping, InstanceMethod, StaticMethod, PropDecl) are handled directly by the parent's `typedX` rather than as top-level dispatch — they have no meaning outside their parent.
+Per dotc, one `typedX` per node kind. Four dispatchers — one each for expressions, patterns, type expressions, declarations — keep each routine focused on its category. Trees that are arms or sub-bindings (MatchCase, OperationClause, ReturnClause, DoBind, FnParam, FieldDecl, DataVariant, ConstructorMapping, ImpossibleMapping, InstanceMethod, StaticMethod, PropDecl) are handled directly by the parent's `typedX` rather than as top-level dispatch — they have no meaning outside their parent.
 
 ```scala
 // typer/Typer.scala — expression dispatcher

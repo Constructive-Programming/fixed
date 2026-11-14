@@ -179,7 +179,7 @@ private[parsing] object TypeParsers:
   /** CapType ::= "cap" CapReturnSpec?
     * CapReturnSpec ::= "of" OfArg
     *                 | "extends" CapBound ("+" CapBound)*
-    * The grammar makes the two arms exclusive (spec/syntax_grammar.ebnf
+    * The grammar makes the two alternatives exclusive (spec/syntax_grammar.ebnf
     * §CapReturnSpec): a `cap` is followed by either `of …` or
     * `extends …`, never both — so `Option[CapReturnSpec]` fits.
     * After `cap` in type position: `of OfArg`, `extends CapBound (+ CapBound)*`, or bare.

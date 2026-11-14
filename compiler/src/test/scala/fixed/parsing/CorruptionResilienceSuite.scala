@@ -28,7 +28,7 @@ class CorruptionResilienceSuite extends FunSuite:
   private val PerParseTimeoutMs = 2000L
   private val JunkChars: Vector[Char] = Vector('@', ';', '}', '?', '$', '\\')
 
-  /** Target 1; ~50 observed today. Tighten as recovery reaches patterns, arms and props. */
+  /** Target 1; ~50 observed today. Tighten as recovery reaches patterns, match cases and props. */
   private val MaxItemDrift = 80
 
   private val ExampleDir = "examples"

@@ -205,28 +205,28 @@ object Trees:
 
   final case class MatchExpr(
       scrutinee: Tree,
-      matchArms: List[MatchArm],
+      cases: List[MatchCase],
       span: Span
   ) extends Tree
 
-  final case class MatchArm(
+  final case class MatchCase(
       pattern: Tree,
       guard: Option[Tree],
       body: Tree,
       span: Span
   ) extends Tree
 
-  /** A `handle` expression. The optional `return(p) => …` arm is
-    * stored separately from the effect-op arms — well-formed input
+  /** A `handle` expression. The optional `return(p) => …` clause is
+    * stored separately from the operation clauses — well-formed input
     * has at most one. */
   final case class HandleExpr(
       subject: Tree,
-      handlerArms: List[HandlerArm],
-      returnArm: Option[ReturnArm],
+      operationClauses: List[OperationClause],
+      returnClause: Option[ReturnClause],
       span: Span
   ) extends Tree
 
-  final case class HandlerArm(
+  final case class OperationClause(
       effect: String,
       op: String,
       params: List[Tree],
@@ -234,7 +234,7 @@ object Trees:
       span: Span
   ) extends Tree
 
-  final case class ReturnArm(param: Tree, body: Tree, span: Span) extends Tree
+  final case class ReturnClause(param: Tree, body: Tree, span: Span) extends Tree
 
   final case class DoExpr(stmts: List[Tree], span: Span) extends Tree
 

@@ -1,7 +1,7 @@
 /*
 rule = NoGenericWords
 NoGenericWords.words = [grain, leg, arm, stuff, helper, thing]
-NoGenericWords.allowedNames = [MatchArm]
+NoGenericWords.allowedNames = [SideArm]
  */
 package fix
 
@@ -20,5 +20,5 @@ object NoGenericWordsTest:
   val harmonic = 5
   val legal = 6
   val stuffed = 7
-  final case class MatchArm(x: Int)
+  final case class SideArm(x: Int)
   val selected = grainSelection()

@@ -144,9 +144,9 @@ class ParserDeclSuite extends FunSuite with ParserTestSupport:
       case Trees.CompilationUnit(List(fn: Trees.FnDecl), _) =>
         fn.body match
           case Some(m: Trees.MatchExpr) =>
-            assertEquals(m.matchArms.length, 2)
+            assertEquals(m.cases.length, 2)
             assertEquals(
-              m.matchArms.map(_.pattern).collect {
+              m.cases.map(_.pattern).collect {
                 case Trees.DataVariantPat(Some(q), v, _, _) => s"$q.$v"
               },
               List("Direction.North", "Direction.South")
@@ -154,7 +154,7 @@ class ParserDeclSuite extends FunSuite with ParserTestSupport:
           case other => fail(s"expected MatchExpr body, got $other")
       case other => fail(s"expected FnDecl, got $other")
 
-  test("M4.4: wildcard arm + constructor arm"):
+  test("M4.4: wildcard case + constructor case"):
     val src = SourceFile.fromString(
       "<test>",
       """fn f(x: Maybe of u64) -> u64 = match x:
@@ -166,9 +166,9 @@ class ParserDeclSuite extends FunSuite with ParserTestSupport:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
-        m.matchArms.last.pattern match
+        m.cases.last.pattern match
           case _: Trees.WildcardPat => ()
-          case other                => fail(s"expected wildcard last arm, got $other")
+          case other                => fail(s"expected wildcard last case, got $other")
       case other => fail(s"expected FnDecl with MatchExpr body, got $other")
 
   test("M4.4: or-pattern flattens left-associatively"):
@@ -183,8 +183,8 @@ class ParserDeclSuite extends FunSuite with ParserTestSupport:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
-        /** First arm should be OrPat(OrPat(N, S), E). */
-        m.matchArms.head.pattern match
+        /** First case should be OrPat(OrPat(N, S), E). */
+        m.cases.head.pattern match
           case Trees.OrPat(Trees.OrPat(_, _, _), _, _) => ()
           case other                                   => fail(s"expected nested OrPat, got $other")
       case other => fail(s"expected MatchExpr, got $other")
@@ -201,10 +201,10 @@ class ParserDeclSuite extends FunSuite with ParserTestSupport:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
-        assert(m.matchArms.head.guard.isDefined, "expected guard on first arm")
+        assert(m.cases.head.guard.isDefined, "expected guard on first case")
       case other => fail(s"expected MatchExpr, got $other")
 
-  test("M4.4: arm with multi-line block body"):
+  test("M4.4: case with multi-line block body"):
     val src = SourceFile.fromString(
       "<test>",
       """fn f(x: Direction) -> u64 = match x:
@@ -218,9 +218,9 @@ class ParserDeclSuite extends FunSuite with ParserTestSupport:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
-        m.matchArms.head.body match
+        m.cases.head.body match
           case Trees.Block(stmts, _) => assert(stmts.length >= 2)
-          case other                 => fail(s"expected Block body for first arm, got $other")
+          case other                 => fail(s"expected Block body for first case, got $other")
       case other => fail(s"expected MatchExpr, got $other")
 
   test("M4.3: simple chain alias"):

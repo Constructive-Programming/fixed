@@ -153,7 +153,7 @@ class ParserSuite extends FunSuite with ParserTestSupport:
         assertEquals(s, "hello")
       case _ => fail(s"expected FnDecl with StringLit body, got $t")
 
-  test("M4.8: handle with effect arm and return arm"):
+  test("M4.8: handle with operation clause and return clause"):
     val src = SourceFile.fromString(
       "<test>",
       """fn f() -> u64 = handle inner(input):
@@ -165,12 +165,12 @@ class ParserSuite extends FunSuite with ParserTestSupport:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(h: Trees.HandleExpr), _)), _) =>
-        assertEquals(h.handlerArms.length, 1)
-        h.handlerArms.head match
-          case Trees.HandlerArm("Fail", "fail", params, _, _) =>
+        assertEquals(h.operationClauses.length, 1)
+        h.operationClauses.head match
+          case Trees.OperationClause("Fail", "fail", params, _, _) =>
             assertEquals(params.length, 1)
-          case other => fail(s"expected HandlerArm Fail.fail, got $other")
-        assert(h.returnArm.isDefined, "expected returnArm")
+          case other => fail(s"expected OperationClause Fail.fail, got $other")
+        assert(h.returnClause.isDefined, "expected returnClause")
       case other => fail(s"expected HandleExpr in fn body, got $other")
 
   test("M4.8: handle with parameterless effect op"):
@@ -185,14 +185,14 @@ class ParserSuite extends FunSuite with ParserTestSupport:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(h: Trees.HandleExpr), _)), _) =>
-        assertEquals(h.handlerArms.length, 2)
-        h.handlerArms.last match
-          case Trees.HandlerArm("Async", "yield_now", params, _, _) =>
+        assertEquals(h.operationClauses.length, 2)
+        h.operationClauses.last match
+          case Trees.OperationClause("Async", "yield_now", params, _, _) =>
             assertEquals(params, Nil)
-          case other => fail(s"expected HandlerArm Async.yield_now, got $other")
+          case other => fail(s"expected OperationClause Async.yield_now, got $other")
       case other => fail(s"expected HandleExpr, got $other")
 
-  test("M4.8: handle with multi-line block body for an arm"):
+  test("M4.8: handle with multi-line block body for an clause"):
     val src = SourceFile.fromString(
       "<test>",
       """fn f() -> u64 = handle task():
@@ -205,7 +205,7 @@ class ParserSuite extends FunSuite with ParserTestSupport:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(h: Trees.HandleExpr), _)), _) =>
-        h.handlerArms.head.body match
+        h.operationClauses.head.body match
           case Trees.Block(stmts, _) => assert(stmts.length >= 2)
           case other                 => fail(s"expected Block body, got $other")
       case other => fail(s"expected HandleExpr, got $other")

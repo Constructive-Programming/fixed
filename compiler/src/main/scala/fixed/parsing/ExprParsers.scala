@@ -233,30 +233,30 @@ private[parsing] object ExprParsers:
       (s7, Trees.IfExpr(cond, thenBranch, elseBranch, span(startTok.span, elseBranch.span)))
     }
 
-  /** MatchExpr ::= "match" Expr ":" INDENT MatchArm+ DEDENT
-    * MatchArm  ::= OrPattern ("if" Expr)? "=>" InlineOrBlockExpr
+  /** MatchExpr ::= "match" Expr ":" INDENT MatchCase+ DEDENT
+    * MatchCase ::= OrPattern ("if" Expr)? "=>" InlineOrBlockExpr
     */
   private[parsing] def parseMatchExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
     s0.afterKeyword(TokenKind.KwMatch, "`match`") { (s1, startTok) =>
       val (s2, scrutinee) = parseExpr(s1)
       val (s3, _) = expect(s2, TokenKind.Colon, "`:` after match scrutinee")
-      val (s4, matchArms) = parseMatchArms(s3)
-      (s4, Trees.MatchExpr(scrutinee, matchArms, span(startTok.span, s4.current.span)))
+      val (s4, cases) = parseMatchCases(s3)
+      (s4, Trees.MatchExpr(scrutinee, cases, span(startTok.span, s4.current.span)))
     }
 
-  private[parsing] def parseMatchArms(s0: ParserState)(using Reporter): Parsed[List[Trees.MatchArm]] =
-    val (s1, matchArms) = parseIndentedBody(s0, List.empty[Trees.MatchArm]) { (st, acc) =>
-      val (st1, matchArm) = parseMatchArm(st)
-      (st1, matchArm :: acc)
+  private[parsing] def parseMatchCases(s0: ParserState)(using Reporter): Parsed[List[Trees.MatchCase]] =
+    val (s1, cases) = parseIndentedBody(s0, List.empty[Trees.MatchCase]) { (st, acc) =>
+      val (st1, matchCase) = parseMatchCase(st)
+      (st1, matchCase :: acc)
     }
-    (s1, matchArms.reverse)
+    (s1, cases.reverse)
 
-  private[parsing] def parseMatchArm(s0: ParserState)(using Reporter): Parsed[Trees.MatchArm] =
+  private[parsing] def parseMatchCase(s0: ParserState)(using Reporter): Parsed[Trees.MatchCase] =
     val (s1, pat) = parseOrPattern(s0)
     val (s2, guard) = s1.optionally(TokenKind.KwIf)(parseExpr)
-    val (s3, _) = expect(s2, TokenKind.FatArrow, "`=>` in match arm")
+    val (s3, _) = expect(s2, TokenKind.FatArrow, "`=>` in match case")
     val (s4, body) = parseInlineOrBlockExpr(s3)
-    (s4, Trees.MatchArm(pat, guard, body, span(pat.span, body.span)))
+    (s4, Trees.MatchCase(pat, guard, body, span(pat.span, body.span)))
 
   private[parsing] def parseOrPattern(s0: ParserState)(using Reporter): Parsed[Tree] =
     val (s1, head) = parsePattern(s0)
@@ -341,48 +341,48 @@ private[parsing] object ExprParsers:
       (s5, Trees.ForallExpr(binders, suchThat, body, span(startTok.span, body.span)))
     }
 
-  /** HandleExpr ::= "handle" Expr ":" INDENT HandlerArm+ DEDENT
-    * HandlerArm ::= EffectArm | ReturnArm
-    *   EffectArm ::= UPPER_IDENT "." LOWER_IDENT ("(" PatternList ")")? "=>" Body
-    *   ReturnArm ::= "return" "(" Pattern ")" "=>" Body
-    * The optional return arm is partitioned out at parse time; multiple
-    * return arms are admitted by the grammar but only the last one
+  /** HandleExpr ::= "handle" Expr ":" INDENT HandlerClause+ DEDENT
+    * HandlerClause ::= OperationClause | ReturnClause
+    *   OperationClause ::= UPPER_IDENT "." LOWER_IDENT ("(" PatternList ")")? "=>" Body
+    *   ReturnClause ::= "return" "(" Pattern ")" "=>" Body
+    * The optional return clause is partitioned out at parse time; multiple
+    * return clauses are admitted by the grammar but only the last one
     * survives (well-formed programs have at most one).
     */
   private[parsing] def parseHandleExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
     s0.afterKeyword(TokenKind.KwHandle, "`handle`") { (s1, startTok) =>
       val (s2, subject) = parseExpr(s1)
       val (s3, _) = expect(s2, TokenKind.Colon, "`:` after handle subject")
-      val (s4, handlerArms, returnArm) = parseHandlerArms(s3)
-      (s4, Trees.HandleExpr(subject, handlerArms, returnArm, span(startTok.span, s4.current.span)))
+      val (s4, operationClauses, returnClause) = parseHandlerClauses(s3)
+      (s4, Trees.HandleExpr(subject, operationClauses, returnClause, span(startTok.span, s4.current.span)))
     }
 
-  /** Internal accumulator for handler-arms parsing: we collect normal
-    * arms and (possibly) a single return arm in lockstep so the body
+  /** Internal accumulator for handler-clause parsing: we collect normal
+    * operation clauses and (possibly) a single return clause in lockstep so the body
     * loop stays a single fold over `parseIndentedBody`.
     */
   final private case class HandlerAcc(
-      handlerArms: List[Trees.HandlerArm],
-      returnArm: Option[Trees.ReturnArm]
+      operationClauses: List[Trees.OperationClause],
+      returnClause: Option[Trees.ReturnClause]
   )
 
-  private[parsing] def parseHandlerArms(
+  private[parsing] def parseHandlerClauses(
       s0: ParserState
-  )(using Reporter): (ParserState, List[Trees.HandlerArm], Option[Trees.ReturnArm]) =
+  )(using Reporter): (ParserState, List[Trees.OperationClause], Option[Trees.ReturnClause]) =
     val (s1, acc) = parseIndentedBody(s0, HandlerAcc(Nil, None)) { (st, acc) =>
-      val (st1, parsed) = parseHandlerArm(st)
+      val (st1, parsed) = parseHandlerClause(st)
       val acc1 = parsed match
-        case ra: Trees.ReturnArm  => acc.copy(returnArm = Some(ra))
-        case ha: Trees.HandlerArm => acc.copy(handlerArms = ha :: acc.handlerArms)
+        case ra: Trees.ReturnClause    => acc.copy(returnClause = Some(ra))
+        case ha: Trees.OperationClause => acc.copy(operationClauses = ha :: acc.operationClauses)
 
         /** recovery; diagnostic already emitted */
         case _: Trees.Error => acc
         case _              => acc
       (st1, acc1)
     }
-    (s1, acc.handlerArms.reverse, acc.returnArm)
+    (s1, acc.operationClauses.reverse, acc.returnClause)
 
-  private[parsing] def parseHandlerArm(s: ParserState)(using Reporter): Parsed[Tree] =
+  private[parsing] def parseHandlerClause(s: ParserState)(using Reporter): Parsed[Tree] =
     val startSpan = s.current.span
     s.current.kind match
       case TokenKind.KwReturn =>
@@ -390,9 +390,9 @@ private[parsing] object ExprParsers:
         val (s2, _) = expect(s1, TokenKind.LParen, "`(`")
         val (s3, pat) = parsePattern(s2)
         val (s4, _) = expect(s3, TokenKind.RParen, "`)`")
-        val (s5, _) = expect(s4, TokenKind.FatArrow, "`=>` after return arm pattern")
+        val (s5, _) = expect(s4, TokenKind.FatArrow, "`=>` after return clause pattern")
         val (s6, body) = parseInlineOrBlockExpr(s5)
-        (s6, Trees.ReturnArm(pat, body, span(startSpan, body.span)))
+        (s6, Trees.ReturnClause(pat, body, span(startSpan, body.span)))
       case TokenKind.UpperIdent =>
         val (s1, effectTok) = consume(s)
         val (s2, _) = expect(s1, TokenKind.Dot, "`.`")
@@ -400,12 +400,12 @@ private[parsing] object ExprParsers:
         val (s4, params) = s3.whenAtOrEmpty(TokenKind.LParen)(parseInnerPatternList)
         val (s5, _) = expect(s4, TokenKind.FatArrow, "`=>` after effect op")
         val (s6, body) = parseInlineOrBlockExpr(s5)
-        (s6, Trees.HandlerArm(effectTok.lexeme, opTok.lexeme, params, body, span(startSpan, body.span)))
+        (s6, Trees.OperationClause(effectTok.lexeme, opTok.lexeme, params, body, span(startSpan, body.span)))
       case _ =>
         s.errorSync(
           DiagCode.P019,
-          "a handler arm",
-          Some("each arm is `Effect.op(...) => body` or `return(p) => body`")
+          "a handler clause",
+          Some("each clause is `Effect.op(...) => body` or `return(p) => body`")
         )
 
   /** A branch body that's either a same-line expression or an INDENTed block. */

@@ -94,8 +94,8 @@ object Parser:
 
     /** True iff `k` is `,` / `)` / `]` / `}` AND an *outer* anchor
       * frame (any frame except the innermost) is waiting for it. Used
-      * by indented-block productions (parseBlock, parseMatchArms,
-      * parseDoStmts, parseHandlerArms) to terminate an
+      * by indented-block productions (parseBlock, parseMatchCases,
+      * parseDoStmts, parseHandlerClauses) to terminate an
       * implicitly-opened off-side body when the enclosing bracketed
       * production would otherwise see noise after an item. See
       * `spec/syntax_grammar.ebnf` "Re-enabling the off-side rule

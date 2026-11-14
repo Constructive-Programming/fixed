@@ -945,23 +945,23 @@ IfExpr
     = "if" Expr ":" BlockTail ( "else" ( IfExpr | ":" BlockTail ) )?
     ;
 
-(* MatchExpr: `match SCRUTINEE: arms`. Arms are newline-separated in
-   the indented form; comma-separated arms are not accepted in v0.3.
-   Inline single-arm form is permitted but rarely useful. *)
+(* MatchExpr: `match SCRUTINEE: cases`. Cases are newline-separated in
+   the indented form; comma-separated cases are not accepted in v0.3.
+   Inline single-case form is permitted but rarely useful. *)
 MatchExpr
-    = "match" Expr ":" MatchArmList
+    = "match" Expr ":" MatchCaseList
     ;
 
-MatchArmList
-    = MatchArm                                                     (* inline single arm *)
-    | NEWLINE INDENT MatchArm ( NEWLINE MatchArm )* NEWLINE? DEDENT
+MatchCaseList
+    = MatchCase                                                     (* inline single case *)
+    | NEWLINE INDENT MatchCase ( NEWLINE MatchCase )* NEWLINE? DEDENT
     ;
 
-(* MatchArm (v0.4.3): supports or-patterns and guards. Or-pattern
+(* MatchCase (v0.4.3): supports or-patterns and guards. Or-pattern
    alternatives must bind identical names at identical types — checked
    in pattern_matching.md §5.5. The guard is a bool expression; if
-   false, control falls through to the next arm. *)
-MatchArm
+   false, control falls through to the next case. *)
+MatchCase
     = OrPattern MatchGuard? "=>" BlockTail
     ;
 
@@ -973,18 +973,18 @@ MatchGuard
     = "if" Expr
     ;
 
-(* HandleExpr: `handle SUBJECT: arms`. SUBJECT is a single Expr; for
+(* HandleExpr: `handle SUBJECT: clauses`. SUBJECT is a single Expr; for
    multi-line subjects, wrap a do-block: `handle (do: …): …`. *)
 HandleExpr
-    = "handle" Expr ":" HandlerArmList
+    = "handle" Expr ":" HandlerClauseList
     ;
 
-HandlerArmList
-    = HandlerArm
-    | NEWLINE INDENT HandlerArm ( NEWLINE HandlerArm )* NEWLINE? DEDENT
+HandlerClauseList
+    = HandlerClause
+    | NEWLINE INDENT HandlerClause ( NEWLINE HandlerClause )* NEWLINE? DEDENT
     ;
 
-HandlerArm
+HandlerClause
     = UPPER_IDENT "." LOWER_IDENT "(" PatternList? ")" "=>" BlockTail
     | "return" "(" Pattern ")" "=>" BlockTail
     ;
