@@ -205,7 +205,7 @@ object Trees:
 
   final case class MatchExpr(
       scrutinee: Tree,
-      arms: List[MatchArm],
+      matchArms: List[MatchArm],
       span: Span
   ) extends Tree
 
@@ -221,7 +221,7 @@ object Trees:
     * has at most one. */
   final case class HandleExpr(
       subject: Tree,
-      arms: List[HandlerArm],
+      handlerArms: List[HandlerArm],
       returnArm: Option[ReturnArm],
       span: Span
   ) extends Tree

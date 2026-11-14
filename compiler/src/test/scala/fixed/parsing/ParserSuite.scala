@@ -165,8 +165,8 @@ class ParserSuite extends FunSuite with ParserTestSupport:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(h: Trees.HandleExpr), _)), _) =>
-        assertEquals(h.arms.length, 1)
-        h.arms.head match
+        assertEquals(h.handlerArms.length, 1)
+        h.handlerArms.head match
           case Trees.HandlerArm("Fail", "fail", params, _, _) =>
             assertEquals(params.length, 1)
           case other => fail(s"expected HandlerArm Fail.fail, got $other")
@@ -185,8 +185,8 @@ class ParserSuite extends FunSuite with ParserTestSupport:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(h: Trees.HandleExpr), _)), _) =>
-        assertEquals(h.arms.length, 2)
-        h.arms.last match
+        assertEquals(h.handlerArms.length, 2)
+        h.handlerArms.last match
           case Trees.HandlerArm("Async", "yield_now", params, _, _) =>
             assertEquals(params, Nil)
           case other => fail(s"expected HandlerArm Async.yield_now, got $other")
@@ -205,7 +205,7 @@ class ParserSuite extends FunSuite with ParserTestSupport:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(h: Trees.HandleExpr), _)), _) =>
-        h.arms.head.body match
+        h.handlerArms.head.body match
           case Trees.Block(stmts, _) => assert(stmts.length >= 2)
           case other                 => fail(s"expected Block body, got $other")
       case other => fail(s"expected HandleExpr, got $other")

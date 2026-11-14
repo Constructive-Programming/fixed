@@ -1,3 +1,4 @@
 fix.ScaladocOnly
 fix.FileLength
 fix.CommentDensity
+fix.NoGenericWords

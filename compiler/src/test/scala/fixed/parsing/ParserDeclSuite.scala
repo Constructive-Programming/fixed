@@ -144,9 +144,9 @@ class ParserDeclSuite extends FunSuite with ParserTestSupport:
       case Trees.CompilationUnit(List(fn: Trees.FnDecl), _) =>
         fn.body match
           case Some(m: Trees.MatchExpr) =>
-            assertEquals(m.arms.length, 2)
+            assertEquals(m.matchArms.length, 2)
             assertEquals(
-              m.arms.map(_.pattern).collect {
+              m.matchArms.map(_.pattern).collect {
                 case Trees.DataVariantPat(Some(q), v, _, _) => s"$q.$v"
               },
               List("Direction.North", "Direction.South")
@@ -166,7 +166,7 @@ class ParserDeclSuite extends FunSuite with ParserTestSupport:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
-        m.arms.last.pattern match
+        m.matchArms.last.pattern match
           case _: Trees.WildcardPat => ()
           case other                => fail(s"expected wildcard last arm, got $other")
       case other => fail(s"expected FnDecl with MatchExpr body, got $other")
@@ -184,7 +184,7 @@ class ParserDeclSuite extends FunSuite with ParserTestSupport:
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
         /** First arm should be OrPat(OrPat(N, S), E). */
-        m.arms.head.pattern match
+        m.matchArms.head.pattern match
           case Trees.OrPat(Trees.OrPat(_, _, _), _, _) => ()
           case other                                   => fail(s"expected nested OrPat, got $other")
       case other => fail(s"expected MatchExpr, got $other")
@@ -201,7 +201,7 @@ class ParserDeclSuite extends FunSuite with ParserTestSupport:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
-        assert(m.arms.head.guard.isDefined, "expected guard on first arm")
+        assert(m.matchArms.head.guard.isDefined, "expected guard on first arm")
       case other => fail(s"expected MatchExpr, got $other")
 
   test("M4.4: arm with multi-line block body"):
@@ -218,7 +218,7 @@ class ParserDeclSuite extends FunSuite with ParserTestSupport:
     assert(!pr.hasErrors, pr.diagnostics.toString)
     pr.tree match
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(m: Trees.MatchExpr), _)), _) =>
-        m.arms.head.body match
+        m.matchArms.head.body match
           case Trees.Block(stmts, _) => assert(stmts.length >= 2)
           case other                 => fail(s"expected Block body for first arm, got $other")
       case other => fail(s"expected MatchExpr, got $other")

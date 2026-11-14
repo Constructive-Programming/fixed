@@ -240,16 +240,16 @@ private[parsing] object ExprParsers:
     s0.afterKeyword(TokenKind.KwMatch, "`match`") { (s1, startTok) =>
       val (s2, scrutinee) = parseExpr(s1)
       val (s3, _) = expect(s2, TokenKind.Colon, "`:` after match scrutinee")
-      val (s4, arms) = parseMatchArms(s3)
-      (s4, Trees.MatchExpr(scrutinee, arms, span(startTok.span, s4.current.span)))
+      val (s4, matchArms) = parseMatchArms(s3)
+      (s4, Trees.MatchExpr(scrutinee, matchArms, span(startTok.span, s4.current.span)))
     }
 
   private[parsing] def parseMatchArms(s0: ParserState)(using Reporter): Parsed[List[Trees.MatchArm]] =
-    val (s1, arms) = parseIndentedBody(s0, List.empty[Trees.MatchArm]) { (st, acc) =>
-      val (st1, arm) = parseMatchArm(st)
-      (st1, arm :: acc)
+    val (s1, matchArms) = parseIndentedBody(s0, List.empty[Trees.MatchArm]) { (st, acc) =>
+      val (st1, matchArm) = parseMatchArm(st)
+      (st1, matchArm :: acc)
     }
-    (s1, arms.reverse)
+    (s1, matchArms.reverse)
 
   private[parsing] def parseMatchArm(s0: ParserState)(using Reporter): Parsed[Trees.MatchArm] =
     val (s1, pat) = parseOrPattern(s0)
@@ -353,8 +353,8 @@ private[parsing] object ExprParsers:
     s0.afterKeyword(TokenKind.KwHandle, "`handle`") { (s1, startTok) =>
       val (s2, subject) = parseExpr(s1)
       val (s3, _) = expect(s2, TokenKind.Colon, "`:` after handle subject")
-      val (s4, arms, returnArm) = parseHandlerArms(s3)
-      (s4, Trees.HandleExpr(subject, arms, returnArm, span(startTok.span, s4.current.span)))
+      val (s4, handlerArms, returnArm) = parseHandlerArms(s3)
+      (s4, Trees.HandleExpr(subject, handlerArms, returnArm, span(startTok.span, s4.current.span)))
     }
 
   /** Internal accumulator for handler-arms parsing: we collect normal
@@ -362,7 +362,7 @@ private[parsing] object ExprParsers:
     * loop stays a single fold over `parseIndentedBody`.
     */
   final private case class HandlerAcc(
-      arms: List[Trees.HandlerArm],
+      handlerArms: List[Trees.HandlerArm],
       returnArm: Option[Trees.ReturnArm]
   )
 
@@ -370,17 +370,17 @@ private[parsing] object ExprParsers:
       s0: ParserState
   )(using Reporter): (ParserState, List[Trees.HandlerArm], Option[Trees.ReturnArm]) =
     val (s1, acc) = parseIndentedBody(s0, HandlerAcc(Nil, None)) { (st, acc) =>
-      val (st1, armOpt) = parseHandlerArm(st)
-      val acc1 = armOpt match
+      val (st1, parsed) = parseHandlerArm(st)
+      val acc1 = parsed match
         case ra: Trees.ReturnArm  => acc.copy(returnArm = Some(ra))
-        case ha: Trees.HandlerArm => acc.copy(arms = ha :: acc.arms)
+        case ha: Trees.HandlerArm => acc.copy(handlerArms = ha :: acc.handlerArms)
 
         /** recovery; diagnostic already emitted */
         case _: Trees.Error => acc
         case _              => acc
       (st1, acc1)
     }
-    (s1, acc.arms.reverse, acc.returnArm)
+    (s1, acc.handlerArms.reverse, acc.returnArm)
 
   private[parsing] def parseHandlerArm(s: ParserState)(using Reporter): Parsed[Tree] =
     val startSpan = s.current.span
