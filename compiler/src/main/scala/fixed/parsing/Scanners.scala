@@ -79,7 +79,7 @@ object Scanner:
               (st1.copy(pending = rest, lastKind = tok.kind), tok)
             case None =>
               if !st1.eofEmitted then step(closeIndentsAndQueueEof(st1), source, reporter)
-              else (st1.copy(lastKind = TokenKind.Eof), Token(TokenKind.Eof, Span(st1.pos, st1.pos)))
+              else (st1.copy(lastKind = TokenKind.Eof), Token.Eof(Span(st1.pos, st1.pos)))
         else
           val st2 = if crossedNewline then handleNewline(st1, source, reporter) else st1
           val (st3, tok) = scanToken(st2, source, reporter)
@@ -96,9 +96,9 @@ object Scanner:
     val pos = state.pos
     val dedentCount = state.indentStack.length - 1
     val poppedStack = state.indentStack.drop(dedentCount)
-    val dedents = Vector.fill(dedentCount)(Token(TokenKind.Dedent, Span(pos, pos)))
+    val dedents = Vector.fill(dedentCount)(Token.Dedent(Span(pos, pos)))
     val withDedents = dedents.foldLeft(state.pending)(_ enqueue _)
-    val withEof = withDedents.enqueue(Token(TokenKind.Eof, Span(pos, pos)))
+    val withEof = withDedents.enqueue(Token.Eof(Span(pos, pos)))
     state.copy(indentStack = poppedStack, pending = withEof, eofEmitted = true)
 
   // Trivia consumption only mutates `pos`; `advanceTrivia` recurses
@@ -179,7 +179,7 @@ object Scanner:
     if isDualMode && newIndent > state.currentIndent then
       state
         .copy(indentStack = newIndent :: state.indentStack)
-        .enqueue(Token(TokenKind.Indent, Span(pos, pos)))
+        .enqueue(Token.Indent(Span(pos, pos)))
     else if state.isInsideSuppressedBrackets then
       state
     else if lastKind != TokenKind.NoStart && lastKind != TokenKind.Newline
@@ -192,7 +192,7 @@ object Scanner:
       val curIndent = state.currentIndent
       // A deeper line after `:` (or `=`/`->`/`=>`) already opened an INDENT
       // above, so here a deeper line is a plain continuation NEWLINE.
-      if newIndent > curIndent then state.enqueue(Token(TokenKind.Newline, Span(pos, pos)))
+      if newIndent > curIndent then state.enqueue(Token.Newline(Span(pos, pos)))
       else if newIndent < curIndent then
         val st1 = popIndents(state, newIndent)
         if st1.isInsideSuppressedBrackets then st1
@@ -204,9 +204,9 @@ object Scanner:
               s"inconsistent indentation; closing dedent does not match any opening indent (got $newIndent, stack=${st1.indentStack.reverse.mkString(",")})",
               Some("align this line to one of the enclosing block's indent levels")
             )
-          st1.enqueue(Token(TokenKind.Newline, Span(pos, pos)))
+          st1.enqueue(Token.Newline(Span(pos, pos)))
       else if lastKind != TokenKind.Newline then
-        state.enqueue(Token(TokenKind.Newline, Span(pos, pos)))
+        state.enqueue(Token.Newline(Span(pos, pos)))
       else state
 
   @tailrec
@@ -216,7 +216,7 @@ object Scanner:
         val pos = state.pos
         val st1 = state
           .copy(indentStack = rest)
-          .enqueue(Token(TokenKind.Dedent, Span(pos, pos)))
+          .enqueue(Token.Dedent(Span(pos, pos)))
         popIndents(st1, newIndent)
       case _ => state
 
@@ -265,7 +265,7 @@ object Scanner:
           bracketStack = ('(', state.indentStack.length) :: state.bracketStack,
           lastKind = TokenKind.LParen
         )
-        (st, Token(TokenKind.LParen, Span(start, st.pos)))
+        (st, Token.LParen(Span(start, st.pos)))
       case ')' => closeBracket(state, start, TokenKind.RParen, '(', reporter)
       case '[' =>
         val st = state.copy(
@@ -273,7 +273,7 @@ object Scanner:
           bracketStack = ('[', state.indentStack.length) :: state.bracketStack,
           lastKind = TokenKind.LBracket
         )
-        (st, Token(TokenKind.LBracket, Span(start, st.pos)))
+        (st, Token.LBracket(Span(start, st.pos)))
       case ']' => closeBracket(state, start, TokenKind.RBracket, '[', reporter)
       case '{' =>
         val st = state.copy(
@@ -281,7 +281,7 @@ object Scanner:
           bracketStack = ('{', state.indentStack.length) :: state.bracketStack,
           lastKind = TokenKind.LBrace
         )
-        (st, Token(TokenKind.LBrace, Span(start, st.pos)))
+        (st, Token.LBrace(Span(start, st.pos)))
       case '}' => closeBracket(state, start, TokenKind.RBrace, '{', reporter)
 
       case ','                                       => single(state, start, TokenKind.Comma)
@@ -334,7 +334,7 @@ object Scanner:
   // Fixed-width token of `len` chars at `start`.
   private def emit(state: ScannerState, start: Int, len: Int, kind: TokenKind): (ScannerState, Token) =
     val st = state.copy(pos = start + len, lastKind = kind)
-    (st, Token(kind, Span(start, st.pos)))
+    (st, Token.of(kind, Span(start, st.pos)))
 
   private def single(state: ScannerState, start: Int, kind: TokenKind) = emit(state, start, 1, kind)
 
@@ -373,7 +373,7 @@ object Scanner:
         )
         state.bracketStack
     val st = state.copy(pos = start + 1, lastKind = kind, bracketStack = nextStack)
-    (st, Token(kind, Span(start, st.pos)))
+    (st, Token.of(kind, Span(start, st.pos)))
 
   // ---- Identifiers, numbers, strings, chars ----
 
@@ -384,13 +384,12 @@ object Scanner:
   ): (ScannerState, Token) =
     val end = skipWhile(source.content, start, source.length)(isIdentPart)
     val text = source.slice(start, end)
-    val kind = Tokens.keywords.get(text) match
-      case Some(kw) => kw
-      case None     =>
-        if text.charAt(0).isUpper then TokenKind.UpperIdent
-        else TokenKind.LowerIdent
-    val st = state.copy(pos = end, lastKind = kind)
-    (st, Token(kind, Span(start, end), text))
+    val sp = Span(start, end)
+    val tok = Tokens.keywords.get(text) match
+      case Some(kw)                    => Token.of(kw, sp)
+      case None if text.charAt(0).isUpper => Token.UpperIdent(sp, text)
+      case None                        => Token.LowerIdent(sp, text)
+    (state.copy(pos = end, lastKind = tok.kind), tok)
 
   private def scanNumber(
       state: ScannerState,
@@ -408,10 +407,10 @@ object Scanner:
     if sawDot then
       val fracEnd = skipDigits(source, intEnd + 1)
       val st = state.copy(pos = fracEnd, lastKind = TokenKind.FloatLit)
-      (st, Token(TokenKind.FloatLit, Span(start, fracEnd), source.slice(start, fracEnd)))
+      (st, Token.FloatLit(Span(start, fracEnd), source.slice(start, fracEnd)))
     else
       val st = state.copy(pos = intEnd, lastKind = TokenKind.IntLit)
-      (st, Token(TokenKind.IntLit, Span(start, intEnd), source.slice(start, intEnd)))
+      (st, Token.IntLit(Span(start, intEnd), source.slice(start, intEnd)))
 
   @tailrec
   private def skipDigits(source: SourceFile, i: Int): Int =
@@ -531,7 +530,7 @@ object Scanner:
       reporter.error(q.code, Span(start, body.pos), s"unterminated ${q.noun} literal at end of input")
     q.checkBody(body.lexeme, Span(start, body.pos), reporter)
     val st = state.copy(pos = body.pos, lastKind = q.kind)
-    (st, Token(q.kind, Span(start, body.pos), body.lexeme))
+    (st, Token.of(q.kind, Span(start, body.pos), body.lexeme))
 
   // ---- Char-class helpers ----
 
@@ -589,7 +588,7 @@ final class Scanner(
 
   def nextToken(): Token =
     if iter.hasNext then iter.next()
-    else Token(TokenKind.Eof, Span(source.length, source.length))
+    else Token.Eof(Span(source.length, source.length))
 
   def tokenize(): Seq[Token] = tokens
 

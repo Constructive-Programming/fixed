@@ -217,7 +217,7 @@ object Parser:
     if s.current.kind == kind then consume(s)
     else
       reportExpected(s, DiagCode.P001, s"$what (token $kind)", None)
-      (s, Token(kind, Span(s.current.span.start, s.current.span.start)))
+      (s, Token.of(kind, Span(s.current.span.start, s.current.span.start)))
 
   /** Report "expected `what`, got …" at `current`. */
   private def reportExpected(
