@@ -487,20 +487,25 @@ object Parser:
     case Instance extends FnKind("method name", Trees.InstanceMethod.apply)
     case Static extends FnKind("static method name", Trees.StaticMethod.apply)
 
+    /** The leading keyword(s): `fn`, or `Self . fn` for statics. Returns the first token, for the span. */
+    def head(s0: ParserState)(using Reporter): Parsed[Token] = this match
+      case Static =>
+        val (s1, selfTok) = expect(s0, TokenKind.KwSelf, "`Self`")
+        val (s2, _) = expect(s1, TokenKind.Dot, "`.`")
+        val (s3, _) = expect(s2, TokenKind.KwFn, "`fn`")
+        (s3, selfTok)
+      case Free | Instance => expect(s0, TokenKind.KwFn, "`fn`")
+
+    /** Free fns require a parameter list; methods may omit it. */
+    def params(s: ParserState)(using Reporter): Parsed[List[Trees.FnParam]] = this match
+      case Free              => parseFnParamList(s)
+      case Instance | Static => s.whenAtOrEmpty(TokenKind.LParen)(parseFnParamList)
+
   private def parseFnLike(s0: ParserState, kind: FnKind)(using Reporter): Parsed[Trees.FnLike] =
-    val (s1, startTok) = kind match
-      case FnKind.Static =>
-        val (st1, selfTok) = expect(s0, TokenKind.KwSelf, "`Self`")
-        val (st2, _) = expect(st1, TokenKind.Dot, "`.`")
-        val (st3, _) = expect(st2, TokenKind.KwFn, "`fn`")
-        (st3, selfTok)
-      case _ => expect(s0, TokenKind.KwFn, "`fn`")
+    val (s1, startTok) = kind.head(s0)
     val (s2, nameTok) = expect(s1, TokenKind.LowerIdent, kind.nameWhat)
     val (s3, typeParamsHint) = parseOptionalTypeParamsHint(s2)
-    // Only free fns require a parameter list; methods may omit it.
-    val (s4, params) =
-      if kind == FnKind.Free then parseFnParamList(s3)
-      else s3.whenAtOrEmpty(TokenKind.LParen)(parseFnParamList)
+    val (s4, params) = kind.params(s3)
     val (s5, (returnType, withClause, body)) = parseFnSigTail(s4)
     (
       s5,

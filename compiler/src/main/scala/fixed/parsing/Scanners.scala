@@ -499,6 +499,17 @@ object Scanner:
         )
     case Chr extends Quote('\'', TokenKind.CharLit, DiagCode.E008, "char", "unterminated char literal", None)
 
+    /** Literal-specific checks on the scanned body: a char literal holds exactly one character. */
+    def checkBody(lexeme: String, span: Span, reporter: Reporter): Unit = this match
+      case Str => ()
+      case Chr =>
+        if lexeme.length != 1 then
+          reporter.error(
+            DiagCode.E009,
+            span,
+            s"char literal must contain exactly one character (got ${lexeme.length})"
+          )
+
   private def scanQuoted(
       state: ScannerState,
       source: SourceFile,
@@ -518,12 +529,7 @@ object Scanner:
     )
     if !body.closed then
       reporter.error(q.code, Span(start, body.pos), s"unterminated ${q.noun} literal at end of input")
-    if q == Quote.Chr && body.lexeme.length != 1 then
-      reporter.error(
-        DiagCode.E009,
-        Span(start, body.pos),
-        s"char literal must contain exactly one character (got ${body.lexeme.length})"
-      )
+    q.checkBody(body.lexeme, Span(start, body.pos), reporter)
     val st = state.copy(pos = body.pos, lastKind = q.kind)
     (st, Token(q.kind, Span(start, body.pos), body.lexeme))
 
