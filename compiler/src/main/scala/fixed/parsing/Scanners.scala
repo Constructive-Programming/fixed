@@ -82,7 +82,11 @@ object Scanner:
       case Some((tok, rest)) =>
         (state.copy(pending = rest, lastKind = tok.kind), tok)
       case None =>
-        val Skipped(st1, crossedNewline) = skipTrivia(state, source, crossedNewline = false, reporter)
+        // Field reads, not `val Skipped(a, b) = …`: that pattern desugars through
+        // a Tuple2 and would box the Boolean again.
+        val skipped = skipTrivia(state, source, crossedNewline = false, reporter)
+        val st1 = skipped.state
+        val crossedNewline = skipped.crossedNewline
         if st1.pos >= source.length then
           st1.pending.dequeueOption match
             case Some((tok, rest)) =>
@@ -247,8 +251,7 @@ object Scanner:
       else if c == '+' then true
       else if c.isLetter || c == '_' then
         val j = skipWhile(content, i, len)(isIdentPart)
-        val word = content.substring(i, j)
-        Tokens.keywords.get(word).exists(Tokens.leadingContinuationKinds.contains)
+        Tokens.keywordAt(content, i, j).exists(kw => Tokens.leadingContinuationKinds.contains(kw.kind))
       else false
 
   // First index at or after `i0` (capped at `len`) whose char fails `p`.
@@ -386,12 +389,12 @@ object Scanner:
       start: Int
   ): (ScannerState, Token) =
     val end = skipWhile(source.content, start, source.length)(isIdentPart)
-    val text = source.slice(start, end)
     val sp = Span(start, end)
-    val tok = Tokens.keywordTokens.get(text) match
-      case Some(mk)                       => mk(sp)
-      case None if text.charAt(0).isUpper => Token.UpperIdent(sp, text)
-      case None                           => Token.LowerIdent(sp, text)
+    val tok = Tokens.keywordAt(source.content, start, end) match
+      case Some(kw) => kw.make(sp)
+      case None     =>
+        val text = source.slice(start, end)
+        if text.charAt(0).isUpper then Token.UpperIdent(sp, text) else Token.LowerIdent(sp, text)
     (state.copy(pos = end, lastKind = tok.kind), tok)
 
   private def scanNumber(
@@ -574,7 +577,14 @@ final class Scanner(
   // carries `lastKind = TokenKind.Eof`, so the next iteration short-
   // circuits. Encoding "done" in the state itself avoids the per-step
   // `Option[ScannerState]` boxing the unfold would otherwise incur.
-  private val tokens: Vector[Token] =
+  // Materialised straight into an Array: the parser indexes it directly,
+  // so a Vector would only be built to be copied. Never mutated after
+  // construction; `tokenize()` exposes it through a read-only ArraySeq view.
+  private val tokens: Array[Token] =
+    // Presized (the examples corpus averages ~6.4 chars per token) so the
+    // builder does not regrow while scanning.
+    val buf = Array.newBuilder[Token]
+    buf.sizeHint(source.length / 5 + 16)
     Iterator
       .unfold[Token, ScannerState](initialState) { st =>
         if st.lastKind == TokenKind.Eof then None
@@ -582,7 +592,8 @@ final class Scanner(
           val (next, tok) = step(st, source, reporter)
           Some((tok, next))
       }
-      .toVector
+      .foreach(buf.addOne)
+    buf.result()
 
   // The single boundary mutation: Scala's `Iterator` owns an internal
   // cursor over `tokens`. Past the materialised end we synthesise
@@ -593,7 +604,10 @@ final class Scanner(
     if iter.hasNext then iter.next()
     else Token.Eof(Span(source.length, source.length))
 
-  def tokenize(): Seq[Token] = tokens
+  def tokenize(): Seq[Token] = scala.collection.immutable.ArraySeq.unsafeWrapArray(tokens)
+
+  /** The token array itself, for the parser's O(1) indexing. Read-only by contract. */
+  private[parsing] def tokenArray: Array[Token] = tokens
 
   /** Trivia table keyed on real-token start offsets. Returns
     * `TriviaTable.empty` when this scanner was constructed with

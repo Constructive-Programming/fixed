@@ -32,17 +32,10 @@ import fixed.util.{DiagCode, Reporter, SourceFile, Span}
 final class Parser(scanner: Scanner, reporter: Reporter):
   import Parser.initialState
 
-  // Reuse the Scanner's already-materialised token vector and project
-  // it into an `Array[Token]` for cheap O(1) indexing. The array is
-  // logically immutable: it is written once at parser construction and
-  // never re-assigned or mutated. `current`/`peek` execute in every
-  // cursor advance, so saving the Vector trie traversal pays back
-  // across the whole parse pass.
-  //
-  // `Vector.toArray` walks the vector once to build the array. The
-  // alternative — leaving the stream as `Vector[Token]` — re-pays the
-  // trie cost on every read. The materialisation is the right trade.
-  private val tokens: Array[Token] = scanner.tokenize().toArray
+  // The Scanner's token array, shared (not copied): `current`/`peek`
+  // index it on every cursor advance. Logically immutable — nothing
+  // writes to it after the scanner builds it.
+  private val tokens: Array[Token] = scanner.tokenArray
 
   /** Parse the whole compilation unit. */
   def parseCompilationUnit(): Tree =
@@ -74,7 +67,7 @@ object Parser:
   final case class ParserState(
       tokens: Array[Token],
       idx: Int,
-      anchors: List[Set[TokenKind]],
+      anchors: List[KindSet],
       owedDedents: Int
   ):
     /** The current (next un-consumed) token. Always available — the
@@ -92,7 +85,7 @@ object Parser:
     inline def advance: ParserState = copy(idx = idx + 1)
 
     /** Push a new anchor frame for a production. */
-    def pushAnchors(a: Set[TokenKind]): ParserState =
+    def pushAnchors(a: KindSet): ParserState =
       copy(anchors = a :: anchors)
 
     /** Pop the innermost anchor frame on production exit. */
@@ -259,7 +252,7 @@ object Parser:
   /** Run `body` with `anchors` pushed; pop the frame on the way out. */
   private inline def withAnchors[A](
       s: ParserState,
-      anchors: Set[TokenKind]
+      anchors: KindSet
   )(body: ParserState => Parsed[A]): Parsed[A] =
     val (s1, a) = body(s.pushAnchors(anchors))
     (s1.popAnchors, a)
@@ -336,7 +329,7 @@ object Parser:
     /** Top-level item starts: keywords that begin a top-level production
       * plus UpperIdent (head of a `T satisfies …` decl) and EOF. NEWLINE
       * is a separator, not a starter, so it is not an anchor here. */
-    val topLevel: Set[TokenKind] = Set(
+    val topLevel: KindSet = KindSet(
       TokenKind.KwUse,
       TokenKind.KwFn,
       TokenKind.KwCap,
@@ -350,11 +343,11 @@ object Parser:
       TokenKind.Eof
     )
 
-    val blockBody: Set[TokenKind] = Set(TokenKind.Newline, TokenKind.Dedent)
+    val blockBody: KindSet = KindSet(TokenKind.Newline, TokenKind.Dedent)
 
     /** Anything that can plausibly follow a type. Arrow is included so a
       * partial atom can sync forward and let `parseArrowType` resume. */
-    val typeExpr: Set[TokenKind] = Set(
+    val typeExpr: KindSet = KindSet(
       TokenKind.Comma,
       TokenKind.RParen,
       TokenKind.RBracket,
@@ -921,7 +914,7 @@ object Parser:
           val next = receiver match
             // `T.member(...)`, or bare `T.Variant` / static-method-no-args
             // (`args` = None); the typer disambiguates.
-            case Trees.Ident(qual, qspan) if qual.headOption.exists(_.isUpper) =>
+            case Trees.Ident(qual, qspan) if qual.nonEmpty && qual.charAt(0).isUpper =>
               Trees.StaticCall(qual, selection, span(qspan, st3.current.span))
             case _ =>
               Trees.MethodCall(receiver, selection, span(receiver.span, st3.current.span))
@@ -1030,7 +1023,7 @@ object Parser:
       closeKind: TokenKind,
       closeLexeme: String
   )(using reporter: Reporter)(inline parseItem: (ParserState, Span) => (ParserState, A, A)): Parsed[List[A]] =
-    val anchors = Set(TokenKind.Comma, closeKind)
+    val anchors = KindSet.empty + TokenKind.Comma + closeKind
 
     def parseOne(st: ParserState): Parsed[A] =
       val itemStart = st.current.span

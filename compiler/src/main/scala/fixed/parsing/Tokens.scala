@@ -57,6 +57,22 @@ enum TokenKind:
 
 end TokenKind
 
+/** A set of token kinds as a 128-bit mask over `TokenKind.ordinal` (79 kinds).
+  * Membership is a shift and an AND — no hashing, no allocation.
+  */
+final case class KindSet(lo: Long, hi: Long):
+  def contains(k: TokenKind): Boolean =
+    val o = k.ordinal
+    if o < 64 then (lo & (1L << o)) != 0L else (hi & (1L << (o - 64))) != 0L
+
+  def +(k: TokenKind): KindSet =
+    val o = k.ordinal
+    if o < 64 then KindSet(lo | (1L << o), hi) else KindSet(lo, hi | (1L << (o - 64)))
+
+object KindSet:
+  val empty: KindSet = KindSet(0L, 0L)
+  def apply(kinds: TokenKind*): KindSet = kinds.foldLeft(empty)(_ + _)
+
 /** A single token. Each case is one token kind; only identifiers and
   * literals (`LowerIdent`, `UpperIdent`, `IntLit`, `FloatLit`, `StringLit`,
   * `CharLit`) carry their source text.
@@ -280,14 +296,29 @@ object Tokens:
     "with" -> (Token.KwWith(_))
   )
 
-  /** Keyword spelling -> kind, derived from `keywordTokens`. */
-  val keywords: Map[String, TokenKind] = keywordTokens.view.mapValues(_(Span(0, 0)).kind).toMap
+  /** A reserved word: its spelling, kind and token constructor. */
+  final case class Keyword(spelling: String, kind: TokenKind, make: Span => Token)
+
+  // Keywords bucketed by first (ASCII) character, so a lookup compares a
+  // handful of candidates in place instead of slicing and hashing a String.
+  private val keywordsByFirstChar: Array[List[Keyword]] =
+    val all = keywordTokens.toList.map((w, mk) => Keyword(w, mk(Span(0, 0)).kind, mk))
+    val grouped = all.groupBy(_.spelling.charAt(0))
+    Array.tabulate(128)(c => grouped.getOrElse(c.toChar, Nil))
+
+  /** The keyword spelled by `content[start, end)`, if any — without allocating the substring. */
+  def keywordAt(content: String, start: Int, end: Int): Option[Keyword] =
+    val first = content.charAt(start)
+    val len = end - start
+    if first >= 128 then None
+    else
+      keywordsByFirstChar(first).find(k => k.spelling.length == len && content.regionMatches(start, k.spelling, 0, len))
 
   /** Token kinds that, when appearing at the end of a logical line, suppress
     * the next physical newline (trailing line-continuation per
     * `spec/syntax_grammar.ebnf` lines 186–195).
     */
-  val trailingContinuationKinds: Set[TokenKind] = Set(
+  val trailingContinuationKinds: KindSet = KindSet(
     TokenKind.Plus,
     TokenKind.Minus,
     TokenKind.Star,
@@ -323,7 +354,7 @@ object Tokens:
     * `Functor + Folding` only appears in `is`-bound and `extends`
     * positions, so leading `+` in expression context is unambiguous.)
     */
-  val leadingContinuationKinds: Set[TokenKind] = Set(
+  val leadingContinuationKinds: KindSet = KindSet(
     TokenKind.KwWith,
     TokenKind.KwExtends,
     TokenKind.Arrow,

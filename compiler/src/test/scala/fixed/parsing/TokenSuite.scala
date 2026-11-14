@@ -23,3 +23,9 @@ class TokenSuite extends FunSuite:
       assertEquals(t.span, sp)
       assertEquals(t.lexeme, if carriesText(k) then "txt" else "")
     }
+
+  test("KindSet membership matches Set for every kind, across both 64-bit halves"):
+    val members = TokenKind.values.zipWithIndex.collect { case (k, i) if i % 3 == 0 => k }.toSet
+    val ks = KindSet(members.toSeq*)
+    TokenKind.values.foreach(k => assertEquals(ks.contains(k), members(k), k.toString))
+    assert(TokenKind.values.length > 64, "test should cover the high word")
