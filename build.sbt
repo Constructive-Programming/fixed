@@ -40,6 +40,18 @@ lazy val compiler = (project in file("compiler"))
     Test / baseDirectory := (ThisBuild / baseDirectory).value
   )
 
+// JMH benchmarks for the front end. Not aggregated: run explicitly with
+// `sbt "bench/Jmh/run -prof gc"`.
+lazy val bench = (project in file("bench"))
+  .dependsOn(compiler)
+  .enablePlugins(JmhPlugin)
+  .settings(
+    name := "fixed-bench",
+    publish / skip := true,
+    // JMH state classes need `var` fields and loops; generated code trips -Werror lints.
+    scalacOptions --= Seq("-Werror", "-Wunused:all", "-Wvalue-discard")
+  )
+
 lazy val root = (project in file("."))
   .aggregate(compiler)
   .configs(Cpd)

@@ -258,6 +258,9 @@ sbt fix     # apply scalafix rewrites and scalafmt formatting
 
 Config: `.scalafmt.conf`, `.scalafix.conf`; CPD threshold is `cpdMinTokens` in `build.sbt`.
 
+Benchmarks (JMH, `bench/`): `sbt "bench/Jmh/run -prof gc fixed.bench.FrontEndBench"` —
+scanner, parser and end-to-end throughput over `examples/`, with allocation per op.
+
 ## Status
 
 **Phase 0 (design) is under way.** The language design is explored through 11 example programs covering:

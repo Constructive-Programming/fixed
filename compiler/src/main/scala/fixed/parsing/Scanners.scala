@@ -15,10 +15,20 @@ object Scanner:
 
   // ---- State ----
 
+  /** An open bracket and the indent-stack depth at which it opened. A case
+    * class rather than a `(Char, Int)` tuple so neither field is boxed.
+    */
+  final case class OpenBracket(char: Char, depth: Int)
+
+  /** `skipTrivia`'s result; a case class rather than `(ScannerState, Boolean)`
+    * so the flag is not boxed.
+    */
+  final case class Skipped(state: ScannerState, crossedNewline: Boolean)
+
   final case class ScannerState(
       pos: Int,
       indentStack: List[Int],
-      bracketStack: List[(Char, Int)],
+      bracketStack: List[OpenBracket],
       lastKind: TokenKind, // TokenKind.NoStart before first emit
       eofEmitted: Boolean,
       pending: Queue[Token]
@@ -27,8 +37,8 @@ object Scanner:
     // equals `indentStack.length` — no body has been engaged since the
     // bracket opened, so off-side rule is suppressed.
     def isInsideSuppressedBrackets: Boolean = bracketStack match
-      case (_, depth) :: _ => indentStack.length == depth
-      case Nil             => false
+      case OpenBracket(_, depth) :: _ => indentStack.length == depth
+      case Nil                        => false
 
     def currentIndent: Int = indentStack.head
 
@@ -72,7 +82,7 @@ object Scanner:
       case Some((tok, rest)) =>
         (state.copy(pending = rest, lastKind = tok.kind), tok)
       case None =>
-        val (st1, crossedNewline) = skipTrivia(state, source, crossedNewline = false, reporter)
+        val Skipped(st1, crossedNewline) = skipTrivia(state, source, crossedNewline = false, reporter)
         if st1.pos >= source.length then
           st1.pending.dequeueOption match
             case Some((tok, rest)) =>
@@ -110,12 +120,12 @@ object Scanner:
       source: SourceFile,
       crossedNewline: Boolean,
       reporter: Reporter
-  ): (ScannerState, Boolean) =
+  ): Skipped =
     val packed = advanceTrivia(state.pos, source, reporter, if crossedNewline then 1 else 0)
     val newPos = (packed & 0xffffffffL).toInt
     val crossed = (packed >>> 32) != 0
-    if newPos == state.pos then (state, crossed)
-    else (state.copy(pos = newPos), crossed)
+    if newPos == state.pos then Skipped(state, crossed)
+    else Skipped(state.copy(pos = newPos), crossed)
 
   @tailrec
   private def advanceTrivia(
@@ -257,39 +267,32 @@ object Scanner:
       reporter: Reporter
   ): (ScannerState, Token) =
     val start = state.pos
-    val c = source.content.charAt(start)
-    c match
-      case '(' =>
-        val st = state.copy(
-          pos = start + 1,
-          bracketStack = ('(', state.indentStack.length) :: state.bracketStack,
-          lastKind = TokenKind.LParen
-        )
-        (st, Token.LParen(Span(start, st.pos)))
-      case ')' => closeBracket(state, start, Token.RParen(_), '(', reporter)
-      case '[' =>
-        val st = state.copy(
-          pos = start + 1,
-          bracketStack = ('[', state.indentStack.length) :: state.bracketStack,
-          lastKind = TokenKind.LBracket
-        )
-        (st, Token.LBracket(Span(start, st.pos)))
-      case ']' => closeBracket(state, start, Token.RBracket(_), '[', reporter)
-      case '{' =>
-        val st = state.copy(
-          pos = start + 1,
-          bracketStack = ('{', state.indentStack.length) :: state.bracketStack,
-          lastKind = TokenKind.LBrace
-        )
-        (st, Token.LBrace(Span(start, st.pos)))
-      case '}' => closeBracket(state, start, Token.RBrace(_), '{', reporter)
+    source.content.charAt(start) match
+      case '('                                       => openBracket(state, start, '(', Token.LParen(_))
+      case ')'                                       => closeBracket(state, start, Token.RParen(_), '(', reporter)
+      case '['                                       => openBracket(state, start, '[', Token.LBracket(_))
+      case ']'                                       => closeBracket(state, start, Token.RBracket(_), '[', reporter)
+      case '{'                                       => openBracket(state, start, '{', Token.LBrace(_))
+      case '}'                                       => closeBracket(state, start, Token.RBrace(_), '{', reporter)
+      case '_' if !isIdentStartAt(source, start + 1) => single(state, start)(Token.Underscore(_))
+      case ch if isIdentStart(ch)                    => scanIdent(state, source, start)
+      case ch if ch.isDigit                          => scanNumber(state, source, start)
+      case '"'                                       => scanQuoted(state, source, start, reporter, Quote.Str)
+      case '\''                                      => scanQuoted(state, source, start, reporter, Quote.Chr)
+      case _                                         => scanOperator(state, source, start, reporter)
 
-      case ','                                       => single(state, start)(Token.Comma(_))
-      case ';'                                       => single(state, start)(Token.Semicolon(_))
-      case '@'                                       => single(state, start)(Token.At(_))
-      case '_' if !isIdentStartAt(source, start + 1) =>
-        single(state, start)(Token.Underscore(_))
-
+  // Punctuation and operators. Split out of `scanToken` to keep that method
+  // small enough for the JIT to compile and inline it well.
+  private def scanOperator(
+      state: ScannerState,
+      source: SourceFile,
+      start: Int,
+      reporter: Reporter
+  ): (ScannerState, Token) =
+    source.content.charAt(start) match
+      case ',' => single(state, start)(Token.Comma(_))
+      case ';' => single(state, start)(Token.Semicolon(_))
+      case '@' => single(state, start)(Token.At(_))
       case ':' => single(state, start)(Token.Colon(_))
       case '.' => single(state, start)(Token.Dot(_))
       case '=' =>
@@ -319,17 +322,17 @@ object Scanner:
       case '&' =>
         if peekChar(source, start + 1) == '&' then double(state, start)(Token.AndAnd(_))
         else errorChar(state, start, DiagCode.E003, "stray `&` (did you mean `&&`?)", reporter)
-      case '+' => single(state, start)(Token.Plus(_))
-      case '*' => single(state, start)(Token.Star(_))
-      case '/' => single(state, start)(Token.Slash(_))
-      case '%' => single(state, start)(Token.Percent(_))
-
-      case ch if isIdentStart(ch) => scanIdent(state, source, start)
-      case ch if ch.isDigit       => scanNumber(state, source, start)
-      case '"'                    => scanQuoted(state, source, start, reporter, Quote.Str)
-      case '\''                   => scanQuoted(state, source, start, reporter, Quote.Chr)
-
+      case '+'   => single(state, start)(Token.Plus(_))
+      case '*'   => single(state, start)(Token.Star(_))
+      case '/'   => single(state, start)(Token.Slash(_))
+      case '%'   => single(state, start)(Token.Percent(_))
       case other => errorChar(state, start, DiagCode.E004, s"unexpected character ${describeChar(other)}", reporter)
+
+  // Open-bracket production: push the bracket with the current indent depth.
+  private def openBracket(state: ScannerState, start: Int, ch: Char, mk: Span => Token): (ScannerState, Token) =
+    val tok = mk(Span(start, start + 1))
+    val bracket = OpenBracket(ch, state.indentStack.length)
+    (state.copy(pos = start + 1, bracketStack = bracket :: state.bracketStack, lastKind = tok.kind), tok)
 
   // Fixed-width token of `len` chars at `start`.
   private inline def emit(state: ScannerState, start: Int, len: Int)(inline mk: Span => Token): (ScannerState, Token) =
@@ -361,11 +364,11 @@ object Scanner:
       reporter: Reporter
   ): (ScannerState, Token) =
     val nextStack = state.bracketStack match
-      case (top, _) :: rest if top == expected => rest
-      case _                                   =>
+      case OpenBracket(top, _) :: rest if top == expected => rest
+      case _                                              =>
         val tag = state.bracketStack match
-          case (top, _) :: _ => s"`$top`"
-          case Nil           => "empty"
+          case OpenBracket(top, _) :: _ => s"`$top`"
+          case Nil                      => "empty"
         reporter.error(
           DiagCode.E005,
           Span(start, start + 1),
