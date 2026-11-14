@@ -10,33 +10,13 @@ import fixed.ast.Trees
 import fixed.util.SourceFile
 import munit.FunSuite
 
-/** Phase 2.1 M3.5 — corruption resilience property test.
+/** Corruption-resilience property test (fixed seed, so reproducible): `Iterations` times, insert a
+  * random junk char into a random example file and parse it under a wall-clock timeout.
   *
-  * For a fixed seed (deterministic), iterate `Iterations` times:
-  *   1. Pick a random `.fixed` file under `examples`.
-  *   2. Insert a random "junk" character at a random byte position.
-  *   3. Run `Parser.parse` under a wall-clock timeout.
-  *
-  * The hard contract (failure stops the suite):
-  *   - No timeout — parser always terminates.
-  *   - No exception — parser never throws.
-  *   - When the tree shape differs from the reference, there is at
-  *     least one diagnostic (no silent corruption).
-  *
-  * The soft contract is that `CompilationUnit.items.length` should
-  * stay within ±1 of the reference. This is the aspirational target
-  * from `phase-2.1-incremental-parser.md` §7.4 and §3.3.3, and will
-  * be reached once recovery is wired into every production. Today
-  * (post-M3.4) only top-level / block-body / arg-list / type-expr
-  * anchors exist, so corruption inside a fn signature or pattern can
-  * still escape its decl and split it into many top-level items. The
-  * suite tracks the worst observed drift and *prints* a digest, but
-  * only fails on extreme drift (>= `MaxItemDrift`) so genuine
-  * regressions still surface.
-  *
-  * The fixed seed makes failures reproducible. To investigate a
-  * report, read the seed below; each iteration prints
-  * `(file, position, char)` on failure.
+  * Hard contract (fails the suite): no timeout, no exception, and a changed tree shape always comes
+  * with a diagnostic. Soft contract: the top-level item count stays within ±1 of the reference
+  * (`phase-2.1-incremental-parser.md` §7.4). Recovery does not cover fn signatures or patterns yet,
+  * so only drift ≥ `MaxItemDrift` fails; the worst drift is printed.
   */
 class CorruptionResilienceSuite extends FunSuite:
 
@@ -48,10 +28,7 @@ class CorruptionResilienceSuite extends FunSuite:
   private val PerParseTimeoutMs = 2000L
   private val JunkChars: Vector[Char] = Vector('@', ';', '}', '?', '$', '\\')
 
-  /** Aspirational target: 1. Current best after M3.0..M3.4: empirically
-    * around 50 (corruption inside a fn signature can split into many
-    * items). Tighten as recovery lands in patterns / arms / props.
-    */
+  /** Target 1; ~50 observed today. Tighten as recovery reaches patterns, arms and props. */
   private val MaxItemDrift = 80
 
   private val ExampleDir = "examples"

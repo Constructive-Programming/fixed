@@ -11,15 +11,7 @@ enum DiagCode:
   case E001, E002, E003, E004, E005, E006, E007, E008, E009
   case P001, P002, P003, P004, P005, P006, P007, P008, P010, P011, P012, P013, P014, P015, P016, P017, P018, P019, P099
 
-/** A single diagnostic message with location, code, and explanation.
-  *
-  * Per the project's "Agent-Friendly CLI and Compiler Output" guidelines,
-  * every diagnostic carries:
-  *  - a numeric error code (e.g. E001)
-  *  - a span pointing into the source
-  *  - a human-readable explanation
-  *  - an optional copy-pasteable suggestion
-  */
+/** A diagnostic: code, source span, explanation and an optional copy-pasteable suggestion. */
 final case class Diagnostic(
     severity: Severity,
     code: DiagCode,
@@ -29,18 +21,14 @@ final case class Diagnostic(
 ):
   def isError: Boolean = severity == Severity.Error
 
-/** Accumulates diagnostics during a single compilation. Single-threaded;
-  * the typer and later phases each have their own Reporter view (or share).
-  */
+/** Accumulates the diagnostics of one compilation; single-threaded. */
 final class Reporter(val source: SourceFile):
   private val buf = scala.collection.mutable.ArrayBuffer.empty[Diagnostic]
 
   def error(code: DiagCode, span: Span, message: String, suggestion: Option[String] = None): Unit =
     buf += Diagnostic(Severity.Error, code, span, message, suggestion)
 
-  /** Append a pre-built diagnostic. Used when a phase (e.g. the parser)
-    * accumulates its own diagnostics functionally and the driver later
-    * folds them into a shared Reporter. */
+  /** Append a pre-built diagnostic, e.g. one folded in from a phase's functional result. */
   def add(d: Diagnostic): Unit =
     buf += d
 

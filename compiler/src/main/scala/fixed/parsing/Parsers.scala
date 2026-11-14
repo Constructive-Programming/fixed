@@ -7,27 +7,14 @@ import cats.data.NonEmptyList
 import fixed.ast.Tree
 import fixed.util.{DiagCode, Reporter, SourceFile, Span}
 
-/** Hand-written recursive-descent parser over the token stream produced
-  * by [[Scanner]]. The pure-functional core lives in `object Parser`:
-  * every production is a `(ParserState, Reporter) -> (ParserState, A)`
-  * function, with `ParserState` carrying the token cursor, recovery
-  * anchor stack, and the off-side-implicit DEDENT counter as immutable
-  * fields. The `class Parser` wrapper materialises the token stream
-  * once and drives the pipeline — there is no internal mutable state.
-  *
-  * The only impurity is diagnostic emission via the supplied `Reporter`,
-  * matching the [[Scanner]] discipline established in commits
-  * `2fff493` and `7395346`.
-  *
-  * Some productions (`prop`, `forall`, struct literals, `mod`, `pub`)
-  * are still stubbed in places — they emit an explicit "not yet
-  * implemented" diagnostic and a `Trees.Error` gap node, leaving the
-  * surrounding parse intact.
-  *
-  * Recovery: every production that owns a synchronisation context
-  * pushes an anchor frame via `withAnchors` and may call `syncToAnchors`
-  * on failure; see `spec/syntax_grammar.ebnf` Appendix A.1 for the
-  * normative anchor set per context.
+/** Hand-written recursive-descent parser. The core is pure: every production is a
+  * `ParserState => Parsed[A]` rule, with `Reporter` as a context parameter (the only impurity), and
+  * `ParserState` carries the token cursor, the recovery-anchor stack and the owed-DEDENT count.
+  * Productions live in `DeclParsers`, `TypeParsers` and `ExprParsers`; this file holds the state,
+  * combinators, recovery and entry points. A production that owns a synchronisation context pushes
+  * anchors with `withAnchors` and calls `syncToAnchors` on failure (`spec/syntax_grammar.ebnf`
+  * Appendix A.1). Unfinished productions (`mod`, `pub`, …) report "not yet implemented" and leave a
+  * `Trees.Error` gap.
   */
 final class Parser(scanner: Scanner, reporter: Reporter):
   import Parser.initialState
@@ -290,26 +277,12 @@ object Parser:
       absorbOwedDedents(s.advance.consumeOwed)
     else s
 
-  /** Drive an `INDENT body DEDENT` block: parse the INDENT, run
-    * `parseStep` for each item, then drain owed DEDENTs and either
-    * consume the matching DEDENT or owe it. The body terminates on
-    * DEDENT, EOF, or an outer-bracket waiter (the off-side body was
-    * implicit inside an arg list and the enclosing `parseDelimited`
-    * needs the comma/close). NEWLINEs between items are skipped.
-    *
-    * Used by every indented-body production: `parseBlock`,
-    * `parseDoStmts`, `parseMatchArms`, `parseHandlerArms`,
-    * `parseDataBody`, `parseCapBody`, `parseSatisfiesBody`,
-    * `parseEffectMembers`. Body productions that own dispatch logic
-    * (variant-vs-prop, fn-vs-Self.fn-vs-prop) put it inside parseStep;
-    * productions with per-statement validity checks (`parseBlock`,
-    * `parseDoStmts`) emit their own P011/P018 diagnostics from inside
-    * parseStep, since the post-statement legality check is per-item.
-    *
-    * `parseStep` takes the current state and current accumulator and
-    * returns the next state + new accumulator. Returning `acc` unchanged
-    * is how a recovery branch records that no item was produced (the
-    * dispatch caller still emitted its diagnostic and synced). */
+  /** Drive an `INDENT item* DEDENT` body: `parseStep` folds each item into the accumulator
+    * (returning `acc` unchanged records a recovered, dropped item). Ends on DEDENT, EOF or an
+    * outer-bracket waiter (an implicit off-side body inside an argument list); NEWLINEs between items
+    * are skipped and owed DEDENTs drained. Item dispatch and per-item diagnostics (P011, P018) live in
+    * the callers' `parseStep`.
+    */
   private[parsing] def parseIndentedBody[A](
       s0: ParserState,
       acc0: A
@@ -465,22 +438,11 @@ object Parser:
       (st1, item, item)
     }
 
-  /** Shared loop body. `parseItem` returns `(state, ok, recovered)`:
-    * the value to store on a clean parse and the value to store after
-    * a P012 sync. The `itemStart` span lets `Tree` callers wrap the
-    * partial item in `Trees.Error`.
-    *
-    * Marked `inline` (with `inline parseItem`) so each call site gets
-    * its own monomorphic copy of the loop. The previous shared-body
-    * version had a megamorphic `Function3` apply — many call sites
-    * (parseArgList, parseFnParamList, parseFieldList, parseStructLit,
-    * parseUseDecl selectors, parseLambdaExpr params, parseListExpr,
-    * parseInnerPatternList, parseOptionalDataOfClause,
-    * parseOptionalTypeParamsHint, …) made the JIT fall back to vtable
-    * dispatch, blocking escape analysis on the `(state, ok, recovered)`
-    * tuple and forcing per-call lambda allocation. Inlining specialises
-    * the loop per call site, the tuple is scalar-replaced, and the
-    * lambda goes away. */
+  /** Shared loop for comma lists. `parseItem` returns `(state, ok, recovered)`: the value for a clean
+    * parse and the value after a P012 sync (`itemStart` lets `Tree` callers wrap the partial item in
+    * `Trees.Error`). `inline` gives each call site a monomorphic loop; the shared version's
+    * megamorphic Function3 blocked escape analysis and allocated a lambda per call.
+    */
   private[parsing] inline def parseDelimitedLoop[A](
       s0: ParserState,
       closeKind: TokenKind,
@@ -515,17 +477,8 @@ object Parser:
         (st1, items.toList)
     }
 
-  /** Functional entry point: parse a whole source file and return its
-    * tree, diagnostics, and trivia together. The parser does not
-    * require a caller-supplied Reporter — diagnostics flow through the
-    * returned [[ParseResult]].
-    *
-    * Internally we still allocate a private Reporter to drive the
-    * Scanner/Parser plumbing; the diagnostics are extracted and the
-    * Reporter is discarded. The hot path stays identical to the
-    * pre-M1 implementation; the API surface itself is functional.
-    *
-    * See `docs/plans/phase-2.1-incremental-parser.md` §2.
+  /** Parse a whole file into a [[ParseResult]] (tree, diagnostics, trivia). Uses a private Reporter
+    * internally, so callers need none.
     */
   def parse(source: SourceFile): ParseResult =
     val privateReporter = new Reporter(source)
@@ -533,17 +486,9 @@ object Parser:
     val parser = new Parser(scanner, privateReporter)
     val tree = parser.parseCompilationUnit()
 
-    /** Scanner's trivia builder is populated incrementally as the parser
-      * pulls tokens; by the time parseCompilationUnit returns it has
-      * observed every real token and the table is complete.
-      */
     ParseResult(tree, privateReporter.diagnostics.toList, scanner.triviaTable)
 
-  /** Adapter: parse and push diagnostics into the supplied reporter.
-    * Retained so existing callers and tests keep working unchanged.
-    * Removed in Phase 3 once every caller is on the [[ParseResult]]
-    * API.
-    */
+  /** Adapter for callers that still pass a Reporter: parse and push the diagnostics into it. */
   def parse(source: SourceFile, reporter: Reporter): Tree =
     val result = parse(source)
     result.diagnostics.foreach(reporter.add)
