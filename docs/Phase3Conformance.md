@@ -84,12 +84,22 @@ JMH, corpus of 11 examples, `FrontEndBench`:
 | Type side table: lazy zonk, then `IdentityHashMap` (plan §3.1/§3.5 hatch) | 1073 | 6.1× |
 | Thunked candidates, unboxed unify / instantiate / sets, per-owner type-variable index, error counter | 920 | 5.1× |
 | Presized identity table (2 forks) | 849 ± 28 | 4.8× |
+| Precomputed capability member tables | 829 ± 48 | 4.7× |
+| No redundant resolution in `unify` (identity fast path, loop `unifyAll`) | 779 ± 32 | 4.4× |
 
 The Namer is ~104 µs of `typer`. The remaining body-typing cost is spread across the persistent
 unifier (`resolve`, `unify`, ~15%), the identity table (~8%), scope maps (`Context.bind`,
 `Namer.Ctx.bind`), member lookup and symbol-table appends. No hotspot remains above ~8%.
 
-Reaching 2× needs the remaining persistent structures in the hot path replaced, starting with a
-mutable unifier (the plan's §3.5 hatch). Overload trials then need an undo trail to roll back a
-failed attempt's bindings. Mutable lexical scopes would come next. Both are a design change, not
-a tuning step.
+Measured diagnosis (counters over one corpus pass): 2,769 expression nodes, 3,126 `unify` and
+12,330 `resolve` calls. Only 2,893 of those resolutions follow a variable link, so unifier chains
+are nearly flat: a mutable or union-find unifier has little to gain. There are 372 member lookups
+over 61 distinct (type, name) pairs.
+
+Allocation (`-prof gc`): the typer allocates ~4.0 MB per pass against 1.6 MB for the parser, and
+GC takes ~0.4% of the time. `TyperState.copy` is 4.4% of the allocated bytes. Removing 5% of
+the allocation (iterators instead of materialized member vectors) changed time by less than the
+noise. A leaner `TyperState` is therefore not a clear win, and was not done.
+
+What remains is a per-node constant factor (~250 ns per expression node) spread over many small
+costs, plus the Namer (~15%, re-run per unit for user declarations).

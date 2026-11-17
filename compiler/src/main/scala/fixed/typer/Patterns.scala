@@ -30,7 +30,7 @@ object Patterns:
           case Some(data) =>
             val (s1, args) = Members.freshArgs(s, data)
             val s2 = Typer.unify(s1, span, t, Type.TypeRef(data, args))
-            val variants = s2.symbols.variantsOf(data)
+            val variants = s2.symbols.variantsOf(data).take(1).toList
             val known = variants.headOption.toList.flatMap(v => s2.symbols.fieldsOf(v.id))
             val (s3, types) =
               variants.headOption.fold((s2, List.empty[Type]))(v => Members.fieldTypes(s2, data, args, v.id))

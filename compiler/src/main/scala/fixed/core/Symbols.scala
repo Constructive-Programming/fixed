@@ -73,13 +73,14 @@ final case class SymbolTable(
   def typeParamsOf(owner: SymbolId): List[SymbolId] = typeParams.getOrElse(owner.toInt, Nil)
 
   /** The symbols `owner` declared, in entry order. */
-  def membersOf(owner: SymbolId): Vector[Denotation] = children.getOrElse(owner.toInt, Vector.empty).map(apply)
+  def membersOf(owner: SymbolId): Iterator[Denotation] =
+    children.getOrElse(owner.toInt, Vector.empty).iterator.map(apply)
 
   /** A data type's variants, in declaration order. */
-  def variantsOf(data: SymbolId): Vector[Denotation] = membersOf(data).filter(_.kind == SymKind.Variant)
+  def variantsOf(data: SymbolId): Iterator[Denotation] = membersOf(data).filter(_.kind == SymKind.Variant)
 
   /** A variant's fields, in declaration order. */
-  def fieldsOf(variant: SymbolId): Vector[Denotation] = membersOf(variant).filter(_.kind == SymKind.Field)
+  def fieldsOf(variant: SymbolId): Iterator[Denotation] = membersOf(variant).filter(_.kind == SymKind.Field)
 
   /** Record `typeName satisfies cap`. */
   def satisfy(typeName: String, cap: Type): SymbolTable =
