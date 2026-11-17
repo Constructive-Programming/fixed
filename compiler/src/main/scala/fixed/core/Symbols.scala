@@ -102,8 +102,9 @@ extension (table: SymbolTable)
         val row = if fx.effects.isEmpty then ""
         else fx.effects.map(e => table(e.sym).name + args(e.args)).mkString(" with ", " + ", "")
         val lhs = l match
-          case _: Type.ArrowType => s"(${render(l)})"
-          case _                 => render(l)
+          case Type.TupleType(List(p: (Type.ArrowType | Type.TupleType))) => s"(${render(p)})"
+          case Type.TupleType(List(p))                                    => render(p)
+          case other                                                      => render(other)
         s"$lhs -> ${render(r)}$row"
       case Type.TupleType(elems)        => elems.map(render).mkString("(", ", ", ")")
       case Type.IsBound(bounds)         => bounds.map(render).mkString("is ", " + ", "")
@@ -115,4 +116,5 @@ extension (table: SymbolTable)
       case Type.RefinementType(g, vals) => vals.map(term).mkString(s"${table(g).name}(", ", ", ")")
       case Type.ValueArg(v)             => term(v)
       case Type.TypeVar(id)             => s"?$id"
+      case Type.AppliedVar(id, as)      => s"?$id${args(as)}"
       case Type.Layer(d, as, seed)      => s"${table(d).name}${args(as)} layer over ${render(seed)}"

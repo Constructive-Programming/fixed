@@ -2,7 +2,7 @@ package fixed.typer
 
 import fixed.CompilationUnit
 import fixed.ast.{Tree, Trees}
-import fixed.core.{Context, Phase, Proto, SymKind, SymbolTable, Type}
+import fixed.core.{Context, Phase, SymKind, SymbolTable}
 
 /** Namer, then Typer: types the body of every top-level `fn` against its declared return type.
   * Cap, effect and satisfies method bodies join with capability member resolution (M5).
@@ -25,12 +25,6 @@ object TyperPhase extends Phase:
     fns.foldLeft(TyperState(symbols))((s, fn) => typeFnBody(s, fn)).finish
 
   private def typeFnBody(s: TyperState, fn: Trees.FnDecl): TyperState =
-    (s.symbols.scope.get(fn.name), fn.body) match
-      case (Some(id), Some(body)) if s.symbols(id).kind == SymKind.Fn =>
-        val params = s.symbols.membersOf(id).filter(d => d.kind == SymKind.ValueParam || d.kind == SymKind.TypeParam)
-        given Context = Context(s.symbols.scope ++ params.map(d => d.name -> d.id), id)
-        val expected = s.symbols(id).info match
-          case Type.ArrowType(_, ret, _) => Proto.ExpectedType(ret)
-          case _                         => Proto.Wildcard
-        Typer.typedExpr(s, body, expected)._1
-      case _ => s
+    s.symbols.scope.get(fn.name).filter(s.symbols(_).kind == SymKind.Fn) match
+      case Some(id) => Typer.typedFnBody(s, id, fn)(using Context(s.symbols.scope, id))
+      case None     => s

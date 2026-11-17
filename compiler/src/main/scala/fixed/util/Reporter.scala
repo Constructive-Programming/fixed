@@ -10,7 +10,7 @@ enum Severity:
 enum DiagCode:
   case E001, E002, E003, E004, E005, E006, E007, E008, E009
   case P001, P002, P003, P004, P005, P006, P007, P008, P010, P011, P012, P013, P014, P015, P016, P017, P018, P019, P099
-  case T001, T002, T003, T004, T005, T006, T007, T008
+  case T001, T002, T003, T004, T005, T006, T007, T008, T009, T020
 
 /** A diagnostic: code, source span, explanation and an optional copy-pasteable suggestion. */
 final case class Diagnostic(

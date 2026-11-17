@@ -54,6 +54,9 @@ cap Empty:
 // This is a simplified, collection-oriented Optional (extends Functor + Folding).
 // The canonical sum-type Optional (with some/none/fold) is in 03_option_result.fixed.
 cap Optional extends Functor + Folding:
+    Self.fn some(value: Part) -> Self
+    Self.fn none -> Self
+    fn fold(on_some: Part -> R, on_none: () -> R) -> R
     fn isDefined -> Boolean
     fn orElse(e: Self) -> Self
 
@@ -207,7 +210,7 @@ fn take(collection: C is ArrayLike, n: u64) -> C =
 //
 // Anamorphism on List: unfold the index counter into a List of u64,
 // then fold-right into the target representation R.
-fn range(start: u64, end: u64) -> R is Sequencing + Empty =
+fn range(start: u64, end: u64) -> R is Sequencing + Folding + Empty =
     List.unfold(start, (i) ->
         if i >= end: List.Nil
         else: List.Cons(i, i + 1)

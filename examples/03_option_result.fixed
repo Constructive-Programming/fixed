@@ -16,6 +16,9 @@ use std.io.Console
 // --- Capabilities declare constructor *requirements* via Self.fn ---
 
 cap Optional extends Functor + Folding:
+    Self.fn some(value: Part) -> Self
+    Self.fn none -> Self
+    fn fold(on_some: Part -> R, on_none: () -> R) -> R
     fn isDefined -> Boolean
     fn orElse(e: Self) -> Self
 
