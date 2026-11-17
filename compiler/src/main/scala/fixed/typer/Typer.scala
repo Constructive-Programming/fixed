@@ -4,7 +4,7 @@ import scala.collection.immutable.IntMap
 
 import fixed.ast.{Tree, Trees}
 import fixed.core.{Context, Proto, SymKind, SymbolId, SymbolTable, Type, render}
-import fixed.util.{DiagCode, Diagnostic, Severity, Span}
+import fixed.util.{DiagCode, Diagnostic, Severity, Span, mapAccum}
 
 /** A tree's identity in the type side table: its span and node class (§3.0 span-as-identity).
   * Cheap to hash, unlike the tree itself, whose structural hash walks the whole subtree.
@@ -32,10 +32,7 @@ final case class TyperState(
     (copy(unifier = u), v)
 
   /** `n` fresh unconstrained variables. */
-  def freshVars(n: Int): (TyperState, List[Type]) = (1 to n).foldLeft((this, List.empty[Type])) { case ((si, acc), _) =>
-    val (si1, v) = si.fresh
-    (si1, acc :+ v)
-  }
+  def freshVars(n: Int): (TyperState, List[Type]) = mapAccum(this, List.fill(n)(()))((si, _) => si.fresh)
 
   /** The recorded type of `tree`. */
   def typeOf(tree: Tree): Option[Type] = types.get(TreeKey.of(tree))
@@ -117,9 +114,7 @@ object Typer:
 
   /** Reconcile an inferred type with the prototype. */
   private def check(s: TyperState, span: Span, t: Type, pt: Proto): TyperState =
-    pt match
-      case Proto.Wildcard        => s
-      case Proto.ExpectedType(e) => unify(s, span, e, t)
+    pt.expected.fold(s)(unify(s, span, _, t))
 
   private[typer] def unify(s: TyperState, span: Span, expected: Type, actual: Type): TyperState =
     solve(
@@ -152,11 +147,7 @@ object Typer:
           case _ => (s.error(DiagCode.T008, span, s"$name is not a value"), Type.NeverType)
 
   private def typedAll(s: TyperState, trees: List[Tree])(using Context): (TyperState, List[Type]) =
-    val (s1, acc) = trees.foldLeft((s, List.empty[Type])) { case ((si, acc0), t) =>
-      val (si1, ty) = typedExpr(si, t, Proto.Wildcard)
-      (si1, ty :: acc0)
-    }
-    (s1, acc.reverse)
+    mapAccum(s, trees)(typedExpr(_, _, Proto.Wildcard))
 
   private def typedBinOp(s: TyperState, t: Trees.BinOp, pt: Proto)(using Context): (TyperState, Type) =
     import Trees.BinOperator.*
@@ -218,21 +209,13 @@ object Typer:
   private def typedIf(s: TyperState, t: Trees.IfExpr, pt: Proto)(using Context): (TyperState, Type) =
     val (s1, _) = typedExpr(s, t.cond, Proto.ExpectedType(bool))
     val (s2, thenType) = typedExpr(s1, t.thenBranch, pt)
-    val elseProto = pt match
-      case Proto.Wildcard => Proto.ExpectedType(thenType)
-      case expected       => expected
-    val typed = pt match
-      case Proto.ExpectedType(e) => e
-      case Proto.Wildcard        => thenType
-    (typedExpr(s2, t.elseBranch, elseProto)._1, typed)
+    (typedExpr(s2, t.elseBranch, pt.orExpect(Some(thenType)))._1, pt.orElse(thenType))
 
   /** A lambda. Against an expected function type of the same arity, parameters take its parameter
     * types and the body its result type; otherwise they are fresh variables.
     */
   private def typedLambda(s: TyperState, t: Trees.LambdaExpr, pt: Proto)(using ctx: Context): (TyperState, Type) =
-    val expected = pt match
-      case Proto.ExpectedType(e) => s.unifier.resolve(e)
-      case Proto.Wildcard        => Type.NeverType
+    val expected = pt.expected.fold(Type.NeverType)(s.unifier.resolve)
     val (expectedParams, expectedResult) = expected match
       case Type.ArrowType(lhs, rhs, _) =>
         val ps = Members.params(lhs)
@@ -308,12 +291,7 @@ object Typer:
     ctx.scope.get(t.qualifier) match
       case None        => (s.error(DiagCode.T001, t.span, s"not found: ${t.qualifier}"), Type.NeverType)
       case Some(owner) =>
-        val layer = pt match
-          case Proto.ExpectedType(e) =>
-            s.unifier.resolve(e) match
-              case l: Type.Layer => Some(l)
-              case _             => None
-          case Proto.Wildcard => None
+        val layer = pt.expected.map(s.unifier.resolve).collect { case l: Type.Layer => l }
         val kind = s.symbols(owner).kind
         Members.static(s, owner, t.method, layer) match
           case Some((s1, member))             => applyArgs(s1, member, t.args, t.span)

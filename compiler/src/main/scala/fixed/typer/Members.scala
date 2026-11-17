@@ -1,6 +1,7 @@
 package fixed.typer
 
 import fixed.core.{SymKind, SymbolId, Type}
+import fixed.util.mapAccum
 
 /** Signature lookup for the typer: instantiation of generic signatures, instance members (data
   * fields, capability methods reached through `satisfies` or a type variable's bound, and the
@@ -47,14 +48,11 @@ object Members:
     (s1, out)
 
   private def go(s: TyperState, t: Type, sub: Subst, m: Map[SymbolId, Type]): (TyperState, Map[SymbolId, Type], Type) =
-    def all(ts: List[Type], s0: TyperState, m0: Map[SymbolId, Type]) =
-      ts.foldLeft((s0, m0, List.empty[Type])) { case ((si, mi, acc), ti) =>
-        val (si1, mi1, ti1) = go(si, ti, sub, mi)
-        (si1, mi1, ti1 :: acc)
-      } match
-        case (s1, m1, acc) => (s1, m1, acc.reverse)
     def rebuild(parts: List[Type])(mk: List[Type] => Type) =
-      val (s1, m1, out) = all(parts, s, m)
+      val ((s1, m1), out) = mapAccum((s, m), parts) { case ((si, mi), ti) =>
+        val (si1, mi1, ti1) = go(si, ti, sub, mi)
+        ((si1, mi1), ti1)
+      }
       (s1, m1, mk(out))
     t match
       case Type.TypeRef(id, Nil) if m.contains(id)  => (s, m, m(id))
@@ -148,9 +146,9 @@ object Members:
 
   /** A field of a single-variant data type, as a zero-argument member. */
   private def field(s: TyperState, data: SymbolId, args: List[Type], name: String): Option[(TyperState, Type)] =
-    s.symbols.membersOf(data).filter(_.kind == SymKind.Variant).toList match
+    s.symbols.variantsOf(data).toList match
       case variant :: Nil =>
-        s.symbols.membersOf(variant.id).find(f => f.kind == SymKind.Field && f.name == name).map { f =>
+        s.symbols.fieldsOf(variant.id).find(_.name == name).map { f =>
           val (s1, t) = instantiate(s, f.info, Subst(typeParamsOf(s, data).zip(args).toMap, Set.empty))
           (s1, Type.ArrowType(Type.TupleType(Nil), t, fixed.core.EffectRow.empty))
         }
@@ -214,14 +212,14 @@ object Members:
     * fields with each recursive occurrence of the type replaced by the result type `R`.
     */
   private def derivedFold(s: TyperState, data: SymbolId, args: List[Type]): Option[(TyperState, Type)] =
-    val variants = s.symbols.membersOf(data).filter(_.kind == SymKind.Variant).toList
+    val variants = s.symbols.variantsOf(data).toList
     Option.when(variants.nonEmpty) {
       val (s0, r) = s.fresh
-      val (s1, cases) = variants.foldLeft((s0, List.empty[Type])) { case ((si, acc), v) =>
+      val (s1, cases) = mapAccum(s0, variants) { (si, v) =>
         val (si1, fields) = fieldTypes(si, data, args, v.id)
-        (si1, Type.ArrowType(product(fields.map(replaceSelf(_, data, r))), r, fixed.core.EffectRow.empty) :: acc)
+        (si1, Type.ArrowType(product(fields.map(replaceSelf(_, data, r))), r, fixed.core.EffectRow.empty))
       }
-      (s1, Type.ArrowType(product(cases.reverse), r, fixed.core.EffectRow.empty))
+      (s1, Type.ArrowType(product(cases), r, fixed.core.EffectRow.empty))
     }
 
   /** The static member `name` of the type, effect or import `owner`, instantiated. `pt` decides
@@ -235,7 +233,7 @@ object Members:
           instantiate(s, op.info, Subst(Map.empty, Set(owner, op.id)))
         }
       case SymKind.Data =>
-        s.symbols.membersOf(owner).find(m => m.kind == SymKind.Variant && m.name == name) match
+        s.symbols.variantsOf(owner).find(_.name == name) match
           case Some(v)                  => Some(construct(s, owner, v.id, layer))
           case None if name == "unfold" => Some(derivedUnfold(s, owner))
           case None                     =>
@@ -283,18 +281,14 @@ object Members:
     (done, Type.ArrowType(Type.TupleType(List(seed, step)), Type.TypeRef(data, params), fixed.core.EffectRow.empty))
 
   def freshArgs(s: TyperState, data: SymbolId): (TyperState, List[Type]) =
-    typeParamsOf(s, data).foldLeft((s, List.empty[Type])) { case ((si, acc), p) =>
+    mapAccum(s, typeParamsOf(s, data)) { (si, p) =>
       val (u, v) = si.unifier.fresh(numeric = isNumeric(si, Type.TypeRef(p, Nil)), default = None)
-      (si.copy(unifier = u), acc :+ v)
+      (si.copy(unifier = u), v)
     }
 
   def fieldTypes(s: TyperState, data: SymbolId, args: List[Type], variant: SymbolId): (TyperState, List[Type]) =
     val sub = Subst(typeParamsOf(s, data).zip(args).toMap, Set(variant))
-    s.symbols.membersOf(variant).filter(_.kind == SymKind.Field).foldLeft((s, List.empty[Type])) {
-      case ((si, acc), f) =>
-        val (si1, t) = instantiate(si, f.info, sub)
-        (si1, acc :+ t)
-    }
+    mapAccum(s, s.symbols.fieldsOf(variant).toList)((si, f) => instantiate(si, f.info, sub))
 
   private def replaceSelf(t: Type, data: SymbolId, by: Type): Type =
     t match

@@ -2,7 +2,7 @@ package fixed.typer
 
 import fixed.ast.{Tree, Trees}
 import fixed.core.*
-import fixed.util.{DiagCode, Diagnostic, Severity, Span}
+import fixed.util.{DiagCode, Diagnostic, Severity, Span, mapAccum}
 
 /** The signature pass (`docs/plans/phase-3-typer.md` §4.2, §5.1). Enters one symbol per top-level
   * declaration, per member (variant, method, effect operation), per parameter and per type
@@ -23,7 +23,7 @@ object Namer:
     val items = unit match
       case Trees.CompilationUnit(items, _) => items
       case other                           => List(other)
-    val (entered, decls) = mapS(stdlib.copy(owner = SymbolId.Root), items)(enterTopLevel)
+    val (entered, decls) = mapAccum(stdlib.copy(owner = SymbolId.Root), items)(enterTopLevel)
     val typed = typeAll(entered, decls.flatten)
     (typed.table.copy(scope = typed.scope), typed.diags.reverse)
 
@@ -31,9 +31,9 @@ object Namer:
   private lazy val stdlib: Ctx =
     val (builtin, stringId) = Ctx.empty(SymbolId.Prelude).enter("String", SymKind.Data, Type.UnitType, Span.NoSpan)
     val withString = builtin.bind("String", stringId)
-    val (preluded, preludeDecls) = mapS(withString, Stdlib.prelude)(enterTopLevel)
-    val (withModules, moduleDecls) = mapS(preluded, Stdlib.modules.toList) { case (c, (module, decls)) =>
-      val (c1, entered) = c.nested(SymbolId.Prelude)(mapS(_, decls)(enterTopLevel))
+    val (preluded, preludeDecls) = mapAccum(withString, Stdlib.prelude)(enterTopLevel)
+    val (withModules, moduleDecls) = mapAccum(preluded, Stdlib.modules.toList) { case (c, (module, decls)) =>
+      val (c1, entered) = c.nested(SymbolId.Prelude)(mapAccum(_, decls)(enterTopLevel))
       val names = entered.flatten.collect { case (_, id) if id != SymbolId.Root => c1.table(id).name -> id }.toMap
       (c1.copy(modules = c1.modules.updated(module, names)), entered.flatten)
     }
@@ -84,14 +84,6 @@ object Namer:
   private object Ctx:
     def empty(owner: SymbolId): Ctx = Ctx(SymbolTable.empty, Nil, Map.empty, owner, Set.empty, Map.empty)
 
-  /** Map over `as`, threading the context. */
-  private def mapS[A, B](c: Ctx, as: List[A])(f: (Ctx, A) => (Ctx, B)): (Ctx, List[B]) =
-    val (out, acc) = as.foldLeft((c, List.empty[B])) { case ((c0, acc0), a) =>
-      val (c1, b) = f(c0, a)
-      (c1, b :: acc0)
-    }
-    (out, acc.reverse)
-
   /** Enter a top-level item's name(s); returns the declarations pass 2 must type. */
   private def enterTopLevel(c: Ctx, item: Tree): (Ctx, List[(Tree, SymbolId)]) =
     item match
@@ -135,7 +127,7 @@ object Namer:
         case t: Trees.DataDecl                       => dataSignature(ci, t, id)
         case t: Trees.EffectDecl                     => effectSignature(ci, t, id)
         case Trees.TypeAlias(_, valueParams, rhs, _) =>
-          val (ci1, _) = mapS(ci, valueParams)(valueParam)
+          val (ci1, _) = mapAccum(ci, valueParams)(valueParam)
           typeOf(ci1, rhs)
         case _ => (ci, Type.UnitType)
     }
@@ -146,7 +138,7 @@ object Namer:
     */
   private def fnSignature(c: Ctx, fn: Trees.FnLike): (Ctx, Type) =
     val c0 = fn.typeParamsHint.foldLeft(c)((ci, name) => introduce(ci, name, Nil, fn.span)._1)
-    val (c1, params) = mapS(c0, fn.params)(valueParam)
+    val (c1, params) = mapAccum(c0, fn.params)(valueParam)
     val (c2, ret) = fn.returnType.fold((c1, Type.UnitType))(typeOf(c1, _))
     arrow(c2, Members.product(params), ret, fn.withClause)
 
@@ -163,8 +155,8 @@ object Namer:
   /** A cap's info is its `extends` chain; its methods are entered as members. */
   private def capSignature(c: Ctx, cap: Trees.CapDecl): (Ctx, Type) =
     val (c1, _) = ofParams(c, cap.ofParams)
-    val (c2, _) = mapS(c1, cap.valueParams)(valueParam)
-    val (c3, supers) = mapS(c2, cap.extendsList)(capBound)
+    val (c2, _) = mapAccum(c1, cap.valueParams)(valueParam)
+    val (c3, supers) = mapAccum(c2, cap.extendsList)(capBound)
     val c4 = cap.body.foldLeft(c3) { (ci, item) =>
       item match
         case m: Trees.InstanceMethod => member(ci, m, SymKind.Method)._1
@@ -180,7 +172,7 @@ object Namer:
     val c2 = data.variants.foldLeft(c1) { (ci, v) =>
       val (ci1, vid) = ci.enter(v.name, SymKind.Variant, Type.UnitType, v.span)
       val (ci2, info) = ci1.nested(vid) { cv =>
-        val (cv1, fields) = mapS(cv, v.fields) { (cf, f) =>
+        val (cv1, fields) = mapAccum(cv, v.fields) { (cf, f) =>
           val (cf1, t) = typeOf(cf, f.typeAnn)
           (cf1.enter(f.name, SymKind.Field, t, f.span)._1, t)
         }
@@ -209,7 +201,7 @@ object Namer:
     * parameters become `ValueParam`s. Returns the type parameters, in order.
     */
   private def ofParams(c: Ctx, params: List[Tree]): (Ctx, List[Type]) =
-    val (c1, ts) = mapS(c, params) { (ci, p) =>
+    val (c1, ts) = mapAccum(c, params) { (ci, p) =>
       p match
         case fp: Trees.FnParam                                           => (valueParam(ci, fp)._1, None)
         case Trees.TypeRef(name, None, span) if !ci.scope.contains(name) =>
@@ -238,11 +230,11 @@ object Namer:
             val (c2, id) = introduce(c1, name, Nil, span)
             (c2, Type.TypeRef(id, args))
       case Trees.NamedAlias(name, caps, span) =>
-        val (c1, bounds) = mapS(c, caps)(capBound)
+        val (c1, bounds) = mapAccum(c, caps)(capBound)
         val (c2, id) = introduce(c1, name, bounds.flatten, span)
         (c2, Type.TypeRef(id, Nil))
       case Trees.IsBound(caps, _) =>
-        val (c1, bounds) = mapS(c, caps)(capBound)
+        val (c1, bounds) = mapAccum(c, caps)(capBound)
         (c1, Type.IsBound(bounds.flatten))
       case Trees.ArrowType(lhs, rhs, withClause, _) =>
         val (c1, l) = typeOf(c, lhs)
@@ -253,7 +245,7 @@ object Namer:
           case (_, single)                                  => List(single)
         arrow(c2, Members.product(params), r, withClause)
       case Trees.TupleArrowLhs(types, _) =>
-        val (c1, ts) = mapS(c, types)(typeOf)
+        val (c1, ts) = mapAccum(c, types)(typeOf)
         (c1, Type.TupleType(ts))
       case Trees.CapType(spec, _) =>
         spec match
@@ -262,7 +254,7 @@ object Namer:
             val (c1, t) = typeOf(c, a)
             (c1, Type.CapType(Some(t)))
           case Some(Trees.CapReturnSpec.Extends(caps)) =>
-            val (c1, bounds) = mapS(c, caps)(capBound)
+            val (c1, bounds) = mapAccum(c, caps)(capBound)
             (c1, Type.CapType(Some(Type.IsBound(bounds.flatten))))
       case Trees.ParenTypeApp(inner, ofArg, span) =>
         val (c1, t) = typeOf(c, inner)
@@ -284,7 +276,7 @@ object Namer:
   private def typeArgs(c: Ctx, ofArg: Option[Tree]): (Ctx, List[Type]) =
     ofArg match
       case None                                => (c, Nil)
-      case Some(Trees.TupleArrowLhs(types, _)) => mapS(c, types)(typeOf)
+      case Some(Trees.TupleArrowLhs(types, _)) => mapAccum(c, types)(typeOf)
       case Some(t)                             =>
         val (c1, ty) = typeOf(c, t)
         (c1, List(ty))
@@ -302,7 +294,7 @@ object Namer:
         val (c1, args) = typeArgs(c, ofArg)
         resolve(c1, name, span, "capability")(reference(c1, _, args))
       case Trees.RefinementCall(name, args, span) =>
-        val (c1, terms) = mapS(c, args)(symbolicTerm)
+        val (c1, terms) = mapAccum(c, args)(symbolicTerm)
         resolve(c1, name, span, "capability generator")(Type.RefinementType(_, terms.flatten))
       case Trees.PrimitiveType(name, _) => (c, Some(Type.PrimType(name)))
       case other                        =>
@@ -326,7 +318,7 @@ object Namer:
     val bounds = tree match
       case Trees.WithClause(row, _) => effectList(row)
       case other                    => effectList(other)
-    val (c1, resolved) = mapS(c, bounds) {
+    val (c1, resolved) = mapAccum(c, bounds) {
       case (ci, Trees.EffectBound(name, ofArg, span)) =>
         val (ci1, args) = typeArgs(ci, ofArg)
         resolve(ci1, name, span, "effect")(EffectBound(_, args))

@@ -1,0 +1,1480 @@
+# sbt-cardinality baseline — compiler module
+# Date:    2026-11-17
+# Command: sbt compiler/cardinalityReport   (plugin dev.constructive:sbt-cardinality 0.0.6, Scala 3.10.1)
+# Commit:  measured on the tree that adds this file (branch phase3-m5, Phase 3 typer)
+#
+# Reduction pass notes — typer (fixed.typer, fixed.core)
+#  Report reading: almost every typer signature row is '?' ("recursive type not read: fixed.core.Type");
+#  stored-value rows with IntMap / Class fields are '?' too. Both are analyzer limits, so the pass
+#  was source-level (skill §4, §5). Signatures 625 -> 629: the new defs below, no tier moved.
+#  1  stage 4  six hand-rolled "fold a list threading state" copies (Namer.mapS, Typer.typedAll,
+#              TyperState.freshVars, Members.go.all / fieldTypes / freshArgs / derivedFold)
+#              -> one generic fixed.util.mapAccum[S, A, B]. Semantics: same left-to-right order,
+#              same state threading. cats' Traverse.mapAccumulate was not used: its default runs
+#              through State/Eval, a cost the following tuning pass would have to undo.
+#  2  stage 3  the same `pt match { ExpectedType / Wildcard }` question at 6 sites -> Proto.expected,
+#              Proto.orElse, Proto.orExpect. Typer.check is now pt.expected.fold.
+#  3  stage 3  `membersOf(x).filter(_.kind == Variant | Field)` at 7 sites -> SymbolTable.variantsOf /
+#              fieldsOf. Kind dispatch in Members.static / candidates is a switchboard: kept.
+#  Recorded, not applied (large refactors, next candidates):
+#  4  stage 1  Denotation(kind, info): what `info` means depends on `kind` (a cap's extends chain,
+#              a data type's self type, a fn's arrow; Import / Variant placeholders), so the product
+#              admits combinations no symbol has. A per-kind sum would make them unrepresentable.
+#  5  stage 1  Type.CapType(retType: Option[Type]) encodes three forms (bare, `of T`, `extends`
+#              as Some(IsBound)) — a hidden sum.
+#  6  stage 2  SymbolTable.satisfies keyed by type *name*: primitives have no symbols, so String
+#              stays until they do.
+#
+Generic method / constructor implementation cardinalities
+  629 signatures: 120 finite · 178 countably infinite · 331 unresolved
+  180 unresolved on: ambiguous sealed family
+  128 unresolved on: recursive type not read
+  68 unresolved on: unresolved type
+  58 unresolved on: declaration not supplied
+  26 unresolved on: inline method
+  9 unresolved on: sealed family construction not resolved
+  8 unresolved on: inferred result type not resolved
+  6 unresolved on: final class field not observable injectively
+  3 unresolved on: definition inside an inline method
+  3 unresolved on: missing type of accessible value
+  2 unresolved on: enum case type not read
+  2 unresolved on: receiver is a sealed family this measurement does not split
+
+?  fixed.CompilationUnit.<init>  CompilationUnit(source: SourceFile, tree: Option[Tree] = None, symbols: SymbolTable = SymbolTable.empty, diagnostics: List[Diagnostic] = Nil)  CompilationUnit.scala:10  [constructor]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.CompilationUnit.hasErrors  hasErrors: Boolean  CompilationUnit.scala:16  [method]
+    captures: diagnostics, source
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.CompilationUnit.report  report(more: List[Diagnostic]): CompilationUnit  CompilationUnit.scala:19  [method]
+    captures: diagnostics, source
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.Compiler.phases  val phases: List[List[Phase]]  Compiler.scala:11  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.Compiler.compile  compile(unit: CompilationUnit): CompilationUnit  Compiler.scala:16  [method]
+    unresolved: ambiguous sealed family: Tree
+1  fixed.Main.main  main(args: Array[String]): Unit  Main.scala:10  [method]
+1  fixed.Main.report  report(unit: CompilationUnit): Unit  Main.scala:19  [method]
+?  fixed.Main.summary  summary(unit: CompilationUnit): String  Main.scala:25  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.ast.Tree.span  span: Span  ast/Trees.scala:19  [declaration]
+    unresolved: receiver is a sealed family this measurement does not split: Tree
+ω  fixed.ast.Trees.Error.<init>  Error(recovered: List[Tree], span: Span)  ast/Trees.scala:29  [constructor]
+ω  fixed.ast.Trees.Missing.<init>  Missing(expected: String, span: Span)  ast/Trees.scala:36  [constructor]
+ω  fixed.ast.Trees.CompilationUnit.<init>  CompilationUnit(items: List[Tree], span: Span)  ast/Trees.scala:38  [constructor]
+ω  fixed.ast.Trees.UseDecl.<init>  UseDecl(path: List[String], selectors: List[String], satisfies: Option[Tree], span: Span)  ast/Trees.scala:47  [constructor]
+?  fixed.ast.Trees.FnLike.sig  sig: FnSig  ast/Trees.scala:58  [declaration]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+?  fixed.ast.Trees.FnLike.name  name: String  ast/Trees.scala:59  [method]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+?  fixed.ast.Trees.FnLike.typeParamsHint  typeParamsHint: List[String]  ast/Trees.scala:60  [method]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+?  fixed.ast.Trees.FnLike.params  params: List[FnParam]  ast/Trees.scala:61  [method]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+?  fixed.ast.Trees.FnLike.returnType  returnType: Option[Tree]  ast/Trees.scala:62  [method]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+?  fixed.ast.Trees.FnLike.withClause  withClause: Option[Tree]  ast/Trees.scala:63  [method]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+?  fixed.ast.Trees.FnLike.body  body: Option[Tree]  ast/Trees.scala:64  [method]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+ω  fixed.ast.Trees.FnSig.<init>  FnSig(name: String, typeParamsHint: List[String], params: List[FnParam], returnType: Option[Tree], withClause: Option[Tree], body: Option[Tree])  ast/Trees.scala:67  [constructor]
+1  fixed.ast.Trees.FnLikeCompanion.<init>  FnLikeCompanion[T <: FnLike]  ast/Trees.scala:79  [constructor]
+?  fixed.ast.Trees.FnLikeCompanion.unapply  unapply(t: T): (String, List[String], List[FnParam], Option[Tree], Option[Tree], Option[Tree], Span)  ast/Trees.scala:80  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: sealed family construction not resolved: FnLike
+ω  fixed.ast.Trees.FnDecl.<init>  FnDecl(sig: FnSig, span: Span)  ast/Trees.scala:84  [constructor]
+ω  fixed.ast.Trees.CapDecl.<init>  CapDecl(name: String, valueParams: List[FnParam], ofParams: List[Tree], extendsList: List[Tree], body: List[Tree], span: Span)  ast/Trees.scala:91  [constructor]
+ω  fixed.ast.Trees.DataDecl.<init>  DataDecl(name: String, ofParams: List[Tree], variants: List[DataVariant], props: List[PropDecl], span: Span)  ast/Trees.scala:104  [constructor]
+ω  fixed.ast.Trees.EffectDecl.<init>  EffectDecl(isLinear: Boolean, name: String, ofParams: List[Tree], members: List[Tree], span: Span)  ast/Trees.scala:112  [constructor]
+ω  fixed.ast.Trees.TypeAlias.<init>  TypeAlias(name: String, valueParams: List[FnParam], rhs: Tree, span: Span)  ast/Trees.scala:120  [constructor]
+ω  fixed.ast.Trees.SatisfiesDecl.<init>  SatisfiesDecl(typeName: String, capRef: Tree, mappings: List[Tree], span: Span)  ast/Trees.scala:127  [constructor]
+ω  fixed.ast.Trees.ModDecl.<init>  ModDecl(name: String, items: List[Tree], span: Span)  ast/Trees.scala:134  [constructor]
+?  fixed.ast.Trees.Binder.binding  binding: Binding  ast/Trees.scala:142  [declaration]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+?  fixed.ast.Trees.Binder.name  name: String  ast/Trees.scala:143  [method]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+?  fixed.ast.Trees.Binder.typeAnn  typeAnn: Tree  ast/Trees.scala:144  [method]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+?  fixed.ast.Trees.Binder.default  default: Option[Tree]  ast/Trees.scala:145  [method]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+ω  fixed.ast.Trees.Binding.<init>  Binding(name: String, typeAnn: Tree, default: Option[Tree])  ast/Trees.scala:148  [constructor]
+1  fixed.ast.Trees.BinderCompanion.<init>  BinderCompanion[T <: Binder]  ast/Trees.scala:151  [constructor]
+?  fixed.ast.Trees.BinderCompanion.unapply  unapply(t: T): (String, Tree, Option[Tree], Span)  ast/Trees.scala:152  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: sealed family construction not resolved: Binder
+ω  fixed.ast.Trees.FnParam.<init>  FnParam(binding: Binding, span: Span)  ast/Trees.scala:155  [constructor]
+ω  fixed.ast.Trees.InstanceMethod.<init>  InstanceMethod(sig: FnSig, span: Span)  ast/Trees.scala:159  [constructor]
+ω  fixed.ast.Trees.StaticMethod.<init>  StaticMethod(sig: FnSig, span: Span)  ast/Trees.scala:163  [constructor]
+ω  fixed.ast.Trees.PropDecl.<init>  PropDecl(name: String, body: Tree, span: Span)  ast/Trees.scala:166  [constructor]
+ω  fixed.ast.Trees.DataVariant.<init>  DataVariant(name: String, fields: List[FieldDecl], span: Span)  ast/Trees.scala:172  [constructor]
+ω  fixed.ast.Trees.FieldDecl.<init>  FieldDecl(binding: Binding, span: Span)  ast/Trees.scala:179  [constructor]
+?  fixed.ast.Trees.SatisfiesMapping.capCtor  capCtor: String  ast/Trees.scala:184  [declaration]
+    captures: span
+    unresolved: receiver is a sealed family this measurement does not split: SatisfiesMapping
+ω  fixed.ast.Trees.ConstructorMapping.<init>  ConstructorMapping(variant: String, capCtor: String, span: Span)  ast/Trees.scala:187  [constructor]
+ω  fixed.ast.Trees.SelfMapping.<init>  SelfMapping(capCtor: String, span: Span)  ast/Trees.scala:190  [constructor]
+ω  fixed.ast.Trees.ImpossibleMapping.<init>  ImpossibleMapping(capCtor: String, span: Span)  ast/Trees.scala:193  [constructor]
+ω  fixed.ast.Trees.Block.<init>  Block(stmts: List[Tree], span: Span)  ast/Trees.scala:195  [constructor]
+ω  fixed.ast.Trees.LetExpr.<init>  LetExpr(pattern: Tree, init: Tree, span: Span)  ast/Trees.scala:197  [constructor]
+ω  fixed.ast.Trees.IfExpr.<init>  IfExpr(cond: Tree, thenBranch: Tree, elseBranch: Tree, span: Span)  ast/Trees.scala:199  [constructor]
+ω  fixed.ast.Trees.MatchExpr.<init>  MatchExpr(scrutinee: Tree, cases: List[MatchCase], span: Span)  ast/Trees.scala:206  [constructor]
+ω  fixed.ast.Trees.MatchCase.<init>  MatchCase(pattern: Tree, guard: Option[Tree], body: Tree, span: Span)  ast/Trees.scala:212  [constructor]
+ω  fixed.ast.Trees.HandleExpr.<init>  HandleExpr(subject: Tree, operationClauses: List[OperationClause], returnClause: Option[ReturnClause], span: Span)  ast/Trees.scala:222  [constructor]
+ω  fixed.ast.Trees.OperationClause.<init>  OperationClause(effect: String, op: String, params: List[Tree], body: Tree, span: Span)  ast/Trees.scala:229  [constructor]
+ω  fixed.ast.Trees.ReturnClause.<init>  ReturnClause(param: Tree, body: Tree, span: Span)  ast/Trees.scala:237  [constructor]
+ω  fixed.ast.Trees.DoExpr.<init>  DoExpr(stmts: List[Tree], span: Span)  ast/Trees.scala:239  [constructor]
+ω  fixed.ast.Trees.DoBind.<init>  DoBind(pattern: Tree, expr: Tree, span: Span)  ast/Trees.scala:241  [constructor]
+ω  fixed.ast.Trees.LambdaExpr.<init>  LambdaExpr(params: List[LambdaParam], body: Tree, span: Span)  ast/Trees.scala:244  [constructor]
+ω  fixed.ast.Trees.LambdaParam.<init>  LambdaParam(name: String, typeAnn: Option[Tree], default: Option[Tree], span: Span)  ast/Trees.scala:253  [constructor]
+?  fixed.ast.Trees.MemberCall.selection  selection: Selection  ast/Trees.scala:259  [declaration]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+?  fixed.ast.Trees.MemberCall.method  method: String  ast/Trees.scala:260  [method]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+?  fixed.ast.Trees.MemberCall.args  args: Option[List[Tree]]  ast/Trees.scala:261  [method]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+ω  fixed.ast.Trees.Selection.<init>  Selection(method: String, args: Option[List[Tree]])  ast/Trees.scala:264  [constructor]
+?  fixed.ast.Trees.MemberCallCompanion.<init>  MemberCallCompanion[H, T <: MemberCall](target: T => H)  ast/Trees.scala:269  [constructor]
+    unresolved: sealed family construction not resolved: MemberCall
+?  fixed.ast.Trees.MemberCallCompanion.unapply  unapply(t: T): (H, String, Option[List[Tree]], Span)  ast/Trees.scala:270  [method]
+    captures: target
+    unresolved: ambiguous sealed family: Tree
+    unresolved: sealed family construction not resolved: MemberCall
+ω  fixed.ast.Trees.MethodCall.<init>  MethodCall(receiver: Tree, selection: Selection, span: Span)  ast/Trees.scala:273  [constructor]
+ω  fixed.ast.Trees.StaticCall.<init>  StaticCall(qualifier: String, selection: Selection, span: Span)  ast/Trees.scala:279  [constructor]
+ω  fixed.ast.Trees.Apply.<init>  Apply(fn: Tree, args: List[Tree], span: Span)  ast/Trees.scala:283  [constructor]
+ω  fixed.ast.Trees.BinOp.<init>  BinOp(op: BinOperator, lhs: Tree, rhs: Tree, span: Span)  ast/Trees.scala:306  [constructor]
+ω  fixed.ast.Trees.UnaryOp.<init>  UnaryOp(op: UnaryOperator, operand: Tree, span: Span)  ast/Trees.scala:313  [constructor]
+ω  fixed.ast.Trees.Pipe.<init>  Pipe(lhs: Tree, rhs: Tree, span: Span)  ast/Trees.scala:319  [constructor]
+ω  fixed.ast.Trees.Ident.<init>  Ident(name: String, span: Span)  ast/Trees.scala:321  [constructor]
+ω  fixed.ast.Trees.IntLit.<init>  IntLit(value: BigInt, span: Span)  ast/Trees.scala:323  [constructor]
+ω  fixed.ast.Trees.FloatLit.<init>  FloatLit(value: BigDecimal, span: Span)  ast/Trees.scala:324  [constructor]
+ω  fixed.ast.Trees.StringLit.<init>  StringLit(value: String, span: Span)  ast/Trees.scala:325  [constructor]
+2^80  fixed.ast.Trees.CharLit.<init>  CharLit(value: Char, span: Span)  ast/Trees.scala:326  [constructor]
+2^65  fixed.ast.Trees.BoolLit.<init>  BoolLit(value: Boolean, span: Span)  ast/Trees.scala:327  [constructor]
+2^64  fixed.ast.Trees.UnitLit.<init>  UnitLit(span: Span)  ast/Trees.scala:328  [constructor]
+ω  fixed.ast.Trees.TupleExpr.<init>  TupleExpr(elements: List[Tree], span: Span)  ast/Trees.scala:330  [constructor]
+ω  fixed.ast.Trees.ListExpr.<init>  ListExpr(elements: List[Tree], span: Span)  ast/Trees.scala:331  [constructor]
+ω  fixed.ast.Trees.StructLit.<init>  StructLit(typeName: String, fields: List[(String, Tree)], span: Span)  ast/Trees.scala:333  [constructor]
+ω  fixed.ast.Trees.Resume.<init>  Resume(value: Option[Tree], span: Span)  ast/Trees.scala:339  [constructor]
+2^64  fixed.ast.Trees.Unreachable.<init>  Unreachable(span: Span)  ast/Trees.scala:341  [constructor]
+ω  fixed.ast.Trees.ForallExpr.<init>  ForallExpr(binders: List[FnParam], suchThat: Option[Tree], body: Tree, span: Span)  ast/Trees.scala:343  [constructor]
+ω  fixed.ast.Trees.Implies.<init>  Implies(antecedent: Tree, consequent: Tree, span: Span)  ast/Trees.scala:350  [constructor]
+2^64  fixed.ast.Trees.WildcardPat.<init>  WildcardPat(span: Span)  ast/Trees.scala:356  [constructor]
+ω  fixed.ast.Trees.BinderPat.<init>  BinderPat(name: String, span: Span)  ast/Trees.scala:357  [constructor]
+ω  fixed.ast.Trees.LiteralPat.<init>  LiteralPat(value: Tree, span: Span)  ast/Trees.scala:358  [constructor]
+ω  fixed.ast.Trees.TuplePat.<init>  TuplePat(elements: List[Tree], span: Span)  ast/Trees.scala:359  [constructor]
+ω  fixed.ast.Trees.DataVariantPat.<init>  DataVariantPat(qualifier: Option[String], variant: String, fields: Option[List[Tree]], span: Span)  ast/Trees.scala:364  [constructor]
+ω  fixed.ast.Trees.StructDestructurePat.<init>  StructDestructurePat(typeName: String, fields: List[(String, Tree)], hasRest: Boolean, span: Span)  ast/Trees.scala:371  [constructor]
+ω  fixed.ast.Trees.OrPat.<init>  OrPat(left: Tree, right: Tree, span: Span)  ast/Trees.scala:378  [constructor]
+ω  fixed.ast.Trees.GuardedPat.<init>  GuardedPat(pat: Tree, cond: Tree, span: Span)  ast/Trees.scala:379  [constructor]
+ω  fixed.ast.Trees.IsBound.<init>  IsBound(caps: List[Tree], span: Span)  ast/Trees.scala:382  [constructor]
+ω  fixed.ast.Trees.NamedAlias.<init>  NamedAlias(name: String, caps: List[Tree], span: Span)  ast/Trees.scala:385  [constructor]
+?  fixed.ast.Trees.NamedRef.name  name: String  ast/Trees.scala:393  [declaration]
+    captures: span
+    unresolved: ambiguous sealed family: Tree
+?  fixed.ast.Trees.NamedRef.ofArg  ofArg: Option[Tree]  ast/Trees.scala:394  [declaration]
+    captures: name, span
+    unresolved: ambiguous sealed family: Tree
+ω  fixed.ast.Trees.CapRef.<init>  CapRef(name: String, ofArg: Option[Tree], span: Span)  ast/Trees.scala:397  [constructor]
+ω  fixed.ast.Trees.EffectBound.<init>  EffectBound(name: String, ofArg: Option[Tree], span: Span)  ast/Trees.scala:400  [constructor]
+ω  fixed.ast.Trees.RefinementCall.<init>  RefinementCall(name: String, args: List[Tree], span: Span)  ast/Trees.scala:403  [constructor]
+ω  fixed.ast.Trees.PrimitiveType.<init>  PrimitiveType(name: String, span: Span)  ast/Trees.scala:410  [constructor]
+ω  fixed.ast.Trees.TypeRef.<init>  TypeRef(name: String, ofArg: Option[Tree], span: Span)  ast/Trees.scala:413  [constructor]
+ω  fixed.ast.Trees.ArrowType.<init>  ArrowType(lhs: Tree, rhs: Tree, withClause: Option[Tree], span: Span)  ast/Trees.scala:417  [constructor]
+ω  fixed.ast.Trees.TupleArrowLhs.<init>  TupleArrowLhs(types: List[Tree], span: Span)  ast/Trees.scala:427  [constructor]
+2^64  fixed.ast.Trees.UnitType.<init>  UnitType(span: Span)  ast/Trees.scala:430  [constructor]
+2^64  fixed.ast.Trees.NeverType.<init>  NeverType(span: Span)  ast/Trees.scala:433  [constructor]
+ω  fixed.ast.Trees.SelfType.<init>  SelfType(ofArg: Option[Tree], span: Span)  ast/Trees.scala:436  [constructor]
+ω  fixed.ast.Trees.CapType.<init>  CapType(returnSpec: Option[CapReturnSpec], span: Span)  ast/Trees.scala:439  [constructor]
+ω  fixed.ast.Trees.CapReturnSpec.OfArg.<init>  OfArg(arg: Tree)  ast/Trees.scala:442  [constructor]
+ω  fixed.ast.Trees.CapReturnSpec.Extends.<init>  Extends(caps: List[Tree])  ast/Trees.scala:443  [constructor]
+ω  fixed.ast.Trees.ParenTypeApp.<init>  ParenTypeApp(inner: Tree, ofArg: Tree, span: Span)  ast/Trees.scala:447  [constructor]
+ω  fixed.ast.Trees.WithClause.<init>  WithClause(row: Tree, span: Span)  ast/Trees.scala:453  [constructor]
+ω  fixed.ast.Trees.EffectRow.<init>  EffectRow(effects: List[Tree], span: Span)  ast/Trees.scala:456  [constructor]
+ω  fixed.core.Context.<init>  Context(scope: Map[String, SymbolId], owner: SymbolId, resume: Option[(Type, Type)] = None)  core/Contexts.scala:4  [constructor]
+?  fixed.core.Context.bind  bind(name: String, id: SymbolId): Context  core/Contexts.scala:9  [method]
+    captures: owner, scope
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.core.Phase.name  name: String  core/Phases.scala:7  [declaration]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.core.Phase.run  run(unit: CompilationUnit): CompilationUnit  core/Phases.scala:8  [declaration]
+    captures: name
+    unresolved: ambiguous sealed family: Tree
+ω  fixed.core.Proto.ExpectedType.<init>  ExpectedType(t: Type)  core/ProtoTypes.scala:5  [constructor]
+?  fixed.core.Proto.expected  expected: Option[Type]  core/ProtoTypes.scala:9  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.core.Proto.orElse  orElse(inferred: => Type): Type  core/ProtoTypes.scala:15  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.core.Proto.orExpect  orExpect(fallback: => Option[Type]): Proto  core/ProtoTypes.scala:18  [method]
+    unresolved: recursive type not read: fixed.core.Type
+2^32  fixed.core.SymbolId.Root  val Root: SymbolId  core/Symbols.scala:12  [method]
+2^32  fixed.core.SymbolId.Prelude  val Prelude: SymbolId  core/Symbols.scala:15  [method]
+2^(2^37)  fixed.core.SymbolId.apply  apply(i: Int): SymbolId  core/Symbols.scala:17  [method]
+2^(2^37)  fixed.core.SymbolId.<extension@19>.toInt  toInt: Int  core/Symbols.scala:19  [method]
+    captures: id
+ω  fixed.core.Denotation.<init>  Denotation(id: SymbolId, name: String, owner: SymbolId, kind: SymKind, info: Type, span: Span)  core/Symbols.scala:27  [constructor]
+?  fixed.core.SymbolTable.<init>  SymbolTable(entries: Vector[Denotation], nextId: Int, children: IntMap[Vector[SymbolId]], scope: Map[String, SymbolId], satisfies: Map[String, List[Type]])  core/Symbols.scala:40  [constructor]
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+?  fixed.core.SymbolTable.apply  apply(id: SymbolId): Denotation  core/Symbols.scala:48  [method]
+    captures: nextId, scope
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.core.SymbolTable.enter  enter(name: String, owner: SymbolId, kind: SymKind, info: Type, span: Span): (SymbolTable, SymbolId)  core/Symbols.scala:51  [method]
+    captures: nextId, scope
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.core.SymbolTable.membersOf  membersOf(owner: SymbolId): Vector[Denotation]  core/Symbols.scala:64  [method]
+    captures: nextId, scope
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.core.SymbolTable.variantsOf  variantsOf(data: SymbolId): Vector[Denotation]  core/Symbols.scala:67  [method]
+    captures: nextId, scope
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.core.SymbolTable.fieldsOf  fieldsOf(variant: SymbolId): Vector[Denotation]  core/Symbols.scala:70  [method]
+    captures: nextId, scope
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.core.SymbolTable.satisfy  satisfy(typeName: String, cap: Type): SymbolTable  core/Symbols.scala:73  [method]
+    captures: nextId, scope
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.core.SymbolTable.refine  refine(id: SymbolId, info: Type): SymbolTable  core/Symbols.scala:77  [method]
+    captures: nextId, scope
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.core.SymbolTable.denotations  denotations: List[Denotation]  core/Symbols.scala:81  [method]
+    captures: nextId, scope
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+2^32  fixed.core.SymbolTable.firstId  val firstId: Int  core/Symbols.scala:87  [method]
+?  fixed.core.SymbolTable.empty  val empty: SymbolTable  core/Symbols.scala:89  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.core.<extension@91>.render  render(t: Type): String  core/Symbols.scala:93  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.core.<extension@91>.render.args  args(as: List[Type]): String  core/Symbols.scala:94  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.core.<extension@91>.render.term  term(st: SymbolicTerm): String  core/Symbols.scala:99  [method]
+    unresolved: recursive type not read: fixed.core.Type
+ω  fixed.core.Type.PrimType.<init>  PrimType(name: String)  core/Types.scala:7  [constructor]
+ω  fixed.core.Type.ArrowType.<init>  ArrowType(lhs: Type, rhs: Type, fx: EffectRow)  core/Types.scala:10  [constructor]
+ω  fixed.core.Type.TupleType.<init>  TupleType(elems: List[Type])  core/Types.scala:13  [constructor]
+ω  fixed.core.Type.IsBound.<init>  IsBound(bounds: List[Type])  core/Types.scala:16  [constructor]
+ω + 1  fixed.core.Type.CapType.<init>  CapType(retType: Option[Type])  core/Types.scala:19  [constructor]
+ω  fixed.core.Type.TypeRef.<init>  TypeRef(sym: SymbolId, args: List[Type])  core/Types.scala:22  [constructor]
+ω  fixed.core.Type.CapRef.<init>  CapRef(sym: SymbolId, args: List[Type])  core/Types.scala:23  [constructor]
+ω + 1  fixed.core.Type.SelfType.<init>  SelfType(of: Option[Type])  core/Types.scala:24  [constructor]
+ω  fixed.core.Type.RefinementType.<init>  RefinementType(generator: SymbolId, valueArgs: List[SymbolicTerm])  core/Types.scala:28  [constructor]
+3ω + ≤2^18  fixed.core.Type.ValueArg.<init>  ValueArg(term: SymbolicTerm)  core/Types.scala:31  [constructor]
+ω  fixed.core.Type.Layer.<init>  Layer(data: SymbolId, args: List[Type], seed: Type)  core/Types.scala:34  [constructor]
+2^32  fixed.core.Type.TypeVar.<init>  TypeVar(id: Int)  core/Types.scala:36  [constructor]
+ω  fixed.core.Type.AppliedVar.<init>  AppliedVar(id: Int, args: List[Type])  core/Types.scala:39  [constructor]
+ω  fixed.core.EffectBound.<init>  EffectBound(sym: SymbolId, args: List[Type])  core/Types.scala:41  [constructor]
+ω  fixed.core.EffectRow.<init>  EffectRow(effects: List[EffectBound])  core/Types.scala:44  [constructor]
+?  fixed.core.EffectRow.empty  val empty: EffectRow  core/Types.scala:47  [method]
+    unresolved: recursive type not read: fixed.core.Type
+ω  fixed.core.SymbolicTerm.LitInt.<init>  LitInt(value: BigInt)  core/Types.scala:50  [constructor]
+ω  fixed.core.SymbolicTerm.LitFloat.<init>  LitFloat(value: BigDecimal)  core/Types.scala:51  [constructor]
+2^16  fixed.core.SymbolicTerm.LitChar.<init>  LitChar(value: Char)  core/Types.scala:52  [constructor]
+2  fixed.core.SymbolicTerm.LitBool.<init>  LitBool(value: Boolean)  core/Types.scala:53  [constructor]
+ω  fixed.core.SymbolicTerm.LitString.<init>  LitString(value: String)  core/Types.scala:54  [constructor]
+1  fixed.core.SymbolicTerm.BoundVar.<init>  BoundVar(sym: SymbolId)  core/Types.scala:55  [constructor]
+?  fixed.parsing.DeclParsers.parseTopItem  parseTopItem(s: ParserState)(using reporter: Reporter): Parsed[Tree]  parsing/DeclParsers.scala:14  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.unsupported  unsupported(s: ParserState, what: String)(using reporter: Reporter): Parsed[Tree]  parsing/DeclParsers.scala:51  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseUseDecl  parseUseDecl(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/DeclParsers.scala:66  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseUseDecl.<block#1>.<lambda#1>.loop  loop(st: ParserState, path: List[String]): (ParserState, List[String], List[String])  parsing/DeclParsers.scala:71  [method]
+    captures: <using#1@fixed.parsing.DeclParsers.parseUseDecl>, s0
+    unresolved: missing type of accessible value: s1
+    unresolved: missing type of accessible value: startTok
+ω  fixed.parsing.DeclParsers.parseIdentTextEither  parseIdentTextEither(s: ParserState)(using Reporter): Parsed[String]  parsing/DeclParsers.scala:88  [method]
+ω  fixed.parsing.DeclParsers.FnKind.head  head(s0: ParserState)(using Reporter): Parsed[Token]  parsing/DeclParsers.scala:111  [method]
+    captures: <receiver fixed.parsing.DeclParsers.FnKind>
+?  fixed.parsing.DeclParsers.FnKind.params  params(s: ParserState)(using Reporter): Parsed[List[Trees.FnParam]]  parsing/DeclParsers.scala:120  [method]
+    captures: <receiver fixed.parsing.DeclParsers.FnKind>
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseFnLike  parseFnLike(s0: ParserState, kind: FnKind)(using Reporter): Parsed[Trees.FnLike]  parsing/DeclParsers.scala:124  [method]
+    unresolved: sealed family construction not resolved: FnLike
+?  fixed.parsing.DeclParsers.parseFnParamList  parseFnParamList(s0: ParserState)(using Reporter): Parsed[List[Trees.FnParam]]  parsing/DeclParsers.scala:138  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseFieldList  parseFieldList(s0: ParserState)(using Reporter): Parsed[List[Trees.FieldDecl]]  parsing/DeclParsers.scala:142  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseFnParam  parseFnParam(s0: ParserState)(using Reporter): Parsed[Trees.FnParam]  parsing/DeclParsers.scala:146  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseBinder  parseBinder[B <: Trees.Binder](s0: ParserState, what: String)(mk: (Trees.Binding, Span) => B)(using Reporter): Parsed[B]  parsing/DeclParsers.scala:150  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: sealed family construction not resolved: Binder
+?  fixed.parsing.DeclParsers.parseFnSigTail  parseFnSigTail(s0: ParserState)(using Reporter): Parsed[(Option[Tree], Option[Tree], Option[Tree])]  parsing/DeclParsers.scala:158  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseTypedBinderTail  parseTypedBinderTail(s0: ParserState)(using Reporter): Parsed[(Tree, Option[Tree])]  parsing/DeclParsers.scala:167  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseOptionalWithClause  parseOptionalWithClause(s0: ParserState)(using Reporter): Parsed[Option[Tree]]  parsing/DeclParsers.scala:173  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseEffectRow  parseEffectRow(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/DeclParsers.scala:178  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseBlock  parseBlock(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/DeclParsers.scala:196  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.<extension@203>.indentedList  indentedList[A](inline step: Rule[Option[A]])(using Reporter): Parsed[List[A]]  parsing/DeclParsers.scala:204  [method]
+    captures: s
+    unresolved: inline method: leaves a given of parseIndentedBody to implicit search, whose choice is not checked
+?  fixed.parsing.DeclParsers.parseStatementList  parseStatementList(s0: ParserState, code: DiagCode, what: String)(inline item: Rule[Tree])(using reporter: Reporter): Parsed[List[Tree]]  parsing/DeclParsers.scala:216  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: inline method: leaves a given of parseIndentedBody to implicit search, whose choice is not checked
+?  fixed.parsing.DeclParsers.parseStatement  parseStatement(s: ParserState)(using Reporter): Parsed[Tree]  parsing/DeclParsers.scala:243  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseDataDecl  parseDataDecl(s0: ParserState)(using reporter: Reporter): Parsed[Tree]  parsing/DeclParsers.scala:257  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseOptionalDataOfClause  parseOptionalDataOfClause(s0: ParserState)(using Reporter): Parsed[List[Tree]]  parsing/DeclParsers.scala:280  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseDataOfItem  parseDataOfItem(s: ParserState)(using Reporter): Parsed[Tree]  parsing/DeclParsers.scala:301  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.DataBodyAcc.<init>  DataBodyAcc(variants: List[Trees.DataVariant], props: List[Trees.PropDecl])  parsing/DeclParsers.scala:313  [constructor]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseDataBody  parseDataBody(s0: ParserState)(using Reporter): (ParserState, List[Trees.DataVariant], List[Trees.PropDecl])  parsing/DeclParsers.scala:322  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseDataVariant  parseDataVariant(s0: ParserState)(using Reporter): Parsed[Trees.DataVariant]  parsing/DeclParsers.scala:344  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseNameAndValueParams  parseNameAndValueParams(s1: ParserState, what: String)(using Reporter): Parsed[(Token, List[Trees.FnParam])]  parsing/DeclParsers.scala:362  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseCapDeclRest  parseCapDeclRest(s1: ParserState, startTok: Token)(using Reporter): Parsed[Tree]  parsing/DeclParsers.scala:370  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseCapBody  parseCapBody(s0: ParserState)(using Reporter): Parsed[List[Tree]]  parsing/DeclParsers.scala:380  [method]
+    unresolved: ambiguous sealed family: Tree
+ω  fixed.parsing.DeclParsers.parseOptionalTypeParamsHint  parseOptionalTypeParamsHint(s0: ParserState)(using Reporter): Parsed[List[String]]  parsing/DeclParsers.scala:401  [method]
+?  fixed.parsing.DeclParsers.parsePropDecl  parsePropDecl(s0: ParserState)(using Reporter): Parsed[Trees.PropDecl]  parsing/DeclParsers.scala:410  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseTypeAlias  parseTypeAlias(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/DeclParsers.scala:423  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseSatisfiesDecl  parseSatisfiesDecl(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/DeclParsers.scala:442  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseSatisfiesBody  parseSatisfiesBody(s0: ParserState)(using Reporter): Parsed[List[Tree]]  parsing/DeclParsers.scala:459  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.AsMappingHead.unapply  unapply(s: ParserState): Option[(String, Span) => Tree]  parsing/DeclParsers.scala:471  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseSatisfiesItem  parseSatisfiesItem(s: ParserState)(using Reporter): Parsed[Tree]  parsing/DeclParsers.scala:481  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.MethodMember.unapply  unapply(k: TokenKind)(using Reporter): Option[Rule[Tree]]  parsing/DeclParsers.scala:491  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseSatisfiesMember  parseSatisfiesMember(s: ParserState)(using Reporter): Parsed[Tree]  parsing/DeclParsers.scala:497  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseEffectDecl  parseEffectDecl(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/DeclParsers.scala:510  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseEffectMembers  parseEffectMembers(s0: ParserState)(using Reporter): Parsed[List[Tree]]  parsing/DeclParsers.scala:519  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.DeclParsers.parseModDecl  parseModDecl(s: ParserState)(using Reporter): Parsed[Tree]  parsing/DeclParsers.scala:533  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseExpr  parseExpr(s: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:14  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseLetExpr  parseLetExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:18  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseLeftAssoc  parseLeftAssoc[Op](s0: ParserState)(inline operand: Rule[Tree])(inline opOf: TokenKind => Option[Op])(inline mk: (Op, Tree, Tree, Span) => Tree): Parsed[Tree]  parsing/ExprParsers.scala:29  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: inline method: selects kind on the result of current, not read
+?  fixed.parsing.ExprParsers.parseLeftAssoc.loop  loop(st: ParserState, acc: Tree): Parsed[Tree]  parsing/ExprParsers.scala:33  [method]
+    captures: opOf, s0
+    unresolved: ambiguous sealed family: Tree
+    unresolved: definition inside an inline method: parseLeftAssoc selects kind on the result of current, not read, and every expansion copies this definition
+?  fixed.parsing.ExprParsers.parsePipeExpr  parsePipeExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:42  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseOrExpr  parseOrExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:48  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseAndExpr  parseAndExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:54  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseCmpExpr  parseCmpExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:66  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseAddExpr  parseAddExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:83  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseMulExpr  parseMulExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:90  [method]
+    unresolved: ambiguous sealed family: Tree
+49269609804781974438694403402127765867  fixed.parsing.ExprParsers.UnaryPrefix.unapply  unapply(k: TokenKind): Option[Trees.UnaryOperator]  parsing/ExprParsers.scala:99  [method]
+?  fixed.parsing.ExprParsers.parseUnaryExpr  parseUnaryExpr(s: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:104  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseAppExpr  parseAppExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:111  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseAppExpr.loop  loop(st: ParserState, receiver: Tree): Parsed[Tree]  parsing/ExprParsers.scala:113  [method]
+    captures: <using#1@fixed.parsing.ExprParsers.parseAppExpr>, s0
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseArgList  parseArgList(s0: ParserState)(using Reporter): Parsed[List[Tree]]  parsing/ExprParsers.scala:149  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseAtomExpr  parseAtomExpr(s: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:153  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseIfExpr  parseIfExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:216  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseMatchExpr  parseMatchExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:239  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseMatchCases  parseMatchCases(s0: ParserState)(using Reporter): Parsed[List[Trees.MatchCase]]  parsing/ExprParsers.scala:247  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseMatchCase  parseMatchCase(s0: ParserState)(using Reporter): Parsed[Trees.MatchCase]  parsing/ExprParsers.scala:254  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseOrPattern  parseOrPattern(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:261  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseOrPattern.loop  loop(st: ParserState, acc: Tree): Parsed[Tree]  parsing/ExprParsers.scala:263  [method]
+    captures: <using#1@fixed.parsing.ExprParsers.parseOrPattern>, s0
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseDoExpr  parseDoExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:276  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseDoStmts  parseDoStmts(s0: ParserState)(using Reporter): Parsed[List[Tree]]  parsing/ExprParsers.scala:283  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseDoStmt  parseDoStmt(s: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:287  [method]
+    unresolved: ambiguous sealed family: Tree
+2^79  fixed.parsing.ExprParsers.Opener.unapply  unapply(k: TokenKind): Boolean  parsing/ExprParsers.scala:303  [method]
+2^79  fixed.parsing.ExprParsers.LiteralStart.unapply  unapply(k: TokenKind): Boolean  parsing/ExprParsers.scala:309  [method]
+2^79  fixed.parsing.ExprParsers.Closer.unapply  unapply(k: TokenKind): Boolean  parsing/ExprParsers.scala:315  [method]
+ω  fixed.parsing.ExprParsers.isDoBindAhead  isDoBindAhead(s: ParserState): Boolean  parsing/ExprParsers.scala:319  [method]
+ω  fixed.parsing.ExprParsers.isDoBindAhead.loop  loop(i: Int, depth: Int): Boolean  parsing/ExprParsers.scala:320  [method]
+    captures: s
+?  fixed.parsing.ExprParsers.parseForallExpr  parseForallExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:335  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseHandleExpr  parseHandleExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:352  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.HandlerAcc.<init>  HandlerAcc(operationClauses: List[Trees.OperationClause], returnClause: Option[Trees.ReturnClause])  parsing/ExprParsers.scala:364  [constructor]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseHandlerClauses  parseHandlerClauses(s0: ParserState)(using Reporter): (ParserState, List[Trees.OperationClause], Option[Trees.ReturnClause])  parsing/ExprParsers.scala:369  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseHandlerClause  parseHandlerClause(s: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:385  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseInlineOrBlockExpr  parseInlineOrBlockExpr(s: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:412  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseListExpr  parseListExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:416  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseStructLit  parseStructLit(s0: ParserState, typeNameTok: Token)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:425  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseParenOrLambdaOrTuple  parseParenOrLambdaOrTuple(s: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:448  [method]
+    unresolved: ambiguous sealed family: Tree
+ω  fixed.parsing.ExprParsers.lookaheadIsLambda  lookaheadIsLambda(s: ParserState): Boolean  parsing/ExprParsers.scala:454  [method]
+ω  fixed.parsing.ExprParsers.lookaheadIsLambda.loop  loop(i: Int, depth: Int): Int  parsing/ExprParsers.scala:456  [method]
+    captures: s
+?  fixed.parsing.ExprParsers.parseLambdaExpr  parseLambdaExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:477  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseLambdaParam  parseLambdaParam(s0: ParserState)(using Reporter): Parsed[Trees.LambdaParam]  parsing/ExprParsers.scala:483  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseParenExpr  parseParenExpr(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:496  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parsePattern  parsePattern(s: ParserState)(using Reporter): Parsed[Tree]  parsing/ExprParsers.scala:504  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.ExprParsers.parseInnerPatternList  parseInnerPatternList(s0: ParserState)(using Reporter): Parsed[List[Tree]]  parsing/ExprParsers.scala:565  [method]
+    unresolved: ambiguous sealed family: Tree
+ω  fixed.parsing.ParseResult.<init>  ParseResult(tree: Tree, diagnostics: List[Diagnostic], trivia: TriviaTable)  parsing/ParseResult.scala:9  [constructor]
+?  fixed.parsing.ParseResult.hasErrors  hasErrors: Boolean  parsing/ParseResult.scala:14  [method]
+    captures: diagnostics, trivia
+    unresolved: ambiguous sealed family: Tree
+ω  fixed.parsing.ParserPhase.name  val name: String  parsing/ParserPhase.scala:8  [method]
+?  fixed.parsing.ParserPhase.run  run(unit: CompilationUnit): CompilationUnit  parsing/ParserPhase.scala:10  [method]
+    unresolved: ambiguous sealed family: Tree
+ω  fixed.parsing.Parser.<init>  Parser(scanner: Scanner, reporter: Reporter)  parsing/Parsers.scala:19  [constructor]
+?  fixed.parsing.Parser.tokens  val tokens: Array[Token]  parsing/Parsers.scala:26  [method]
+    captures: reporter
+    unresolved: final class field not observable injectively: fixed.parsing.Scanner.captureTrivia
+?  fixed.parsing.Parser.parseCompilationUnit  parseCompilationUnit(): Tree  parsing/Parsers.scala:29  [method]
+    captures: reporter
+    unresolved: ambiguous sealed family: Tree
+    unresolved: final class field not observable injectively: fixed.parsing.Scanner.captureTrivia
+?  fixed.parsing.Parser.parseExpr  parseExpr(): Tree  parsing/Parsers.scala:34  [method]
+    captures: reporter
+    unresolved: ambiguous sealed family: Tree
+    unresolved: final class field not observable injectively: fixed.parsing.Scanner.captureTrivia
+?  fixed.parsing.Parser.parseTypeExpr  parseTypeExpr(): Tree  parsing/Parsers.scala:39  [method]
+    captures: reporter
+    unresolved: ambiguous sealed family: Tree
+    unresolved: final class field not observable injectively: fixed.parsing.Scanner.captureTrivia
+ω  fixed.parsing.Parser.ParserState.<init>  ParserState(tokens: Array[Token], idx: Int, anchors: List[KindSet], owedDedents: Int)  parsing/Parsers.scala:58  [constructor]
+ω  fixed.parsing.Parser.ParserState.current  current: Token  parsing/Parsers.scala:66  [method]
+    captures: anchors, idx, owedDedents, tokens
+?  fixed.parsing.Parser.ParserState.peek  peek(n: Int): Token  parsing/Parsers.scala:71  [method]
+    captures: anchors, idx, owedDedents, tokens
+    unresolved: inline method: selects < on a value whose type is not read: the result of + on scala.Int, which depends on its arguments
+?  fixed.parsing.Parser.ParserState.advance  advance: ParserState  parsing/Parsers.scala:76  [method]
+    captures: anchors, idx, owedDedents, tokens
+    unresolved: inline method: reads copy, which is declared neither in the sources nor in the library table
+ω  fixed.parsing.Parser.ParserState.pushAnchors  pushAnchors(a: KindSet): ParserState  parsing/Parsers.scala:79  [method]
+    captures: anchors, idx, owedDedents, tokens
+ω  fixed.parsing.Parser.ParserState.popAnchors  popAnchors: ParserState  parsing/Parsers.scala:83  [method]
+    captures: anchors, idx, owedDedents, tokens
+ω  fixed.parsing.Parser.ParserState.addOwed  addOwed: ParserState  parsing/Parsers.scala:89  [method]
+    captures: anchors, idx, owedDedents, tokens
+ω  fixed.parsing.Parser.ParserState.consumeOwed  consumeOwed: ParserState  parsing/Parsers.scala:93  [method]
+    captures: anchors, idx, owedDedents, tokens
+ω  fixed.parsing.Parser.ParserState.isOuterBracketWaiter  isOuterBracketWaiter(k: TokenKind): Boolean  parsing/Parsers.scala:108  [method]
+    captures: anchors, idx, owedDedents, tokens
+ω  fixed.parsing.Parser.initialState  initialState(tokens: Array[Token]): ParserState  parsing/Parsers.scala:121  [method]
+?  fixed.parsing.Parser.consume  consume(s: ParserState): Parsed[Token]  parsing/Parsers.scala:124  [method]
+    unresolved: inline method: calls inline method advance, which reads copy, which is declared neither in the sources nor in the library table
+?  fixed.parsing.Parser.accept  accept(s: ParserState, kind: TokenKind): (ParserState, Option[Token])  parsing/Parsers.scala:127  [method]
+    unresolved: inline method: selects kind on the result of current, not read
+?  fixed.parsing.Parser.<extension@136>.afterKeyword  afterKeyword[A](kind: TokenKind, what: String)(inline rest: (ParserState, Token) => Parsed[A])(using Reporter): Parsed[A]  parsing/Parsers.scala:137  [method]
+    captures: s
+    unresolved: inline method: leaves a given of expect to implicit search, whose choice is not checked
+?  fixed.parsing.Parser.<extension@147>.optionalOrEmpty  optionalOrEmpty(kind: TokenKind)(inline p: Rule[A]): Parsed[A]  parsing/Parsers.scala:149  [method]
+    captures: s
+    unresolved: inline method: selects optionally, no member of fixed.parsing.Parser.ParserState (an extension or conversion is not resolved)
+    unresolved: recursive type not read: cats.kernel.Monoid
+?  fixed.parsing.Parser.<extension@147>.whenAtOrEmpty  whenAtOrEmpty(kind: TokenKind)(inline p: Rule[A]): Parsed[A]  parsing/Parsers.scala:154  [method]
+    captures: s
+    unresolved: inline method: selects kind on the result of current, not read
+    unresolved: recursive type not read: cats.kernel.Monoid
+?  fixed.parsing.Parser.parseSepBy1  parseSepBy1[A](s0: ParserState, sep: TokenKind)(inline item: Rule[A]): Parsed[NonEmptyList[A]]  parsing/Parsers.scala:158  [method]
+    unresolved: inline method: calls inline method parseSepBy1Until, which calls inline method accept, which selects kind on the result of current, not read
+?  fixed.parsing.Parser.parseSepBy1Until  parseSepBy1Until[A](s0: ParserState, sep: TokenKind)(inline item: Rule[A])(inline afterSep: ParserState => ParserState, inline stop: ParserState => Boolean): Parsed[NonEmptyList[A]]  parsing/Parsers.scala:168  [method]
+    unresolved: inline method: calls inline method accept, which selects kind on the result of current, not read
+?  fixed.parsing.Parser.parseSepBy1Until.loop  loop(st: ParserState, acc: List[A]): Parsed[List[A]]  parsing/Parsers.scala:173  [method]
+    captures: afterSep, item, s0, sep, stop
+    unresolved: definition inside an inline method: parseSepBy1Until calls inline method accept, which selects kind on the result of current, not read, and every expansion copies this definition
+?  fixed.parsing.Parser.<extension@187>.optionally  optionally[A](kind: TokenKind)(inline p: Rule[A]): Parsed[Option[A]]  parsing/Parsers.scala:188  [method]
+    captures: s
+    unresolved: inline method: calls inline method accept, which selects kind on the result of current, not read
+ω  fixed.parsing.Parser.expect  expect(s: ParserState, kind: TokenKind, what: String)(using Reporter): Parsed[Token]  parsing/Parsers.scala:200  [method]
+1  fixed.parsing.Parser.reportExpected  reportExpected(s: ParserState, code: DiagCode, what: String, hint: Option[String])(using reporter: Reporter): Unit  parsing/Parsers.scala:211  [method]
+ω  fixed.parsing.Parser.<extension@220>.errorSkip  errorSkip(code: DiagCode, what: String)(using Reporter): Parsed[Span]  parsing/Parsers.scala:221  [method]
+    captures: s
+?  fixed.parsing.Parser.<extension@226>.errorSync  errorSync(code: DiagCode, what: String, hint: Option[String] = None)(using Reporter): Parsed[Tree]  parsing/Parsers.scala:227  [method]
+    captures: s
+    unresolved: ambiguous sealed family: Tree
+ω  fixed.parsing.Parser.describeLexeme  describeLexeme(t: Token): String  parsing/Parsers.scala:234  [method]
+2^(2^134)  fixed.parsing.Parser.span  span(start: Span, end: Span): Span  parsing/Parsers.scala:238  [method]
+ω  fixed.parsing.Parser.skipNewlines  skipNewlines(s: ParserState): ParserState  parsing/Parsers.scala:242  [method]
+?  fixed.parsing.Parser.withAnchors  withAnchors[A](s: ParserState, anchors: KindSet)(body: ParserState => Parsed[A]): Parsed[A]  parsing/Parsers.scala:248  [method]
+    unresolved: inline method: selects popAnchors on a value whose type is not read: the type of s1
+ω  fixed.parsing.Parser.syncToAnchors  syncToAnchors(s: ParserState): ParserState  parsing/Parsers.scala:257  [method]
+ω  fixed.parsing.Parser.absorbOwedDedents  absorbOwedDedents(s: ParserState): ParserState  parsing/Parsers.scala:274  [method]
+ω  fixed.parsing.Parser.parseIndentedBody  parseIndentedBody[A](s0: ParserState, acc0: A)(parseStep: (ParserState, A) => Parsed[A])(using Reporter): Parsed[A]  parsing/Parsers.scala:286  [method]
+?  fixed.parsing.Parser.parseIndentedBody.<block#1>.<lambda#1>.loop  loop(state: ParserState, acc: A): Parsed[A]  parsing/Parsers.scala:293  [method]
+    captures: <using#3@fixed.parsing.Parser.parseIndentedBody>, acc0, parseStep, s0
+    unresolved: missing type of accessible value: st
+2^128  fixed.parsing.Parser.Anchors.topLevel  val topLevel: KindSet  parsing/Parsers.scala:314  [method]
+2^128  fixed.parsing.Parser.Anchors.blockBody  val blockBody: KindSet  parsing/Parsers.scala:328  [method]
+2^128  fixed.parsing.Parser.Anchors.typeExpr  val typeExpr: KindSet  parsing/Parsers.scala:332  [method]
+?  fixed.parsing.Parser.parseCompilationUnit  parseCompilationUnit(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/Parsers.scala:344  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.Parser.parseCompilationUnit.<block#1>.<lambda#1>.loop  loop(state: ParserState, acc: List[Tree]): Parsed[List[Tree]]  parsing/Parsers.scala:348  [method]
+    captures: <using#1@fixed.parsing.Parser.parseCompilationUnit>, s0
+    unresolved: ambiguous sealed family: Tree
+    unresolved: missing type of accessible value: st
+ω  fixed.parsing.Parser.drainListSeparators  drainListSeparators(s: ParserState): ParserState  parsing/Parsers.scala:365  [method]
+ω  fixed.parsing.Parser.Bracket.openWhat  val openWhat: String  parsing/Parsers.scala:391  [method]
+    captures: <receiver fixed.parsing.Parser.Bracket>
+ω  fixed.parsing.Parser.Bracket.closeWhat  val closeWhat: String  parsing/Parsers.scala:392  [method]
+    captures: <receiver fixed.parsing.Parser.Bracket>
+?  fixed.parsing.Parser.bracketed  bracketed(s0: ParserState, b: Bracket)(inline item: Rule[Tree])(using Reporter): Parsed[(List[Tree], Span)]  parsing/Parsers.scala:397  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: inline method: calls inline method inBrackets, which leaves a given of expect to implicit search, whose choice is not checked
+?  fixed.parsing.Parser.bracketedTyped  bracketedTyped[A](s0: ParserState, b: Bracket)(inline item: Rule[A])(using Reporter): Parsed[(List[A], Span)]  parsing/Parsers.scala:403  [method]
+    unresolved: inline method: calls inline method inBrackets, which leaves a given of expect to implicit search, whose choice is not checked
+?  fixed.parsing.Parser.inBrackets  inBrackets[A](s0: ParserState, b: Bracket)(inline items: ParserState => Parsed[List[A]])(using Reporter): Parsed[(List[A], Span)]  parsing/Parsers.scala:408  [method]
+    unresolved: inline method: leaves a given of expect to implicit search, whose choice is not checked
+?  fixed.parsing.Parser.parseDelimited  parseDelimited(s0: ParserState, closeKind: TokenKind, closeLexeme: String)(inline parseItem: Rule[Tree])(using Reporter): Parsed[List[Tree]]  parsing/Parsers.scala:416  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: inline method: calls inline method parseDelimitedLoop, which selects span on the result of current, not read
+?  fixed.parsing.Parser.parseDelimitedTyped  parseDelimitedTyped[A](s0: ParserState, closeKind: TokenKind, closeLexeme: String)(inline parseItem: Rule[A])(using Reporter): Parsed[List[A]]  parsing/Parsers.scala:431  [method]
+    unresolved: inline method: calls inline method parseDelimitedLoop, which selects span on the result of current, not read
+?  fixed.parsing.Parser.parseDelimitedLoop  parseDelimitedLoop[A](s0: ParserState, closeKind: TokenKind, closeLexeme: String)(using reporter: Reporter)(inline parseItem: (ParserState, Span) => (ParserState, A, A)): Parsed[List[A]]  parsing/Parsers.scala:446  [method]
+    unresolved: inline method: selects span on the result of current, not read
+?  fixed.parsing.Parser.parseDelimitedLoop.parseOne  parseOne(st: ParserState): Parsed[A]  parsing/Parsers.scala:453  [method]
+    captures: closeKind, closeLexeme, parseItem, reporter, s0
+    unresolved: definition inside an inline method: parseDelimitedLoop selects span on the result of current, not read, and every expansion copies this definition
+?  fixed.parsing.Parser.parse  parse(source: SourceFile): ParseResult  parsing/Parsers.scala:483  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.Parser.parse  parse(source: SourceFile, reporter: Reporter): Tree  parsing/Parsers.scala:492  [method]
+    unresolved: ambiguous sealed family: Tree
+2^48  fixed.parsing.Scanner.OpenBracket.<init>  OpenBracket(char: Char, depth: Int)  parsing/Scanners.scala:20  [constructor]
+?  fixed.parsing.Scanner.Skipped.<init>  Skipped(state: ScannerState, crossedNewline: Boolean)  parsing/Scanners.scala:25  [constructor]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.ScannerState.<init>  ScannerState(pos: Int, indentStack: List[Int], bracketStack: List[OpenBracket], lastKind: TokenKind, eofEmitted: Boolean, pending: Queue[Token])  parsing/Scanners.scala:27  [constructor]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.ScannerState.isInsideSuppressedBrackets  isInsideSuppressedBrackets: Boolean  parsing/Scanners.scala:40  [method]
+    captures: bracketStack, eofEmitted, indentStack, lastKind, pos
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.ScannerState.currentIndent  currentIndent: Int  parsing/Scanners.scala:44  [method]
+    captures: bracketStack, eofEmitted, indentStack, lastKind, pos
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.ScannerState.enqueue  enqueue(t: Token): ScannerState  parsing/Scanners.scala:46  [method]
+    captures: bracketStack, eofEmitted, indentStack, lastKind, pos
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.ScannerState.withLast  withLast(t: Token): ScannerState  parsing/Scanners.scala:47  [method]
+    captures: bracketStack, eofEmitted, indentStack, lastKind, pos
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.initialState  initialState: ScannerState  parsing/Scanners.scala:51  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+ω  fixed.parsing.Scanner.tokenize  tokenize(source: SourceFile, reporter: Reporter): Seq[Token]  parsing/Scanners.scala:61  [method]
+?  fixed.parsing.Scanner.step  step(state: ScannerState, source: SourceFile, reporter: Reporter): (ScannerState, Token)  parsing/Scanners.scala:74  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.closeIndentsAndQueueEof  closeIndentsAndQueueEof(state: ScannerState): ScannerState  parsing/Scanners.scala:109  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.skipTrivia  skipTrivia(state: ScannerState, source: SourceFile, crossedNewline: Boolean, reporter: Reporter): Skipped  parsing/Scanners.scala:123  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+ω  fixed.parsing.Scanner.advanceTrivia  advanceTrivia(pos: Int, source: SourceFile, reporter: Reporter, crossed: Int): Long  parsing/Scanners.scala:135  [method]
+ω  fixed.parsing.Scanner.skipUntilNewline  skipUntilNewline(source: SourceFile, i: Int): Int  parsing/Scanners.scala:161  [method]
+?  fixed.parsing.Scanner.handleNewline  handleNewline(state: ScannerState, source: SourceFile, reporter: Reporter): ScannerState  parsing/Scanners.scala:179  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.popIndents  popIndents(state: ScannerState, newIndent: Int): ScannerState  parsing/Scanners.scala:229  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+ω  fixed.parsing.Scanner.peekKindIsLeadingContinuation  peekKindIsLeadingContinuation(source: SourceFile, pos: Int): Boolean  parsing/Scanners.scala:245  [method]
+ω  fixed.parsing.Scanner.skipWhile  skipWhile(content: String, i0: Int, len: Int)(inline p: Char => Boolean): Int  parsing/Scanners.scala:262  [method]
+ω  fixed.parsing.Scanner.skipWhile.loop  loop(i: Int): Int  parsing/Scanners.scala:263  [method]
+    captures: content, i0, len, p
+?  fixed.parsing.Scanner.isSpaceOrTab  isSpaceOrTab(c: Char): Boolean  parsing/Scanners.scala:266  [method]
+    unresolved: inline method: selects || on a value whose type is not read: the result of ==
+?  fixed.parsing.Scanner.isIdentPart  isIdentPart(c: Char): Boolean  parsing/Scanners.scala:267  [method]
+    unresolved: inline method: selects isLetterOrDigit on scala.Char, which the library table does not list
+?  fixed.parsing.Scanner.scanToken  scanToken(state: ScannerState, source: SourceFile, reporter: Reporter): (ScannerState, Token)  parsing/Scanners.scala:269  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.scanOperator  scanOperator(state: ScannerState, source: SourceFile, start: Int, reporter: Reporter): (ScannerState, Token)  parsing/Scanners.scala:292  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.openBracket  openBracket(state: ScannerState, start: Int, ch: Char, mk: Span => Token): (ScannerState, Token)  parsing/Scanners.scala:338  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.emit  emit(state: ScannerState, start: Int, len: Int)(inline mk: Span => Token): (ScannerState, Token)  parsing/Scanners.scala:344  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+    unresolved: inline method: selects copy, no member of fixed.parsing.Scanner.ScannerState (an extension or conversion is not resolved)
+?  fixed.parsing.Scanner.single  single(state: ScannerState, start: Int)(inline mk: Span => Token): <inferred>  parsing/Scanners.scala:348  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+    unresolved: inline method: calls inline method emit, which selects copy, no member of fixed.parsing.Scanner.ScannerState (an extension or conversion is not resolved)
+?  fixed.parsing.Scanner.double  double(state: ScannerState, start: Int)(inline mk: Span => Token): <inferred>  parsing/Scanners.scala:350  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+    unresolved: inline method: calls inline method emit, which selects copy, no member of fixed.parsing.Scanner.ScannerState (an extension or conversion is not resolved)
+?  fixed.parsing.Scanner.errorChar  errorChar(state: ScannerState, start: Int, code: DiagCode, msg: String, reporter: Reporter): (ScannerState, Token)  parsing/Scanners.scala:353  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.closeBracket  closeBracket(state: ScannerState, start: Int, mk: Span => Token, expected: Char, reporter: Reporter): (ScannerState, Token)  parsing/Scanners.scala:366  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.scanIdent  scanIdent(state: ScannerState, source: SourceFile, start: Int): (ScannerState, Token)  parsing/Scanners.scala:388  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+?  fixed.parsing.Scanner.scanNumber  scanNumber(state: ScannerState, source: SourceFile, start: Int): (ScannerState, Token)  parsing/Scanners.scala:402  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+ω  fixed.parsing.Scanner.skipDigits  skipDigits(source: SourceFile, i: Int): Int  parsing/Scanners.scala:425  [method]
+ω  fixed.parsing.Scanner.QuotedBody.<init>  QuotedBody(pos: Int, lexeme: String, closed: Boolean)  parsing/Scanners.scala:435  [constructor]
+ω  fixed.parsing.Scanner.scanQuotedBody  scanQuotedBody(source: SourceFile, start: Int, i0: Int, terminator: Char, reporter: Reporter, unterminatedCode: DiagCode, unterminatedLineMessage: String, unterminatedLineSuggestion: Option[String]): QuotedBody  parsing/Scanners.scala:443  [method]
+?  fixed.parsing.Scanner.scanQuotedBody.loop  loop(i: Int, buf: StringBuilder): QuotedBody  parsing/Scanners.scala:453  [method]
+    captures: i0, reporter, source, start, terminator, unterminatedCode, unterminatedLineMessage, unterminatedLineSuggestion
+    unresolved: unresolved type: StringBuilder
+65537^(2^16)  fixed.parsing.Scanner.stdEscape  stdEscape(esc: Char): Option[Char]  parsing/Scanners.scala:483  [method]
+1  fixed.parsing.Scanner.Quote.checkBody  checkBody(lexeme: String, span: Span, reporter: Reporter): Unit  parsing/Scanners.scala:514  [method]
+    captures: <receiver fixed.parsing.Scanner.Quote>
+?  fixed.parsing.Scanner.scanQuoted  scanQuoted(state: ScannerState, source: SourceFile, start: Int, reporter: Reporter, q: Quote): (ScannerState, Token)  parsing/Scanners.scala:524  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.Queue (named import Queue)
+ω  fixed.parsing.Scanner.peekChar  peekChar(source: SourceFile, i: Int): Char  parsing/Scanners.scala:547  [method]
+2^(2^16)  fixed.parsing.Scanner.isIdentStart  isIdentStart(c: Char): Boolean  parsing/Scanners.scala:550  [method]
+ω  fixed.parsing.Scanner.isIdentStartAt  isIdentStartAt(source: SourceFile, i: Int): Boolean  parsing/Scanners.scala:552  [method]
+ω  fixed.parsing.Scanner.describeChar  describeChar(c: Char): String  parsing/Scanners.scala:555  [method]
+ω  fixed.parsing.Scanner.<init>  Scanner(val source: SourceFile, val reporter: Reporter, captureTrivia: Boolean = true)  parsing/Scanners.scala:574  [constructor]
+ω  fixed.parsing.Scanner.tokens  val tokens: Array[Token]  parsing/Scanners.scala:589  [method]
+    captures: captureTrivia, reporter, source
+ω  fixed.parsing.Scanner.iter  val iter: Iterator[Token]  parsing/Scanners.scala:609  [method]
+    captures: captureTrivia, reporter, source
+ω  fixed.parsing.Scanner.nextToken  nextToken(): Token  parsing/Scanners.scala:611  [method]
+    captures: captureTrivia, reporter, source
+ω  fixed.parsing.Scanner.tokenize  tokenize(): Seq[Token]  parsing/Scanners.scala:615  [method]
+    captures: captureTrivia, reporter, source
+ω  fixed.parsing.Scanner.tokenArray  tokenArray: Array[Token]  parsing/Scanners.scala:618  [method]
+    captures: captureTrivia, reporter, source
+ω  fixed.parsing.Scanner.triviaTable  triviaTable: TriviaTable  parsing/Scanners.scala:623  [method]
+    captures: captureTrivia, reporter, source
+ω  fixed.parsing.Scanner.collectTrivia  collectTrivia(content: String, i: Int, end: Int, acc: List[Trivia]): List[Trivia]  parsing/Scanners.scala:648  [method]
+    captures: captureTrivia, reporter, source
+2^128  fixed.parsing.KindSet.<init>  KindSet(lo: Long, hi: Long)  parsing/Tokens.scala:83  [constructor]
+2^(79·2^128)  fixed.parsing.KindSet.contains  contains(k: TokenKind): Boolean  parsing/Tokens.scala:84  [method]
+    captures: hi, lo
+2^(79·2^135)  fixed.parsing.KindSet.+  +(k: TokenKind): KindSet  parsing/Tokens.scala:88  [method]
+    captures: hi, lo
+2^128  fixed.parsing.KindSet.empty  val empty: KindSet  parsing/Tokens.scala:93  [method]
+ω  fixed.parsing.KindSet.apply  apply(kinds: TokenKind*): KindSet  parsing/Tokens.scala:94  [method]
+2^64  fixed.parsing.Token.KwAs.<init>  KwAs(at: Span)  parsing/Tokens.scala:108  [constructor]
+2^64  fixed.parsing.Token.KwCap.<init>  KwCap(at: Span)  parsing/Tokens.scala:109  [constructor]
+2^64  fixed.parsing.Token.KwData.<init>  KwData(at: Span)  parsing/Tokens.scala:110  [constructor]
+2^64  fixed.parsing.Token.KwDo.<init>  KwDo(at: Span)  parsing/Tokens.scala:111  [constructor]
+2^64  fixed.parsing.Token.KwEffect.<init>  KwEffect(at: Span)  parsing/Tokens.scala:112  [constructor]
+2^64  fixed.parsing.Token.KwElse.<init>  KwElse(at: Span)  parsing/Tokens.scala:113  [constructor]
+2^64  fixed.parsing.Token.KwExtends.<init>  KwExtends(at: Span)  parsing/Tokens.scala:114  [constructor]
+2^64  fixed.parsing.Token.KwFalse.<init>  KwFalse(at: Span)  parsing/Tokens.scala:115  [constructor]
+2^64  fixed.parsing.Token.KwFn.<init>  KwFn(at: Span)  parsing/Tokens.scala:116  [constructor]
+2^64  fixed.parsing.Token.KwForall.<init>  KwForall(at: Span)  parsing/Tokens.scala:117  [constructor]
+2^64  fixed.parsing.Token.KwHandle.<init>  KwHandle(at: Span)  parsing/Tokens.scala:118  [constructor]
+2^64  fixed.parsing.Token.KwIf.<init>  KwIf(at: Span)  parsing/Tokens.scala:119  [constructor]
+2^64  fixed.parsing.Token.KwImplies.<init>  KwImplies(at: Span)  parsing/Tokens.scala:120  [constructor]
+2^64  fixed.parsing.Token.KwImpossible.<init>  KwImpossible(at: Span)  parsing/Tokens.scala:121  [constructor]
+2^64  fixed.parsing.Token.KwIn.<init>  KwIn(at: Span)  parsing/Tokens.scala:122  [constructor]
+2^64  fixed.parsing.Token.KwIs.<init>  KwIs(at: Span)  parsing/Tokens.scala:123  [constructor]
+2^64  fixed.parsing.Token.KwLet.<init>  KwLet(at: Span)  parsing/Tokens.scala:124  [constructor]
+2^64  fixed.parsing.Token.KwLinear.<init>  KwLinear(at: Span)  parsing/Tokens.scala:125  [constructor]
+2^64  fixed.parsing.Token.KwMatch.<init>  KwMatch(at: Span)  parsing/Tokens.scala:126  [constructor]
+2^64  fixed.parsing.Token.KwMod.<init>  KwMod(at: Span)  parsing/Tokens.scala:127  [constructor]
+2^64  fixed.parsing.Token.KwOf.<init>  KwOf(at: Span)  parsing/Tokens.scala:128  [constructor]
+2^64  fixed.parsing.Token.KwPart.<init>  KwPart(at: Span)  parsing/Tokens.scala:129  [constructor]
+2^64  fixed.parsing.Token.KwProp.<init>  KwProp(at: Span)  parsing/Tokens.scala:130  [constructor]
+2^64  fixed.parsing.Token.KwPub.<init>  KwPub(at: Span)  parsing/Tokens.scala:131  [constructor]
+2^64  fixed.parsing.Token.KwResume.<init>  KwResume(at: Span)  parsing/Tokens.scala:132  [constructor]
+2^64  fixed.parsing.Token.KwReturn.<init>  KwReturn(at: Span)  parsing/Tokens.scala:133  [constructor]
+2^64  fixed.parsing.Token.KwSatisfies.<init>  KwSatisfies(at: Span)  parsing/Tokens.scala:134  [constructor]
+2^64  fixed.parsing.Token.KwSelf.<init>  KwSelf(at: Span)  parsing/Tokens.scala:135  [constructor]
+2^64  fixed.parsing.Token.KwSelfLower.<init>  KwSelfLower(at: Span)  parsing/Tokens.scala:136  [constructor]
+2^64  fixed.parsing.Token.KwSuchThat.<init>  KwSuchThat(at: Span)  parsing/Tokens.scala:137  [constructor]
+2^64  fixed.parsing.Token.KwTrue.<init>  KwTrue(at: Span)  parsing/Tokens.scala:138  [constructor]
+2^64  fixed.parsing.Token.KwType.<init>  KwType(at: Span)  parsing/Tokens.scala:139  [constructor]
+2^64  fixed.parsing.Token.KwUnreachable.<init>  KwUnreachable(at: Span)  parsing/Tokens.scala:140  [constructor]
+2^64  fixed.parsing.Token.KwUse.<init>  KwUse(at: Span)  parsing/Tokens.scala:141  [constructor]
+2^64  fixed.parsing.Token.KwWith.<init>  KwWith(at: Span)  parsing/Tokens.scala:142  [constructor]
+ω  fixed.parsing.Token.LowerIdent.<init>  LowerIdent(at: Span, text: String)  parsing/Tokens.scala:143  [constructor]
+ω  fixed.parsing.Token.UpperIdent.<init>  UpperIdent(at: Span, text: String)  parsing/Tokens.scala:144  [constructor]
+ω  fixed.parsing.Token.IntLit.<init>  IntLit(at: Span, text: String)  parsing/Tokens.scala:145  [constructor]
+ω  fixed.parsing.Token.FloatLit.<init>  FloatLit(at: Span, text: String)  parsing/Tokens.scala:146  [constructor]
+ω  fixed.parsing.Token.StringLit.<init>  StringLit(at: Span, text: String)  parsing/Tokens.scala:147  [constructor]
+ω  fixed.parsing.Token.CharLit.<init>  CharLit(at: Span, text: String)  parsing/Tokens.scala:148  [constructor]
+2^64  fixed.parsing.Token.LParen.<init>  LParen(at: Span)  parsing/Tokens.scala:149  [constructor]
+2^64  fixed.parsing.Token.RParen.<init>  RParen(at: Span)  parsing/Tokens.scala:150  [constructor]
+2^64  fixed.parsing.Token.LBrace.<init>  LBrace(at: Span)  parsing/Tokens.scala:151  [constructor]
+2^64  fixed.parsing.Token.RBrace.<init>  RBrace(at: Span)  parsing/Tokens.scala:152  [constructor]
+2^64  fixed.parsing.Token.LBracket.<init>  LBracket(at: Span)  parsing/Tokens.scala:153  [constructor]
+2^64  fixed.parsing.Token.RBracket.<init>  RBracket(at: Span)  parsing/Tokens.scala:154  [constructor]
+2^64  fixed.parsing.Token.Comma.<init>  Comma(at: Span)  parsing/Tokens.scala:155  [constructor]
+2^64  fixed.parsing.Token.Colon.<init>  Colon(at: Span)  parsing/Tokens.scala:156  [constructor]
+2^64  fixed.parsing.Token.Semicolon.<init>  Semicolon(at: Span)  parsing/Tokens.scala:157  [constructor]
+2^64  fixed.parsing.Token.Dot.<init>  Dot(at: Span)  parsing/Tokens.scala:158  [constructor]
+2^64  fixed.parsing.Token.Eq.<init>  Eq(at: Span)  parsing/Tokens.scala:159  [constructor]
+2^64  fixed.parsing.Token.Arrow.<init>  Arrow(at: Span)  parsing/Tokens.scala:160  [constructor]
+2^64  fixed.parsing.Token.FatArrow.<init>  FatArrow(at: Span)  parsing/Tokens.scala:161  [constructor]
+2^64  fixed.parsing.Token.BackArrow.<init>  BackArrow(at: Span)  parsing/Tokens.scala:162  [constructor]
+2^64  fixed.parsing.Token.Pipe.<init>  Pipe(at: Span)  parsing/Tokens.scala:163  [constructor]
+2^64  fixed.parsing.Token.PipeForward.<init>  PipeForward(at: Span)  parsing/Tokens.scala:164  [constructor]
+2^64  fixed.parsing.Token.Plus.<init>  Plus(at: Span)  parsing/Tokens.scala:165  [constructor]
+2^64  fixed.parsing.Token.Minus.<init>  Minus(at: Span)  parsing/Tokens.scala:166  [constructor]
+2^64  fixed.parsing.Token.Star.<init>  Star(at: Span)  parsing/Tokens.scala:167  [constructor]
+2^64  fixed.parsing.Token.Slash.<init>  Slash(at: Span)  parsing/Tokens.scala:168  [constructor]
+2^64  fixed.parsing.Token.Percent.<init>  Percent(at: Span)  parsing/Tokens.scala:169  [constructor]
+2^64  fixed.parsing.Token.Lt.<init>  Lt(at: Span)  parsing/Tokens.scala:170  [constructor]
+2^64  fixed.parsing.Token.Le.<init>  Le(at: Span)  parsing/Tokens.scala:171  [constructor]
+2^64  fixed.parsing.Token.Gt.<init>  Gt(at: Span)  parsing/Tokens.scala:172  [constructor]
+2^64  fixed.parsing.Token.Ge.<init>  Ge(at: Span)  parsing/Tokens.scala:173  [constructor]
+2^64  fixed.parsing.Token.EqEq.<init>  EqEq(at: Span)  parsing/Tokens.scala:174  [constructor]
+2^64  fixed.parsing.Token.Neq.<init>  Neq(at: Span)  parsing/Tokens.scala:175  [constructor]
+2^64  fixed.parsing.Token.AndAnd.<init>  AndAnd(at: Span)  parsing/Tokens.scala:176  [constructor]
+2^64  fixed.parsing.Token.OrOr.<init>  OrOr(at: Span)  parsing/Tokens.scala:177  [constructor]
+2^64  fixed.parsing.Token.Bang.<init>  Bang(at: Span)  parsing/Tokens.scala:178  [constructor]
+2^64  fixed.parsing.Token.Underscore.<init>  Underscore(at: Span)  parsing/Tokens.scala:179  [constructor]
+2^64  fixed.parsing.Token.At.<init>  At(at: Span)  parsing/Tokens.scala:180  [constructor]
+2^64  fixed.parsing.Token.Newline.<init>  Newline(at: Span)  parsing/Tokens.scala:181  [constructor]
+2^64  fixed.parsing.Token.Indent.<init>  Indent(at: Span)  parsing/Tokens.scala:182  [constructor]
+2^64  fixed.parsing.Token.Dedent.<init>  Dedent(at: Span)  parsing/Tokens.scala:183  [constructor]
+2^64  fixed.parsing.Token.Eof.<init>  Eof(at: Span)  parsing/Tokens.scala:184  [constructor]
+2^64  fixed.parsing.Token.Error.<init>  Error(at: Span)  parsing/Tokens.scala:185  [constructor]
+ω  fixed.parsing.Token.of  of(kind: TokenKind, span: Span, lexeme: String = ""): Token  parsing/Tokens.scala:189  [method]
+ω  fixed.parsing.Tokens.keywordTokens  val keywordTokens: Map[String, Span => Token]  parsing/Tokens.scala:283  [method]
+ω  fixed.parsing.Tokens.Keyword.<init>  Keyword(spelling: String, kind: TokenKind, make: Span => Token)  parsing/Tokens.scala:322  [constructor]
+ω  fixed.parsing.Tokens.keywordsByFirstChar  val keywordsByFirstChar: Array[List[Keyword]]  parsing/Tokens.scala:327  [method]
+ω  fixed.parsing.Tokens.keywordAt  keywordAt(content: String, start: Int, end: Int): Option[Keyword]  parsing/Tokens.scala:333  [method]
+2^128  fixed.parsing.Tokens.trailingContinuationKinds  val trailingContinuationKinds: KindSet  parsing/Tokens.scala:344  [method]
+2^128  fixed.parsing.Tokens.leadingContinuationKinds  val leadingContinuationKinds: KindSet  parsing/Tokens.scala:380  [method]
+ω  fixed.parsing.Trivia.LineComment.<init>  LineComment(span: Span, text: String)  parsing/TriviaTable.scala:10  [constructor]
+2^96  fixed.parsing.Trivia.BlankLines.<init>  BlankLines(span: Span, count: Int)  parsing/TriviaTable.scala:11  [constructor]
+ω  fixed.parsing.TriviaTable.<init>  TriviaTable(private val byTokenStart: Map[Int, List[Trivia]])  parsing/TriviaTable.scala:14  [constructor]
+ω  fixed.parsing.TriviaTable.leadingFor  leadingFor(tokenStart: Int): List[Trivia]  parsing/TriviaTable.scala:17  [method]
+    captures: byTokenStart
+ω  fixed.parsing.TriviaTable.all  all: Iterable[(Int, List[Trivia])]  parsing/TriviaTable.scala:20  [method]
+    captures: byTokenStart
+ω  fixed.parsing.TriviaTable.isEmpty  isEmpty: Boolean  parsing/TriviaTable.scala:22  [method]
+    captures: byTokenStart
+?  fixed.parsing.TriviaTable.empty  val empty: TriviaTable  parsing/TriviaTable.scala:25  [method]
+    unresolved: final class field not observable injectively: fixed.parsing.TriviaTable.byTokenStart
+?  fixed.parsing.TriviaTable.from  from(byTokenStart: Map[Int, List[Trivia]]): TriviaTable  parsing/TriviaTable.scala:27  [method]
+    unresolved: final class field not observable injectively: fixed.parsing.TriviaTable.byTokenStart
+?  fixed.parsing.TypeParsers.parseTypeExpr  parseTypeExpr(s: ParserState)(using Reporter): Parsed[Tree]  parsing/TypeParsers.scala:14  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.TypeParsers.parseArrowType  parseArrowType(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/TypeParsers.scala:17  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.TypeParsers.Paren.Empty.<init>  Empty(span: Span)  parsing/TypeParsers.scala:28  [constructor]
+    unresolved: unresolved type: Span (may be imported by ExprParsers.*: ExprParsers may be imported by Parser.*, an exported member not followed)
+?  fixed.parsing.TypeParsers.Paren.One.<init>  One(t: Tree)  parsing/TypeParsers.scala:29  [constructor]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.TypeParsers.Paren.Many.<init>  Many(ts: List[Tree], span: Span)  parsing/TypeParsers.scala:30  [constructor]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: unresolved type: Span (may be imported by ExprParsers.*: ExprParsers may be imported by Parser.*, an exported member not followed)
+?  fixed.parsing.TypeParsers.parseParenBody  parseParenBody(s1: ParserState, start: Span)(inline item: Rule[Tree])(using Reporter): Parsed[Paren]  parsing/TypeParsers.scala:35  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: inline method: calls inline method accept, which selects kind on the result of current, not read
+?  fixed.parsing.TypeParsers.parseArrowLhs  parseArrowLhs(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/TypeParsers.scala:54  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.TypeParsers.parseTypeAtom  parseTypeAtom(s: ParserState)(using Reporter): Parsed[Tree]  parsing/TypeParsers.scala:74  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.TypeParsers.parseIsBound  parseIsBound(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/TypeParsers.scala:105  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.TypeParsers.parseCapBoundChain  parseCapBoundChain(s0: ParserState)(using Reporter): Parsed[List[Tree]]  parsing/TypeParsers.scala:111  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.TypeParsers.parseRefinementCall  parseRefinementCall(s1: ParserState, nameTok: Token)(using Reporter): Parsed[Tree]  parsing/TypeParsers.scala:116  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.TypeParsers.parseCapBound  parseCapBound(s: ParserState)(using Reporter): Parsed[Tree]  parsing/TypeParsers.scala:120  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.TypeParsers.parseCapRef  parseCapRef(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/TypeParsers.scala:139  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.TypeParsers.parseEffectBound  parseEffectBound(s0: ParserState)(using Reporter): Parsed[Tree]  parsing/TypeParsers.scala:142  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.TypeParsers.parseNamedRef  parseNamedRef(s0: ParserState, what: String)(mk: (String, Option[Tree], Span) => Trees.NamedRef)(using Reporter): Parsed[Tree]  parsing/TypeParsers.scala:146  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.TypeParsers.parseOfArg  parseOfArg(s: ParserState)(using Reporter): Parsed[Tree]  parsing/TypeParsers.scala:162  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.parsing.TypeParsers.parseCapTypeRest  parseCapTypeRest(s1: ParserState, startTok: Token)(using Reporter): Parsed[Tree]  parsing/TypeParsers.scala:187  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.typer.Members.numericPrims  val numericPrims: <inferred>  typer/Members.scala:15  [method]
+    unresolved: inferred result type not resolved: call of Set, not a method an enclosing scope declares
+?  fixed.typer.Members.isNumeric  isNumeric(s: TyperState, t: Type): Boolean  typer/Members.scala:20  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.isCap  isCap(s: TyperState, t: Type, name: String): Boolean  typer/Members.scala:29  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+ω  fixed.typer.Members.Subst.<init>  Subst(mapping: Map[SymbolId, Type], freshOwners: Set[SymbolId], self: Option[Type] = None, part: Option[Type] = None)  typer/Members.scala:37  [constructor]
+?  fixed.typer.Members.instantiate  instantiate(s: TyperState, t: Type, sub: Subst): (TyperState, Type)  typer/Members.scala:45  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.go  go(s: TyperState, t: Type, sub: Subst, m: Map[SymbolId, Type]): (TyperState, Map[SymbolId, Type], Type)  typer/Members.scala:50  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.go.rebuild  rebuild(parts: List[Type])(mk: List[Type] => Type): <inferred>  typer/Members.scala:51  [method]
+    unresolved: inferred result type not resolved: block
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.elementOf  elementOf(s: TyperState, t: Type): Option[Type]  typer/Members.scala:83  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.boundElement  boundElement(bounds: List[Type]): Option[Type]  typer/Members.scala:93  [method]
+    unresolved: recursive type not read: fixed.core.Type
+1  fixed.typer.Members.PartKey  val PartKey: SymbolId  typer/Members.scala:97  [method]
+?  fixed.typer.Members.selfOf  selfOf(self: Type, of: Option[Type]): Type  typer/Members.scala:100  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Members.typeParamsOf  typeParamsOf(s: TyperState, owner: SymbolId): List[SymbolId]  typer/Members.scala:107  [method]
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.autoDerived  val autoDerived: <inferred>  typer/Members.scala:113  [method]
+    unresolved: inferred result type not resolved: call of List, not a method an enclosing scope declares
+?  fixed.typer.Members.instance  instance(s: TyperState, recv: Type, name: String): Option[(TyperState, Type)]  typer/Members.scala:116  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.candidates  candidates(s: TyperState, recv: Type, name: String): LazyList[(TyperState, Type)]  typer/Members.scala:122  [method]
+    unresolved: declaration not supplied: LazyList (not declared in the sources or stdlib-model/1)
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.field  field(s: TyperState, data: SymbolId, args: List[Type], name: String): Option[(TyperState, Type)]  typer/Members.scala:148  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.capMember  capMember(s: TyperState, caps: List[Type], recv: Type, name: String, seen: Set[SymbolId], kind: SymKind = SymKind.Method, partOverride: Option[Type] = None): LazyList[(TyperState, Type)]  typer/Members.scala:158  [method]
+    unresolved: declaration not supplied: LazyList (not declared in the sources or stdlib-model/1)
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.expandAliases  expandAliases(s: TyperState, bounds: List[Type]): List[Type]  typer/Members.scala:189  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.boundsOf  boundsOf(s: TyperState, param: SymbolId): List[Type]  typer/Members.scala:206  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.derivedFold  derivedFold(s: TyperState, data: SymbolId, args: List[Type]): Option[(TyperState, Type)]  typer/Members.scala:214  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.static  static(s: TyperState, owner: SymbolId, name: String, layer: Option[Type.Layer]): Option[(TyperState, Type)]  typer/Members.scala:228  [method]
+    unresolved: enum case type not read: fixed.core.Type.Layer
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.construct  construct(s: TyperState, data: SymbolId, variant: SymbolId, layer: Option[Type.Layer]): (TyperState, Type)  typer/Members.scala:263  [method]
+    unresolved: enum case type not read: fixed.core.Type.Layer
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.derivedUnfold  derivedUnfold(s: TyperState, data: SymbolId): (TyperState, Type)  typer/Members.scala:277  [method]
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.freshArgs  freshArgs(s: TyperState, data: SymbolId): (TyperState, List[Type])  typer/Members.scala:283  [method]
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.fieldTypes  fieldTypes(s: TyperState, data: SymbolId, args: List[Type], variant: SymbolId): (TyperState, List[Type])  typer/Members.scala:289  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Members.replaceSelf  replaceSelf(t: Type, data: SymbolId, by: Type): Type  typer/Members.scala:293  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Members.params  params(lhs: Type): List[Type]  typer/Members.scala:304  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Members.product  product(ts: List[Type]): Type  typer/Members.scala:310  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.index  index(unit: Tree): (SymbolTable, List[Diagnostic])  typer/Namer.scala:22  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.stdlib  val stdlib: Ctx  typer/Namer.scala:31  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.translate  translate(table: SymbolTable, scope: Map[String, SymbolId], owner: SymbolId, tree: Tree): (SymbolTable, Type, List[Diagnostic])  typer/Namer.scala:45  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.nestedFn  nestedFn(table: SymbolTable, scope: Map[String, SymbolId], owner: SymbolId, fn: Trees.FnDecl): (SymbolTable, SymbolId, List[Diagnostic])  typer/Namer.scala:51  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.typeAll  typeAll(c: Ctx, decls: List[(Tree, SymbolId)]): Ctx  typer/Namer.scala:56  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.Ctx.<init>  Ctx(table: SymbolTable, diags: List[Diagnostic], scope: Map[String, SymbolId], owner: SymbolId, sigLocals: Set[String], modules: Map[String, Map[String, SymbolId]])  typer/Namer.scala:62  [constructor]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.Ctx.enter  enter(name: String, kind: SymKind, info: Type, span: Span): (Ctx, SymbolId)  typer/Namer.scala:70  [method]
+    captures: diags, modules, owner, scope, sigLocals
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.Ctx.bind  bind(name: String, id: SymbolId): Ctx  typer/Namer.scala:74  [method]
+    captures: diags, modules, owner, scope, sigLocals
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.Ctx.error  error(code: DiagCode, span: Span, message: String): Ctx  typer/Namer.scala:76  [method]
+    captures: diags, modules, owner, scope, sigLocals
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.Ctx.nested  nested[A](owner: SymbolId)(f: Ctx => (Ctx, A)): (Ctx, A)  typer/Namer.scala:80  [method]
+    captures: diags, modules, owner, scope, sigLocals
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.Ctx.empty  empty(owner: SymbolId): Ctx  typer/Namer.scala:85  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.enterTopLevel  enterTopLevel(c: Ctx, item: Tree): (Ctx, List[(Tree, SymbolId)])  typer/Namer.scala:88  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.declare  declare(c: Ctx, tree: Tree, name: String, kind: SymKind): (Ctx, List[(Tree, SymbolId)])  typer/Namer.scala:112  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.typeDecl  typeDecl(c: Ctx, tree: Tree, id: SymbolId): Ctx  typer/Namer.scala:119  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.fnSignature  fnSignature(c: Ctx, fn: Trees.FnLike): (Ctx, Type)  typer/Namer.scala:139  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: sealed family construction not resolved: FnLike
+?  fixed.typer.Namer.arrow  arrow(c: Ctx, lhs: Type, rhs: Type, withClause: Option[Tree]): (Ctx, Type)  typer/Namer.scala:146  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.valueParam  valueParam(c: Ctx, p: Trees.FnParam): (Ctx, Type)  typer/Namer.scala:150  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.capSignature  capSignature(c: Ctx, cap: Trees.CapDecl): (Ctx, Type)  typer/Namer.scala:156  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.dataSignature  dataSignature(c: Ctx, data: Trees.DataDecl, id: SymbolId): (Ctx, Type)  typer/Namer.scala:169  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.effectSignature  effectSignature(c: Ctx, eff: Trees.EffectDecl, id: SymbolId): (Ctx, Type)  typer/Namer.scala:185  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.member  member(c: Ctx, fn: Trees.FnLike, kind: SymKind): (Ctx, SymbolId)  typer/Namer.scala:195  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: sealed family construction not resolved: FnLike
+?  fixed.typer.Namer.ofParams  ofParams(c: Ctx, params: List[Tree]): (Ctx, List[Type])  typer/Namer.scala:203  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.typeOf  typeOf(c: Ctx, tree: Tree): (Ctx, Type)  typer/Namer.scala:216  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.typeArgs  typeArgs(c: Ctx, ofArg: Option[Tree]): (Ctx, List[Type])  typer/Namer.scala:276  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.reference  reference(c: Ctx, id: SymbolId, args: List[Type]): Type  typer/Namer.scala:285  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.capBound  capBound(c: Ctx, tree: Tree): (Ctx, Option[Type])  typer/Namer.scala:291  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.symbolicTerm  symbolicTerm(c: Ctx, tree: Tree): (Ctx, Option[SymbolicTerm])  typer/Namer.scala:304  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.effects  effects(c: Ctx, tree: Tree): (Ctx, EffectRow)  typer/Namer.scala:317  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.effectList  effectList(row: Tree): List[Tree]  typer/Namer.scala:329  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.typer.Namer.resolve  resolve[A](c: Ctx, name: String, span: Span, what: String)(f: SymbolId => A): (Ctx, Option[A])  typer/Namer.scala:334  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Namer.introduce  introduce(c: Ctx, name: String, bounds: List[Type], span: Span): (Ctx, SymbolId)  typer/Namer.scala:342  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Patterns.bool  val bool: <inferred>  typer/Patterns.scala:13  [method]
+    unresolved: inferred result type not resolved: application of a selection
+?  fixed.typer.Patterns.bind  bind(s: TyperState, pat: fixed.ast.Tree, t: Type)(using ctx: Context): (TyperState, Context)  typer/Patterns.scala:16  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Patterns.bindAll  bindAll(s: TyperState, pairs: List[(fixed.ast.Tree, Type)])(using ctx: Context): (TyperState, Context)  typer/Patterns.scala:55  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Patterns.variant  variant(s: TyperState, p: Trees.DataVariantPat, t: Type)(using ctx: Context): (TyperState, Context)  typer/Patterns.scala:59  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Patterns.typedMatch  typedMatch(s: TyperState, m: Trees.MatchExpr, pt: Proto)(using ctx: Context): (TyperState, Type)  typer/Patterns.scala:86  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Patterns.exhaustive  exhaustive(s: TyperState, m: Trees.MatchExpr, scrutinee: Type): TyperState  typer/Patterns.scala:100  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Patterns.flatten  flatten(p: fixed.ast.Tree): List[fixed.ast.Tree]  typer/Patterns.scala:126  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.typer.Patterns.nestedFn  nestedFn(s: TyperState, fn: Trees.FnDecl)(using ctx: Context): (TyperState, Context)  typer/Patterns.scala:132  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Stdlib.prelude  val prelude: List[Tree]  typer/Stdlib.scala:13  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.typer.Stdlib.modules  val modules: Map[String, List[Tree]]  typer/Stdlib.scala:15  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.typer.Stdlib.load  load(name: String): List[Tree]  typer/Stdlib.scala:17  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.typer.TreeKey.<init>  TreeKey(start: Int, end: Int, node: Class[?])  typer/Typer.scala:12  [constructor]
+    unresolved: unresolved type: Class
+?  fixed.typer.TreeKey.of  of(tree: Tree): TreeKey  typer/Typer.scala:15  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: unresolved type: Class
+?  fixed.typer.TyperState.<init>  TyperState(types: Map[TreeKey, Type], symbols: SymbolTable, unifier: Unifier, diags: List[Diagnostic], typeParams: IntMap[List[SymbolId]])  typer/Typer.scala:20  [constructor]
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.TyperState.record  record(tree: Tree, t: Type): TyperState  typer/Typer.scala:27  [method]
+    captures: diags
+    unresolved: ambiguous sealed family: Tree
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.TyperState.fresh  fresh: (TyperState, Type)  typer/Typer.scala:30  [method]
+    captures: diags
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.TyperState.freshVars  freshVars(n: Int): (TyperState, List[Type])  typer/Typer.scala:35  [method]
+    captures: diags
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.TyperState.typeOf  typeOf(tree: Tree): Option[Type]  typer/Typer.scala:38  [method]
+    captures: diags
+    unresolved: ambiguous sealed family: Tree
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.TyperState.error  error(code: DiagCode, span: Span, message: String): TyperState  typer/Typer.scala:41  [method]
+    captures: diags
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.TyperState.unsupported  unsupported(span: Span, what: String): TyperState  typer/Typer.scala:46  [method]
+    captures: diags
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.TyperState.finish  finish: TyperState  typer/Typer.scala:50  [method]
+    captures: diags
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.TyperState.apply  apply(symbols: SymbolTable): TyperState  typer/Typer.scala:55  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.TyperState.typeParamsIndex  typeParamsIndex(symbols: SymbolTable): IntMap[List[SymbolId]]  typer/Typer.scala:67  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Typer.i64  val i64: <inferred>  typer/Typer.scala:78  [method]
+    unresolved: inferred result type not resolved: application of a selection
+?  fixed.typer.Typer.f64  val f64: <inferred>  typer/Typer.scala:79  [method]
+    unresolved: inferred result type not resolved: application of a selection
+?  fixed.typer.Typer.bool  val bool: <inferred>  typer/Typer.scala:80  [method]
+    unresolved: inferred result type not resolved: application of a selection
+?  fixed.typer.Typer.typedExpr  typedExpr(s: TyperState, tree: Tree, pt: Proto)(using ctx: Context): (TyperState, Type)  typer/Typer.scala:83  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.check  check(s: TyperState, span: Span, t: Type, pt: Proto): TyperState  typer/Typer.scala:116  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.unify  unify(s: TyperState, span: Span, expected: Type, actual: Type): TyperState  typer/Typer.scala:119  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.solve  solve(s: TyperState, span: Span, result: Either[?, Unifier])(message: => String): TyperState  typer/Typer.scala:127  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.show  show(s: TyperState, t: Type): String  typer/Typer.scala:130  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.literal  literal(s: TyperState, default: Type): (TyperState, Type)  typer/Typer.scala:133  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.isNumeric  isNumeric(s: TyperState, t: Type): Boolean  typer/Typer.scala:137  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedIdent  typedIdent(s: TyperState, name: String, span: Span)(using ctx: Context): (TyperState, Type)  typer/Typer.scala:139  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedAll  typedAll(s: TyperState, trees: List[Tree])(using Context): (TyperState, List[Type])  typer/Typer.scala:149  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedBinOp  typedBinOp(s: TyperState, t: Trees.BinOp, pt: Proto)(using Context): (TyperState, Type)  typer/Typer.scala:152  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedUnaryOp  typedUnaryOp(s: TyperState, t: Trees.UnaryOp, pt: Proto)(using Context): (TyperState, Type)  typer/Typer.scala:169  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.numeric  numeric(s: TyperState, span: Span, t: Type): TyperState  typer/Typer.scala:178  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedApply  typedApply(s: TyperState, t: Trees.Apply)(using Context): (TyperState, Type)  typer/Typer.scala:181  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.applyArgs  applyArgs(s: TyperState, fnType: Type, args: Option[List[Tree]], span: Span)(using Context): (TyperState, Type)  typer/Typer.scala:188  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedList  typedList(s: TyperState, elems: List[Tree])(using ctx: Context): (TyperState, Type)  typer/Typer.scala:203  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedIf  typedIf(s: TyperState, t: Trees.IfExpr, pt: Proto)(using Context): (TyperState, Type)  typer/Typer.scala:209  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedLambda  typedLambda(s: TyperState, t: Trees.LambdaExpr, pt: Proto)(using ctx: Context): (TyperState, Type)  typer/Typer.scala:217  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedMethodCall  typedMethodCall(s: TyperState, t: Trees.MethodCall)(using ctx: Context): (TyperState, Type)  typer/Typer.scala:248  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedPipe  typedPipe(s: TyperState, lhs: Tree, rhs: Tree, span: Span)(using Context): (TyperState, Type)  typer/Typer.scala:273  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.intrinsic  intrinsic(s: TyperState, t: Trees.MethodCall)(using Context): (TyperState, Type)  typer/Typer.scala:285  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedStaticCall  typedStaticCall(s: TyperState, t: Trees.StaticCall, pt: Proto)(using ctx: Context): (TyperState, Type)  typer/Typer.scala:290  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedBlock  typedBlock(s: TyperState, stmts: List[Tree], pt: Proto)(using ctx: Context): (TyperState, Type)  typer/Typer.scala:306  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedLet  typedLet(s: TyperState, let: Trees.LetExpr)(using ctx: Context): (TyperState, Context)  typer/Typer.scala:328  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedFnBody  typedFnBody(s: TyperState, id: fixed.core.SymbolId, fn: Trees.FnLike)(using ctx: Context): TyperState  typer/Typer.scala:333  [method]
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: sealed family construction not resolved: FnLike
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedHandle  typedHandle(s: TyperState, h: Trees.HandleExpr, pt: Proto)(using ctx: Context): (TyperState, Type)  typer/Typer.scala:347  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedClause  typedClause(s: TyperState, c: Trees.OperationClause, result: Type)(using ctx: Context): TyperState  typer/Typer.scala:361  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.Typer.typedResume  typedResume(s: TyperState, value: Option[Tree], span: Span)(using ctx: Context): (TyperState, Type)  typer/Typer.scala:382  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+ω  fixed.typer.TyperPhase.name  val name: String  typer/TyperPhase.scala:11  [method]
+?  fixed.typer.TyperPhase.run  run(unit: CompilationUnit): CompilationUnit  typer/TyperPhase.scala:13  [method]
+    unresolved: ambiguous sealed family: Tree
+?  fixed.typer.TyperPhase.typeBodies  typeBodies(tree: Tree, symbols: SymbolTable): TyperState  typer/TyperPhase.scala:21  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: recursive type not read: fixed.core.Type
+    unresolved: unresolved type: Class
+?  fixed.typer.TyperPhase.typeFnBody  typeFnBody(s: TyperState, fn: Trees.FnDecl): TyperState  typer/TyperPhase.scala:27  [method]
+    unresolved: ambiguous sealed family: Tree
+    unresolved: unresolved type: Class
+?  fixed.typer.Unifier.<init>  Unifier(bindings: IntMap[Type], numericVars: Set[Int], defaults: IntMap[Type], varBounds: IntMap[List[Type]], tuple: Option[SymbolId], next: Int)  typer/Unifier.scala:14  [constructor]
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+?  fixed.typer.Unifier.fresh  fresh(numeric: Boolean, default: Option[Type], bounds: List[Type] = Nil): (Unifier, Type)  typer/Unifier.scala:23  [method]
+    captures: next, numericVars, tuple
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Unifier.boundsOf  boundsOf(id: Int): List[Type]  typer/Unifier.scala:36  [method]
+    captures: next, numericVars, tuple
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Unifier.resolve  resolve(t: Type): Type  typer/Unifier.scala:39  [method]
+    captures: next, numericVars, tuple
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Unifier.zonk  zonk(t: Type): Type  typer/Unifier.scala:49  [method]
+    captures: next, numericVars, tuple
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Unifier.applyDefaults  applyDefaults: Unifier  typer/Unifier.scala:63  [method]
+    captures: next, numericVars, tuple
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+?  fixed.typer.Unifier.requireNumeric  requireNumeric(t: Type, numeric: Type => Boolean): Either[String, Unifier]  typer/Unifier.scala:71  [method]
+    captures: next, numericVars, tuple
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Unifier.unify  unify(a: Type, b: Type, numeric: Type => Boolean): Either[Unit, Unifier]  typer/Unifier.scala:81  [method]
+    captures: next, numericVars, tuple
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Unifier.bindHead  bindHead(x: Int, cap: Boolean, sym: SymbolId, applied: List[Type], full: List[Type], numeric: Type => Boolean): Solved  typer/Unifier.scala:115  [method]
+    captures: next, numericVars, tuple
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Unifier.unifyShared  unifyShared(left: List[Type], right: List[Type], numeric: Type => Boolean): Solved  typer/Unifier.scala:132  [method]
+    captures: next, numericVars, tuple
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Unifier.unifyAll  unifyAll(xs: List[Type], ys: List[Type], numeric: Type => Boolean): Either[Unit, Unifier]  typer/Unifier.scala:143  [method]
+    captures: next, numericVars, tuple
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Unifier.bind  bind(id: Int, t: Type, numeric: Type => Boolean): Either[Unit, Unifier]  typer/Unifier.scala:148  [method]
+    captures: next, numericVars, tuple
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Unifier.occurs  occurs(id: Int, t: Type): Boolean  typer/Unifier.scala:166  [method]
+    captures: next, numericVars, tuple
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Capabilities.unapply  unapply(t: Type): Option[List[Type]]  typer/Unifier.scala:179  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Applied.unapply  unapply(t: Type): Option[(Boolean, SymbolId, List[Type])]  typer/Unifier.scala:187  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Unifier.applyHead  applyHead(head: Type, args: List[Type]): Type  typer/Unifier.scala:198  [method]
+    unresolved: recursive type not read: fixed.core.Type
+?  fixed.typer.Unifier.empty  val empty: Unifier  typer/Unifier.scala:207  [method]
+    unresolved: declaration not supplied: scala.collection.immutable.IntMap (named import IntMap)
+ω  fixed.util.Diagnostic.<init>  Diagnostic(severity: Severity, code: DiagCode, span: Span, message: String, suggestion: Option[String] = None)  util/Reporter.scala:16  [constructor]
+ω  fixed.util.Diagnostic.isError  isError: Boolean  util/Reporter.scala:23  [method]
+    captures: code, message, severity, span, suggestion
+ω  fixed.util.Reporter.<init>  Reporter(val source: SourceFile)  util/Reporter.scala:26  [constructor]
+?  fixed.util.Reporter.buf  val buf: <inferred>  util/Reporter.scala:27  [method]
+    captures: source
+    unresolved: inferred result type not resolved: application of a selection
+1  fixed.util.Reporter.error  error(code: DiagCode, span: Span, message: String, suggestion: Option[String] = None): Unit  util/Reporter.scala:29  [method]
+    captures: source
+1  fixed.util.Reporter.add  add(d: Diagnostic): Unit  util/Reporter.scala:33  [method]
+    captures: source
+ω  fixed.util.Reporter.diagnostics  diagnostics: Seq[Diagnostic]  util/Reporter.scala:36  [method]
+    captures: source
+ω  fixed.util.Reporter.hasErrors  hasErrors: Boolean  util/Reporter.scala:38  [method]
+    captures: source
+ω  fixed.util.Reporter.errorCount  errorCount: Int  util/Reporter.scala:40  [method]
+    captures: source
+ω  fixed.util.Reporter.format  format(d: Diagnostic): String  util/Reporter.scala:43  [method]
+    captures: source
+ω  fixed.util.Reporter.formatAll  formatAll: String  util/Reporter.scala:55  [method]
+    captures: source
+ω  fixed.util.SourceFile.<init>  SourceFile(val path: String, val content: String)  util/SourceFile.scala:10  [constructor]
+ω  fixed.util.SourceFile.lineOffsets  val lineOffsets: IndexedSeq[Int]  util/SourceFile.scala:16  [method]
+    captures: content, path
+ω  fixed.util.SourceFile.lineColumn  lineColumn(offset: Int): (Int, Int)  util/SourceFile.scala:20  [method]
+    captures: content, path
+ω  fixed.util.SourceFile.lineOf  lineOf(offset: Int): Int  util/SourceFile.scala:33  [method]
+    captures: content, path
+ω  fixed.util.SourceFile.slice  slice(start: Int, end: Int): String  util/SourceFile.scala:36  [method]
+    captures: content, path
+ω  fixed.util.SourceFile.length  length: Int  util/SourceFile.scala:44  [method]
+    captures: content, path
+ω  fixed.util.SourceFile.fromString  fromString(path: String, content: String): SourceFile  util/SourceFile.scala:47  [method]
+ω  fixed.util.SourceFile.fromPath  fromPath(path: String): SourceFile  util/SourceFile.scala:50  [method]
+2^64  fixed.util.Span.<init>  Span(start: Int, end: Int)  util/SourceFile.scala:55  [constructor]
+2^(2^69)  fixed.util.Span.length  length: Int  util/SourceFile.scala:58  [method]
+    captures: end, start
+2^(2^134)  fixed.util.Span.union  union(other: Span): Span  util/SourceFile.scala:60  [method]
+    captures: end, start
+2^(2^96)  fixed.util.Span.contains  contains(offset: Int): Boolean  util/SourceFile.scala:62  [method]
+    captures: end, start
+2^64  fixed.util.Span.NoSpan  val NoSpan: Span  util/SourceFile.scala:65  [method]
+ω  fixed.util.mapAccum  mapAccum[S, A, B](state: S, as: List[A])(f: (S, A) => (S, B)): (S, List[B])  util/Threading.scala:4  [method]
+scala-cardinality — 28 sources, 185 definitions
+  stored-value estimates: constructor inputs only; a finite capacity prints as the bound ≤2^b, marked (lossy) when it holds floating point
+  ?: no single number here — the reason after the row says what would give one
+  15 unresolved · 2 instantiation-dependent · 121 with more than one value · 46 with one value · 1 abstract
+Stored-value estimates (constructor inputs; `?` = unresolved)
+
+?            fixed.CompilationUnit                      class     CompilationUnit.scala:10  unresolved: IntMap (imported from scala.collection.immutable.IntMap, not supplied)
+?            fixed.ast.Trees.BinderCompanion[T]         abstract  ast/Trees.scala:151  unresolved: sealed family not summed: BinderCompanion (sealed subtype leaves a parameter of its parent unpinned: FnParam (FnParam, of BinderCompanion))
+?            fixed.ast.Trees.FnLikeCompanion[T]         abstract  ast/Trees.scala:79  unresolved: sealed family not summed: FnLikeCompanion (sealed subtype leaves a parameter of its parent unpinned: FnDecl (FnDecl, of FnLikeCompanion))
+?            fixed.ast.Trees.MemberCallCompanion[H, T]  abstract  ast/Trees.scala:269  unresolved: sealed family not summed: MemberCallCompanion (sealed subtype leaves a parameter of its parent unpinned: MethodCall (Tree, of MemberCallCompanion))
+?            fixed.core.SymbolTable                     class     core/Symbols.scala:40  unresolved: IntMap (imported from scala.collection.immutable.IntMap, not supplied)
+?            fixed.parsing.DeclParsers.DataBodyAcc      class     parsing/DeclParsers.scala:313  unresolved: List (may be imported by TypeParsers.*: TypeParsers may be imported by Parser.*, an exported member not followed)
+?            fixed.parsing.ExprParsers.HandlerAcc       class     parsing/ExprParsers.scala:364  unresolved: List (may be imported by TypeParsers.*: TypeParsers may be imported by Parser.*, an exported member not followed), Option (may be imported by TypeParsers.*: TypeParsers may be imported by Parser.*, an exported member not followed)
+?            fixed.parsing.Parser.Parsed[A]             alias     parsing/Parsers.scala:116  depends on its instantiation (A)
+?            fixed.parsing.Parser.Rule[A]               alias     parsing/Parsers.scala:119  depends on its instantiation (A)
+?            fixed.parsing.Scanner.ScannerState         class     parsing/Scanners.scala:27  unresolved: Queue (imported from scala.collection.immutable.Queue, not supplied)
+?            fixed.parsing.Scanner.Skipped              class     parsing/Scanners.scala:25  unresolved: Queue (imported from scala.collection.immutable.Queue, not supplied)
+?            fixed.parsing.TypeParsers.Paren            enum      parsing/TypeParsers.scala:27  unresolved: Span (may be imported by ExprParsers.*: ExprParsers may be imported by Parser.*, an exported member not followed), Tree (may be imported by ExprParsers.*: ExprParsers may be imported by Parser.*, an exported member not followed), List (may be imported by ExprParsers.*: ExprParsers may be imported by Parser.*, an exported member not followed)
+?            fixed.typer.Namer.Ctx                      class     typer/Namer.scala:62  unresolved: IntMap (imported from scala.collection.immutable.IntMap, not supplied)
+?            fixed.typer.Solved                         alias     typer/Unifier.scala:194  unresolved: IntMap (imported from scala.collection.immutable.IntMap, not supplied)
+?            fixed.typer.TreeKey                        class     typer/Typer.scala:12  unresolved: Class
+?            fixed.typer.TyperState                     class     typer/Typer.scala:20  unresolved: Class, IntMap (imported from scala.collection.immutable.IntMap, not supplied)
+?            fixed.typer.Unifier                        class     typer/Unifier.scala:14  unresolved: IntMap (imported from scala.collection.immutable.IntMap, not supplied)
+6ω + ≤2^135  fixed.parsing.Token                        enum      parsing/Tokens.scala:106
+3ω + ≤2^18   fixed.core.SymbolicTerm                    enum      core/Types.scala:49
+3ω           fixed.ast.Trees.FnLike                     abstract  ast/Trees.scala:57
+3ω           fixed.ast.Trees.SatisfiesMapping           abstract  ast/Trees.scala:183
+2ω           fixed.ast.Trees.Binder                     abstract  ast/Trees.scala:141
+2ω           fixed.ast.Trees.CapReturnSpec              enum      ast/Trees.scala:441
+2ω           fixed.ast.Trees.MemberCall                 abstract  ast/Trees.scala:258
+2ω           fixed.ast.Trees.NamedRef                   abstract  ast/Trees.scala:392
+ω + ≤2^96    fixed.parsing.Trivia                       enum      parsing/TriviaTable.scala:9
+ω + 1        fixed.core.Proto                           enum      core/ProtoTypes.scala:4
+ω            fixed.ast.Tree                             abstract  ast/Trees.scala:18
+ω            fixed.ast.Trees.Apply                      class     ast/Trees.scala:283
+ω            fixed.ast.Trees.ArrowType                  class     ast/Trees.scala:417
+ω            fixed.ast.Trees.BinOp                      class     ast/Trees.scala:306
+ω            fixed.ast.Trees.BinderPat                  class     ast/Trees.scala:357
+ω            fixed.ast.Trees.Binding                    class     ast/Trees.scala:148
+ω            fixed.ast.Trees.Block                      class     ast/Trees.scala:195
+ω            fixed.ast.Trees.CapDecl                    class     ast/Trees.scala:91
+ω            fixed.ast.Trees.CapRef                     class     ast/Trees.scala:397
+ω            fixed.ast.Trees.CapType                    class     ast/Trees.scala:439
+ω            fixed.ast.Trees.CompilationUnit            class     ast/Trees.scala:38
+ω            fixed.ast.Trees.ConstructorMapping         class     ast/Trees.scala:187
+ω            fixed.ast.Trees.DataDecl                   class     ast/Trees.scala:104
+ω            fixed.ast.Trees.DataVariant                class     ast/Trees.scala:172
+ω            fixed.ast.Trees.DataVariantPat             class     ast/Trees.scala:364
+ω            fixed.ast.Trees.DoBind                     class     ast/Trees.scala:241
+ω            fixed.ast.Trees.DoExpr                     class     ast/Trees.scala:239
+ω            fixed.ast.Trees.EffectBound                class     ast/Trees.scala:400
+ω            fixed.ast.Trees.EffectDecl                 class     ast/Trees.scala:112
+ω            fixed.ast.Trees.EffectRow                  class     ast/Trees.scala:456
+ω            fixed.ast.Trees.Error                      class     ast/Trees.scala:29
+ω            fixed.ast.Trees.FieldDecl                  class     ast/Trees.scala:179
+ω            fixed.ast.Trees.FloatLit                   class     ast/Trees.scala:324
+ω            fixed.ast.Trees.FnDecl                     class     ast/Trees.scala:84
+ω            fixed.ast.Trees.FnParam                    class     ast/Trees.scala:155
+ω            fixed.ast.Trees.FnSig                      class     ast/Trees.scala:67
+ω            fixed.ast.Trees.ForallExpr                 class     ast/Trees.scala:343
+ω            fixed.ast.Trees.GuardedPat                 class     ast/Trees.scala:379
+ω            fixed.ast.Trees.HandleExpr                 class     ast/Trees.scala:222
+ω            fixed.ast.Trees.Ident                      class     ast/Trees.scala:321
+ω            fixed.ast.Trees.IfExpr                     class     ast/Trees.scala:199
+ω            fixed.ast.Trees.Implies                    class     ast/Trees.scala:350
+ω            fixed.ast.Trees.ImpossibleMapping          class     ast/Trees.scala:193
+ω            fixed.ast.Trees.InstanceMethod             class     ast/Trees.scala:159
+ω            fixed.ast.Trees.IntLit                     class     ast/Trees.scala:323
+ω            fixed.ast.Trees.IsBound                    class     ast/Trees.scala:382
+ω            fixed.ast.Trees.LambdaExpr                 class     ast/Trees.scala:244
+ω            fixed.ast.Trees.LambdaParam                class     ast/Trees.scala:253
+ω            fixed.ast.Trees.LetExpr                    class     ast/Trees.scala:197
+ω            fixed.ast.Trees.ListExpr                   class     ast/Trees.scala:331
+ω            fixed.ast.Trees.LiteralPat                 class     ast/Trees.scala:358
+ω            fixed.ast.Trees.MatchCase                  class     ast/Trees.scala:212
+ω            fixed.ast.Trees.MatchExpr                  class     ast/Trees.scala:206
+ω            fixed.ast.Trees.MethodCall                 class     ast/Trees.scala:273
+ω            fixed.ast.Trees.Missing                    class     ast/Trees.scala:36
+ω            fixed.ast.Trees.ModDecl                    class     ast/Trees.scala:134
+ω            fixed.ast.Trees.NamedAlias                 class     ast/Trees.scala:385
+ω            fixed.ast.Trees.OperationClause            class     ast/Trees.scala:229
+ω            fixed.ast.Trees.OrPat                      class     ast/Trees.scala:378
+ω            fixed.ast.Trees.ParenTypeApp               class     ast/Trees.scala:447
+ω            fixed.ast.Trees.Pipe                       class     ast/Trees.scala:319
+ω            fixed.ast.Trees.PrimitiveType              class     ast/Trees.scala:410
+ω            fixed.ast.Trees.PropDecl                   class     ast/Trees.scala:166
+ω            fixed.ast.Trees.RefinementCall             class     ast/Trees.scala:403
+ω            fixed.ast.Trees.Resume                     class     ast/Trees.scala:339
+ω            fixed.ast.Trees.ReturnClause               class     ast/Trees.scala:237
+ω            fixed.ast.Trees.SatisfiesDecl              class     ast/Trees.scala:127
+ω            fixed.ast.Trees.Selection                  class     ast/Trees.scala:264
+ω            fixed.ast.Trees.SelfMapping                class     ast/Trees.scala:190
+ω            fixed.ast.Trees.SelfType                   class     ast/Trees.scala:436
+ω            fixed.ast.Trees.StaticCall                 class     ast/Trees.scala:279
+ω            fixed.ast.Trees.StaticMethod               class     ast/Trees.scala:163
+ω            fixed.ast.Trees.StringLit                  class     ast/Trees.scala:325
+ω            fixed.ast.Trees.StructDestructurePat       class     ast/Trees.scala:371
+ω            fixed.ast.Trees.StructLit                  class     ast/Trees.scala:333
+ω            fixed.ast.Trees.TupleArrowLhs              class     ast/Trees.scala:427
+ω            fixed.ast.Trees.TupleExpr                  class     ast/Trees.scala:330
+ω            fixed.ast.Trees.TuplePat                   class     ast/Trees.scala:359
+ω            fixed.ast.Trees.TypeAlias                  class     ast/Trees.scala:120
+ω            fixed.ast.Trees.TypeRef                    class     ast/Trees.scala:413
+ω            fixed.ast.Trees.UnaryOp                    class     ast/Trees.scala:313
+ω            fixed.ast.Trees.UseDecl                    class     ast/Trees.scala:47
+ω            fixed.ast.Trees.WithClause                 class     ast/Trees.scala:453
+ω            fixed.ast.tpd.Tree                         alias     ast/Trees.scala:468
+ω            fixed.ast.untpd.Tree                       alias     ast/Trees.scala:465
+ω            fixed.core.Context                         class     core/Contexts.scala:4
+ω            fixed.core.Denotation                      class     core/Symbols.scala:27
+ω            fixed.core.EffectBound                     class     core/Types.scala:41
+ω            fixed.core.EffectRow                       class     core/Types.scala:44
+ω            fixed.core.Type                            enum      core/Types.scala:6
+ω            fixed.parsing.ParseResult                  class     parsing/ParseResult.scala:9
+ω            fixed.parsing.Parser                       class     parsing/Parsers.scala:19
+ω            fixed.parsing.Parser.ParserState           class     parsing/Parsers.scala:58
+ω            fixed.parsing.Scanner                      class     parsing/Scanners.scala:574
+ω            fixed.parsing.Scanner.QuotedBody           class     parsing/Scanners.scala:435
+ω            fixed.parsing.Tokens.Keyword               class     parsing/Tokens.scala:322
+ω            fixed.parsing.TriviaTable                  class     parsing/TriviaTable.scala:14
+ω            fixed.typer.Members.Subst                  class     typer/Members.scala:37
+ω            fixed.util.Diagnostic                      class     util/Reporter.scala:16
+ω            fixed.util.Reporter                        class     util/Reporter.scala:26
+ω            fixed.util.SourceFile                      class     util/SourceFile.scala:10
+≤2^128       fixed.parsing.KindSet                      class     parsing/Tokens.scala:83
+≤2^80        fixed.ast.Trees.CharLit                    class     ast/Trees.scala:326
+≤2^65        fixed.ast.Trees.BoolLit                    class     ast/Trees.scala:327
+≤2^64        fixed.ast.Trees.NeverType                  class     ast/Trees.scala:433
+≤2^64        fixed.ast.Trees.UnitLit                    class     ast/Trees.scala:328
+≤2^64        fixed.ast.Trees.UnitType                   class     ast/Trees.scala:430
+≤2^64        fixed.ast.Trees.Unreachable                class     ast/Trees.scala:341
+≤2^64        fixed.ast.Trees.WildcardPat                class     ast/Trees.scala:356
+≤2^64        fixed.util.Span                            class     util/SourceFile.scala:55
+≤2^48        fixed.parsing.Scanner.OpenBracket          class     parsing/Scanners.scala:20
+≤2^32        fixed.core.SymbolId                        opaque    core/Symbols.scala:8
+79           fixed.parsing.TokenKind                    enum      parsing/Tokens.scala:13
+38           fixed.util.DiagCode                        enum      util/Reporter.scala:10
+14           fixed.core.SymKind                         enum      core/Symbols.scala:22
+13           fixed.ast.Trees.BinOperator                enum      ast/Trees.scala:286
+4            fixed.parsing.Parser.Bracket               enum      parsing/Parsers.scala:381
+3            fixed.parsing.DeclParsers.FnKind           enum      parsing/DeclParsers.scala:102
+3            fixed.util.Severity                        enum      util/Reporter.scala:4
+2            fixed.ast.Trees.UnaryOperator              enum      ast/Trees.scala:302
+2            fixed.parsing.Scanner.Quote                enum      parsing/Scanners.scala:494
+1            fixed.Compiler                             object    Compiler.scala:10
+1            fixed.Main                                 object    Main.scala:9
+1            fixed.ast.Trees                            object    ast/Trees.scala:21
+1            fixed.ast.Trees.FieldDecl                  object    ast/Trees.scala:180
+1            fixed.ast.Trees.FnDecl                     object    ast/Trees.scala:85
+1            fixed.ast.Trees.FnParam                    object    ast/Trees.scala:156
+1            fixed.ast.Trees.InstanceMethod             object    ast/Trees.scala:160
+1            fixed.ast.Trees.MethodCall                 object    ast/Trees.scala:274
+1            fixed.ast.Trees.StaticCall                 object    ast/Trees.scala:280
+1            fixed.ast.Trees.StaticMethod               object    ast/Trees.scala:164
+1            fixed.ast.tpd                              object    ast/Trees.scala:467
+1            fixed.ast.untpd                            object    ast/Trees.scala:464
+1            fixed.core.EffectRow                       object    core/Types.scala:46
+1            fixed.core.SymbolId                        object    core/Symbols.scala:10
+1            fixed.core.SymbolTable                     object    core/Symbols.scala:83
+1            fixed.parsing.DeclParsers                  object    parsing/DeclParsers.scala:10
+1            fixed.parsing.DeclParsers.AsMappingHead    object    parsing/DeclParsers.scala:470
+1            fixed.parsing.DeclParsers.MethodMember     object    parsing/DeclParsers.scala:490
+1            fixed.parsing.ExprParsers                  object    parsing/ExprParsers.scala:10
+1            fixed.parsing.ExprParsers.Closer           object    parsing/ExprParsers.scala:314
+1            fixed.parsing.ExprParsers.LiteralStart     object    parsing/ExprParsers.scala:308
+1            fixed.parsing.ExprParsers.Opener           object    parsing/ExprParsers.scala:302
+1            fixed.parsing.ExprParsers.UnaryPrefix      object    parsing/ExprParsers.scala:98
+1            fixed.parsing.KindSet                      object    parsing/Tokens.scala:92
+1            fixed.parsing.Parser                       object    parsing/Parsers.scala:45
+1            fixed.parsing.Parser.Anchors               object    parsing/Parsers.scala:310
+1            fixed.parsing.ParserPhase                  object    parsing/ParserPhase.scala:7
+1            fixed.parsing.Scanner                      object    parsing/Scanners.scala:15
+1            fixed.parsing.Token                        object    parsing/Tokens.scala:187
+1            fixed.parsing.Tokens                       object    parsing/Tokens.scala:274
+1            fixed.parsing.TriviaTable                  object    parsing/TriviaTable.scala:24
+1            fixed.parsing.TypeParsers                  object    parsing/TypeParsers.scala:6
+1            fixed.typer.Applied                        object    typer/Unifier.scala:186
+1            fixed.typer.Capabilities                   object    typer/Unifier.scala:178
+1            fixed.typer.Members                        object    typer/Members.scala:13
+1            fixed.typer.Namer                          object    typer/Namer.scala:16
+1            fixed.typer.Namer.Ctx                      object    typer/Namer.scala:84
+1            fixed.typer.Patterns                       object    typer/Patterns.scala:11
+1            fixed.typer.Stdlib                         object    typer/Stdlib.scala:12
+1            fixed.typer.TreeKey                        object    typer/Typer.scala:14
+1            fixed.typer.Typer                          object    typer/Typer.scala:76
+1            fixed.typer.TyperPhase                     object    typer/TyperPhase.scala:10
+1            fixed.typer.TyperState                     object    typer/Typer.scala:54
+1            fixed.typer.Unifier                        object    typer/Unifier.scala:196
+1            fixed.util.SourceFile                      object    util/SourceFile.scala:46
+1            fixed.util.Span                            object    util/SourceFile.scala:64
+—            fixed.core.Phase                           abstract  core/Phases.scala:6
