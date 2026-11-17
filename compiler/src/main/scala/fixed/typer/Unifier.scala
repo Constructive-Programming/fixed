@@ -1,6 +1,6 @@
 package fixed.typer
 
-import scala.collection.immutable.IntMap
+import scala.collection.immutable.{BitSet, IntMap}
 
 import fixed.core.{SymbolId, Type}
 
@@ -13,7 +13,7 @@ import fixed.core.{SymbolId, Type}
   */
 final case class Unifier(
     bindings: IntMap[Type],
-    numericVars: Set[Int],
+    numericVars: BitSet,
     defaults: IntMap[Type],
     varBounds: IntMap[List[Type]],
     tuple: Option[SymbolId],
@@ -72,8 +72,10 @@ final case class Unifier(
       case (Type.NeverType, _) | (_, Type.NeverType)                                        => Right(this)
       case (Type.TypeVar(x), Type.TypeVar(y)) if x == y                                     => Right(this)
       case (Type.AppliedVar(x, xs), Type.AppliedVar(y, ys)) if x == y && xs.size == ys.size => unifyAll(xs, ys, numeric)
-      case (Type.AppliedVar(x, xs), Applied(k, sym, ys))          => bindHead(x, k, sym, xs, ys, numeric)
-      case (Applied(k, sym, ys), Type.AppliedVar(x, xs))          => bindHead(x, k, sym, xs, ys, numeric)
+      case (Type.AppliedVar(x, xs), Type.TypeRef(sym, ys))        => bindHead(x, false, sym, xs, ys, numeric)
+      case (Type.AppliedVar(x, xs), Type.CapRef(sym, ys))         => bindHead(x, true, sym, xs, ys, numeric)
+      case (Type.TypeRef(sym, ys), Type.AppliedVar(x, xs))        => bindHead(x, false, sym, xs, ys, numeric)
+      case (Type.CapRef(sym, ys), Type.AppliedVar(x, xs))         => bindHead(x, true, sym, xs, ys, numeric)
       case (Type.TypeVar(x), t)                                   => bind(x, t, numeric)
       case (t, Type.TypeVar(y))                                   => bind(y, t, numeric)
       case (Capabilities(xs), Capabilities(ys))                   => unifyShared(xs, ys, numeric)
@@ -83,9 +85,8 @@ final case class Unifier(
       case (Type.TupleType(xs), Type.TupleType(ys)) if xs.size == ys.size => unifyAll(xs, ys, numeric)
 
       /** A higher-kinded type variable used bare (`M`) and applied (`M of A`) names the same type. */
-      case (Applied(k1, s1, xs), Applied(k2, s2, ys)) if k1 == k2 && s1 == s2 =>
-        if xs.size == ys.size then unifyAll(xs, ys, numeric)
-        else if xs.isEmpty || ys.isEmpty then Right(this) else Left(())
+      case (Type.TypeRef(s1, xs), Type.TypeRef(s2, ys)) if s1 == s2                       => sameHead(xs, ys, numeric)
+      case (Type.CapRef(s1, xs), Type.CapRef(s2, ys)) if s1 == s2                         => sameHead(xs, ys, numeric)
       case (Type.TupleType(List(a, b)), Type.TypeRef(t, List(x, y))) if tuple.contains(t) =>
         unifyAll(List(a, b), List(x, y), numeric)
       case (Type.TypeRef(t, List(x, y)), Type.TupleType(List(a, b))) if tuple.contains(t) =>
@@ -118,6 +119,12 @@ final case class Unifier(
   /** Bounds are not yet checked against each other (M6), but a capability both sides name has
     * its arguments unified: `is Optional of A` against `is Optional of u64` solves `A`.
     */
+  /** Two applications of the same constructor. A higher-kinded type variable used bare (`M`) and
+    * applied (`M of A`) names the same type.
+    */
+  private def sameHead(xs: List[Type], ys: List[Type], numeric: Type => Boolean): Solved =
+    if xs.size == ys.size then unifyAll(xs, ys, numeric) else if xs.isEmpty || ys.isEmpty then Right(this) else Left(())
+
   private def unifyShared(left: List[Type], right: List[Type], numeric: Type => Boolean): Solved =
     val pairs =
       for
@@ -166,14 +173,6 @@ private object Capabilities:
       case c: Type.CapRef   => Some(List(c))
       case _                => None
 
-/** `TypeRef` and `CapRef` as one shape: (is a cap, symbol, arguments). */
-private object Applied:
-  def unapply(t: Type): Option[(Boolean, SymbolId, List[Type])] =
-    t match
-      case Type.TypeRef(sym, args) => Some((false, sym, args))
-      case Type.CapRef(sym, args)  => Some((true, sym, args))
-      case _                       => None
-
 /** Unification's outcome: the extended unifier, or a mismatch the caller reports. */
 type Solved = Either[Unit, Unifier]
 
@@ -188,4 +187,4 @@ object Unifier:
       case Type.AppliedVar(id, _)                => Type.AppliedVar(id, args)
       case other                                 => other
 
-  val empty: Unifier = Unifier(IntMap.empty, Set.empty, IntMap.empty, IntMap.empty, None, 0)
+  val empty: Unifier = Unifier(IntMap.empty, BitSet.empty, IntMap.empty, IntMap.empty, None, 0)

@@ -6,25 +6,34 @@ import fixed.ast.{Tree, Trees}
 import fixed.core.{Context, EffectRow, Proto, SymKind, SymbolId, SymbolTable, Type, render}
 import fixed.util.{DiagCode, Diagnostic, Severity, Span, mapAccum}
 
-/** A tree's identity in the type side table: its span and node class (§3.0 span-as-identity).
-  * Cheap to hash, unlike the tree itself, whose structural hash walks the whole subtree.
+/** The type side table, keyed by tree identity.
+  *
+  * Escape hatch (plan §3.1, §3.5): a `java.util.IdentityHashMap` behind a pure-looking interface.
+  * Persistent maps keyed by a structural tree (or its packed span) dominated typer time. Writes
+  * are only ever overwrites of the same key with the newer type: a failed overload trial types the
+  * same argument trees the winning attempt then re-records, so no stale entry survives a call.
   */
-final case class TreeKey(start: Int, end: Int, node: Class[?])
+final class TypeTable private (entries: java.util.IdentityHashMap[Tree, Type]):
+  def updated(tree: Tree, t: Type): TypeTable =
+    val _ = entries.put(tree, t)
+    this
 
-object TreeKey:
-  def of(tree: Tree): TreeKey = TreeKey(tree.span.start, tree.span.end, tree.getClass)
+  def get(tree: Tree): Option[Type] = Option(entries.get(tree))
+
+object TypeTable:
+  def empty: TypeTable = TypeTable(java.util.IdentityHashMap[Tree, Type]())
 
 /** Threaded typer state (`docs/plans/phase-3-typer.md` §3.4): the type side table, the symbol
   * table (local bindings join it), the unifier and the diagnostics so far (newest first).
   */
 final case class TyperState(
-    types: Map[TreeKey, Type],
+    types: TypeTable,
     symbols: SymbolTable,
     unifier: Unifier,
     diags: List[Diagnostic],
-    typeParams: IntMap[List[SymbolId]]
+    errors: Int
 ):
-  def record(tree: Tree, t: Type): TyperState = copy(types = types.updated(TreeKey.of(tree), t))
+  def record(tree: Tree, t: Type): TyperState = copy(types = types.updated(tree, t))
 
   /** A fresh unconstrained unification variable. */
   def fresh: (TyperState, Type) =
@@ -34,40 +43,36 @@ final case class TyperState(
   /** `n` fresh unconstrained variables. */
   def freshVars(n: Int): (TyperState, List[Type]) = mapAccum(this, List.fill(n)(()))((si, _) => si.fresh)
 
-  /** The recorded type of `tree`. */
-  def typeOf(tree: Tree): Option[Type] = types.get(TreeKey.of(tree))
+  /** The recorded type of `tree`, with every solved variable substituted. */
+  def typeOf(tree: Tree): Option[Type] = types.get(tree).map(unifier.zonk)
 
   /** Report an error once: a prototype re-checked by an enclosing node repeats the same finding. */
   def error(code: DiagCode, span: Span, message: String): TyperState =
     val d = Diagnostic(Severity.Error, code, span, message)
-    if diags.contains(d) then this else copy(diags = d :: diags)
+    if diags.contains(d) then this else copy(diags = d :: diags, errors = errors + 1)
+
+  /** Merge diagnostics produced outside the typer (the Namer's), in source order. */
+  def report(more: List[Diagnostic]): TyperState =
+    copy(diags = more.reverse ++ diags, errors = errors + more.count(_.isError))
 
   /** A construct the typer does not handle yet (`T005`): a gap in the typer, not in the program. */
   def unsupported(span: Span, what: String): TyperState =
     copy(diags = Diagnostic(Severity.Warning, DiagCode.T005, span, s"$what is not supported by the typer yet") :: diags)
 
-  /** Default unsolved literal variables, zonk every recorded type and order the diagnostics. */
-  def finish: TyperState =
-    val u = unifier.applyDefaults
-    copy(types = types.view.mapValues(u.zonk).toMap, unifier = u, diags = diags.reverse)
+  /** Default unsolved literal variables and order the diagnostics. Recorded types stay as typed;
+    * `typeOf` substitutes on read, so the table is never rewritten wholesale.
+    */
+  def finish: TyperState = copy(unifier = unifier.applyDefaults, diags = diags.reverse)
 
 object TyperState:
   def apply(symbols: SymbolTable): TyperState =
     TyperState(
-      Map.empty,
+      TypeTable.empty,
       symbols,
       Unifier.empty.copy(tuple = symbols.scope.get("Tuple")),
       Nil,
-      typeParamsIndex(symbols)
+      0
     )
-
-  /** Each declaration's own type variables (`of` parameters), in order: computed once, since
-    * signatures do not change while bodies are typed.
-    */
-  private def typeParamsIndex(symbols: SymbolTable): IntMap[List[SymbolId]] =
-    symbols.children.map { case (owner, ids) =>
-      owner -> ids.iterator.filter(symbols(_).kind == SymKind.TypeParam).toList
-    }
 
 /** The bidirectional body typer (§5.2, §3.7–§3.9). Each routine records the tree's type in the
   * side table and returns it; constructs not handled yet report a `T005` warning.
@@ -142,8 +147,8 @@ object Typer:
         val d = s.symbols(id)
         d.kind match
           case SymKind.ValueParam | SymKind.Local => (s, d.info)
-          case SymKind.Fn                         => Members.instantiate(s, d.info, Members.Subst(Map.empty, Set(id)))
-          case _ => (s.error(DiagCode.T008, span, s"$name is not a value"), Type.NeverType)
+          case SymKind.Fn => Members.instantiate(s, d.info, Members.Subst(IntMap.empty, Set(id)))
+          case _          => (s.error(DiagCode.T008, span, s"$name is not a value"), Type.NeverType)
 
   private def typedAll(s: TyperState, trees: List[Tree])(using Context): (TyperState, List[Type]) =
     mapAccum(s, trees)(typedExpr(_, _, Proto.Wildcard))
@@ -228,7 +233,7 @@ object Typer:
             si.fresh
         val si2 = p.typeAnn.fold(si1) { ann =>
           val (table, annotated, diags) = Namer.translate(si1.symbols, ci.scope, ci.owner, ann)
-          unify(si1.copy(symbols = table, diags = diags.reverse ++ si1.diags), p.span, annotated, declared)
+          unify(si1.copy(symbols = table).report(diags), p.span, annotated, declared)
         }
         val (table, id) = si2.symbols.enter(p.name, ci.owner, SymKind.Local, declared, p.span)
         (si2.copy(symbols = table).record(p, declared), ci.bind(p.name, id), acc :+ declared)
@@ -253,18 +258,23 @@ object Typer:
           case Type.NeverType => (s1, Type.NeverType)
           case resolved       =>
             Members.candidates(s1, resolved, t.method) match
-              case LazyList() =>
+              case Nil =>
                 resolved match
                   case Type.TypeVar(id) if s1.unifier.boundsOf(id).isEmpty =>
                     (s1.unsupported(t.span, s"`.${t.method}` on a receiver of unknown type"), Type.NeverType)
-                  case _ => (
+                  case _ =>
+                    (
                       s1.error(DiagCode.T001, t.span, s"not found: member ${t.method} of ${show(s1, resolved)}"),
                       Type.NeverType
                     )
-              case candidates =>
-                val errors = s1.diags.count(_.isError)
-                val attempts = candidates.map((si, member) => applyArgs(si, member, t.args, t.span))
-                attempts.find((si, _) => si.diags.count(_.isError) == errors).getOrElse(attempts.head)
+              case first :: rest =>
+                val errors = s1.errors
+                def attempt(c: Members.Candidate) =
+                  val (si, member) = c()
+                  applyArgs(si, member, t.args, t.span)
+                val firstAttempt = attempt(first)
+                if rest.isEmpty || firstAttempt._1.errors == errors then firstAttempt
+                else rest.iterator.map(attempt).find(_._1.errors == errors).getOrElse(firstAttempt)
 
   /** `x |> f(a, ...)` is `f(x, a, ...)`; `x |> f` is `f(x)`. The spec gives `|>` only a grammar
     * (`spec/syntax_grammar.ebnf` PipeExpr); first-argument insertion is the typer's reading.
@@ -303,7 +313,8 @@ object Typer:
     * block's type is its last expression's, or `()` when it ends in a binding or is empty.
     */
   private def typedBlock(s: TyperState, stmts: List[Tree], pt: Proto)(using ctx: Context): (TyperState, Type) =
-    val (s1, _, last) = stmts.zipWithIndex.foldLeft((s, ctx, Type.UnitType: Type)) { case ((si, ci, _), (stmt, i)) =>
+    val lastStmt = stmts.lastOption
+    val (s1, _, last) = stmts.foldLeft((s, ctx, Type.UnitType: Type)) { case ((si, ci, _), stmt) =>
       stmt match
         case b @ Trees.DoBind(pat, expr, _) =>
           val (si1, m) = typedExpr(si, expr, Proto.Wildcard)(using ci)
@@ -317,7 +328,7 @@ object Typer:
           val (si1, ci1) = Patterns.nestedFn(si, fn)(using ci)
           (si1, ci1, Type.UnitType)
         case e =>
-          val expect = if i == stmts.size - 1 then pt else Proto.Wildcard
+          val expect = if lastStmt.exists(_ eq stmt) then pt else Proto.Wildcard
           val (si1, ty) = typedExpr(si, e, expect)(using ci)
           (si1, ci, ty)
     }
