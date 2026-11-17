@@ -10,8 +10,8 @@ item are in `docs/plans/phase-3-typer.md` §3.6–§3.9.
 - Examples `07`–`11` still report errors. They use features outside Part A (props, struct literals,
   `forall` / `implies`, satisfies bodies and more) or need the gaps below closed. At M5 they show
   57 errors and 15 `T005` warnings in total.
-- Performance: the typer takes ~1.8 ms per corpus pass against ~0.18 ms for the parser. That is
-  about 10×, against the plan's 2× target. See "Performance" below.
+- Performance: the typer takes ~0.85 ms per corpus pass against ~0.18 ms for the parser. That is
+  about 4.8×, against the plan's 2× target. See "Performance" below.
 
 ## Enforced
 
@@ -74,11 +74,22 @@ These choices are the typer's own. Each should become a spec rule or be changed.
 
 ## Performance
 
-The M5 checkpoint (JMH, 1 fork, corpus of 11 examples) measured `typer` at 1807 µs per pass (the
-Namer is 104 µs of that) against 177 µs for `parseOnly`. Two fixes went in during Part A:
+JMH, corpus of 11 examples, `FrontEndBench`:
 
-- keying the type side table by span and node class instead of whole trees, which saved ~1.1 ms;
-- caching the indexed stdlib and laziness in member lookup.
+| Step | `typer` µs/op | × `parseOnly` |
+|---|---|---|
+| M5 as first landed | 2038 | 11.9× |
+| Lazy members, cached type params, dense symbol table | 1807 | 10.2× |
+| Cardinality + ponytail passes (no perf intent) | 1943 | 11× |
+| Type side table: lazy zonk, then `IdentityHashMap` (plan §3.1/§3.5 hatch) | 1073 | 6.1× |
+| Thunked candidates, unboxed unify / instantiate / sets, per-owner type-variable index, error counter | 920 | 5.1× |
+| Presized identity table (2 forks) | 849 ± 28 | 4.8× |
 
-The remaining cost is spread across persistent-map operations: recording types, unifier
-resolve / zonk and symbol lookups. Closing the gap is a dedicated tuning pass, still open.
+The Namer is ~104 µs of `typer`. The remaining body-typing cost is spread across the persistent
+unifier (`resolve`, `unify`, ~15%), the identity table (~8%), scope maps (`Context.bind`,
+`Namer.Ctx.bind`), member lookup and symbol-table appends. No hotspot remains above ~8%.
+
+Reaching 2× needs the remaining persistent structures in the hot path replaced, starting with a
+mutable unifier (the plan's §3.5 hatch). Overload trials then need an undo trail to roll back a
+failed attempt's bindings. Mutable lexical scopes would come next. Both are a design change, not
+a tuning step.
