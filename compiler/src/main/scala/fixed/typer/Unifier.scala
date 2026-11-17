@@ -24,7 +24,7 @@ final case class Unifier(
     val v = Type.TypeVar(next)
     (
       copy(
-        numericVars = if numeric then numericVars + next else numericVars,
+        numericVars = if numeric then numericVars.incl(next) else numericVars,
         defaults = default.fold(defaults)(defaults.updated(next, _)),
         varBounds = if bounds.isEmpty then varBounds else varBounds.updated(next, bounds),
         next = next + 1
@@ -59,7 +59,7 @@ final case class Unifier(
   /** Require `t` to be `Numeric`. */
   def requireNumeric(t: Type, numeric: Type => Boolean): Solved =
     resolve(t) match
-      case Type.TypeVar(id)        => Right(copy(numericVars = numericVars + id))
+      case Type.TypeVar(id)        => Right(copy(numericVars = numericVars.incl(id)))
       case Type.NeverType          => Right(this)
       case other if numeric(other) => Right(this)
       case _                       => Left(())
@@ -149,15 +149,15 @@ final case class Unifier(
         case Type.TypeVar(other) =>
           Right(
             bound.copy(
-              numericVars = if numericVars(id) then numericVars + other else numericVars,
+              numericVars = if numericVars.contains(id) then numericVars.incl(other) else numericVars,
               varBounds =
                 if boundsOf(id).isEmpty then varBounds else varBounds.updated(other, boundsOf(other) ++ boundsOf(id)),
               defaults =
                 defaults.get(id).filterNot(_ => defaults.contains(other)).fold(defaults)(defaults.updated(other, _))
             )
           )
-        case _ if numericVars(id) && !numeric(t) => Left(())
-        case _                                   => Right(bound)
+        case _ if numericVars.contains(id) && !numeric(t) => Left(())
+        case _                                            => Right(bound)
 
   private def occurs(id: Int, t: Type): Boolean =
     resolve(t) match

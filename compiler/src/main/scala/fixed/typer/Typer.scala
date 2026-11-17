@@ -21,7 +21,7 @@ final class TypeTable private (entries: java.util.IdentityHashMap[Tree, Type]):
   def get(tree: Tree): Option[Type] = Option(entries.get(tree))
 
 object TypeTable:
-  def empty: TypeTable = TypeTable(java.util.IdentityHashMap[Tree, Type]())
+  def empty: TypeTable = TypeTable(java.util.IdentityHashMap[Tree, Type](2048))
 
 /** Threaded typer state (`docs/plans/phase-3-typer.md` §3.4): the type side table, the symbol
   * table (local bindings join it), the unifier and the diagnostics so far (newest first).
@@ -225,9 +225,10 @@ object Typer:
         val ps = Members.params(lhs)
         (Option.when(ps.size == t.params.size)(ps), Some(rhs))
       case _ => (None, None)
-    val (s1, inner, paramTypes) = t.params.zipWithIndex.foldLeft((s, ctx, List.empty[Type])) {
-      case ((si, ci, acc), (p, i)) =>
-        val (si1, declared) = expectedParams.map(_(i)) match
+    val withExpected = expectedParams.fold(t.params.map(_ -> Option.empty[Type]))(ps => t.params.zip(ps.map(Some(_))))
+    val (s1, inner, paramTypes) = withExpected.foldLeft((s, ctx, List.empty[Type])) {
+      case ((si, ci, acc), (p, expectedParam)) =>
+        val (si1, declared) = expectedParam match
           case Some(e) => (si, e)
           case None    =>
             si.fresh

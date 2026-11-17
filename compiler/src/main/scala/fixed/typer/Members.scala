@@ -164,9 +164,8 @@ object Members:
       kind: SymKind = SymKind.Method,
       partOverride: Option[Type] = None
   ): List[Candidate] =
-    expandAliases(s, caps)
-      .collect { case Type.CapRef(c, capArgs) if !seen(c.toInt) => (c, capArgs) }
-      .flatMap { case (c, capArgs) =>
+    expandAliases(s, caps).flatMap {
+      case Type.CapRef(c, capArgs) if !seen.contains(c.toInt) =>
         val recvArgs = recv match
           case Type.TypeRef(_, as) => as
           case _                   => Nil
@@ -179,8 +178,9 @@ object Members:
         val supers = s.symbols(c).info match
           case Type.IsBound(bs) => bs
           case _                => Nil
-        own ++ capMember(s, supers, recv, name, seen + c.toInt, kind, partOverride)
-      }
+        own ++ capMember(s, supers, recv, name, seen.incl(c.toInt), kind, partOverride)
+      case _ => Nil
+    }
 
   /** Replace type-alias references in a bound chain by their constituents; arguments given to
     * the alias pass to constituents that take none (`ArrayLike of A` is `Sequencing of A + ...`).
