@@ -47,6 +47,12 @@ object Namer:
     val (c, t) = typeOf(Ctx(table, Nil, scope, owner, Set.empty, Map.empty), tree)
     (c.table, t, c.diags.reverse)
 
+  /** Enter a `fn` declared inside a body and type its signature in `scope`. */
+  def nestedFn(table: SymbolTable, scope: Map[String, SymbolId], owner: SymbolId, fn: Trees.FnDecl)
+      : (SymbolTable, SymbolId, List[Diagnostic]) =
+    val (c, id) = member(Ctx(table, Nil, scope, owner, Set.empty, Map.empty), fn, SymKind.Fn)
+    (c.table, id, c.diags.reverse)
+
   private def typeAll(c: Ctx, decls: List[(Tree, SymbolId)]): Ctx =
     decls.foldLeft(c) { case (ci, (tree, id)) => typeDecl(ci, tree, id) }
 
@@ -161,8 +167,8 @@ object Namer:
     val (c3, supers) = mapS(c2, cap.extendsList)(capBound)
     val c4 = cap.body.foldLeft(c3) { (ci, item) =>
       item match
-        case m: Trees.InstanceMethod => member(ci, m, SymKind.Method)
-        case m: Trees.StaticMethod   => member(ci, m, SymKind.StaticMethod)
+        case m: Trees.InstanceMethod => member(ci, m, SymKind.Method)._1
+        case m: Trees.StaticMethod   => member(ci, m, SymKind.StaticMethod)._1
         case _                       => ci
     }
     (c4, Type.IsBound(supers.flatten))
@@ -188,16 +194,16 @@ object Namer:
     val (c1, params) = ofParams(c, eff.ofParams)
     val c2 = eff.members.foldLeft(c1) { (ci, m) =>
       m match
-        case op: Trees.FnLike => member(ci, op, SymKind.Operation)
+        case op: Trees.FnLike => member(ci, op, SymKind.Operation)._1
         case _                => ci
     }
     (c2, Type.TypeRef(id, params))
 
   /** Enter a method or operation and type its signature in its own frame. */
-  private def member(c: Ctx, fn: Trees.FnLike, kind: SymKind): Ctx =
+  private def member(c: Ctx, fn: Trees.FnLike, kind: SymKind): (Ctx, SymbolId) =
     val (c1, id) = c.enter(fn.name, kind, Type.UnitType, fn.span)
     val (c2, info) = c1.nested(id)(fnSignature(_, fn))
-    c2.copy(table = c2.table.refine(id, info))
+    (c2.copy(table = c2.table.refine(id, info)), id)
 
   /** An `of (...)` declaration list: bare names and `N is C` introduce type variables, value
     * parameters become `ValueParam`s. Returns the type parameters, in order.
@@ -241,7 +247,11 @@ object Namer:
       case Trees.ArrowType(lhs, rhs, withClause, _) =>
         val (c1, l) = typeOf(c, lhs)
         val (c2, r) = typeOf(c1, rhs)
-        arrow(c2, l, r, withClause)
+        val params = (lhs, l) match
+          case (_: Trees.TupleArrowLhs, Type.TupleType(ts)) => ts
+          case (_: Trees.UnitType, _)                       => Nil
+          case (_, single)                                  => List(single)
+        arrow(c2, Members.product(params), r, withClause)
       case Trees.TupleArrowLhs(types, _) =>
         val (c1, ts) = mapS(c, types)(typeOf)
         (c1, Type.TupleType(ts))

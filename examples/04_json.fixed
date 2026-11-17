@@ -70,6 +70,9 @@ fn pretty(json: Json, indent: u64) -> String =
                     "{\n".concat(join(parts, ",\n")).concat("\n").concat(pad).concat("}"),
     )(indent)
 
+fn map_optional(opt: is Optional of A, f: A -> B) -> is Optional of B =
+    opt.fold((value) -> Optional.some(f(value)), () -> Optional.none)
+
 // Look up a key in a JSON object
 fn get_field(json: Json, key: String) -> is Optional of Json =
     match json:

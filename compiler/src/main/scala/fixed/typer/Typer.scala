@@ -23,6 +23,17 @@ final case class TyperState(
 ):
   def record(tree: Tree, t: Type): TyperState = copy(types = types.updated(TreeKey.of(tree), t))
 
+  /** A fresh unconstrained unification variable. */
+  def fresh: (TyperState, Type) =
+    val (u, v) = unifier.fresh(numeric = false, default = None)
+    (copy(unifier = u), v)
+
+  /** `n` fresh unconstrained variables. */
+  def freshVars(n: Int): (TyperState, List[Type]) = (1 to n).foldLeft((this, List.empty[Type])) { case ((si, acc), _) =>
+    val (si1, v) = si.fresh
+    (si1, acc :+ v)
+  }
+
   /** The recorded type of `tree`. */
   def typeOf(tree: Tree): Option[Type] = types.get(TreeKey.of(tree))
 
@@ -41,7 +52,8 @@ final case class TyperState(
     copy(types = types.view.mapValues(u.zonk).toMap, unifier = u, diags = diags.reverse)
 
 object TyperState:
-  def apply(symbols: SymbolTable): TyperState = TyperState(Map.empty, symbols, Unifier.empty, Nil)
+  def apply(symbols: SymbolTable): TyperState =
+    TyperState(Map.empty, symbols, Unifier.empty.copy(tuple = symbols.scope.get("Tuple")), Nil)
 
 /** The bidirectional body typer (§5.2). M3 covers literals, identifiers, arithmetic, comparison and
   * logic operators, tuples, function application and `let` in blocks; other expressions report
@@ -72,7 +84,14 @@ object Typer:
       case Trees.Block(stmts, _)             => typedBlock(s, stmts, pt)
       case t: Trees.LetExpr                  => (typedLet(s, t)._1, Type.UnitType)
       case _: Trees.Error | _: Trees.Missing => (s, Type.NeverType)
+      case Trees.ListExpr(elems, _)          => typedList(s, elems)
       case t: Trees.IfExpr                   => typedIf(s, t, pt)
+      case Trees.DoExpr(stmts, _)            => typedBlock(s, stmts, pt)
+      case t: Trees.MatchExpr                => Patterns.typedMatch(s, t, pt)
+      case t: Trees.HandleExpr               => typedHandle(s, t, pt)
+      case Trees.Resume(value, span)         => typedResume(s, value, span)
+      case _: Trees.Unreachable              => (s, Type.NeverType)
+      case Trees.Pipe(lhs, rhs, span)        => typedPipe(s, lhs, rhs, span)
       case t: Trees.LambdaExpr               => typedLambda(s, t, pt)
       case t: Trees.MethodCall               => typedMethodCall(s, t)
       case t: Trees.StaticCall               => typedStaticCall(s, t, pt)
@@ -85,7 +104,7 @@ object Typer:
       case Proto.Wildcard        => s
       case Proto.ExpectedType(e) => unify(s, span, e, t)
 
-  private def unify(s: TyperState, span: Span, expected: Type, actual: Type): TyperState =
+  private[typer] def unify(s: TyperState, span: Span, expected: Type, actual: Type): TyperState =
     solve(
       s,
       span,
@@ -162,15 +181,21 @@ object Typer:
       Context
   ): (TyperState, Type) =
     (s.unifier.resolve(fnType), args) match
-      case (Type.ArrowType(Type.UnitType, rhs, _), None) => (s, rhs)
-      case (other, None)                                 => (s, other)
-      case (Type.ArrowType(lhs, rhs, _), Some(as))       =>
+      case (Type.ArrowType(Type.TupleType(Nil), rhs, _), None) => (s, rhs)
+      case (other, None)                                       => (s, other)
+      case (Type.ArrowType(lhs, rhs, _), Some(as))             =>
         val params = Members.params(lhs)
         if params.size != as.size then
           (s.error(DiagCode.T006, span, s"expected ${params.size} argument(s), got ${as.size}"), rhs)
         else (params.zip(as).foldLeft(s) { case (si, (p, a)) => typedExpr(si, a, Proto.ExpectedType(p))._1 }, rhs)
       case (Type.NeverType, _) => (s, Type.NeverType)
       case (other, _)          => (s.error(DiagCode.T007, span, s"${show(s, other)} is not a function"), Type.NeverType)
+
+  /** `[a, b, ...]`: a `List` of the elements' common type. */
+  private def typedList(s: TyperState, elems: List[Tree])(using ctx: Context): (TyperState, Type) =
+    val (s0, elem) = s.fresh
+    val s1 = elems.foldLeft(s0)((si, e) => typedExpr(si, e, Proto.ExpectedType(elem))._1)
+    (s1, ctx.scope.get("List").fold(Type.NeverType)(Type.TypeRef(_, List(elem))))
 
   /** `if c: a else: b` — `c` is `bool`; both branches meet the prototype (or the first branch's type). */
   private def typedIf(s: TyperState, t: Trees.IfExpr, pt: Proto)(using Context): (TyperState, Type) =
@@ -179,7 +204,10 @@ object Typer:
     val elseProto = pt match
       case Proto.Wildcard => Proto.ExpectedType(thenType)
       case expected       => expected
-    (typedExpr(s2, t.elseBranch, elseProto)._1, thenType)
+    val typed = pt match
+      case Proto.ExpectedType(e) => e
+      case Proto.Wildcard        => thenType
+    (typedExpr(s2, t.elseBranch, elseProto)._1, typed)
 
   /** A lambda. Against an expected function type of the same arity, parameters take its parameter
     * types and the body its result type; otherwise they are fresh variables.
@@ -198,8 +226,7 @@ object Typer:
         val (si1, declared) = expectedParams.map(_(i)) match
           case Some(e) => (si, e)
           case None    =>
-            val (u, v) = si.unifier.fresh(numeric = false, default = None)
-            (si.copy(unifier = u), v)
+            si.fresh
         val si2 = p.typeAnn.fold(si1) { ann =>
           val (table, annotated, diags) = Namer.translate(si1.symbols, ci.scope, ci.owner, ann)
           unify(si1.copy(symbols = table, diags = diags.reverse ++ si1.diags), p.span, annotated, declared)
@@ -214,17 +241,51 @@ object Typer:
     val result = expectedResult.getOrElse(bodyType)
     (s2, Type.ArrowType(Members.product(paramTypes), result, fixed.core.EffectRow.empty))
 
-  /** `recv.m(args)` / `recv.m`: an instance member of the receiver's type. */
-  private def typedMethodCall(s: TyperState, t: Trees.MethodCall)(using Context): (TyperState, Type) =
-    val (s1, recv) = typedExpr(s, t.receiver, Proto.Wildcard)
-    s1.unifier.resolve(recv) match
-      case Type.NeverType  => (s1, Type.NeverType)
-      case _: Type.TypeVar => (s1.unsupported(t.span, s"`.${t.method}` on a receiver of unknown type"), Type.NeverType)
-      case resolved        =>
-        Members.instance(s1, resolved, t.method) match
-          case Some((s2, member)) => applyArgs(s2, member, t.args, t.span)
-          case None               =>
-            (s1.error(DiagCode.T001, t.span, s"not found: member ${t.method} of ${show(s1, resolved)}"), Type.NeverType)
+  /** `recv.m(args)` / `recv.m`: an instance member of the receiver's type. With several
+    * candidates (a capability `fold` and a data type's derived `fold`), the first whose argument
+    * typing reports nothing wins.
+    */
+  private def typedMethodCall(s: TyperState, t: Trees.MethodCall)(using ctx: Context): (TyperState, Type) =
+    t.receiver match
+      case Trees.Ident("builtin", _) if !ctx.scope.contains("builtin") => intrinsic(s, t)
+      case receiver                                                    =>
+        val (s1, recv) = typedExpr(s, receiver, Proto.Wildcard)
+        s1.unifier.resolve(recv) match
+          case Type.NeverType => (s1, Type.NeverType)
+          case resolved       =>
+            Members.candidates(s1, resolved, t.method) match
+              case Nil =>
+                resolved match
+                  case Type.TypeVar(id) if s1.unifier.boundsOf(id).isEmpty =>
+                    (s1.unsupported(t.span, s"`.${t.method}` on a receiver of unknown type"), Type.NeverType)
+                  case _ => (
+                      s1.error(DiagCode.T001, t.span, s"not found: member ${t.method} of ${show(s1, resolved)}"),
+                      Type.NeverType
+                    )
+              case candidates =>
+                val attempts = candidates.map((si, member) => applyArgs(si, member, t.args, t.span))
+                attempts
+                  .find((si, _) => si.diags.count(_.isError) == s1.diags.count(_.isError))
+                  .getOrElse(attempts.head)
+
+  /** `x |> f(a, ...)` is `f(x, a, ...)`; `x |> f` is `f(x)`. The spec gives `|>` only a grammar
+    * (`spec/syntax_grammar.ebnf` PipeExpr); first-argument insertion is the typer's reading.
+    */
+  private def typedPipe(s: TyperState, lhs: Tree, rhs: Tree, span: Span)(using Context): (TyperState, Type) =
+    rhs match
+      case Trees.Apply(fn, args, _) =>
+        val (s1, fnType) = typedExpr(s, fn, Proto.Wildcard)
+        applyArgs(s1, fnType, Some(lhs :: args), span)
+      case other =>
+        val (s1, fnType) = typedExpr(s, other, Proto.Wildcard)
+        applyArgs(s1, fnType, Some(List(lhs)), span)
+
+  /** `builtin.f(args)`: a host intrinsic placeholder used by the examples; its arguments are typed,
+    * its result is left to inference.
+    */
+  private def intrinsic(s: TyperState, t: Trees.MethodCall)(using Context): (TyperState, Type) =
+    val (s1, _) = typedAll(s, t.args.getOrElse(Nil))
+    s1.fresh
 
   /** `T.m(args)` / `T.m`: an effect operation, a data constructor or derived `unfold`. */
   private def typedStaticCall(s: TyperState, t: Trees.StaticCall, pt: Proto)(using ctx: Context): (TyperState, Type) =
@@ -239,20 +300,29 @@ object Typer:
           case Proto.Wildcard => None
         val kind = s.symbols(owner).kind
         Members.static(s, owner, t.method, layer) match
-          case Some((s1, member))                                     => applyArgs(s1, member, t.args, t.span)
-          case None if kind == SymKind.Effect || kind == SymKind.Data =>
+          case Some((s1, member))             => applyArgs(s1, member, t.args, t.span)
+          case None if kind != SymKind.Import =>
             (s.error(DiagCode.T001, t.span, s"not found: ${t.qualifier}.${t.method}"), Type.NeverType)
           case None => (s.unsupported(t.span, s"`${t.qualifier}.${t.method}`"), Type.NeverType)
 
-  /** Statements in order; `let` extends the scope of what follows. The block's type is its last
-    * expression's, or `()` when it ends in a `let` or is empty.
+  /** Statements in order; `let`, nested `fn` and (in `do:`) `pat <- m` extend the scope of what
+    * follows. `pat <- m` binds the pattern to the element type of `m` (monadic sequencing). The
+    * block's type is its last expression's, or `()` when it ends in a binding or is empty.
     */
   private def typedBlock(s: TyperState, stmts: List[Tree], pt: Proto)(using ctx: Context): (TyperState, Type) =
     val (s1, _, last) = stmts.zipWithIndex.foldLeft((s, ctx, Type.UnitType: Type)) { case ((si, ci, _), (stmt, i)) =>
       stmt match
+        case b @ Trees.DoBind(pat, expr, _) =>
+          val (si1, m) = typedExpr(si, expr, Proto.Wildcard)(using ci)
+          val (si2, elem) = Members.elementOf(si1, m).fold(si1.fresh)((si1, _))
+          val (si3, ci1) = Patterns.bind(si2.record(b, m), pat, elem)(using ci)
+          (si3, ci1, m)
         case let: Trees.LetExpr =>
           val (si1, ci1) = typedLet(si, let)(using ci)
           (si1.record(let, Type.UnitType), ci1, Type.UnitType)
+        case fn: Trees.FnDecl =>
+          val (si1, ci1) = Patterns.nestedFn(si, fn)(using ci)
+          (si1, ci1, Type.UnitType)
         case e =>
           val expect = if i == stmts.size - 1 then pt else Proto.Wildcard
           val (si1, ty) = typedExpr(si, e, expect)(using ci)
@@ -263,23 +333,62 @@ object Typer:
   /** `let pat = init`: types `init` and binds the pattern's names. */
   private def typedLet(s: TyperState, let: Trees.LetExpr)(using ctx: Context): (TyperState, Context) =
     val (s1, t) = typedExpr(s, let.init, Proto.Wildcard)
-    bindPattern(s1, let.pattern, t)
+    Patterns.bind(s1, let.pattern, t)
 
-  /** Bind a `let` pattern against type `t`: binders, wildcards and tuples (M3); the rest join with
-    * pattern typing (M5).
+  /** A `fn` body against its declared return type, its parameters and type variables in scope. */
+  def typedFnBody(s: TyperState, id: fixed.core.SymbolId, fn: Trees.FnLike)(using ctx: Context): TyperState =
+    fn.body.fold(s) { body =>
+      val params = s.symbols.membersOf(id).filter(d => d.kind == SymKind.ValueParam || d.kind == SymKind.TypeParam)
+      val inner = Context(ctx.scope ++ params.map(d => d.name -> d.id), id)
+      val expected = s.symbols(id).info match
+        case Type.ArrowType(_, ret, _) => Proto.ExpectedType(ret)
+        case _                         => Proto.Wildcard
+      typedExpr(s, body, expected)(using inner)._1
+    }
+
+  /** `handle subject: clauses` (`spec/effects.md` §6). Operation clauses bind the operation's
+    * parameters; inside them `resume(v)` takes the operation's result type and yields the
+    * handler's. The handler's type is the `return` clause's (else the subject's).
     */
-  private def bindPattern(s: TyperState, pat: Tree, t: Type)(using ctx: Context): (TyperState, Context) =
-    pat match
-      case Trees.WildcardPat(_)        => (s.record(pat, t), ctx)
-      case Trees.BinderPat(name, span) =>
-        val (table, id) = s.symbols.enter(name, ctx.owner, SymKind.Local, t, span)
-        (s.copy(symbols = table).record(pat, t), ctx.bind(name, id))
-      case Trees.TuplePat(elems, span) =>
-        val (u, vars) = elems.foldLeft((s.unifier, List.empty[Type])) { case ((u0, acc), _) =>
-          val (u1, v) = u0.fresh(numeric = false, default = None)
-          (u1, v :: acc)
-        }
-        val tuple = Type.TupleType(vars.reverse)
-        val s1 = unify(s.copy(unifier = u), span, tuple, t).record(pat, tuple)
-        elems.zip(vars.reverse).foldLeft((s1, ctx)) { case ((si, ci), (p, v)) => bindPattern(si, p, v)(using ci) }
-      case other => (s.unsupported(other.span, "this let pattern"), ctx)
+  private def typedHandle(s: TyperState, h: Trees.HandleExpr, pt: Proto)(using ctx: Context): (TyperState, Type) =
+    val (s1, subject) = typedExpr(s, h.subject, Proto.Wildcard)
+    val (s2, result) = (h.returnClause, pt) match
+      case (None, _)                        => (s1, subject)
+      case (Some(_), Proto.ExpectedType(e)) => (s1, e)
+      case (Some(_), Proto.Wildcard)        =>
+        s1.fresh
+    val s3 = h.returnClause.fold(s2) { rc =>
+      val (si, ci) = Patterns.bind(s2, rc.param, subject)
+      typedExpr(si, rc.body, Proto.ExpectedType(result))(using ci)._1
+    }
+    val s4 = h.operationClauses.foldLeft(s3)((si, clause) => typedClause(si, clause, result))
+    (s4, result)
+
+  private def typedClause(s: TyperState, c: Trees.OperationClause, result: Type)(using ctx: Context): TyperState =
+    ctx.scope.get(c.effect).filter(s.symbols(_).kind == SymKind.Effect) match
+      case None         => s.error(DiagCode.T001, c.span, s"not found: effect ${c.effect}")
+      case Some(effect) =>
+        Members.static(s, effect, c.op, None) match
+          case Some((s1, Type.ArrowType(lhs, opResult, _))) =>
+            val params = Members.params(lhs)
+            if params.size != c.params.size then
+              s1.error(
+                DiagCode.T006,
+                c.span,
+                s"${c.effect}.${c.op} takes ${params.size} parameter(s), the clause binds ${c.params.size}"
+              )
+            else
+              val (s2, inner) = c.params.zip(params).foldLeft((s1, ctx)) { case ((si, ci), (p, t)) =>
+                Patterns.bind(si, p, t)(using ci)
+              }
+              typedExpr(s2, c.body, Proto.ExpectedType(result))(using inner.copy(resume = Some((opResult, result))))._1
+          case _ => s.error(DiagCode.T001, c.span, s"not found: operation ${c.effect}.${c.op}")
+
+  /** `resume(v)` inside an operation clause. */
+  private def typedResume(s: TyperState, value: Option[Tree], span: Span)(using ctx: Context): (TyperState, Type) =
+    ctx.resume match
+      case None => (s.error(DiagCode.T009, span, "resume outside a handler's operation clause"), Type.NeverType)
+      case Some((opResult, result)) =>
+        val s1 =
+          value.fold(unify(s, span, opResult, Type.UnitType))(v => typedExpr(s, v, Proto.ExpectedType(opResult))._1)
+        (s1, result)

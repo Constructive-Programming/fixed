@@ -35,6 +35,9 @@ enum Type:
 
   case TypeVar(id: Int)
 
+  /** A type-constructor variable applied to arguments (`M of B` while `M` is unsolved). */
+  case AppliedVar(id: Int, args: List[Type])
+
 final case class EffectBound(sym: SymbolId, args: List[Type])
 
 /** A `with` row. Effect inference (M7) adds an open-row variable. */

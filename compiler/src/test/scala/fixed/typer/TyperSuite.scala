@@ -129,3 +129,83 @@ class TyperSuite extends munit.FunSuite:
       "use std.io.Console\nfn greet(name: String) -> () with Console =\n    Console.print_line(\"Hi \".concat(name))\nfn main() -> () with Console =\n    greet(42)\n"
     )
     assertEquals(codes(s), List(DiagCode.T002))
+
+  test("M5: match binds variant fields and checks top-level exhaustiveness"):
+    val decls = "data Shape:\n    Circle(r: u64)\n    Square(side: u64)\n    Dot\n"
+    assertEquals(
+      typedUnit(
+        decls +
+          "fn area(s: Shape) -> u64 =\n    match s:\n        Shape.Circle(r) => r * r\n        Shape.Square(x) => x * x\n        Shape.Dot => 0\n"
+      ).diags,
+      Nil
+    )
+    assertEquals(
+      codes(typedUnit(decls +
+        "fn area(s: Shape) -> u64 =\n    match s:\n        Shape.Circle(r) => r * r\n        Shape.Dot => 0\n")),
+      List(DiagCode.T020)
+    )
+    assertEquals(
+      typedUnit(decls +
+        "fn area(s: Shape) -> u64 =\n    match s:\n        Shape.Circle(r) => r\n        _ => 0\n").diags,
+      Nil
+    )
+    assertEquals(
+      codes(typedUnit(decls +
+        "fn area(s: Shape) -> u64 =\n    match s:\n        Shape.Circle(r) => \"no\"\n        _ => 0\n")),
+      List(DiagCode.T002)
+    )
+    assertEquals(
+      codes(typedUnit(decls +
+        "fn area(s: Shape) -> u64 =\n    match s:\n        Shape.Circle(r, q) => r\n        _ => 0\n")),
+      List(DiagCode.T006)
+    )
+
+  test("M5: matches on bool and numbers need full coverage or a catch-all"):
+    assertEquals(typedUnit("fn f(b: bool) -> u64 =\n    match b:\n        true => 1\n        false => 0\n").diags, Nil)
+    assertEquals(
+      codes(typedUnit("fn f(n: u64) -> u64 =\n    match n:\n        0 => 1\n        1 => 0\n")),
+      List(DiagCode.T020)
+    )
+
+  test("M5: handle binds operation parameters; resume takes the operation's result"):
+    val eff = "effect Ask:\n    fn ask(prompt: String) -> u64\nfn ignore_len(s: String) -> u64 = 0\n"
+    val ok = typedUnit(
+      eff +
+        "fn run(f: () -> u64 with Ask) -> u64 =\n    handle f():\n        Ask.ask(p) => resume(p.show().concat(\"!\") |> ignore_len)\n        return(v) => v + 1\n"
+    )
+    assertEquals(ok.diags.filter(_.isError), Nil)
+    val bad =
+      typedUnit(eff + "fn run(f: () -> u64 with Ask) -> u64 =\n    handle f():\n        Ask.ask(p) => resume(\"no\")\n")
+    assertEquals(codes(bad), List(DiagCode.T002))
+    assertEquals(codes(typedUnit("fn f() -> u64 = resume(1)\n")), List(DiagCode.T009))
+
+  test("M5: nested fns are typed and scoped to their block"):
+    assertEquals(typedUnit("fn outer(x: u64) -> u64 =\n    fn inner(y: u64) -> u64 = y * 2\n    inner(x)\n").diags, Nil)
+    assertEquals(
+      codes(typedUnit("fn outer(x: u64) -> u64 =\n    fn inner(y: u64) -> u64 = \"s\"\n    inner(x)\n")),
+      List(DiagCode.T002)
+    )
+
+  test("M5: cap statics, do-notation and higher-kinded type variables"):
+    val s = typedUnit(
+      "cap Box of A:\n    Self.fn wrap(value: A) -> Self\n    fn flat_map(f: A -> Self of B) -> Self of B\n" +
+        "fn twice(b: M is Box of u64) -> M of u64 =\n    do:\n        x <- b\n        M.wrap(x * 2)\n"
+    )
+    assertEquals(s.diags.filter(_.isError), Nil)
+
+  test("M5: overloaded fold picks the candidate whose arguments fit"):
+    val s = typedUnit(
+      "fn sum(xs: List of u64) -> u64 = xs.fold(0, (acc, x) -> acc + x)\nfn len(xs: List of u64) -> u64 = xs.fold((h, t) -> t + 1, () -> 0)\n"
+    )
+    assertEquals(s.diags, Nil)
+    assertEquals(codes(typedUnit("fn bad(xs: List of u64) -> u64 = xs.fold(\"x\")\n")).headOption, Some(DiagCode.T006))
+
+  test("M5: pipes insert the left side as the first argument"):
+    assertEquals(typedUnit("fn add(a: u64, b: u64) -> u64 = a + b\nfn f(x: u64) -> u64 = x |> add(1)\n").diags, Nil)
+    assertEquals(
+      codes(typedUnit("fn add(a: u64, b: u64) -> u64 = a + b\nfn f(x: String) -> u64 = x |> add(1)\n")),
+      List(DiagCode.T002)
+    )
+
+  test("M5: a bounded type variable's missing member is an error, not a gap"):
+    assertEquals(codes(typedUnit("fn f(c: C is Empty) -> u64 = c.size\n")), List(DiagCode.T001))
