@@ -1,7 +1,9 @@
 package fixed.typer
 
+import scala.collection.immutable.IntMap
+
 import fixed.ast.{Tree, Trees}
-import fixed.core.{Context, Proto, SymKind, SymbolTable, Type, render}
+import fixed.core.{Context, Proto, SymKind, SymbolId, SymbolTable, Type, render}
 import fixed.util.{DiagCode, Diagnostic, Severity, Span}
 
 /** A tree's identity in the type side table: its span and node class (§3.0 span-as-identity).
@@ -19,7 +21,8 @@ final case class TyperState(
     types: Map[TreeKey, Type],
     symbols: SymbolTable,
     unifier: Unifier,
-    diags: List[Diagnostic]
+    diags: List[Diagnostic],
+    typeParams: IntMap[List[SymbolId]]
 ):
   def record(tree: Tree, t: Type): TyperState = copy(types = types.updated(TreeKey.of(tree), t))
 
@@ -53,7 +56,21 @@ final case class TyperState(
 
 object TyperState:
   def apply(symbols: SymbolTable): TyperState =
-    TyperState(Map.empty, symbols, Unifier.empty.copy(tuple = symbols.scope.get("Tuple")), Nil)
+    TyperState(
+      Map.empty,
+      symbols,
+      Unifier.empty.copy(tuple = symbols.scope.get("Tuple")),
+      Nil,
+      typeParamsIndex(symbols)
+    )
+
+  /** Each declaration's own type variables (`of` parameters), in order: computed once, since
+    * signatures do not change while bodies are typed.
+    */
+  private def typeParamsIndex(symbols: SymbolTable): IntMap[List[SymbolId]] =
+    symbols.children.map { case (owner, ids) =>
+      owner -> ids.iterator.filter(symbols(_).kind == SymKind.TypeParam).toList
+    }
 
 /** The bidirectional body typer (§5.2). M3 covers literals, identifiers, arithmetic, comparison and
   * logic operators, tuples, function application and `let` in blocks; other expressions report
@@ -254,7 +271,7 @@ object Typer:
           case Type.NeverType => (s1, Type.NeverType)
           case resolved       =>
             Members.candidates(s1, resolved, t.method) match
-              case Nil =>
+              case LazyList() =>
                 resolved match
                   case Type.TypeVar(id) if s1.unifier.boundsOf(id).isEmpty =>
                     (s1.unsupported(t.span, s"`.${t.method}` on a receiver of unknown type"), Type.NeverType)
@@ -263,10 +280,9 @@ object Typer:
                       Type.NeverType
                     )
               case candidates =>
+                val errors = s1.diags.count(_.isError)
                 val attempts = candidates.map((si, member) => applyArgs(si, member, t.args, t.span))
-                attempts
-                  .find((si, _) => si.diags.count(_.isError) == s1.diags.count(_.isError))
-                  .getOrElse(attempts.head)
+                attempts.find((si, _) => si.diags.count(_.isError) == errors).getOrElse(attempts.head)
 
   /** `x |> f(a, ...)` is `f(x, a, ...)`; `x |> f` is `f(x)`. The spec gives `|>` only a grammar
     * (`spec/syntax_grammar.ebnf` PipeExpr); first-argument insertion is the typer's reading.

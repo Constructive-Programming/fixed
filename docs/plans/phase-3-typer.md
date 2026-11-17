@@ -1,6 +1,6 @@
 # Fixed Compiler — Phase 3: Type Checker (Implementation Plan)
 
-**Status:** In progress — M1–M4 done
+**Status:** Part A functionally complete (M1–M5); M5 perf checkpoint open — see `docs/Phase3Conformance.md`
 **Scope:** Scala 3 implementation of the typer pipeline. Untyped AST (Phase 2 output) → typed AST → typed AST refined by capability closure / effect inference / quantity check / representation selection.
 **Prerequisite:** Phase 2 + 2.1 complete (parser produces a usable AST with diagnostics, gap nodes, and trivia for every `examples/*.fixed`, even on syntactically broken input).
 **Reference:** `docs/references/scala3-compiler-reference.md` §4 (typer pipeline) and §5.4 (recheck pattern). Read both end-to-end before starting M1.
@@ -49,7 +49,7 @@ Phase 3 is split into two parts: **Part A — Base typer (M1–M5, this plan)** 
 | M2 ✅ | `Symbols` (with `Denotation`), `Types` and `Phases` in place; `Names`, `Contexts` and `ProtoTypes` deferred to M3, their first consumer. `Namer` types every top-level decl's **signature** — and every member, parameter and type variable — across the whole corpus (see §3.6). `FrontEndBench.namer` (the TyperBench) baselined. Perf checkpoint: corpus ≤ 2× the parser's cost. | `NamerSuite` asserts the `(name, kind, signature)` triples for `01_basics.fixed` and that all 11 examples index with no diagnostics. Baseline (JMH, 1 fork): `namer` 128 µs/corpus vs `parseOnly` 316 µs/corpus — 0.4×. |
 | M3 ✅ | `TypeVar` + `Proto` + `Context` + Typer skeleton + `Unifier`. Literals, identifiers, arithmetic / comparison / logic operators, tuples, function calls (generic signatures instantiated per call) and `let` in blocks type-check (see §3.7). | `TyperSuite`: `1 + 2 * 3` is a `BinOp(+)` whose node and children are typed `i64`; identifiers resolve to their symbols; arity, mismatch, Numeric-bound and not-a-function errors are reported. |
 | M4 ✅ | Body typing for every top-level `fn` against its declared return type, over a signature-only stdlib (`resources/stdlib/`, see §3.8). Pulled forward from M5 for `01_basics`: `if`, lambdas, method and static calls, data fields, capability methods via `satisfies` / bounds, effect operations, derived `fold` / `unfold`. `02_collections` moves to M5's acceptance set. | `examples/01_basics.fixed` compiles with no diagnostics (`CompilerSuite`); `TyperSuite` covers each pulled-forward construct and its errors. Baseline (JMH, 1 fork): `typer` 1049 µs/corpus (Namer 112) vs `parseOnly` 180 µs — tuning is the M5 perf checkpoint. |
-| M5 | Expression typing — `if`, `match` (with in-tree top-level-variant exhaustiveness — see §5.5.1 for the conformance gaps deferred to Phase 3.x), `handle`, `do`, `forall`, `implies`, `lambda`, struct literals, method calls, static calls, `Resume`, `Unreachable`. Pattern typing — variant patterns, literal patterns, or-patterns, guards, struct-destructure (top-level only). Perf checkpoint: corpus mean within 2× of M2 baseline. | `examples/02_collections.fixed` through `examples/06_functor_monad.fixed` type-check with no diagnostics. `TyperBench` reports a corpus mean. |
+| M5 ✅ (perf open) | Expression typing — `match` with top-level exhaustiveness, `handle` / `resume`, `do`, nested `fn`, lambdas, method and static calls, capability statics, list literals, pipes, `unreachable`; pattern typing (variant, literal, tuple, or-, guarded, struct-destructure). See §3.9. `forall` / `implies` / struct literals remain `T005` gaps (M9 / follow-up). | `examples/01`–`06` compile with no diagnostics (`CompilerSuite`); `TyperSuite` covers each construct and its errors. Perf checkpoint **not met**: `typer` 1807 µs/corpus vs `parseOnly` 177 µs (~10×, target 2×). Conformance gaps: `docs/Phase3Conformance.md`. |
 
 **Part A success criterion:** every example in `examples/01..06.fixed` type-checks, the symbol table has a complete signature view for every cap/data/fn, `TyperBench` is within 2× of the parser's per-token cost, AND the v1 conformance gaps (top-level-only exhaustiveness per §5.5.1; no Part B layered analyses) are documented in a `Phase3Conformance.md` artifact emitted by M5 — so a downstream consumer reading the typer output knows what is and isn't enforced. Shipping a known-incomplete typer is the right v1 trade; shipping it without surfacing what's incomplete is not.
 
@@ -101,6 +101,7 @@ compiler/src/main/scala/fixed/
     Unifier.scala                   — persistent substitution over TypeVars (M3)
     Members.scala                   — member lookup, instantiation, derived fold / unfold (M4)
     Stdlib.scala                    — loads the signature-only stdlib resources (M4)
+    Patterns.scala                  — pattern binding, match, exhaustiveness, nested fn (M5)
     ProtoTypes.scala                — prototype types (M3; lives in core/)
     Inferencing.scala               — type variable instantiation (NEW)
     Exhaustiveness.scala            — match coverage (NEW; M8)
@@ -432,6 +433,20 @@ The Scanner and Parser are hard-FP (zero `var`, zero `while`, zero `mutable.*`).
 - **Lambdas** take parameter and result types from an expected function type of the same arity; annotations are translated in the body's scope and must agree.
 - **Gaps are warnings.** `T005` (not supported yet) is a warning: it is a typer gap, not a program error. Cap, effect and satisfies method bodies, nested `fn`s, `match`, `handle`, `do`, list literals and capability statics on type variables (`C.empty`) wait for M5, so the other examples still report false errors until then.
 - **Side table key.** Types are keyed by `TreeKey` (span + node class) instead of the tree itself: a case-class tree's structural hash walks its whole subtree, which made recording types the dominant cost (~1.1 ms of 1.65 ms per corpus).
+
+### 3.9 Expression and capability typing (M5)
+
+- **Arrow left-hand sides** are always parameter lists (`TupleType` of any arity): a single `()` parameter and no parameters differ, and a single tuple-typed parameter is `TupleType(List(TupleType(...)))`.
+- **`match`** types each case's pattern against the scrutinee, its guard as `bool`, and its body against the prototype (else the first body). Exhaustiveness is the v1 top-level check (§5.5.1), reported as `T020`.
+- **`handle`**: operation clauses bind the operation's parameters; `Context.resume` carries (operation result, handler result) so `resume(v)` checks `v` and has the handler's type; `T009` outside a clause. The handler's type is the `return` clause's, else the subject's.
+- **`do:`** shares block typing; `pat <- m` binds the pattern to `m`'s element type (its last type argument, or its bound's).
+- **Nested `fn`** declarations get their signature from `Namer.nestedFn` and their body typed in the block's scope.
+- **Capability statics**: on a cap (`Optional.some`) `Self` is the anonymous bound `is Cap of ?`; on a type variable (`M.pure(x)`) `Self` is `M of ?part`, so higher-kinded results keep their argument.
+- **Higher-kinded variables**: `AppliedVar(v, args)` is an unsolved constructor variable applied to arguments; unifying it with `C of ys` solves `v := C` and unifies the trailing arguments. Bare `M` and applied `M of A` of the same rigid variable unify.
+- **Bounds on instantiated variables** are kept in the unifier, so members resolve on a variable before it is solved (`range(...).fold_right` through `R is ... + Folding`). A bounded variable lacking a member is `T001`; an unbounded one is a `T005` gap.
+- **Member candidates** come lazily: data field, then capability methods (whole `extends` chain), then the derived `fold`; a call with several candidates takes the first whose arguments type-check. `Show` / `Eq` / `Clone` resolve on any type (auto-derivation; checked at M11).
+- **Bound unification**: an `is ...` bound still accepts any type (M6), but a capability named on both sides unifies its arguments; 2-tuples equal `Tuple of (A, B)`.
+- **Pipes** read `x |> f(a)` as `f(x, a)`; `builtin.f(...)` intrinsics type their arguments and leave the result to inference.
 
 ## 4. Phase pipeline
 

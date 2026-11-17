@@ -38,14 +38,14 @@ final case class Denotation(
   * Persistent: entering or refining returns a new table.
   */
 final case class SymbolTable(
-    entries: IntMap[Denotation],
+    entries: Vector[Denotation],
     nextId: Int,
     children: IntMap[Vector[SymbolId]],
     scope: Map[String, SymbolId],
     satisfies: Map[String, List[Type]]
 ):
 
-  def apply(id: SymbolId): Denotation = entries(id.toInt)
+  def apply(id: SymbolId): Denotation = entries(id.toInt - SymbolTable.firstId)
 
   /** Enter a new symbol; returns the table and the fresh id. */
   def enter(name: String, owner: SymbolId, kind: SymKind, info: Type, span: Span): (SymbolTable, SymbolId) =
@@ -53,7 +53,7 @@ final case class SymbolTable(
     val siblings = children.getOrElse(owner.toInt, Vector.empty)
     (
       copy(
-        entries = entries.updated(nextId, Denotation(id, name, owner, kind, info, span)),
+        entries = entries :+ Denotation(id, name, owner, kind, info, span),
         nextId = nextId + 1,
         children = children.updated(owner.toInt, siblings :+ id)
       ),
@@ -69,14 +69,18 @@ final case class SymbolTable(
 
   /** Replace a symbol's signature type. */
   def refine(id: SymbolId, info: Type): SymbolTable =
-    copy(entries = entries.updated(id.toInt, apply(id).copy(info = info)))
+    copy(entries = entries.updated(id.toInt - SymbolTable.firstId, apply(id).copy(info = info)))
 
   /** All denotations in entry order. */
-  def denotations: List[Denotation] = entries.values.toList
+  def denotations: List[Denotation] = entries.toList
 
 object SymbolTable:
-  /** Ids 0 and 1 are reserved for the pseudo-owners [[SymbolId.Root]] and [[SymbolId.Prelude]]. */
-  val empty: SymbolTable = SymbolTable(IntMap.empty, 2, IntMap.empty, Map.empty, Map.empty)
+  /** Ids 0 and 1 are reserved for the pseudo-owners [[SymbolId.Root]] and [[SymbolId.Prelude]];
+    * real symbols are dense from 2, so `entries` is indexed by `id - firstId`.
+    */
+  val firstId: Int = 2
+
+  val empty: SymbolTable = SymbolTable(Vector.empty, firstId, IntMap.empty, Map.empty, Map.empty)
 
 extension (table: SymbolTable)
   /** Source-like rendering of `t`, with symbol names resolved through `table`. */

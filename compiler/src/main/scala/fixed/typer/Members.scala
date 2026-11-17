@@ -107,7 +107,7 @@ object Members:
 
   /** Type variables `owner` declared (`of` parameters), in declaration order. */
   def typeParamsOf(s: TyperState, owner: SymbolId): List[SymbolId] =
-    s.symbols.membersOf(owner).filter(_.kind == SymKind.TypeParam).map(_.id).toList
+    s.typeParams.getOrElse(owner.toInt, Nil)
 
   /** Capabilities every type has: auto-derived per `spec/stdlib.md` §4.7, §4.10, §4.11. Whether a
     * representation can actually derive them is checked at representation selection (M11).
@@ -121,21 +121,21 @@ object Members:
   /** Every instance member `name` on `recv`, best first: a data type's own field, then its
     * capabilities, then its derived `fold`. Calls with several candidates pick by argument shape.
     */
-  def candidates(s: TyperState, recv: Type, name: String): List[(TyperState, Type)] =
+  def candidates(s: TyperState, recv: Type, name: String): LazyList[(TyperState, Type)] =
     val resolved = s.unifier.resolve(recv)
     val auto = autoDerived.flatMap(s.symbols.scope.get).map(Type.CapRef(_, Nil))
-    val own: List[(TyperState, Type)] = resolved match
+    val own: LazyList[(TyperState, Type)] = resolved match
       case Type.TupleType(ts) =>
-        s.symbols.scope.get("Tuple").toList.flatMap(t => candidates(s, Type.TypeRef(t, ts), name))
+        LazyList.from(s.symbols.scope.get("Tuple")).flatMap(t => candidates(s, Type.TypeRef(t, ts), name))
       case t @ Type.TypeRef(id, args) =>
         val d = s.symbols(id)
         d.kind match
           case SymKind.Data =>
-            field(s, id, args, name).toList ++
-              capMember(s, s.symbols.satisfies.getOrElse(d.name, Nil), t, name, Set.empty) ++
-              Option.when(name == "fold")(derivedFold(s, id, args)).flatten
+            LazyList.from(field(s, id, args, name)) #:::
+              capMember(s, s.symbols.satisfies.getOrElse(d.name, Nil), t, name, Set.empty) #:::
+              LazyList.from(Option.when(name == "fold")(derivedFold(s, id, args)).flatten)
           case SymKind.TypeParam => capMember(s, boundsOf(s, id), t, name, Set.empty)
-          case _                 => Nil
+          case _                 => LazyList.empty
       case t @ Type.PrimType(n) =>
         val numeric = if isNumeric(s, t) then s.symbols.scope.get("Numeric").map(Type.CapRef(_, Nil)).toList else Nil
         capMember(s, s.symbols.satisfies.getOrElse(n, Nil) ++ numeric, t, name, Set.empty)
@@ -143,7 +143,7 @@ object Members:
       case Type.IsBound(bs)       => capMember(s, bs, resolved, name, Set.empty)
       case Type.TypeVar(id)       => capMember(s, s.unifier.boundsOf(id), resolved, name, Set.empty)
       case Type.AppliedVar(id, _) => capMember(s, s.unifier.boundsOf(id), resolved, name, Set.empty)
-      case _                      => Nil
+      case _                      => LazyList.empty
     if own.nonEmpty then own else capMember(s, auto, resolved, name, Set.empty)
 
   /** A field of a single-variant data type, as a zero-argument member. */
@@ -165,8 +165,9 @@ object Members:
       seen: Set[SymbolId],
       kind: SymKind = SymKind.Method,
       partOverride: Option[Type] = None
-  ): List[(TyperState, Type)] =
-    expandAliases(s, caps)
+  ): LazyList[(TyperState, Type)] =
+    LazyList
+      .from(expandAliases(s, caps))
       .collect { case Type.CapRef(c, capArgs) if !seen(c) => (c, capArgs) }
       .flatMap { case (c, capArgs) =>
         val recvArgs = recv match
@@ -175,13 +176,13 @@ object Members:
         val params = typeParamsOf(s, c)
         val args = if capArgs.nonEmpty then capArgs else recvArgs.takeRight(params.size)
         val part = partOverride.orElse(capArgs.lastOption).orElse(recvArgs.lastOption)
-        val own = s.symbols.membersOf(c).find(m => m.kind == kind && m.name == name).toList.map { m =>
+        val own = LazyList.from(s.symbols.membersOf(c).find(m => m.kind == kind && m.name == name)).map { m =>
           instantiate(s, m.info, Subst(params.zip(args).toMap, Set(m.id, c), Some(recv), part))
         }
-        val supers = s.symbols(c).info match
+        lazy val supers = s.symbols(c).info match
           case Type.IsBound(bs) => bs
           case _                => Nil
-        own ++ capMember(s, supers, recv, name, seen + c, kind, partOverride)
+        own #::: capMember(s, supers, recv, name, seen + c, kind, partOverride)
       }
 
   /** Replace type-alias references in a bound chain by their constituents; arguments given to
