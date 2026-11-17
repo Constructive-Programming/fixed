@@ -68,7 +68,14 @@ final case class Unifier(
     * zonked types. `is ...` bounds accept any type until capability checking lands (M6).
     */
   def unify(a: Type, b: Type, numeric: Type => Boolean): Either[Unit, Unifier] =
-    (resolve(a), resolve(b)) match
+    if a eq b then Right(this) else unifyResolved(resolve(a), resolve(b), numeric)
+
+  private def unifyResolved(a: Type, b: Type, numeric: Type => Boolean): Solved =
+    if a eq b then Right(this)
+    else unifyDistinct(a, b, numeric)
+
+  private def unifyDistinct(a: Type, b: Type, numeric: Type => Boolean): Solved =
+    (a, b) match
       case (Type.NeverType, _) | (_, Type.NeverType)                                        => Right(this)
       case (Type.TypeVar(x), Type.TypeVar(y)) if x == y                                     => Right(this)
       case (Type.AppliedVar(x, xs), Type.AppliedVar(y, ys)) if x == y && xs.size == ys.size => unifyAll(xs, ys, numeric)
@@ -136,10 +143,15 @@ final case class Unifier(
       acc.flatMap(_.unifyAll(as, bs, numeric))
     }
 
-  private def unifyAll(xs: List[Type], ys: List[Type], numeric: Type => Boolean): Either[Unit, Unifier] =
-    xs.zip(ys).foldLeft[Either[Unit, Unifier]](Right(this)) { case (acc, (x, y)) =>
-      acc.flatMap(_.unify(x, y, numeric))
-    }
+  private def unifyAll(xs: List[Type], ys: List[Type], numeric: Type => Boolean): Solved =
+    @scala.annotation.tailrec
+    def loop(u: Unifier, xs: List[Type], ys: List[Type]): Solved =
+      if xs.isEmpty || ys.isEmpty then Right(u)
+      else
+        u.unify(xs.head, ys.head, numeric) match
+          case Right(next) => loop(next, xs.tail, ys.tail)
+          case failed      => failed
+    loop(this, xs, ys)
 
   private def bind(id: Int, t: Type, numeric: Type => Boolean): Either[Unit, Unifier] =
     if occurs(id, t) then Left(())
