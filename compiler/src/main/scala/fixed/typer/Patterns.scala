@@ -32,9 +32,8 @@ object Patterns:
           case Some(data) =>
             val (s1, args) = Members.freshArgs(s, data)
             val s2 = Typer.unify(s1, span, t, Type.TypeRef(data, args))
-            val variants = s2.symbols.membersOf(data).filter(_.kind == SymKind.Variant)
-            val known =
-              variants.headOption.toList.flatMap(v => s2.symbols.membersOf(v.id).filter(_.kind == SymKind.Field))
+            val variants = s2.symbols.variantsOf(data)
+            val known = variants.headOption.toList.flatMap(v => s2.symbols.fieldsOf(v.id))
             val (s3, types) =
               variants.headOption.fold((s2, List.empty[Type]))(v => Members.fieldTypes(s2, data, args, v.id))
             val byName = known.map(_.name).zip(types).toMap
@@ -63,7 +62,7 @@ object Patterns:
       case _                                                         => None
     val data = p.qualifier.flatMap(ctx.scope.get).filter(s.symbols(_).kind == SymKind.Data).orElse(fromScrutinee)
     data.flatMap(d =>
-      s.symbols.membersOf(d).find(v => v.kind == SymKind.Variant && v.name == p.variant).map(d -> _)
+      s.symbols.variantsOf(d).find(_.name == p.variant).map(d -> _)
     ) match
       case None =>
         (s.error(DiagCode.T001, p.span, s"not found: variant ${p.qualifier.fold("")(_ + ".")}${p.variant}"), ctx)
@@ -89,17 +88,13 @@ object Patterns:
     val (s2, result) = m.cases.foldLeft((s1, Option.empty[Type])) { case ((si, first), c) =>
       val (si1, ci) = bind(si, c.pattern, scrutinee)
       val si2 = c.guard.fold(si1)(g => Typer.typedExpr(si1, g, Proto.ExpectedType(bool))(using ci)._1)
-      val expect = pt match
-        case Proto.Wildcard => first.fold(Proto.Wildcard)(Proto.ExpectedType(_))
-        case expected       => expected
+      val expect = pt.orExpect(first)
       val (si3, bodyType) = Typer.typedExpr(si2, c.body, expect)(using ci)
       (si3.record(c, bodyType), first.orElse(Some(bodyType)))
     }
 
     /** Bodies were checked against an expected type already; report each mismatch once. */
-    val typed = pt match
-      case Proto.ExpectedType(e) => e
-      case Proto.Wildcard        => result.getOrElse(Type.NeverType)
+    val typed = pt.orElse(result.getOrElse(Type.NeverType))
     (exhaustive(s2, m, scrutinee), typed)
 
   private def exhaustive(s: TyperState, m: Trees.MatchExpr, scrutinee: Type): TyperState =
@@ -113,7 +108,7 @@ object Patterns:
     s.unifier.resolve(scrutinee) match
       case _ if catchAll                                           => s
       case Type.TypeRef(d, _) if s.symbols(d).kind == SymKind.Data =>
-        val missing = s.symbols.membersOf(d).filter(v => v.kind == SymKind.Variant && !named(v.name))
+        val missing = s.symbols.variantsOf(d).filterNot(v => named(v.name))
         if missing.isEmpty then s
         else
           s.error(

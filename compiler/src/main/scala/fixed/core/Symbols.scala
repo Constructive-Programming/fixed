@@ -63,6 +63,12 @@ final case class SymbolTable(
   /** The symbols `owner` declared, in entry order. */
   def membersOf(owner: SymbolId): Vector[Denotation] = children.getOrElse(owner.toInt, Vector.empty).map(apply)
 
+  /** A data type's variants, in declaration order. */
+  def variantsOf(data: SymbolId): Vector[Denotation] = membersOf(data).filter(_.kind == SymKind.Variant)
+
+  /** A variant's fields, in declaration order. */
+  def fieldsOf(variant: SymbolId): Vector[Denotation] = membersOf(variant).filter(_.kind == SymKind.Field)
+
   /** Record `typeName satisfies cap`. */
   def satisfy(typeName: String, cap: Type): SymbolTable =
     copy(satisfies = satisfies.updated(typeName, satisfies.getOrElse(typeName, Nil) :+ cap))
