@@ -20,7 +20,8 @@ object SymbolId:
 
 /** What a symbol denotes. */
 enum SymKind:
-  case Fn, Method, StaticMethod, Cap, Data, Variant, Effect, Operation, TypeAlias, Import, TypeParam, ValueParam, Local
+  case Fn, Method, StaticMethod, Cap, Data, Variant, Effect, Operation, TypeAlias, Import, TypeParam, ValueParam, Field,
+    Local
 
 /** A symbol's current view: name, owner, kind, signature type and declaration span. */
 final case class Denotation(
@@ -32,15 +33,39 @@ final case class Denotation(
     span: Span
 )
 
-/** Every symbol of a compilation, by id. Persistent: entering or refining returns a new table. */
-final case class SymbolTable(entries: IntMap[Denotation], nextId: Int):
+/** Every symbol of a compilation, by id, plus what the Namer learns alongside: each owner's
+  * members in entry order, the top-level scope and the `satisfies` declarations by type name.
+  * Persistent: entering or refining returns a new table.
+  */
+final case class SymbolTable(
+    entries: IntMap[Denotation],
+    nextId: Int,
+    children: IntMap[Vector[SymbolId]],
+    scope: Map[String, SymbolId],
+    satisfies: Map[String, List[Type]]
+):
 
   def apply(id: SymbolId): Denotation = entries(id.toInt)
 
   /** Enter a new symbol; returns the table and the fresh id. */
   def enter(name: String, owner: SymbolId, kind: SymKind, info: Type, span: Span): (SymbolTable, SymbolId) =
     val id = SymbolId(nextId)
-    (SymbolTable(entries.updated(nextId, Denotation(id, name, owner, kind, info, span)), nextId + 1), id)
+    val siblings = children.getOrElse(owner.toInt, Vector.empty)
+    (
+      copy(
+        entries = entries.updated(nextId, Denotation(id, name, owner, kind, info, span)),
+        nextId = nextId + 1,
+        children = children.updated(owner.toInt, siblings :+ id)
+      ),
+      id
+    )
+
+  /** The symbols `owner` declared, in entry order. */
+  def membersOf(owner: SymbolId): Vector[Denotation] = children.getOrElse(owner.toInt, Vector.empty).map(apply)
+
+  /** Record `typeName satisfies cap`. */
+  def satisfy(typeName: String, cap: Type): SymbolTable =
+    copy(satisfies = satisfies.updated(typeName, satisfies.getOrElse(typeName, Nil) :+ cap))
 
   /** Replace a symbol's signature type. */
   def refine(id: SymbolId, info: Type): SymbolTable =
@@ -49,16 +74,9 @@ final case class SymbolTable(entries: IntMap[Denotation], nextId: Int):
   /** All denotations in entry order. */
   def denotations: List[Denotation] = entries.values.toList
 
-  /** Names visible at the top level: prelude and root-owned symbols, later entries shadowing earlier ones. */
-  def topLevelScope: Map[String, SymbolId] =
-    entries.valuesIterator
-      .filter(d => d.owner == SymbolId.Root || d.owner == SymbolId.Prelude)
-      .map(d => d.name -> d.id)
-      .toMap
-
 object SymbolTable:
   /** Ids 0 and 1 are reserved for the pseudo-owners [[SymbolId.Root]] and [[SymbolId.Prelude]]. */
-  val empty: SymbolTable = SymbolTable(IntMap.empty, 2)
+  val empty: SymbolTable = SymbolTable(IntMap.empty, 2, IntMap.empty, Map.empty, Map.empty)
 
 extension (table: SymbolTable)
   /** Source-like rendering of `t`, with symbol names resolved through `table`. */
@@ -97,3 +115,4 @@ extension (table: SymbolTable)
       case Type.RefinementType(g, vals) => vals.map(term).mkString(s"${table(g).name}(", ", ", ")")
       case Type.ValueArg(v)             => term(v)
       case Type.TypeVar(id)             => s"?$id"
+      case Type.Layer(d, as, seed)      => s"${table(d).name}${args(as)} layer over ${render(seed)}"

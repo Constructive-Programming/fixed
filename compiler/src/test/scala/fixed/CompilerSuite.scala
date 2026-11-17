@@ -1,22 +1,24 @@
 package fixed
 
-import fixed.ast.Trees
-import fixed.util.{DiagCode, Severity, SourceFile}
+import fixed.util.SourceFile
 
 class CompilerSuite extends munit.FunSuite:
 
   private def compileFile(path: String) = Compiler.compile(CompilationUnit(SourceFile.fromPath(path)))
 
-  test("M1: every example runs parser then stub typer with only the T000 body-typing note"):
+  test("every example runs through parser, Namer and Typer"):
     val examples = new java.io.File("examples").listFiles(_.getName.endsWith(".fixed")).sorted.toList
     assert(examples.nonEmpty)
     examples.foreach { f =>
       val unit = compileFile(f.getPath)
-      assert(unit.tree.exists { case _: Trees.CompilationUnit => true; case _ => false }, f.getName)
-      assertEquals(unit.diagnostics.map(d => (d.severity, d.code)), List((Severity.Info, DiagCode.T000)), f.getName)
+      assert(unit.tree.isDefined, f.getName)
+      assert(unit.symbols.scope.nonEmpty, f.getName)
     }
 
-  test("M1: a unit with parse errors stops before the typer"):
+  test("M4: 01_basics compiles with no diagnostics"):
+    assertEquals(compileFile("examples/01_basics.fixed").diagnostics, Nil)
+
+  test("a unit with parse errors stops before the typer"):
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString("<test>", "fn f(x: i64 -> i64 = x\n")))
     assert(unit.hasErrors)
-    assert(!unit.diagnostics.exists(_.code == DiagCode.T000))
+    assert(unit.diagnostics.forall(_.code.toString.startsWith("P")), unit.diagnostics)

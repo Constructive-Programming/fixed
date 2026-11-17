@@ -15,41 +15,40 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
   */
 object Namer:
 
-  /** Standard-library names in scope everywhere (`spec/stdlib.md` §2, §5; `spec/effects.md` §2). */
-  val prelude: List[(String, SymKind)] =
-    List("String", "List", "Json", "Tuple", "Nat").map(_ -> SymKind.Data) ++
-      List(
-        "Optional",
-        "Result",
-        "Pair",
-        "Ordering",
-        "Boolean",
-        "Empty",
-        "Eq",
-        "Ord",
-        "Numeric",
-        "Show",
-        "Clone",
-        "Sequencing",
-        "Folding",
-        "Functor",
-        "Filtering",
-        "Sized"
-      ).map(_ -> SymKind.Cap) :+
-      ("Fail" -> SymKind.Effect)
-
-  /** Index a compilation unit: its symbol table and the Namer's diagnostics, in source order. */
+  /** Index a compilation unit against the stdlib: its symbol table (with the final top-level
+    * scope) and the Namer's diagnostics, in source order. The prelude's declarations are in scope
+    * everywhere; a stdlib module's (`std.io`) only through `use`.
+    */
   def index(unit: Tree): (SymbolTable, List[Diagnostic]) =
     val items = unit match
       case Trees.CompilationUnit(items, _) => items
       case other                           => List(other)
-    val withPrelude = prelude.foldLeft(Ctx.empty(SymbolId.Prelude)) { case (c, (name, kind)) =>
-      val (c1, id) = c.enter(name, kind, Type.UnitType, Span.NoSpan)
-      c1.bind(name, id)
+    val (entered, decls) = mapS(stdlib.copy(owner = SymbolId.Root), items)(enterTopLevel)
+    val typed = typeAll(entered, decls.flatten)
+    (typed.table.copy(scope = typed.scope), typed.diags.reverse)
+
+  /** The stdlib, indexed once: prelude names bound, modules recorded for `use`. Pure, so shared. */
+  private lazy val stdlib: Ctx =
+    val (builtin, stringId) = Ctx.empty(SymbolId.Prelude).enter("String", SymKind.Data, Type.UnitType, Span.NoSpan)
+    val withString = builtin.bind("String", stringId)
+    val (preluded, preludeDecls) = mapS(withString, Stdlib.prelude)(enterTopLevel)
+    val (withModules, moduleDecls) = mapS(preluded, Stdlib.modules.toList) { case (c, (module, decls)) =>
+      val (c1, entered) = c.nested(SymbolId.Prelude)(mapS(_, decls)(enterTopLevel))
+      val names = entered.flatten.collect { case (_, id) if id != SymbolId.Root => c1.table(id).name -> id }.toMap
+      (c1.copy(modules = c1.modules.updated(module, names)), entered.flatten)
     }
-    val (entered, decls) = mapS(withPrelude.copy(owner = SymbolId.Root), items)(enterTopLevel)
-    val typed = decls.flatten.foldLeft(entered) { case (c, (tree, id)) => typeDecl(c, tree, id) }
-    (typed.table, typed.diags.reverse)
+    typeAll(withModules, preludeDecls.flatten ++ moduleDecls.flatten)
+
+  /** Translate a type annotation met inside a body (a lambda parameter's) in `scope`; type
+    * variables it introduces are owned by `owner`.
+    */
+  def translate(table: SymbolTable, scope: Map[String, SymbolId], owner: SymbolId, tree: Tree)
+      : (SymbolTable, Type, List[Diagnostic]) =
+    val (c, t) = typeOf(Ctx(table, Nil, scope, owner, Set.empty, Map.empty), tree)
+    (c.table, t, c.diags.reverse)
+
+  private def typeAll(c: Ctx, decls: List[(Tree, SymbolId)]): Ctx =
+    decls.foldLeft(c) { case (ci, (tree, id)) => typeDecl(ci, tree, id) }
 
   /** Threaded Namer state. `table` and `diags` (newest first) are global; `scope`, `owner` and
     * `sigLocals` (type variables introduced by the signature being typed) are lexical.
@@ -59,7 +58,8 @@ object Namer:
       diags: List[Diagnostic],
       scope: Map[String, SymbolId],
       owner: SymbolId,
-      sigLocals: Set[String]
+      sigLocals: Set[String],
+      modules: Map[String, Map[String, SymbolId]]
   ):
     def enter(name: String, kind: SymKind, info: Type, span: Span): (Ctx, SymbolId) =
       val (t, id) = table.enter(name, owner, kind, info, span)
@@ -76,7 +76,7 @@ object Namer:
       (copy(table = inner.table, diags = inner.diags), a)
 
   private object Ctx:
-    def empty(owner: SymbolId): Ctx = Ctx(SymbolTable.empty, Nil, Map.empty, owner, Set.empty)
+    def empty(owner: SymbolId): Ctx = Ctx(SymbolTable.empty, Nil, Map.empty, owner, Set.empty, Map.empty)
 
   /** Map over `as`, threading the context. */
   private def mapS[A, B](c: Ctx, as: List[A])(f: (Ctx, A) => (Ctx, B)): (Ctx, List[B]) =
@@ -90,19 +90,25 @@ object Namer:
   private def enterTopLevel(c: Ctx, item: Tree): (Ctx, List[(Tree, SymbolId)]) =
     item match
       case Trees.UseDecl(path, selectors, None, span) =>
-        val names = if selectors.nonEmpty then selectors else path.lastOption.toList
+        val (modulePath, names) =
+          if selectors.nonEmpty then (path, selectors) else (path.dropRight(1), path.takeRight(1))
+        val module = c.modules.getOrElse(modulePath.mkString("."), Map.empty)
         val c1 = names.foldLeft(c) { (ci, name) =>
-          val (ci1, id) = ci.enter(name, SymKind.Import, Type.UnitType, span)
-          ci1.bind(name, id)
+          module.get(name) match
+            case Some(id) => ci.bind(name, id)
+            case None     =>
+              val (ci1, id) = ci.enter(name, SymKind.Import, Type.UnitType, span)
+              ci1.bind(name, id)
         }
         (c1, Nil)
-      case t: Trees.FnDecl     => declare(c, t, t.name, SymKind.Fn)
-      case t: Trees.CapDecl    => declare(c, t, t.name, SymKind.Cap)
-      case t: Trees.DataDecl   => declare(c, t, t.name, SymKind.Data)
-      case t: Trees.EffectDecl => declare(c, t, t.name, SymKind.Effect)
-      case t: Trees.TypeAlias  => declare(c, t, t.name, SymKind.TypeAlias)
+      case t: Trees.SatisfiesDecl => (c, List(t -> SymbolId.Root))
+      case t: Trees.FnDecl        => declare(c, t, t.name, SymKind.Fn)
+      case t: Trees.CapDecl       => declare(c, t, t.name, SymKind.Cap)
+      case t: Trees.DataDecl      => declare(c, t, t.name, SymKind.Data)
+      case t: Trees.EffectDecl    => declare(c, t, t.name, SymKind.Effect)
+      case t: Trees.TypeAlias     => declare(c, t, t.name, SymKind.TypeAlias)
 
-      /** ponytail: `satisfies` (M6) and `mod` declarations are not indexed yet. */
+      /** ponytail: `mod` declarations are not indexed yet. */
       case _ => (c, Nil)
 
   private def declare(c: Ctx, tree: Tree, name: String, kind: SymKind): (Ctx, List[(Tree, SymbolId)]) =
@@ -115,6 +121,9 @@ object Namer:
   private def typeDecl(c: Ctx, tree: Tree, id: SymbolId): Ctx =
     val (c1, info) = c.nested(id) { ci =>
       tree match
+        case Trees.SatisfiesDecl(typeName, capRef, _, _) =>
+          val (ci1, cap) = capBound(ci, capRef)
+          (cap.fold(ci1)(ct => ci1.copy(table = ci1.table.satisfy(typeName, ct))), Type.UnitType)
         case t: Trees.FnDecl                         => fnSignature(ci, t)
         case t: Trees.CapDecl                        => capSignature(ci, t)
         case t: Trees.DataDecl                       => dataSignature(ci, t, id)
@@ -124,7 +133,7 @@ object Namer:
           typeOf(ci1, rhs)
         case _ => (ci, Type.UnitType)
     }
-    c1.copy(table = c1.table.refine(id, info))
+    if id == SymbolId.Root then c1 else c1.copy(table = c1.table.refine(id, info))
 
   /** `(params) -> ret with fx`. Parameters become `ValueParam` symbols in scope for the rest of the
     * signature (refinement calls such as `between(lo, hi)` refer to them).
@@ -133,7 +142,7 @@ object Namer:
     val c0 = fn.typeParamsHint.foldLeft(c)((ci, name) => introduce(ci, name, Nil, fn.span)._1)
     val (c1, params) = mapS(c0, fn.params)(valueParam)
     val (c2, ret) = fn.returnType.fold((c1, Type.UnitType))(typeOf(c1, _))
-    arrow(c2, product(params), ret, fn.withClause)
+    arrow(c2, Members.product(params), ret, fn.withClause)
 
   /** `lhs -> rhs [with row]`. */
   private def arrow(c: Ctx, lhs: Type, rhs: Type, withClause: Option[Tree]): (Ctx, Type) =
@@ -165,8 +174,11 @@ object Namer:
     val c2 = data.variants.foldLeft(c1) { (ci, v) =>
       val (ci1, vid) = ci.enter(v.name, SymKind.Variant, Type.UnitType, v.span)
       val (ci2, info) = ci1.nested(vid) { cv =>
-        val (cv1, fields) = mapS(cv, v.fields)((cf, f) => typeOf(cf, f.typeAnn))
-        (cv1, if fields.isEmpty then self else Type.ArrowType(product(fields), self, EffectRow.empty))
+        val (cv1, fields) = mapS(cv, v.fields) { (cf, f) =>
+          val (cf1, t) = typeOf(cf, f.typeAnn)
+          (cf1.enter(f.name, SymKind.Field, t, f.span)._1, t)
+        }
+        (cv1, if fields.isEmpty then self else Type.ArrowType(Members.product(fields), self, EffectRow.empty))
       }
       ci2.copy(table = ci2.table.refine(vid, info))
     }
@@ -337,10 +349,3 @@ object Namer:
           if bound.isDefined then c.error(DiagCode.T004, span, s"$name is already bound in an enclosing scope") else c
         val (c2, id) = c1.enter(name, SymKind.TypeParam, Type.IsBound(bounds), span)
         (c2.bind(name, id).copy(sigLocals = c2.sigLocals + name), id)
-
-  /** Parameter or field list as one arrow left-hand side. */
-  private def product(ts: List[Type]): Type =
-    ts match
-      case Nil      => Type.UnitType
-      case t :: Nil => t
-      case _        => Type.TupleType(ts)

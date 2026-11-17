@@ -7,7 +7,7 @@ import java.util.concurrent.TimeUnit
 
 import fixed.ast.Tree
 import fixed.parsing.{Parser, Scanner, Token}
-import fixed.typer.Namer
+import fixed.typer.{Namer, TyperPhase}
 import fixed.util.{Reporter, SourceFile}
 import org.openjdk.jmh.annotations.*
 import org.openjdk.jmh.infra.Blackhole
@@ -60,6 +60,14 @@ class FrontEndBench:
   @Benchmark
   def namer(bh: Blackhole): Unit =
     trees.foreach(t => bh.consume(Namer.index(t)))
+
+  /** Namer + body typer over pre-parsed trees (M4: top-level `fn` bodies). */
+  @Benchmark
+  def typer(bh: Blackhole): Unit =
+    trees.foreach { t =>
+      val (symbols, _) = Namer.index(t)
+      bh.consume(TyperPhase.typeBodies(t, symbols))
+    }
 
   /** Scan + parse, the public entry point. */
   @Benchmark
