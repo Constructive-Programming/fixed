@@ -1,8 +1,8 @@
 package fixed.typer
 
-import scala.collection.immutable.{BitSet, IntMap}
+import scala.collection.immutable.IntMap
 
-import fixed.core.{EffectRow, SymKind, SymbolId, Type}
+import fixed.core.{EffectRow, SymKind, SymbolId, SymbolTable, Type}
 import fixed.util.mapAccum
 
 /** Signature lookup for the typer: instantiation of generic signatures, instance members (data
@@ -129,20 +129,20 @@ object Members:
         d.kind match
           case SymKind.Data =>
             field(s, id, args, name).map(f => () => f).toList ++
-              capMember(s, s.symbols.satisfies.getOrElse(d.name, Nil), t, name, BitSet.empty) ++
+              capMember(s, s.symbols.satisfies.getOrElse(d.name, Nil), t, name) ++
               Option.when(name == "fold" && s.symbols.variantsOf(id).nonEmpty)(() => derivedFold(s, id, args))
-          case SymKind.TypeParam => capMember(s, boundsOf(s, id), t, name, BitSet.empty)
+          case SymKind.TypeParam => capMember(s, boundsOf(s, id), t, name)
           case _                 => Nil
       case t @ Type.PrimType(n) =>
         val numeric = if isNumeric(s, t) then s.symbols.scope.get("Numeric").map(Type.CapRef(_, Nil)).toList else Nil
-        capMember(s, s.symbols.satisfies.getOrElse(n, Nil) ++ numeric, t, name, BitSet.empty)
-      case t @ Type.CapRef(_, _)  => capMember(s, List(t), t, name, BitSet.empty)
-      case Type.IsBound(bs)       => capMember(s, bs, resolved, name, BitSet.empty)
-      case Type.TypeVar(id)       => capMember(s, s.unifier.boundsOf(id), resolved, name, BitSet.empty)
-      case Type.AppliedVar(id, _) => capMember(s, s.unifier.boundsOf(id), resolved, name, BitSet.empty)
+        capMember(s, s.symbols.satisfies.getOrElse(n, Nil) ++ numeric, t, name)
+      case t @ Type.CapRef(_, _)  => capMember(s, List(t), t, name)
+      case Type.IsBound(bs)       => capMember(s, bs, resolved, name)
+      case Type.TypeVar(id)       => capMember(s, s.unifier.boundsOf(id), resolved, name)
+      case Type.AppliedVar(id, _) => capMember(s, s.unifier.boundsOf(id), resolved, name)
       case _                      => Nil
     if own.nonEmpty then own
-    else capMember(s, autoDerived.flatMap(s.symbols.scope.get).map(Type.CapRef(_, Nil)), resolved, name, BitSet.empty)
+    else capMember(s, autoDerived.flatMap(s.symbols.scope.get).map(Type.CapRef(_, Nil)), resolved, name)
 
   /** A field of a single-variant data type, as a zero-argument member. */
   private def field(s: TyperState, data: SymbolId, args: List[Type], name: String): Option[(TyperState, Type)] =
@@ -154,44 +154,42 @@ object Members:
         }
       case _ => None
 
-  /** Method `name` in `caps` or their `extends` chains, instantiated for receiver `recv`. */
+  /** Member `name` of `kind` in `caps` or their `extends` chains, instantiated for receiver `recv`:
+    * one table lookup per capability (see [[MemberTables]]).
+    */
   private def capMember(
       s: TyperState,
       caps: List[Type],
       recv: Type,
       name: String,
-      seen: BitSet,
       kind: SymKind = SymKind.Method,
       partOverride: Option[Type] = None
   ): List[Candidate] =
-    expandAliases(s, caps).flatMap {
-      case Type.CapRef(c, capArgs) if !seen.contains(c.toInt) =>
-        val recvArgs = recv match
-          case Type.TypeRef(_, as) => as
-          case _                   => Nil
-        val params = typeParamsOf(s, c)
-        val args = if capArgs.nonEmpty then capArgs else recvArgs.takeRight(params.size)
-        val part = partOverride.orElse(capArgs.lastOption).orElse(recvArgs.lastOption)
-        val own = s.symbols.membersOf(c).find(m => m.kind == kind && m.name == name).toList.map { m => () =>
-          instantiate(s, m.info, Subst(Subst.of(params, args), Set(m.id, c), Some(recv), part))
+    val recvArgs = recv match
+      case Type.TypeRef(_, as) => as
+      case _                   => Nil
+    expandAliases(s.symbols, caps).flatMap {
+      case Type.CapRef(root, rootArgs) =>
+        s.members.lookup(root, kind, name).map { e =>
+          val capArgs = e.written.getOrElse(rootArgs)
+          val params = typeParamsOf(s, e.cap)
+          val args = if capArgs.nonEmpty then capArgs else recvArgs.takeRight(params.size)
+          val part = partOverride.orElse(capArgs.lastOption).orElse(recvArgs.lastOption)
+          () => instantiate(s, e.member.info, Subst(Subst.of(params, args), Set(e.member.id, e.cap), Some(recv), part))
         }
-        val supers = s.symbols(c).info match
-          case Type.IsBound(bs) => bs
-          case _                => Nil
-        own ++ capMember(s, supers, recv, name, seen.incl(c.toInt), kind, partOverride)
       case _ => Nil
     }
 
   /** Replace type-alias references in a bound chain by their constituents; arguments given to
     * the alias pass to constituents that take none (`ArrayLike of A` is `Sequencing of A + ...`).
     */
-  private def expandAliases(s: TyperState, bounds: List[Type]): List[Type] =
+  def expandAliases(symbols: SymbolTable, bounds: List[Type]): List[Type] =
     bounds.flatMap {
-      case Type.TypeRef(id, args) if s.symbols(id).kind == SymKind.TypeAlias =>
-        s.symbols(id).info match
+      case Type.TypeRef(id, args) if symbols(id).kind == SymKind.TypeAlias =>
+        symbols(id).info match
           case Type.IsBound(parts) =>
             expandAliases(
-              s,
+              symbols,
               parts.map {
                 case Type.CapRef(c, Nil) if args.nonEmpty => Type.CapRef(c, args)
                 case other                                => other
@@ -204,7 +202,7 @@ object Members:
   /** A type variable's bound chain, aliases expanded. */
   private def boundsOf(s: TyperState, param: SymbolId): List[Type] =
     s.symbols(param).info match
-      case Type.IsBound(bs) => expandAliases(s, bs)
+      case Type.IsBound(bs) => expandAliases(s.symbols, bs)
       case _                => Nil
 
   /** `fold` derived from a data type's variants (a catamorphism): one function per variant, its
@@ -235,14 +233,14 @@ object Members:
           case None                     =>
             val (s1, args) = freshArgs(s, owner)
             val self = Type.TypeRef(owner, args)
-            capMember(s1, s1.symbols.satisfies.getOrElse(d.name, Nil), self, name, BitSet.empty, SymKind.StaticMethod)
+            capMember(s1, s1.symbols.satisfies.getOrElse(d.name, Nil), self, name, SymKind.StaticMethod)
               .headOption
               .map(_())
       case SymKind.TypeParam =>
         /** A type constructor variable: `M.pure(x)` is `M of typeof(x)`, whatever `M`'s bound says. */
         val (s1, part) = s.fresh
         val self = Type.TypeRef(owner, List(part))
-        capMember(s1, boundsOf(s, owner), self, name, BitSet.empty, SymKind.StaticMethod, Some(part))
+        capMember(s1, boundsOf(s, owner), self, name, SymKind.StaticMethod, Some(part))
           .headOption
           .map(_())
       case SymKind.Cap =>
@@ -257,7 +255,6 @@ object Members:
           List(Type.CapRef(owner, args)),
           self,
           name,
-          BitSet.empty,
           SymKind.StaticMethod
         ).headOption.map(_())
       case _ => None

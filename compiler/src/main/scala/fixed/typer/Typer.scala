@@ -31,7 +31,8 @@ final case class TyperState(
     symbols: SymbolTable,
     unifier: Unifier,
     diags: List[Diagnostic],
-    errors: Int
+    errors: Int,
+    members: MemberTables
 ):
   def record(tree: Tree, t: Type): TyperState = copy(types = types.updated(tree, t))
 
@@ -71,7 +72,8 @@ object TyperState:
       symbols,
       Unifier.empty.copy(tuple = symbols.scope.get("Tuple")),
       Nil,
-      0
+      0,
+      MemberTables(symbols)
     )
 
 /** The bidirectional body typer (§5.2, §3.7–§3.9). Each routine records the tree's type in the
