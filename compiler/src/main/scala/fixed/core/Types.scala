@@ -38,6 +38,34 @@ enum Type:
   /** A type-constructor variable applied to arguments (`M of B` while `M` is unsolved). */
   case AppliedVar(id: Int, args: List[Type])
 
+  /** The types this one is built from. */
+  def children: List[Type] =
+    this match
+      case ArrowType(l, r, _)   => List(l, r)
+      case TupleType(ts)        => ts
+      case IsBound(bs)          => bs
+      case CapType(r)           => r.toList
+      case TypeRef(_, args)     => args
+      case CapRef(_, args)      => args
+      case SelfType(of)         => of.toList
+      case Layer(_, args, seed) => args :+ seed
+      case AppliedVar(_, args)  => args
+      case _                    => Nil
+
+  /** This type with `f` applied to each of its children. */
+  def mapChildren(f: Type => Type): Type =
+    this match
+      case ArrowType(l, r, fx)  => ArrowType(f(l), f(r), fx)
+      case TupleType(ts)        => TupleType(ts.map(f))
+      case IsBound(bs)          => IsBound(bs.map(f))
+      case CapType(r)           => CapType(r.map(f))
+      case TypeRef(sym, args)   => TypeRef(sym, args.map(f))
+      case CapRef(sym, args)    => CapRef(sym, args.map(f))
+      case SelfType(of)         => SelfType(of.map(f))
+      case Layer(d, args, seed) => Layer(d, args.map(f), f(seed))
+      case AppliedVar(id, args) => AppliedVar(id, args.map(f))
+      case other                => other
+
 final case class EffectBound(sym: SymbolId, args: List[Type])
 
 /** A `with` row. Effect inference (M7) adds an open-row variable. */

@@ -4,14 +4,9 @@ import fixed.core.Phase
 import fixed.parsing.ParserPhase
 import fixed.typer.TyperPhase
 
-/** The phase plan. Inner lists are groups that may later be fused into one tree walk; today each
-  * group holds one phase. A unit stops at the first phase group that leaves it with errors.
-  */
+/** The phase plan. A unit stops at the first phase that leaves it with errors. */
 object Compiler:
-  val phases: List[List[Phase]] = List(
-    List(ParserPhase),
-    List(TyperPhase)
-  )
+  val phases: List[Phase] = List(ParserPhase, TyperPhase)
 
   def compile(unit: CompilationUnit): CompilationUnit =
-    phases.flatten.foldLeft(unit)((u, phase) => if u.hasErrors then u else phase.run(u))
+    phases.foldLeft(unit)((u, phase) => if u.hasErrors then u else phase.run(u))

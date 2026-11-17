@@ -44,13 +44,13 @@ object Namer:
     */
   def translate(table: SymbolTable, scope: Map[String, SymbolId], owner: SymbolId, tree: Tree)
       : (SymbolTable, Type, List[Diagnostic]) =
-    val (c, t) = typeOf(Ctx(table, Nil, scope, owner, Set.empty, Map.empty), tree)
+    val (c, t) = typeOf(Ctx.at(table, scope, owner), tree)
     (c.table, t, c.diags.reverse)
 
   /** Enter a `fn` declared inside a body and type its signature in `scope`. */
   def nestedFn(table: SymbolTable, scope: Map[String, SymbolId], owner: SymbolId, fn: Trees.FnDecl)
       : (SymbolTable, SymbolId, List[Diagnostic]) =
-    val (c, id) = member(Ctx(table, Nil, scope, owner, Set.empty, Map.empty), fn, SymKind.Fn)
+    val (c, id) = member(Ctx.at(table, scope, owner), fn, SymKind.Fn)
     (c.table, id, c.diags.reverse)
 
   private def typeAll(c: Ctx, decls: List[(Tree, SymbolId)]): Ctx =
@@ -82,7 +82,11 @@ object Namer:
       (copy(table = inner.table, diags = inner.diags), a)
 
   private object Ctx:
-    def empty(owner: SymbolId): Ctx = Ctx(SymbolTable.empty, Nil, Map.empty, owner, Set.empty, Map.empty)
+    def empty(owner: SymbolId): Ctx = at(SymbolTable.empty, Map.empty, owner)
+
+    /** A frame over an existing table and scope, for signatures met inside bodies. */
+    def at(table: SymbolTable, scope: Map[String, SymbolId], owner: SymbolId): Ctx =
+      Ctx(table, Nil, scope, owner, Set.empty, Map.empty)
 
   /** Enter a top-level item's name(s); returns the declarations pass 2 must type. */
   private def enterTopLevel(c: Ctx, item: Tree): (Ctx, List[(Tree, SymbolId)]) =
@@ -140,7 +144,7 @@ object Namer:
     val c0 = fn.typeParamsHint.foldLeft(c)((ci, name) => introduce(ci, name, Nil, fn.span)._1)
     val (c1, params) = mapAccum(c0, fn.params)(valueParam)
     val (c2, ret) = fn.returnType.fold((c1, Type.UnitType))(typeOf(c1, _))
-    arrow(c2, Members.product(params), ret, fn.withClause)
+    arrow(c2, Type.TupleType(params), ret, fn.withClause)
 
   /** `lhs -> rhs [with row]`. */
   private def arrow(c: Ctx, lhs: Type, rhs: Type, withClause: Option[Tree]): (Ctx, Type) =
@@ -176,7 +180,7 @@ object Namer:
           val (cf1, t) = typeOf(cf, f.typeAnn)
           (cf1.enter(f.name, SymKind.Field, t, f.span)._1, t)
         }
-        (cv1, if fields.isEmpty then self else Type.ArrowType(Members.product(fields), self, EffectRow.empty))
+        (cv1, if fields.isEmpty then self else Type.ArrowType(Type.TupleType(fields), self, EffectRow.empty))
       }
       ci2.copy(table = ci2.table.refine(vid, info))
     }
@@ -243,7 +247,7 @@ object Namer:
           case (_: Trees.TupleArrowLhs, Type.TupleType(ts)) => ts
           case (_: Trees.UnitType, _)                       => Nil
           case (_, single)                                  => List(single)
-        arrow(c2, Members.product(params), r, withClause)
+        arrow(c2, Type.TupleType(params), r, withClause)
       case Trees.TupleArrowLhs(types, _) =>
         val (c1, ts) = mapAccum(c, types)(typeOf)
         (c1, Type.TupleType(ts))
