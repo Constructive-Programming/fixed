@@ -46,18 +46,7 @@ final case class Unifier(
       case _ => t
 
   /** `t` with every bound variable replaced, recursively. */
-  def zonk(t: Type): Type =
-    resolve(t) match
-      case Type.ArrowType(l, r, fx)  => Type.ArrowType(zonk(l), zonk(r), fx)
-      case Type.TupleType(ts)        => Type.TupleType(ts.map(zonk))
-      case Type.AppliedVar(id, args) => Type.AppliedVar(id, args.map(zonk))
-      case Type.TypeRef(sym, args)   => Type.TypeRef(sym, args.map(zonk))
-      case Type.CapRef(sym, args)    => Type.CapRef(sym, args.map(zonk))
-      case Type.IsBound(bs)          => Type.IsBound(bs.map(zonk))
-      case Type.CapType(r)           => Type.CapType(r.map(zonk))
-      case Type.SelfType(of)         => Type.SelfType(of.map(zonk))
-      case Type.Layer(d, args, seed) => Type.Layer(d, args.map(zonk), zonk(seed))
-      case other                     => other
+  def zonk(t: Type): Type = resolve(t).mapChildren(zonk)
 
   /** Solve every still-unbound literal variable to its default. */
   def applyDefaults: Unifier =
@@ -68,12 +57,12 @@ final case class Unifier(
     }
 
   /** Require `t` to be `Numeric`. */
-  def requireNumeric(t: Type, numeric: Type => Boolean): Either[String, Unifier] =
+  def requireNumeric(t: Type, numeric: Type => Boolean): Solved =
     resolve(t) match
       case Type.TypeVar(id)        => Right(copy(numericVars = numericVars + id))
       case Type.NeverType          => Right(this)
       case other if numeric(other) => Right(this)
-      case _                       => Left("Numeric")
+      case _                       => Left(())
 
   /** Make `a` and `b` equal. `Left` carries no message: the caller reports the mismatch with both
     * zonked types. `is ...` bounds accept any type until capability checking lands (M6).
@@ -165,14 +154,9 @@ final case class Unifier(
 
   private def occurs(id: Int, t: Type): Boolean =
     resolve(t) match
-      case Type.TypeVar(other)       => other == id
-      case Type.ArrowType(l, r, _)   => occurs(id, l) || occurs(id, r)
-      case Type.TupleType(ts)        => ts.exists(occurs(id, _))
-      case Type.AppliedVar(v, args)  => v == id || args.exists(occurs(id, _))
-      case Type.TypeRef(_, args)     => args.exists(occurs(id, _))
-      case Type.CapRef(_, args)      => args.exists(occurs(id, _))
-      case Type.Layer(_, args, seed) => args.exists(occurs(id, _)) || occurs(id, seed)
-      case _                         => false
+      case Type.TypeVar(other)      => other == id
+      case Type.AppliedVar(v, args) => v == id || args.exists(occurs(id, _))
+      case other                    => other.children.exists(occurs(id, _))
 
 /** An anonymous bound or a single capability, as its list of capabilities. */
 private object Capabilities:

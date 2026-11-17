@@ -10,8 +10,6 @@ import fixed.util.DiagCode
   */
 object Patterns:
 
-  private val bool = Type.PrimType("bool")
-
   /** Bind `pat` against the scrutinee type `t`: the state and the context extended by its binders. */
   def bind(s: TyperState, pat: fixed.ast.Tree, t: Type)(using ctx: Context): (TyperState, Context) =
     pat match
@@ -48,7 +46,7 @@ object Patterns:
         (bind(s1, right, t)._1.record(pat, t), c1)
       case Trees.GuardedPat(p, cond, _) =>
         val (s1, c1) = bind(s, p, t)
-        (Typer.typedExpr(s1, cond, Proto.ExpectedType(bool))(using c1)._1, c1)
+        (Typer.typedExpr(s1, cond, Proto.ExpectedType(Typer.bool))(using c1)._1, c1)
       case _: Trees.Error | _: Trees.Missing => (s, ctx)
       case other                             => (s.unsupported(other.span, "this pattern"), ctx)
 
@@ -87,7 +85,7 @@ object Patterns:
     val (s1, scrutinee) = Typer.typedExpr(s, m.scrutinee, Proto.Wildcard)
     val (s2, result) = m.cases.foldLeft((s1, Option.empty[Type])) { case ((si, first), c) =>
       val (si1, ci) = bind(si, c.pattern, scrutinee)
-      val si2 = c.guard.fold(si1)(g => Typer.typedExpr(si1, g, Proto.ExpectedType(bool))(using ci)._1)
+      val si2 = c.guard.fold(si1)(g => Typer.typedExpr(si1, g, Proto.ExpectedType(Typer.bool))(using ci)._1)
       val expect = pt.orExpect(first)
       val (si3, bodyType) = Typer.typedExpr(si2, c.body, expect)(using ci)
       (si3.record(c, bodyType), first.orElse(Some(bodyType)))

@@ -1,6 +1,6 @@
 package fixed.typer
 
-import fixed.core.{SymKind, SymbolId, Type}
+import fixed.core.{EffectRow, SymKind, SymbolId, Type}
 import fixed.util.mapAccum
 
 /** Signature lookup for the typer: instantiation of generic signatures, instance members (data
@@ -22,14 +22,10 @@ object Members:
       case Type.PrimType(n)    => numericPrims(n)
       case Type.TypeRef(id, _) =>
         s.symbols(id).info match
-          case Type.IsBound(bs) => bs.exists(isCap(s, _, "Numeric"))
-          case _                => false
+          case Type.IsBound(bs) =>
+            bs.exists { case Type.CapRef(c, _) => s.symbols(c).name == "Numeric"; case _ => false }
+          case _ => false
       case _ => false
-
-  private def isCap(s: TyperState, t: Type, name: String): Boolean =
-    t match
-      case Type.CapRef(c, _) => s.symbols(c).name == name
-      case _                 => false
 
   /** How to rewrite a signature: explicit replacements, owners whose type variables become fresh,
     * and what `Self` / `Part` stand for.
@@ -43,8 +39,7 @@ object Members:
 
   /** Rewrite `t` under `sub`, allocating one fresh variable per instantiated type variable. */
   def instantiate(s: TyperState, t: Type, sub: Subst): (TyperState, Type) =
-    val (s1, m, out) = go(s, t, sub, sub.mapping)
-    val _ = m
+    val (s1, _, out) = go(s, t, sub, sub.mapping)
     (s1, out)
 
   private def go(s: TyperState, t: Type, sub: Subst, m: Map[SymbolId, Type]): (TyperState, Map[SymbolId, Type], Type) =
@@ -71,10 +66,9 @@ object Members:
       case Type.Layer(d, args, seed) => rebuild(args :+ seed)(xs => Type.Layer(d, xs.init, xs.last))
       case Type.SelfType(of)         => rebuild(of.toList)(xs => selfOf(sub.self.getOrElse(t), xs.headOption))
       case Type.PartType             =>
-        (sub.part, m.get(PartKey)) match
-          case (Some(p), _)    => (s, m, p)
-          case (None, Some(p)) => (s, m, p)
-          case (None, None)    =>
+        sub.part.orElse(m.get(PartKey)) match
+          case Some(p) => (s, m, p)
+          case None    =>
             val (s1, v) = s.fresh
             (s1, m.updated(PartKey, v), v)
       case other => (s, m, other)
@@ -99,9 +93,8 @@ object Members:
   /** `Self of B`: the receiver with its element (last) argument replaced. */
   private def selfOf(self: Type, of: Option[Type]): Type =
     (self, of) match
-      case (Type.TypeRef(id, args), Some(b)) if args.nonEmpty => Type.TypeRef(id, args.init :+ b)
-      case (Type.TypeRef(id, Nil), Some(b))                   => Type.TypeRef(id, List(b))
-      case _                                                  => self
+      case (Type.TypeRef(id, args), Some(b)) => Type.TypeRef(id, args.dropRight(1) :+ b)
+      case _                                 => self
 
   /** Type variables `owner` declared (`of` parameters), in declaration order. */
   def typeParamsOf(s: TyperState, owner: SymbolId): List[SymbolId] =
@@ -111,10 +104,6 @@ object Members:
     * representation can actually derive them is checked at representation selection (M11).
     */
   private val autoDerived = List("Show", "Eq", "Clone")
-
-  /** The instantiated type of instance member `name` on `recv`, if any. */
-  def instance(s: TyperState, recv: Type, name: String): Option[(TyperState, Type)] =
-    candidates(s, recv, name).headOption
 
   /** Every instance member `name` on `recv`, best first: a data type's own field, then its
     * capabilities, then its derived `fold`. Calls with several candidates pick by argument shape.
@@ -150,7 +139,7 @@ object Members:
       case variant :: Nil =>
         s.symbols.fieldsOf(variant.id).find(_.name == name).map { f =>
           val (s1, t) = instantiate(s, f.info, Subst(typeParamsOf(s, data).zip(args).toMap, Set.empty))
-          (s1, Type.ArrowType(Type.TupleType(Nil), t, fixed.core.EffectRow.empty))
+          (s1, Type.ArrowType(Type.TupleType(Nil), t, EffectRow.empty))
         }
       case _ => None
 
@@ -217,9 +206,9 @@ object Members:
       val (s0, r) = s.fresh
       val (s1, cases) = mapAccum(s0, variants) { (si, v) =>
         val (si1, fields) = fieldTypes(si, data, args, v.id)
-        (si1, Type.ArrowType(product(fields.map(replaceSelf(_, data, r))), r, fixed.core.EffectRow.empty))
+        (si1, Type.ArrowType(Type.TupleType(fields.map(replaceSelf(_, data, r))), r, EffectRow.empty))
       }
-      (s1, Type.ArrowType(product(cases), r, fixed.core.EffectRow.empty))
+      (s1, Type.ArrowType(Type.TupleType(cases), r, EffectRow.empty))
     }
 
   /** The static member `name` of the type, effect or import `owner`, instantiated. `pt` decides
@@ -271,14 +260,14 @@ object Members:
     val (result, fieldsOut) = layer match
       case Some(Type.Layer(`data`, _, seed)) => (Type.Layer(data, args, seed), fields.map(replaceSelf(_, data, seed)))
       case _                                 => (Type.TypeRef(data, args), fields)
-    (s2, if fields.isEmpty then result else Type.ArrowType(product(fieldsOut), result, fixed.core.EffectRow.empty))
+    (s2, if fields.isEmpty then result else Type.ArrowType(Type.TupleType(fieldsOut), result, EffectRow.empty))
 
   /** `unfold(seed: S, step: S -> layer of D over S) -> D`, derived from the variants (an anamorphism). */
   private def derivedUnfold(s: TyperState, data: SymbolId): (TyperState, Type) =
     val (withParams, params) = freshArgs(s, data)
     val (done, seed) = withParams.fresh
-    val step = Type.ArrowType(Type.TupleType(List(seed)), Type.Layer(data, params, seed), fixed.core.EffectRow.empty)
-    (done, Type.ArrowType(Type.TupleType(List(seed, step)), Type.TypeRef(data, params), fixed.core.EffectRow.empty))
+    val step = Type.ArrowType(Type.TupleType(List(seed)), Type.Layer(data, params, seed), EffectRow.empty)
+    (done, Type.ArrowType(Type.TupleType(List(seed, step)), Type.TypeRef(data, params), EffectRow.empty))
 
   def freshArgs(s: TyperState, data: SymbolId): (TyperState, List[Type]) =
     mapAccum(s, typeParamsOf(s, data)) { (si, p) =>
@@ -292,11 +281,8 @@ object Members:
 
   private def replaceSelf(t: Type, data: SymbolId, by: Type): Type =
     t match
-      case Type.TypeRef(`data`, _)  => by
-      case Type.TypeRef(id, args)   => Type.TypeRef(id, args.map(replaceSelf(_, data, by)))
-      case Type.ArrowType(l, r, fx) => Type.ArrowType(replaceSelf(l, data, by), replaceSelf(r, data, by), fx)
-      case Type.TupleType(ts)       => Type.TupleType(ts.map(replaceSelf(_, data, by)))
-      case other                    => other
+      case Type.TypeRef(`data`, _) => by
+      case other                   => other.mapChildren(replaceSelf(_, data, by))
 
   /** An arrow's left-hand side is always its parameter list, a `TupleType` of any arity, so a
     * single `()` parameter and no parameters stay distinct.
@@ -305,6 +291,3 @@ object Members:
     lhs match
       case Type.TupleType(ts) => ts
       case single             => List(single)
-
-  /** A parameter list as an arrow's left-hand side. */
-  def product(ts: List[Type]): Type = Type.TupleType(ts)

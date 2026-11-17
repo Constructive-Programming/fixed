@@ -3,7 +3,7 @@ package fixed.typer
 import scala.collection.immutable.IntMap
 
 import fixed.ast.{Tree, Trees}
-import fixed.core.{Context, Proto, SymKind, SymbolId, SymbolTable, Type, render}
+import fixed.core.{Context, EffectRow, Proto, SymKind, SymbolId, SymbolTable, Type, render}
 import fixed.util.{DiagCode, Diagnostic, Severity, Span, mapAccum}
 
 /** A tree's identity in the type side table: its span and node class (§3.0 span-as-identity).
@@ -69,15 +69,14 @@ object TyperState:
       owner -> ids.iterator.filter(symbols(_).kind == SymKind.TypeParam).toList
     }
 
-/** The bidirectional body typer (§5.2). M3 covers literals, identifiers, arithmetic, comparison and
-  * logic operators, tuples, function application and `let` in blocks; other expressions report
-  * `T005` until M5. Each routine records the tree's type in the side table and returns it.
+/** The bidirectional body typer (§5.2, §3.7–§3.9). Each routine records the tree's type in the
+  * side table and returns it; constructs not handled yet report a `T005` warning.
   */
 object Typer:
 
   private val i64 = Type.PrimType("i64")
   private val f64 = Type.PrimType("f64")
-  private val bool = Type.PrimType("bool")
+  private[typer] val bool = Type.PrimType("bool")
 
   /** Type an expression against prototype `pt`. */
   def typedExpr(s: TyperState, tree: Tree, pt: Proto)(using ctx: Context): (TyperState, Type) =
@@ -239,7 +238,7 @@ object Typer:
 
     /** The body was already checked against an expected result; report its mismatch once. */
     val result = expectedResult.getOrElse(bodyType)
-    (s2, Type.ArrowType(Members.product(paramTypes), result, fixed.core.EffectRow.empty))
+    (s2, Type.ArrowType(Type.TupleType(paramTypes), result, EffectRow.empty))
 
   /** `recv.m(args)` / `recv.m`: an instance member of the receiver's type. With several
     * candidates (a capability `fold` and a data type's derived `fold`), the first whose argument
