@@ -21,7 +21,7 @@ final class TypeTable private (entries: java.util.IdentityHashMap[Tree, Type]):
   def get(tree: Tree): Option[Type] = Option(entries.get(tree))
 
 object TypeTable:
-  def empty: TypeTable = TypeTable(java.util.IdentityHashMap[Tree, Type](2048))
+  def empty: TypeTable = TypeTable(java.util.IdentityHashMap[Tree, Type](1024))
 
 /** Threaded typer state (`docs/plans/phase-3-typer.md` §3.4): the type side table, the symbol
   * table (local bindings join it), the unifier and the diagnostics so far (newest first).
