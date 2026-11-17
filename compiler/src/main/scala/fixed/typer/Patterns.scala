@@ -129,6 +129,6 @@ object Patterns:
   /** Type a nested `fn` declaration met in a block: signature via the Namer, then its body. */
   def nestedFn(s: TyperState, fn: Trees.FnDecl)(using ctx: Context): (TyperState, Context) =
     val (table, id, diags) = Namer.nestedFn(s.symbols, ctx.scope, ctx.owner, fn)
-    val s1 = s.copy(symbols = table, diags = diags.reverse ++ s.diags)
+    val s1 = s.copy(symbols = table).report(diags)
     val inner = ctx.bind(fn.name, id)
     (Typer.typedFnBody(s1, id, fn)(using inner), inner)

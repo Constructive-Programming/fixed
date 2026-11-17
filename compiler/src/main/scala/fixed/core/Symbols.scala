@@ -41,6 +41,7 @@ final case class SymbolTable(
     entries: Vector[Denotation],
     nextId: Int,
     children: IntMap[Vector[SymbolId]],
+    typeParams: IntMap[List[SymbolId]],
     scope: Map[String, SymbolId],
     satisfies: Map[String, List[Type]]
 ):
@@ -50,15 +51,26 @@ final case class SymbolTable(
   /** Enter a new symbol; returns the table and the fresh id. */
   def enter(name: String, owner: SymbolId, kind: SymKind, info: Type, span: Span): (SymbolTable, SymbolId) =
     val id = SymbolId(nextId)
-    val siblings = children.getOrElse(owner.toInt, Vector.empty)
+
+    /** Locals are never looked up as members, so they skip the owner index. */
+    val indexed =
+      if kind == SymKind.Local then children
+      else children.updated(owner.toInt, children.getOrElse(owner.toInt, Vector.empty) :+ id)
+    val params =
+      if kind == SymKind.TypeParam then typeParams.updated(owner.toInt, typeParams.getOrElse(owner.toInt, Nil) :+ id)
+      else typeParams
     (
       copy(
         entries = entries :+ Denotation(id, name, owner, kind, info, span),
         nextId = nextId + 1,
-        children = children.updated(owner.toInt, siblings :+ id)
+        children = indexed,
+        typeParams = params
       ),
       id
     )
+
+  /** The type variables `owner` declared (`of` parameters, signature variables), in order. */
+  def typeParamsOf(owner: SymbolId): List[SymbolId] = typeParams.getOrElse(owner.toInt, Nil)
 
   /** The symbols `owner` declared, in entry order. */
   def membersOf(owner: SymbolId): Vector[Denotation] = children.getOrElse(owner.toInt, Vector.empty).map(apply)
@@ -86,7 +98,7 @@ object SymbolTable:
     */
   val firstId: Int = 2
 
-  val empty: SymbolTable = SymbolTable(Vector.empty, firstId, IntMap.empty, Map.empty, Map.empty)
+  val empty: SymbolTable = SymbolTable(Vector.empty, firstId, IntMap.empty, IntMap.empty, Map.empty, Map.empty)
 
 extension (table: SymbolTable)
   /** Source-like rendering of `t`, with symbol names resolved through `table`. */
