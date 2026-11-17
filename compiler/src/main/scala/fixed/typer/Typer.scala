@@ -1,23 +1,39 @@
 package fixed.typer
 
 import fixed.ast.{Tree, Trees}
-import fixed.core.{Context, Proto, SymKind, SymbolId, SymbolTable, Type, render}
+import fixed.core.{Context, Proto, SymKind, SymbolTable, Type, render}
 import fixed.util.{DiagCode, Diagnostic, Severity, Span}
 
-/** Threaded typer state (`docs/plans/phase-3-typer.md` §3.4): the type side table keyed by tree
-  * (§3.0 span-as-identity), the symbol table (local bindings join it), the unifier and the
-  * diagnostics so far (newest first).
+/** A tree's identity in the type side table: its span and node class (§3.0 span-as-identity).
+  * Cheap to hash, unlike the tree itself, whose structural hash walks the whole subtree.
+  */
+final case class TreeKey(start: Int, end: Int, node: Class[?])
+
+object TreeKey:
+  def of(tree: Tree): TreeKey = TreeKey(tree.span.start, tree.span.end, tree.getClass)
+
+/** Threaded typer state (`docs/plans/phase-3-typer.md` §3.4): the type side table, the symbol
+  * table (local bindings join it), the unifier and the diagnostics so far (newest first).
   */
 final case class TyperState(
-    types: Map[Tree, Type],
+    types: Map[TreeKey, Type],
     symbols: SymbolTable,
     unifier: Unifier,
     diags: List[Diagnostic]
 ):
-  def record(tree: Tree, t: Type): TyperState = copy(types = types.updated(tree, t))
+  def record(tree: Tree, t: Type): TyperState = copy(types = types.updated(TreeKey.of(tree), t))
 
+  /** The recorded type of `tree`. */
+  def typeOf(tree: Tree): Option[Type] = types.get(TreeKey.of(tree))
+
+  /** Report an error once: a prototype re-checked by an enclosing node repeats the same finding. */
   def error(code: DiagCode, span: Span, message: String): TyperState =
-    copy(diags = Diagnostic(Severity.Error, code, span, message) :: diags)
+    val d = Diagnostic(Severity.Error, code, span, message)
+    if diags.contains(d) then this else copy(diags = d :: diags)
+
+  /** A construct the typer does not handle yet (`T005`): a gap in the typer, not in the program. */
+  def unsupported(span: Span, what: String): TyperState =
+    copy(diags = Diagnostic(Severity.Warning, DiagCode.T005, span, s"$what is not supported by the typer yet") :: diags)
 
   /** Default unsolved literal variables, zonk every recorded type and order the diagnostics. */
   def finish: TyperState =
@@ -33,7 +49,6 @@ object TyperState:
   */
 object Typer:
 
-  private val numericPrims = Set("i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64")
   private val i64 = Type.PrimType("i64")
   private val f64 = Type.PrimType("f64")
   private val bool = Type.PrimType("bool")
@@ -57,7 +72,11 @@ object Typer:
       case Trees.Block(stmts, _)             => typedBlock(s, stmts, pt)
       case t: Trees.LetExpr                  => (typedLet(s, t)._1, Type.UnitType)
       case _: Trees.Error | _: Trees.Missing => (s, Type.NeverType)
-      case other => (s.error(DiagCode.T005, other.span, "not supported by the typer yet"), Type.NeverType)
+      case t: Trees.IfExpr                   => typedIf(s, t, pt)
+      case t: Trees.LambdaExpr               => typedLambda(s, t, pt)
+      case t: Trees.MethodCall               => typedMethodCall(s, t)
+      case t: Trees.StaticCall               => typedStaticCall(s, t, pt)
+      case other => (s.unsupported(other.span, other.getClass.getSimpleName), Type.NeverType)
     (check(s1, tree.span, t, pt).record(tree, t), t)
 
   /** Reconcile an inferred type with the prototype. */
@@ -84,20 +103,7 @@ object Typer:
     val (u, v) = s.unifier.fresh(numeric = true, default = Some(default))
     (s.copy(unifier = u), v)
 
-  /** A primitive numeric type, or a type variable whose bound names `Numeric`. Transitive
-    * `extends Numeric` joins with capability closure (M6).
-    */
-  private def isNumeric(s: TyperState, t: Type): Boolean =
-    t match
-      case Type.PrimType(n)    => numericPrims(n)
-      case Type.TypeRef(id, _) =>
-        s.symbols(id).info match
-          case Type.IsBound(bs) => bs.exists {
-              case Type.CapRef(c, _) => s.symbols(c).name == "Numeric"
-              case _                 => false
-            }
-          case _ => false
-      case _ => false
+  private def isNumeric(s: TyperState, t: Type): Boolean = Members.isNumeric(s, t)
 
   private def typedIdent(s: TyperState, name: String, span: Span)(using ctx: Context): (TyperState, Type) =
     ctx.scope.get(name) match
@@ -106,36 +112,8 @@ object Typer:
         val d = s.symbols(id)
         d.kind match
           case SymKind.ValueParam | SymKind.Local => (s, d.info)
-          case SymKind.Fn                         => instantiate(s, id, d.info)
+          case SymKind.Fn                         => Members.instantiate(s, d.info, Members.Subst(Map.empty, Set(id)))
           case _ => (s.error(DiagCode.T008, span, s"$name is not a value"), Type.NeverType)
-
-  /** Replace the type variables a function's signature introduced with fresh unification variables. */
-  private def instantiate(s: TyperState, fn: SymbolId, t: Type): (TyperState, Type) =
-    val params = typeParams(s, fn, t).distinct
-    val (u, fresh) = params.foldLeft((s.unifier, Map.empty[SymbolId, Type])) { case ((u0, m), p) =>
-      val (u1, v) = u0.fresh(numeric = isNumeric(s, Type.TypeRef(p, Nil)), default = None)
-      (u1, m.updated(p, v))
-    }
-    (s.copy(unifier = u), substitute(t, fresh))
-
-  private def typeParams(s: TyperState, fn: SymbolId, t: Type): List[SymbolId] =
-    t match
-      case Type.TypeRef(id, args) =>
-        val own = if s.symbols(id).kind == SymKind.TypeParam && s.symbols(id).owner == fn then List(id) else Nil
-        own ++ args.flatMap(typeParams(s, fn, _))
-      case Type.ArrowType(l, r, _) => typeParams(s, fn, l) ++ typeParams(s, fn, r)
-      case Type.TupleType(ts)      => ts.flatMap(typeParams(s, fn, _))
-      case Type.CapRef(_, args)    => args.flatMap(typeParams(s, fn, _))
-      case _                       => Nil
-
-  private def substitute(t: Type, m: Map[SymbolId, Type]): Type =
-    t match
-      case Type.TypeRef(id, Nil) if m.contains(id) => m(id)
-      case Type.TypeRef(id, args)                  => Type.TypeRef(id, args.map(substitute(_, m)))
-      case Type.ArrowType(l, r, fx)                => Type.ArrowType(substitute(l, m), substitute(r, m), fx)
-      case Type.TupleType(ts)                      => Type.TupleType(ts.map(substitute(_, m)))
-      case Type.CapRef(id, args)                   => Type.CapRef(id, args.map(substitute(_, m)))
-      case other                                   => other
 
   private def typedAll(s: TyperState, trees: List[Tree])(using Context): (TyperState, List[Type]) =
     val (s1, acc) = trees.foldLeft((s, List.empty[Type])) { case ((si, acc0), t) =>
@@ -175,23 +153,96 @@ object Typer:
 
   private def typedApply(s: TyperState, t: Trees.Apply)(using Context): (TyperState, Type) =
     val (s1, fnType) = typedExpr(s, t.fn, Proto.Wildcard)
-    s1.unifier.resolve(fnType) match
+    applyArgs(s1, fnType, Some(t.args), t.span)
+
+  /** Apply a function type to `args`; `None` is a member selected without `(...)`, which reads a
+    * zero-parameter member.
+    */
+  private def applyArgs(s: TyperState, fnType: Type, args: Option[List[Tree]], span: Span)(using
+      Context
+  ): (TyperState, Type) =
+    (s.unifier.resolve(fnType), args) match
+      case (Type.ArrowType(Type.UnitType, rhs, _), None) => (s, rhs)
+      case (other, None)                                 => (s, other)
+      case (Type.ArrowType(lhs, rhs, _), Some(as))       =>
+        val params = Members.params(lhs)
+        if params.size != as.size then
+          (s.error(DiagCode.T006, span, s"expected ${params.size} argument(s), got ${as.size}"), rhs)
+        else (params.zip(as).foldLeft(s) { case (si, (p, a)) => typedExpr(si, a, Proto.ExpectedType(p))._1 }, rhs)
+      case (Type.NeverType, _) => (s, Type.NeverType)
+      case (other, _)          => (s.error(DiagCode.T007, span, s"${show(s, other)} is not a function"), Type.NeverType)
+
+  /** `if c: a else: b` — `c` is `bool`; both branches meet the prototype (or the first branch's type). */
+  private def typedIf(s: TyperState, t: Trees.IfExpr, pt: Proto)(using Context): (TyperState, Type) =
+    val (s1, _) = typedExpr(s, t.cond, Proto.ExpectedType(bool))
+    val (s2, thenType) = typedExpr(s1, t.thenBranch, pt)
+    val elseProto = pt match
+      case Proto.Wildcard => Proto.ExpectedType(thenType)
+      case expected       => expected
+    (typedExpr(s2, t.elseBranch, elseProto)._1, thenType)
+
+  /** A lambda. Against an expected function type of the same arity, parameters take its parameter
+    * types and the body its result type; otherwise they are fresh variables.
+    */
+  private def typedLambda(s: TyperState, t: Trees.LambdaExpr, pt: Proto)(using ctx: Context): (TyperState, Type) =
+    val expected = pt match
+      case Proto.ExpectedType(e) => s.unifier.resolve(e)
+      case Proto.Wildcard        => Type.NeverType
+    val (expectedParams, expectedResult) = expected match
       case Type.ArrowType(lhs, rhs, _) =>
-        val params = lhs match
-          case Type.UnitType      => Nil
-          case Type.TupleType(ts) => ts
-          case single             => List(single)
-        if params.size != t.args.size then
-          (s1.error(DiagCode.T006, t.span, s"expected ${params.size} argument(s), got ${t.args.size}"), rhs)
-        else
-          val s2 = params.zip(t.args).foldLeft(s1) { case (si, (p, a)) => typedExpr(si, a, Proto.ExpectedType(p))._1 }
-          (s2, rhs)
-      case Type.NeverType => (s1, Type.NeverType)
-      case other          =>
-        (
-          s1.error(DiagCode.T007, t.fn.span, s"${s1.symbols.render(s1.unifier.zonk(other))} is not a function"),
-          Type.NeverType
-        )
+        val ps = Members.params(lhs)
+        (Option.when(ps.size == t.params.size)(ps), Some(rhs))
+      case _ => (None, None)
+    val (s1, inner, paramTypes) = t.params.zipWithIndex.foldLeft((s, ctx, List.empty[Type])) {
+      case ((si, ci, acc), (p, i)) =>
+        val (si1, declared) = expectedParams.map(_(i)) match
+          case Some(e) => (si, e)
+          case None    =>
+            val (u, v) = si.unifier.fresh(numeric = false, default = None)
+            (si.copy(unifier = u), v)
+        val si2 = p.typeAnn.fold(si1) { ann =>
+          val (table, annotated, diags) = Namer.translate(si1.symbols, ci.scope, ci.owner, ann)
+          unify(si1.copy(symbols = table, diags = diags.reverse ++ si1.diags), p.span, annotated, declared)
+        }
+        val (table, id) = si2.symbols.enter(p.name, ci.owner, SymKind.Local, declared, p.span)
+        (si2.copy(symbols = table).record(p, declared), ci.bind(p.name, id), acc :+ declared)
+    }
+    val bodyProto = expectedResult.fold(Proto.Wildcard)(Proto.ExpectedType(_))
+    val (s2, bodyType) = typedExpr(s1, t.body, bodyProto)(using inner)
+
+    /** The body was already checked against an expected result; report its mismatch once. */
+    val result = expectedResult.getOrElse(bodyType)
+    (s2, Type.ArrowType(Members.product(paramTypes), result, fixed.core.EffectRow.empty))
+
+  /** `recv.m(args)` / `recv.m`: an instance member of the receiver's type. */
+  private def typedMethodCall(s: TyperState, t: Trees.MethodCall)(using Context): (TyperState, Type) =
+    val (s1, recv) = typedExpr(s, t.receiver, Proto.Wildcard)
+    s1.unifier.resolve(recv) match
+      case Type.NeverType  => (s1, Type.NeverType)
+      case _: Type.TypeVar => (s1.unsupported(t.span, s"`.${t.method}` on a receiver of unknown type"), Type.NeverType)
+      case resolved        =>
+        Members.instance(s1, resolved, t.method) match
+          case Some((s2, member)) => applyArgs(s2, member, t.args, t.span)
+          case None               =>
+            (s1.error(DiagCode.T001, t.span, s"not found: member ${t.method} of ${show(s1, resolved)}"), Type.NeverType)
+
+  /** `T.m(args)` / `T.m`: an effect operation, a data constructor or derived `unfold`. */
+  private def typedStaticCall(s: TyperState, t: Trees.StaticCall, pt: Proto)(using ctx: Context): (TyperState, Type) =
+    ctx.scope.get(t.qualifier) match
+      case None        => (s.error(DiagCode.T001, t.span, s"not found: ${t.qualifier}"), Type.NeverType)
+      case Some(owner) =>
+        val layer = pt match
+          case Proto.ExpectedType(e) =>
+            s.unifier.resolve(e) match
+              case l: Type.Layer => Some(l)
+              case _             => None
+          case Proto.Wildcard => None
+        val kind = s.symbols(owner).kind
+        Members.static(s, owner, t.method, layer) match
+          case Some((s1, member))                                     => applyArgs(s1, member, t.args, t.span)
+          case None if kind == SymKind.Effect || kind == SymKind.Data =>
+            (s.error(DiagCode.T001, t.span, s"not found: ${t.qualifier}.${t.method}"), Type.NeverType)
+          case None => (s.unsupported(t.span, s"`${t.qualifier}.${t.method}`"), Type.NeverType)
 
   /** Statements in order; `let` extends the scope of what follows. The block's type is its last
     * expression's, or `()` when it ends in a `let` or is empty.
@@ -231,4 +282,4 @@ object Typer:
         val tuple = Type.TupleType(vars.reverse)
         val s1 = unify(s.copy(unifier = u), span, tuple, t).record(pat, tuple)
         elems.zip(vars.reverse).foldLeft((s1, ctx)) { case ((si, ci), (p, v)) => bindPattern(si, p, v)(using ci) }
-      case other => (s.error(DiagCode.T005, other.span, "pattern not supported in let yet"), ctx)
+      case other => (s.unsupported(other.span, "this let pattern"), ctx)

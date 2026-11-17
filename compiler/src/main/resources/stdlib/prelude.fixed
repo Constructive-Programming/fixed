@@ -1,0 +1,117 @@
+// The standard prelude: signature-only declarations, in scope in every
+// compilation unit (spec/stdlib.md). Bodies arrive with the Phase 5 stdlib.
+// `String` itself is built into the Namer: it has no variants to declare.
+
+data List of A:
+    Cons(head: A, tail: List of A)
+    Nil
+
+data Json:
+    Null
+    Bool(value: bool)
+    Number(value: f64)
+    String(value: String)
+    Array(elements: is Sequencing of Json)
+    Object(fields: is Map of (String, Json))
+
+data Tuple of (A, B):
+    Tuple(first: A, second: B)
+
+data Nat:
+    Zero
+    Succ(pred: Nat)
+
+cap Functor:
+    fn map(f: Part -> B) -> Self of B
+
+cap Folding:
+    fn fold(init: R, f: (R, Part) -> R) -> R
+    fn fold_right(init: R, f: (Part, R) -> R) -> R
+
+cap Sequencing:
+    fn head -> is Optional of Part
+    fn tail -> Self
+    Self.fn cons(h: Part, t: Self) -> Self
+
+cap Filtering:
+    fn filter(pred: Part -> bool) -> Self
+
+cap Empty:
+    Self.fn empty -> Self
+
+cap Sized of (Part, Size is Numeric):
+    fn size -> Size
+
+cap Map of (K, V):
+    fn get(key: K) -> is Optional of V
+
+cap Optional extends Functor + Folding:
+    Self.fn some(value: Part) -> Self
+    Self.fn none -> Self
+    fn fold(on_some: Part -> R, on_none: () -> R) -> R
+
+cap Result of (E, A):
+    Self.fn ok(value: A) -> Self
+    Self.fn err(error: E) -> Self
+    fn fold(on_ok: A -> R, on_err: E -> R) -> R
+
+cap Pair of (A, B):
+    Self.fn pair(a: A, b: B) -> Self
+    fn first -> A
+    fn second -> B
+
+cap Ordering:
+    Self.fn lt -> Self
+    Self.fn eq -> Self
+    Self.fn gt -> Self
+    fn fold(on_lt: () -> R, on_eq: () -> R, on_gt: () -> R) -> R
+
+cap Boolean:
+    Self.fn yes -> Self
+    Self.fn no -> Self
+    fn fold(on_yes: () -> R, on_no: () -> R) -> R
+
+cap Eq:
+    fn eq(other: Self) -> bool
+
+cap Ord extends Eq:
+    fn compare(other: Self) -> is Ordering
+
+cap Numeric extends Eq + Ord:
+    Self.fn from_i64(n: i64) -> Self
+
+cap Show:
+    fn show -> String
+
+cap Clone:
+    fn clone -> Self
+
+cap Concat:
+    fn concat(other: Self) -> Self
+
+effect Fail of E:
+    fn fail(error: E) -> !
+
+String satisfies Show
+String satisfies Concat
+String satisfies Eq
+String satisfies Ord
+List satisfies Folding
+List satisfies Functor
+List satisfies Filtering
+Json satisfies Show
+Json satisfies Eq
+Tuple satisfies Pair
+bool satisfies Show
+bool satisfies Eq
+char satisfies Show
+i8 satisfies Show
+i16 satisfies Show
+i32 satisfies Show
+i64 satisfies Show
+u8 satisfies Show
+u16 satisfies Show
+u32 satisfies Show
+u64 satisfies Show
+f32 satisfies Show
+f64 satisfies Show

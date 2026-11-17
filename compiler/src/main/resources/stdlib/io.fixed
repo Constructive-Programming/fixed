@@ -1,0 +1,9 @@
+// std.io: signature-only declarations, in scope through `use std.io.<Name>`.
+
+effect Console:
+    fn print_line(line: String) -> ()
+    fn read_line -> String
+
+effect FileSystem:
+    fn read_file(path: String) -> String
+    fn write_file(path: String, content: String) -> ()

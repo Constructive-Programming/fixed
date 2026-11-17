@@ -17,10 +17,10 @@ class TyperSuite extends munit.FunSuite:
     val rep = new Reporter(src)
     val tree = new Parser(new Scanner(src, rep), rep).parseExpr()
     assert(!rep.hasErrors, rep.formatAll)
-    given Context = Context(table.topLevelScope, SymbolId.Root)
+    given Context = Context(table.scope, SymbolId.Root)
     val (s, _) = Typer.typedExpr(TyperState(table), tree, Proto.Wildcard)
     val done = s.finish
-    (done, tree, done.symbols.render(done.types(tree)))
+    (done, tree, done.symbols.render(done.typeOf(tree).get))
 
   private def codes(s: TyperState): List[DiagCode] = s.diags.map(_.code)
 
@@ -29,8 +29,8 @@ class TyperSuite extends munit.FunSuite:
     assertEquals(t, "i64")
     tree match
       case Trees.BinOp(Trees.BinOperator.Add, l, r, _) =>
-        assertEquals(s.types(l), s.types(tree))
-        assertEquals(s.types(r), s.types(tree))
+        assertEquals(s.typeOf(l), s.typeOf(tree))
+        assertEquals(s.typeOf(r), s.typeOf(tree))
       case other => fail(s"unexpected tree $other")
 
   test("literals default per kind; tuples and logic"):
@@ -61,9 +61,9 @@ class TyperSuite extends munit.FunSuite:
         items.collect { case f: Trees.FnDecl => f }.last match
           case f => (f, f.body.getOrElse(fail("no body")))
       case other => fail(s"unexpected $other")
-    val fnId = table.topLevelScope(fn.name)
+    val fnId = table.scope(fn.name)
     val params = table.denotations.filter(d => d.owner == fnId).map(d => d.name -> d.id)
-    given Context = Context(table.topLevelScope ++ params, fnId)
+    given Context = Context(table.scope ++ params, fnId)
     val (st, ty) = Typer.typedExpr(TyperState(table), body, Proto.Wildcard)
     val done = st.finish
     (done, done.symbols.render(done.unifier.zonk(ty)))
@@ -87,3 +87,45 @@ class TyperSuite extends munit.FunSuite:
     assertEquals(codes(s1), List(DiagCode.T002))
     val (s2, _) = typedBody("fn f(x: u64) -> u64 = x(1)\n")
     assertEquals(codes(s2), List(DiagCode.T007))
+
+  /** Index and body-type a whole unit, as `TyperPhase` does. */
+  private def typedUnit(code: String): TyperState =
+    val unit = Parser.parse(SourceFile.fromString("<unit>", code))
+    assert(!unit.hasErrors, unit.diagnostics)
+    val (table, namerDiags) = Namer.index(unit.tree)
+    assertEquals(namerDiags, Nil)
+    TyperPhase.typeBodies(unit.tree, table)
+
+  test("M4: lambdas take parameter types from the expected function type"):
+    val s = typedUnit("fn apply(f: u64 -> u64, x: u64) -> u64 = f(x)\nfn g() -> u64 = apply((n) -> n * 2, 3)\n")
+    assertEquals(s.diags, Nil)
+    assertEquals(
+      codes(typedUnit("fn apply(f: u64 -> u64, x: u64) -> u64 = f(x)\nfn g() -> u64 = apply((n) -> \"s\", 3)\n")),
+      List(DiagCode.T002)
+    )
+
+  test("M4: if/else branches agree; the condition is bool"):
+    assertEquals(typedUnit("fn f(x: u64) -> u64 =\n    if x > 1: x else: 0\n").diags, Nil)
+    assertEquals(codes(typedUnit("fn f(x: u64) -> u64 =\n    if x: x else: 0\n")), List(DiagCode.T002))
+
+  test("M4: members through satisfies, fields of single-variant data, and effect operations"):
+    val s = typedUnit(
+      "use std.io.Console\nfn f(n: u64, p: Tuple of (u64, String)) -> () with Console =\n    Console.print_line(n.show().concat(p.second))\n"
+    )
+    assertEquals(s.diags, Nil)
+    assertEquals(codes(typedUnit("fn f(n: u64) -> String = n.nope()\n")), List(DiagCode.T001))
+
+  test("M4: derived unfold steps build layers; derived fold takes one function per variant"):
+    val s = typedUnit(
+      "fn depth(n: u64) -> u64 =\n    Nat.unfold(n, (k) ->\n        if k == 0: Nat.Zero\n        else: Nat.Succ(k - 1)\n    ).fold(() -> 0, (d) -> d + 1)\n"
+    )
+    assertEquals(s.diags, Nil)
+    val bad =
+      typedUnit("fn bad(n: u64) -> u64 =\n    Nat.unfold(n, (k) -> Nat.Succ(\"x\")).fold(() -> 0, (d) -> d + 1)\n")
+    assertEquals(codes(bad), List(DiagCode.T002))
+
+  test("M4: a wrong argument inside 01_basics-style code is caught"):
+    val s = typedUnit(
+      "use std.io.Console\nfn greet(name: String) -> () with Console =\n    Console.print_line(\"Hi \".concat(name))\nfn main() -> () with Console =\n    greet(42)\n"
+    )
+    assertEquals(codes(s), List(DiagCode.T002))

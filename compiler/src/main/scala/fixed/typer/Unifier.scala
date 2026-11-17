@@ -32,14 +32,15 @@ final case class Unifier(bindings: IntMap[Type], numericVars: Set[Int], defaults
   /** `t` with every bound variable replaced, recursively. */
   def zonk(t: Type): Type =
     resolve(t) match
-      case Type.ArrowType(l, r, fx) => Type.ArrowType(zonk(l), zonk(r), fx)
-      case Type.TupleType(ts)       => Type.TupleType(ts.map(zonk))
-      case Type.TypeRef(sym, args)  => Type.TypeRef(sym, args.map(zonk))
-      case Type.CapRef(sym, args)   => Type.CapRef(sym, args.map(zonk))
-      case Type.IsBound(bs)         => Type.IsBound(bs.map(zonk))
-      case Type.CapType(r)          => Type.CapType(r.map(zonk))
-      case Type.SelfType(of)        => Type.SelfType(of.map(zonk))
-      case other                    => other
+      case Type.ArrowType(l, r, fx)  => Type.ArrowType(zonk(l), zonk(r), fx)
+      case Type.TupleType(ts)        => Type.TupleType(ts.map(zonk))
+      case Type.TypeRef(sym, args)   => Type.TypeRef(sym, args.map(zonk))
+      case Type.CapRef(sym, args)    => Type.CapRef(sym, args.map(zonk))
+      case Type.IsBound(bs)          => Type.IsBound(bs.map(zonk))
+      case Type.CapType(r)           => Type.CapType(r.map(zonk))
+      case Type.SelfType(of)         => Type.SelfType(of.map(zonk))
+      case Type.Layer(d, args, seed) => Type.Layer(d, args.map(zonk), zonk(seed))
+      case other                     => other
 
   /** Solve every still-unbound literal variable to its default. */
   def applyDefaults: Unifier =
@@ -72,6 +73,8 @@ final case class Unifier(bindings: IntMap[Type], numericVars: Set[Int], defaults
       case (Type.TupleType(xs), Type.TupleType(ys)) if xs.size == ys.size => unifyAll(xs, ys, numeric)
       case (Applied(k1, s1, xs), Applied(k2, s2, ys)) if k1 == k2 && s1 == s2 && xs.size == ys.size =>
         unifyAll(xs, ys, numeric)
+      case (Type.Layer(d1, xs, s1), Type.Layer(d2, ys, s2)) if d1 == d2 && xs.size == ys.size =>
+        unifyAll(xs :+ s1, ys :+ s2, numeric)
       case (x, y) if x == y => Right(this)
       case _                => Left(())
 
@@ -98,12 +101,13 @@ final case class Unifier(bindings: IntMap[Type], numericVars: Set[Int], defaults
 
   private def occurs(id: Int, t: Type): Boolean =
     resolve(t) match
-      case Type.TypeVar(other)     => other == id
-      case Type.ArrowType(l, r, _) => occurs(id, l) || occurs(id, r)
-      case Type.TupleType(ts)      => ts.exists(occurs(id, _))
-      case Type.TypeRef(_, args)   => args.exists(occurs(id, _))
-      case Type.CapRef(_, args)    => args.exists(occurs(id, _))
-      case _                       => false
+      case Type.TypeVar(other)       => other == id
+      case Type.ArrowType(l, r, _)   => occurs(id, l) || occurs(id, r)
+      case Type.TupleType(ts)        => ts.exists(occurs(id, _))
+      case Type.TypeRef(_, args)     => args.exists(occurs(id, _))
+      case Type.CapRef(_, args)      => args.exists(occurs(id, _))
+      case Type.Layer(_, args, seed) => args.exists(occurs(id, _)) || occurs(id, seed)
+      case _                         => false
 
 /** `TypeRef` and `CapRef` as one shape: (is a cap, symbol, arguments). */
 private object Applied:

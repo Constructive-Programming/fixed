@@ -11,9 +11,11 @@ class NamerSuite extends munit.FunSuite:
     assert(!parsed.hasErrors, parsed.diagnostics)
     Namer.index(parsed.tree)
 
-  /** Every non-prelude symbol as `(name, kind, signature)`, in entry order. */
+  /** Every symbol outside the stdlib as `(name, kind, signature)`, in entry order. */
   private def triples(table: SymbolTable): List[(String, SymKind, String)] =
-    table.denotations.filter(_.owner != SymbolId.Prelude).map(d => (d.name, d.kind, table.render(d.info)))
+    def stdlib(owner: SymbolId): Boolean =
+      owner == SymbolId.Prelude || (owner != SymbolId.Root && stdlib(table(owner).owner))
+    table.denotations.filterNot(d => stdlib(d.owner)).map(d => (d.name, d.kind, table.render(d.info)))
 
   private def indexString(code: String) = index(SourceFile.fromString("<test>", code))
 
@@ -23,7 +25,6 @@ class NamerSuite extends munit.FunSuite:
     assertEquals(
       triples(table),
       List(
-        ("Console", SymKind.Import, "()"),
         ("greet", SymKind.Fn, "String -> () with Console"),
         ("fib_iter", SymKind.Fn, "N -> N"),
         ("print_fibs", SymKind.Fn, "u64 -> () with Console"),
@@ -72,3 +73,16 @@ class NamerSuite extends munit.FunSuite:
   test("unknown capabilities and effects are T001; duplicate definitions are T003"):
     val (_, diags) = indexString("fn f(x: is Nope) -> () with Nada = ()\nfn f() -> () = ()\n")
     assertEquals(diags.map(_.code), List(DiagCode.T003, DiagCode.T001, DiagCode.T001))
+
+  test("use std.io.X binds the stdlib declaration; unknown modules stay opaque imports"):
+    val (table, diags) = indexString("use std.io.Console\nuse acme.Widget\n")
+    assertEquals(diags, Nil)
+    assertEquals(table(table.scope("Console")).kind, SymKind.Effect)
+    assertEquals(table(table.scope("Widget")).kind, SymKind.Import)
+    assert(!table.scope.contains("FileSystem"))
+
+  test("satisfies declarations are recorded by type name"):
+    val (table, diags) = indexString("data Maybe of A:\n    Just(value: A)\n    Nothing\nMaybe satisfies Optional\n")
+    assertEquals(diags, Nil)
+    assertEquals(table.satisfies("Maybe").map(table.render), List("Optional"))
+    assert(table.satisfies("u64").map(table.render).contains("Show"))
