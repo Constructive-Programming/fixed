@@ -118,9 +118,9 @@ object Members:
 
   /** Every instance member `name` on `recv`, best first: a data type's own field, then its
     * capabilities, then its derived `fold`. Calls with several candidates pick by argument shape.
+    * `resolved` is the receiver's type with its variable already resolved.
     */
-  def candidates(s: TyperState, recv: Type, name: String): List[Candidate] =
-    val resolved = s.unifier.resolve(recv)
+  def candidates(s: TyperState, resolved: Type, name: String): List[Candidate] =
     val own: List[Candidate] = resolved match
       case Type.TupleType(ts) =>
         s.symbols.scope.get("Tuple").toList.flatMap(t => candidates(s, Type.TypeRef(t, ts), name))
