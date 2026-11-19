@@ -1,8 +1,12 @@
 # Fixed Properties
 
-**Status:** Draft v0.2.1
+**Status:** Draft v0.2.2
 **Specifies:** `prop` declarations, `forall` / `implies` / `suchThat` constructs, the verification strategy (static-then-PBT), property-based test generation, and how verified properties feed compiler optimization for Fixed v0.4.5 source.
-**Last revised:** 2026-05-01
+**Last revised:** 2026-11-19
+
+**Changes from v0.2.1.**
+- **Verification status** (new Rule P7.7). Every accepted prop carries one of three statuses: `proved`, `tested` or `assumed`. `fixed verify` reports the count of each in one verdict line, and the new `--require-proved` flag rejects a build that has any prop below `proved`.
+- **§9 restricted to `proved` props.** v0.2.1 let a prop accepted by PBT become a compiler assumption, and its examples (binary search, bounds-check elision, unchecked arithmetic) change program behaviour when the prop is false. That was unsound. Only `proved` props now license an optimisation whose correctness depends on the prop.
 
 **Changes from v0.2.**
 - **Function-result postconditions deferred** (re-opens OQ7 from `spec/type_system.md`). The §3.3 mechanism — a `prop` declaration at the top of a fn body, with `result` as an implicit binder for the return value — is removed from v0.4.5. Postconditions are reserved for a future release if user demand emerges. The grammar still admits `PropDecl` as an `Expr` alternative because refinement-cap fn bodies (§3.4) require it; the typer rejects `prop` declarations inside non-cap-returning fn bodies. OQ-P5 is moot under this deferral.
@@ -285,7 +289,7 @@ For each `prop`, the compiler attempts:
 1. **Static proof.** Submit the prop to the static prover (typically an SMT solver — choice deferred to OQ-P1) with a bounded time budget (default 5 seconds per prop, configurable).
 2. **PBT fallback.** If the static prover reports `unknown` (no proof, no counterexample) or times out, run PBT (§8) for at least 100 non-discarded iterations.
 3. **Failure path.** If the static prover reports `falsified` (a counterexample exists) OR PBT finds a counterexample, emit `error[E102]: prop failed: <name>` with the counterexample and a copy-pasteable test snippet.
-4. **Success path.** If the static prover reports `proved` OR PBT runs to completion without counterexample, the prop is accepted and recorded as a verified compiler assumption (§9).
+4. **Success path.** If the static prover reports `proved` OR PBT runs to completion without counterexample, the prop is accepted and its **verification status** is recorded (Rule P7.7). Only a `proved` prop becomes a compiler assumption (§9).
 
 ### 7.2 Static proof obligations (Rule P7.2)
 
@@ -313,7 +317,7 @@ The cache key for each prop is the tuple of:
 - The configured PBT iteration count and time budget (Rule P7.6 below).
 - The prover version / SMT solver version (so prover upgrades invalidate cache).
 
-A cache hit skips both static proof and PBT entirely. A cache miss runs the full verification. Cache invalidation occurs when any key component changes.
+A cached result stores the prop's verification status (Rule P7.7). A cache hit skips both static proof and PBT entirely. A cache miss runs the full verification. Cache invalidation occurs when any key component changes.
 
 This rule is **implementation guidance**, not a normative requirement: a conformant compiler may run verification fresh every time. Caching is strongly recommended for development ergonomics — without it, every full build re-runs PBT iterations on every prop, which is unacceptably slow at scale.
 
@@ -335,10 +339,35 @@ The user controls verification behavior via the following flags on `fixed verify
 | `--prop-timeout=Ts` | Override default total time budget per prop (default: 30s). |
 | `--prop-discard-threshold=R` | Override the discard-rate guard (Rule P5.4.d, default 0.9 — i.e., 90%). |
 | `--no-prop-cache` | Disable the verification cache (Rule P7.4). Forces fresh verification on every invocation. Useful for debugging cache invalidation issues. |
+| `--require-proved` | Treat every prop whose status is `tested` or `assumed` (Rule P7.7) as `error[E106]: prop <name> is not proved (status: <status>)`. For builds where an untested or merely tested invariant must block. |
 
 `--no-pbt` is mutually exclusive with `--strict-pbt`; combining them is a CLI usage error.
 
 When `--no-pbt` is set, props requiring PBT are not verified. The compiler emits W107 warnings for each. The compiled artifact still excludes prop bodies (per §4.1) — the only effect is that the *verification step* is skipped.
+
+### 7.7 Verification status (Rule P7.7)
+
+Every accepted prop has exactly one **verification status**:
+
+| Status | How a prop gets it | What it guarantees |
+|---|---|---|
+| `proved` | The static prover reported `proved`. | The prop holds for every value of its binders. |
+| `tested` | The static prover reported `unknown` or timed out, and PBT ran without a counterexample. The record keeps the number of non-discarded iterations, including the reduced count of a `W103` budget overrun. | No counterexample among the generated inputs. The prop may still be false. |
+| `assumed` | Neither the prover nor PBT checked the prop: `--no-pbt` with an `unknown` prover result (`W107`). | Nothing. |
+
+A prop that fails (Rule P7.1 step 3) is an error and has no status.
+
+**Rule P7.7.a (inheritance).** A prop inherited through `extends` (§10) is verified per satisfying type, so its status is recorded per (prop, satisfying type) pair. An override (Rule P10.3) has its own status; proving the override proves the parent's version, because the override implies it.
+
+**Rule P7.7.b (verdict).** `fixed verify` ends with one verdict line giving the count of each status and of failures:
+
+```
+props: 41 proved, 6 tested, 1 assumed, 0 failed
+```
+
+With `--format json` the same counts appear together with one record per prop: name, location, status and, for `tested`, the iteration count. The exit code is `2` when any prop failed, or when `--require-proved` is set and any prop is `tested` or `assumed`.
+
+**Rule P7.7.c (what a status licenses).** Only `proved` props are compiler assumptions (§9). A `tested` or `assumed` prop is still an obligation on satisfying types and still makes a refinement-cap candidate viable (`spec/type_system.md` §6.5.3), but the optimiser must not rely on it.
 
 ## 8. Property-based test generation
 
@@ -396,7 +425,7 @@ The format of this error message follows the project-wide "Agent-Friendly CLI an
 
 ## 9. Verified props as compiler assumptions
 
-A prop verified by either static proof or PBT becomes a **compiler assumption**. This unlocks optimisations:
+A prop with status `proved` (Rule P7.7) becomes a **compiler assumption**. This unlocks optimisations:
 
 ### 9.1 Examples (informational)
 
@@ -407,7 +436,9 @@ A prop verified by either static proof or PBT becomes a **compiler assumption**.
 | `prop in_range: lo <= value <= hi` (Bounded) | Bounds checks at use sites are elided; arithmetic that would have required checked overflow uses unchecked. |
 | `prop positive: Self > 0` | `0 - n` becomes guaranteed-non-negative; `if n > 0` branches compile to unconditional. |
 
-The mechanism: each verified prop annotates the symbol's denotation (per `docs/references/scala3-compiler-reference.md` §4.4) with a *fact* the optimiser may consult. Optimisations are guided by these facts but never depend on them for correctness — a missing fact is simply a missed optimisation.
+The mechanism: each `proved` prop annotates the symbol's denotation (per `docs/references/scala3-compiler-reference.md` §4.4) with a *fact* the optimiser may consult. A missing fact is simply a missed optimisation.
+
+Every optimisation in the table changes what the program does when the prop is false: binary search over an unsorted sequence returns a wrong answer, and an elided bounds check reads out of range. They are therefore available only for `proved` props. A `tested` or `assumed` prop produces no fact. The compiler may use it only for a choice that leaves behaviour unchanged when the prop is false, such as a scoring hint in representation selection.
 
 ### 9.2 `unreachable` discharge (Rule P9.2)
 
@@ -424,7 +455,7 @@ fn median(collection: C is SortedNonEmpty of (N is Numeric)) -> N =
 
 Per `prop non_empty: size > 0` on `NonEmpty`, the typer proves `collection.get(mid)` is `Optional.some(_)` for `mid < size`; the `Optional.none` case is unreachable and the call to `unreachable` is dead code. The compiler emits no runtime check for this case.
 
-PBT-verified props do **not** discharge `unreachable` (PBT is incomplete; a counterexample at runtime would convert dead-code elision into undefined behavior). Only statically-proven props gain this capability.
+`tested` and `assumed` props do **not** discharge `unreachable` (PBT is incomplete; a counterexample at runtime would convert dead-code elision into undefined behavior). Only `proved` props gain this capability, as for every other assumption in this section.
 
 ## 10. Inheritance through `extends`
 
@@ -489,7 +520,7 @@ Verification walk:
 
 - `push_increments` — static prover: with `s` and `x` quantified, `s.push(x)` is a function call whose body is opaque to the prover. Likely `unknown`; PBT runs. Generator: pick a `Self` from a satisfying type's generator (e.g., a `List` or `Vec` that provides `push`); pick a `Part`; check the equality.
 - `pop_decrements` — `suchThat s.size > 0` filters generated stacks at the PBT generator level. Empty stacks are discarded by the driver and never counted toward the iteration budget. The body is then evaluated only on non-empty stacks. Compare to a hypothetical `implies` formulation, where every generated stack would count toward the budget but only non-empty ones would actually exercise the property.
-- `push_pop_identity` — the strongest invariant. PBT with the same generators verifies. If it passes, the optimiser may use this as a peephole: `s.push(x).pop()` ⇒ `s` (eliminating the round-trip).
+- `push_pop_identity` — the strongest invariant. PBT with the same generators verifies, giving the prop status `tested`. The peephole `s.push(x).pop()` ⇒ `s` (eliminating the round-trip) needs status `proved` (Rule P7.7.c), so it is not applied on the strength of PBT alone.
 
 ### 11.2 `Bounded` data type
 
@@ -538,6 +569,6 @@ fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String =
 | `spec/quantities.md` | Rule Q5.5 (prop bodies at quantity 0), Q5.9 / Q5.10 (semiring usage) |
 | `spec/effects.md` | Effects forbidden in props (§4.2 here); linear effects (§3.5 there) as resource-lifecycle alternative to OQ-P6 |
 | `spec/pattern_matching.md` | Rule M6.2 (refinement-aided exhaustiveness) shares prop-evidence machinery |
-| `spec/memory_management.md` | Verified props inform reuse decisions and bounds-check elision |
+| `spec/memory_management.md` | `proved` props (Rule P7.7) inform reuse decisions and bounds-check elision |
 | `docs/references/scala3-compiler-reference.md` | Phase-indexed denotations (§4.4) — verified props annotate symbols |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `caps/PropVerifier.scala`; structured error reporting per the project-wide CLI guidelines |

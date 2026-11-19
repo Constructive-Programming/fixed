@@ -59,6 +59,7 @@ Phase 3 is split into two parts: **Part A — Base typer (M1–M5, this plan)** 
 |---|---|---|---|
 | M6 ✅ | Capability closure (obligations discharged after typing, not a recheck walk) | `phase-3.1-capability-closure.md` | `extends` chain computed; `satisfies` scope resolved at every use site; cross-module coherence per §7.4.1 |
 | M7 ✅ | Effect inference (inline rows, not a recheck; see sub-plan) | `phase-3.2-effects.md` | With-clauses inferred; `do`/`handle` rows propagate; unhandled effect at `main` is `error[T015]` |
+| 4.0 | Naive backend slice. Not a typer milestone; listed here because it runs **before M10** (`implementation-plan.md` Phase 4.0) | `phase-4.0-backend-slice.md` | Examples `01` and `03` plus five benchmark programs compile to LLVM IR and run, everything boxed and reference-counted. `04` and `05` join as their blockers close; `02` and `06` are left out. Gives the baseline that M10 and M11 are measured against |
 | M9 | Property verifier recheck | `phase-3.3-properties.md` | Princess (per §5.6.1) discharges QF_LIA + propositional; rest queued as PBT obligations |
 | M10 | QTT + lifetime recheck | `phase-3.4-qtt.md` | 0/1/ω inference; linearity + erasure check; escape sets, lifetime classes, garbage-free carry, handler kinds, signature facts and `fip` check per `spec/memory_management.md` §20; runs **before** M9 to feed it |
 | M11 | Representation selector recheck | `phase-3.5-repr.md` | `ReprMap` per `spec/type_system.md` §6.5; consumes M6 + M10 (quantities, classes, escape sets); demotes to `Inline`, resolves growable-stack count N and packed copy-out requirements; re-checks abstract `Cap.ctor` calls against the chosen variant's fields (§6.5.6, Rule 8.1.a refinement) |
@@ -501,6 +502,7 @@ The milestone numbering (M6–M11) is the **implementation order** — but execu
 | M7 → M11 | Effect-row info determines whether a fn body needs a continuation slot (handler-clause reentry). |
 | M10 → M9 (PBT branch only) | M9 has two **execution branches** (see §5.6): (a) **static-discharge** — Princess attempts compile-time discharge; the three prop *forms* §5.6 lists (Static-decidable / Compile-time-undecidable / Trivially-false) all enter through this branch and are routed by Princess's reply (`Unsat` / `Unknown` / `Sat`); (b) **PBT-queue** — `Unknown` results are deferred to codegen-time property-based testing. The PBT branch should skip 0-quantity bindings (no runtime PBT for erased terms). The **static-discharge branch runs unconditionally** — a 0-quantity binding can carry a soundness-relevant compile-time prop (e.g. `prop nonneg: phantom-N >= 0`) whose discharge guarantees a type-level invariant even though no runtime value exists. |
 | M10 → M11 | Representation selection elides 0-quantity bindings entirely, scores allocation cost by lifetime class, and resolves the two representation-dependent requirements M10 records (growable-stack count, packed copy-out; `spec/memory_management.md` §20.1). |
+| M9 → M10 (fork site 3 only) | A sequence fold forks only over an operation with `proved` associativity (`spec/quantities.md` Rule Q5.13.a). M10 runs before M9, so it records such folds as fork candidates conditional on the named props and computes their escape facts as if they fork. The candidates become final after M9. Tree folds and unfolds need no props and are final in M10. |
 | M7 → M10 | Lifetime classes need effect rows and handler clause shapes to classify handler installs and continuation escapes (`spec/memory_management.md` §14.1). |
 
 The dependency graph is a DAG. The execution order in the `phases` list above (M6, M7, M10, M9, M11) is one valid topological sort.
@@ -860,7 +862,7 @@ M10 also owns the memory-placement analysis, computed in the same walk as usage 
 
 - **Per binding:** quantity, escape set (`result`, `field(b)`, `closure(c, escapes?)`, `continuation(h, escapes?)`, `carried(loop)`, `lane-shared(fork)`, `unbounded`), lifetime class (`Erased` / `Static` / `Frame(s)` / `Dest(p)` / `Region(r)` / `Heap`; `Inline` is left to M11) and its reason chain.
 - **Per scope:** allocations reset at its end; drop-list registrations.
-- **Per `fold` / `unfold`:** garbage-free carry (Rule MM5.2(b)), checked at constructor and variant level.
+- **Per `fold` / `unfold`:** garbage-free carry (Rule MM5.2(b)), checked at constructor and variant level; fork-site admissibility and, when not admissible, the reason (`spec/quantities.md` Rule Q5.13).
 - **Per cohesive group:** root and members (Rule MM5.4).
 - **Per handler install:** kind (tail-resumptive, abortive, capturing-local, capturing-escaping; Rule MM14.1).
 - **Per function signature:** per parameter quantity, mode (borrowed / owned), escape (`none` / `into-result` / `unbounded`), class-polymorphic or fixed; result destination-polymorphism; stack demand; verified `fip` level (`error[E110]` on a violated `fip fn`).

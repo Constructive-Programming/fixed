@@ -25,7 +25,7 @@ Capabilities *are* predicate functors over the type universe. Cropping = existen
 - **QTT** — Quantitative Type Theory tracks how each value is used: erased (type-level only), linear (used once, no RC), or shared (full RC). This makes dependent types sound with RC and enables guaranteed in-place mutation for linear values. We can consider this a bit of the theory behind both **FBIP (Functional But In-Place)** and the Perceus reference counter.
 - **Evidence passing** — effects compile to efficient evidence-vector lookups, not full delimited continuations.
 
-You will recognize some of these features from [Koka](https://koka-lang.github.io/koka/doc/index.html). Koka is a research language that got several hard things right and Fixed adopts all of them wholesale. The compilation target is C. Memory management is Perceus. Effects are algebraic with evidence passing. FBIP optimizes functional updates.
+You will recognize some of these features from [Koka](https://koka-lang.github.io/koka/doc/index.html). Koka is a research language that got several hard things right and Fixed adopts all of them wholesale. The compilation target is LLVM IR. Memory management is Perceus. Effects are algebraic with evidence passing. FBIP optimizes functional updates.
 
 #### What Fixed changes
 

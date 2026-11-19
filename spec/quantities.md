@@ -1,8 +1,14 @@
 # Fixed Quantities (QTT)
 
-**Status:** Draft v0.2
+**Status:** Draft v0.3
 **Specifies:** quantity inference for Fixed v0.4.4 source.
-**Last revised:** 2026-04-30
+**Last revised:** 2026-11-19
+
+**Changes from v0.2.**
+- New Rule Q5.13 (parallel composition): where the compiler may evaluate parts of a `fold` / `unfold` in parallel lanes, and how quantities compose across lanes. There is no surface syntax; fork sites are found automatically.
+- OQ-Q2 resolved: quantities stay inferred, and a function can demand in-place behaviour with the checked `fip fn` contract (§7.5, `spec/memory_management.md` §18).
+- Placement moved out: quantity decides reference-count traffic only. Where a value lives is its lifetime class (`spec/memory_management.md`, which replaces `spec/perceus.md`).
+- New OQ-Q6 (where associativity props live).
 
 **Changes from v0.1.** Rule Q5.5 reframed: prop bodies are not "checked at quantity 0" — they are *excluded from the compiled artifact*. References inside prop bodies do not contribute to a binding's runtime quantity in the artifact, but PBT (`spec/properties.md` §7) may run prop bodies as code in a separate test build; that build computes its own quantities independently. The semantic effect on the compiled binary is the same as before; the framing now distinguishes *artifact* (program binary) from *test build* (PBT driver).
 
@@ -226,6 +232,34 @@ When a cap method carries a default body (Rule 6.1 in type_system.md), the body'
 
 If a satisfying type provides an explicit `satisfies`-block override (an `InstanceMethodDef`), the default body is not used; quantities are computed entirely from the override.
 
+### 5.13 Parallel composition (Rule Q5.13)
+
+Fixed has no surface syntax for parallelism. The compiler may evaluate independent sub-computations of a `fold` or `unfold` in parallel **lanes**. Write `e1 ∥ … ∥ en` for such a composition in the lowered IR. The memory side (lane stacks, borrowed inputs, disjoint destinations, non-atomic counts) is `spec/memory_management.md` §17.
+
+**Rule Q5.13.a (fork sites).** A parallel composition may be introduced only at one of these sites:
+
+1. **Tree fold.** An auto-derived `fold` (`spec/type_system.md` Rule 7.4.a) at a variant with two or more recursive fields. The sub-folds of those fields are the lanes. Required: every function argument of the `fold` has an empty effect row (`spec/effects.md` §4.3).
+2. **Tree unfold.** An auto-derived `unfold` (Rule 7.4.b) whose step returns a variant with two or more recursive seeds. The sub-unfolds of those seeds are the lanes. Required: the step has an empty effect row.
+3. **Sequence fold over a proved associative operation.** A `fold(init, step)` over a value with one recursive position, where `step` has the form `(acc, x) -> op(acc, g(x))` with `op: (R, R) -> R`, all effect rows are empty, and props with status `proved` (`spec/properties.md` Rule P7.7) state that `op` is associative and that `init` is its identity. The sequence is split into contiguous runs. Each run is a lane, and the lane results are combined with `op` in sequence order.
+
+Sites 1 and 2 need no props. Each lane computes exactly the sub-result that sequential evaluation computes, and the node function combines the sub-results in the same order. Site 3 changes the association order, so its result differs from the sequential one unless `op` is associative. That is why it needs `proved` props: a `tested` or `assumed` prop does not qualify (Rule P7.7.c). Floating-point addition is the standard case that is rejected: it is not associative, so the prop is never `proved` and the fold stays sequential.
+
+An effect row is a typing fact (`spec/effects.md` §5), not a prop, so "pure" needs no verification status.
+
+**Rule Q5.13.b (quantities across lanes).** Every lane runs, so a free binding's contribution is the **sum** (`+`, §3.1) of its usages over the lanes, as for sequencing (Rule Q5.10):
+
+1. `e1 ∥ e2` gives every binding the same quantity as `e1; e2`. Whether the compiler forks at an admissible site therefore never changes an inferred quantity or any diagnostic of this document.
+2. A quantity-1 binding is used by at most one lane, since `1 + 1 = ω`.
+3. A binding used by two or more lanes is quantity ω. It gets the escape fact `lane-shared(fork)` (`spec/memory_management.md` Rule MM20.1), and the lanes borrow it for the duration of the fork.
+4. The folded value itself: when it is quantity 1, its recursive fields are separate pattern bindings (Rule Q5.8) and each lane consumes exactly one of them, so in-place reuse (§7.2) stays available inside every lane. When it is quantity ω, the lanes borrow it.
+5. Each lane's result is quantity 1 at the join. It is consumed once, by the node function (sites 1 and 2) or by `op` (site 3).
+
+The function arguments of a `fold` are closures that run once per node, so the bindings they capture are already scaled by ω under Rule Q5.7. Forking adds nothing to that.
+
+**Rule Q5.13.c (same result).** A forked evaluation must produce the result of sequential evaluation. Empty effect rows and totality make the order of lanes unobservable. If more than one lane panics (`unreachable`, or an `impossible` mapping per `spec/type_system.md` §8.2), the panic reported is that of the first such lane in sequential order.
+
+**Rule Q5.13.d (the fork decision).** Whether an admissible site actually forks is a cost decision of the compiler and runtime (granularity), observable only as timing. The memory report (`spec/memory_management.md` §19) states for every `fold` / `unfold` whether it is a fork site and, when it is not, the reason: the effect that makes a row non-empty, or the prop that is not `proved` and its status.
+
 ## 6. Erasure (quantity 0)
 
 A quantity-0 binding generates **no runtime code**. The compiler removes it from the runtime AST before code generation.
@@ -301,6 +335,10 @@ handle (do: ... Console.print_line):
 ```
 
 If OQ-Q5 closes the other way (effect rows do not participate in QTT quantity), Rule Q7.4 is withdrawn and Rule Q7.1 applies uniformly to all handler clauses regardless of effect linearity.
+
+### 7.5 Demanding linearity: `fip fn`
+
+Quantities are inferred, so most programs never state one. Inference alone cannot be violated: a binding used twice is simply ω. A function that must run in place states that with the `fip fn` contract (`spec/memory_management.md` §18). The compiler then rejects the function (`error[E110]`) if inference finds an allocation on the heap, a reference-count operation or an unbounded data-stack use. Every parameter such a function reuses must be quantity 1 in its signature (Rule MM18.3), which is where Rule Q7.1 gets a declared obligation to check. This resolves OQ-Q2.
 
 ## 8. Unrestricted (quantity ω)
 
@@ -387,13 +425,15 @@ let result = x.value + x.lo                     // x.value: runtime read; x.lo: 
 
 - **OQ-Q1 — Multi-shot handlers.** Rule Q5.11 fixes `resume` at quantity 1. Real-world non-determinism handlers (probabilistic programming, backtracking, async schedulers with replay) need quantity-ω resume. Lifting requires a continuation representation that survives multiple invocations and a quantity inference that admits `resume` at ω. Defer to v0.5+ when a use case lands.
 
-- **OQ-Q2 — User-declared quantities on parameters.** Rule Q5.2 infers parameter quantities from body usage. Should the user be able to declare `linear` parameters explicitly, both as documentation and as a way to demand FBIP? Trade-off: explicit annotations reduce inference surprise but leak QTT into the surface syntax. Fixed has so far avoided this. Revisit once examples reveal a need.
+- ~~**OQ-Q2 — User-declared quantities on parameters.**~~ Resolved in v0.3. Parameters stay unannotated. The way to demand FBIP is the function-level `fip fn` contract (§7.5), which the compiler checks against the inferred quantities. No quantity appears in the surface syntax.
 
 - **OQ-Q3 — Closure-of-closure quantities.** Rule Q5.7's multiplication composes through one closure layer. For nested closures (a closure that returns a closure that captures the outer scope), the composition is straightforward by induction, but worked examples will reveal corner cases. Add concrete worked examples in v0.2 of this doc once the typer is implemented.
 
 - **OQ-Q4 — Quantity polymorphism.** A truly generic `id : T -> T` could be quantity-polymorphic — the parameter's quantity equals the call site's. Idris 2 has limited quantity polymorphism; Fixed has so far inferred everything. Decision deferred until benchmark code shows the need.
 
 - **OQ-Q5 — Effect operations and quantities.** Effect ops (e.g., `Console.print_line`) currently follow Rule Q5.2. Whether *effect rows* themselves participate in quantity (e.g., a "linear effect" that may be performed at most once) is a separate research question, related to OQ-Q1. The proposed semantics live in `spec/effects.md` §3.5 (re-opened OQ-E5 in v0.2.1) and stand non-normative pending closure of this question.
+
+- **OQ-Q6 — Where associativity props live.** Fork site 3 (Rule Q5.13.a) needs `proved` props that an operation is associative and has an identity. `spec/stdlib.md` has no capability carrying such props today: `Numeric` declares none. Until one exists (a monoid-like capability, or props on `Numeric.add` for the integer types), only tree folds and tree unfolds fork. Whether the static prover can discharge associativity for fixed-width integer arithmetic also depends on OQ-P1.
 
 ## 12. Cross-references
 

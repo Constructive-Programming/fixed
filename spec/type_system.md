@@ -582,7 +582,7 @@ For each viable candidate, compute a **performance score** as a weighted linear 
 - **Locality** — contiguous layouts score higher for fold-heavy use; pointer-chased layouts lose cache lines and amortise across allocator slabs.
 - **PGO hit rate** — when profile data is present, weight the operations the profile shows dominate.
 
-**Normative weights and tie threshold (Rule 6.5.4 — resolves C4).** The default weights for the scoring function are fixed at the spec level for cross-implementation determinism:
+**Provisional weights and tie threshold (Rule 6.5.4 — resolves C4).** The scoring *mechanism* is normative: a weighted sum over the dimensions above, a tie threshold ε, and a Lipschitz bound `K < ε`. The *numeric values* below are **provisional**. They were chosen before any backend or benchmark existed, and adding candidates to the pool (§6.6) is expected to change them. They become normative only once they are calibrated against measured workloads. Until then they are the defaults every implementation uses, for cross-implementation determinism:
 
 | Dimension | Weight | Range of raw score |
 |---|---|---|
@@ -600,7 +600,7 @@ The **Lipschitz bound** on the scoring function is `K ≤ 0.4` per single-bound 
 
 PGO data may override per-call-site (within the per-call instantiation) but never globally; the global default weights and ε remain fixed regardless of profile data.
 
-Implementations are conformant if they (a) use these defaults for unprofiled code and (b) document any per-call-site PGO override that can deviate from them. The weights and ε are subject to revision in future spec versions; programs that depend on a specific representation choice should pin it via explicit type annotation rather than relying on scoring.
+Implementations are conformant if they (a) use these defaults for unprofiled code and (b) document any per-call-site PGO override that can deviate from them. Because the values are provisional, a spec revision may change which candidate wins for a given bound set; programs that depend on a specific representation choice should pin it via explicit type annotation rather than relying on scoring. A revision must keep `K < ε`, so the stability property above survives recalibration.
 
 #### 6.5.5 Pick or halt
 
@@ -639,7 +639,7 @@ Mutually recursive `data` types (§7.5) form a strongly-connected component on t
 #### 6.5.9 Open questions
 
 - **Cross-function rep flow.** A generic function's representation is determined by its signature; concrete reps are monomorphised at each instantiation. Whether two call sites share a monomorphisation is an implementation detail; this spec promises only that selection is consistent within a single function instantiation.
-- ~~**Heuristic stability.**~~ Resolved in v0.4.5 — the Lipschitz bound `K ≤ 0.4 < ε = 0.5` is now part of Rule 6.5.4 (normative weights). Single-bound extensions cannot flip a clear winner.
+- ~~**Heuristic stability.**~~ Resolved in v0.4.5 — the Lipschitz bound `K ≤ 0.4 < ε = 0.5` is now part of Rule 6.5.4 (the requirement `K < ε` is normative; the numeric values are provisional). Single-bound extensions cannot flip a clear winner.
 - **Stack-allocated recursive data** (deferred). Recursive `data` declarations whose `of` value-params are concrete and bound the recursion depth could be added as a sixth built-in candidate (stack-flat struct), competing alongside the heap-allocated co-recursive group. Targeted for v0.5+ once the pass is implemented and the win is measured against a representative workload.
 
 ### 6.6 Built-in representation candidates (resolves OQ4)
@@ -792,7 +792,19 @@ Auto-derived `fold` is the canonical eliminator and the destructuring path for a
 fn unfold<S>(seed: S, step: S -> Self) -> Self
 ```
 
-The compiler iterates `step` until no recursive seeds remain. The combination of `fold` (Rule 7.4.a) and `unfold` enables hylomorphism (`unfold` then `fold`) and the compiler is permitted to fuse the intermediate structure away.
+The compiler iterates `step` until no recursive seeds remain. The combination of `fold` (Rule 7.4.a) and `unfold` enables hylomorphism (`unfold` then `fold`).
+
+**Rule 7.4.b.1 (Guaranteed fusion).** Function recursion is not available (functions are total), so every loop in a Fixed program is a `fold`, and a counted loop is an `unfold` followed by a `fold`. The compiler therefore **must** remove the intermediate structure, with no allocation for it, when all of these hold:
+
+1. The result of an `unfold` (or of a conversion the compiler derives from one, such as `to_nat`) is consumed by exactly one `fold`.
+2. That result has quantity 1 (`spec/quantities.md`): nothing else observes it.
+3. Both calls resolve to auto-derived `fold` / `unfold` (Rules 7.4.a, 7.4.b) after monomorphisation.
+
+Outside this class the compiler is permitted, but not required, to fuse.
+
+**Rule 7.4.b.2 (Guaranteed specialisation).** When an argument of an auto-derived `fold` or `unfold` is a lambda or a statically known function after monomorphisation, the compiler **must** compile the call with that argument inlined: no closure allocation and no indirect call per step.
+
+These two guarantees are part of code generation (`docs/plans/implementation-plan.md` Phase 4), not of profile-guided optimisation.
 
 **Rule 7.4.c (Functor over the rightmost type parameter).** A *named* `data T of (X1, ..., Xn)` declaration is auto-derived as `Functor of Xn` (the **rightmost type parameter** — right-bias convention) iff:
 

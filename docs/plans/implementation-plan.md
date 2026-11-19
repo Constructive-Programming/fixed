@@ -843,6 +843,45 @@ All 11 example programs type-check with correct capability classifications, repr
 
 ---
 
+## Phase 4.0: Naive backend slice (before M10)
+
+Runs after M7 and **before** M10. Fixed's memory model (`spec/memory_management.md` §21) and representation scoring (`spec/type_system.md` §6.5.4, provisional weights) are hypotheses until measured, and nothing can be measured without running code. This slice produces running code and a baseline as cheaply as possible, so that M10, M11 and Phase 4 proper are each judged by what they change in the numbers.
+
+### Scope
+
+Sub-plan: `docs/plans/phase-4.0-backend-slice.md`.
+
+Programs compile to LLVM IR, link and run with correct output. The required set is examples `01` and `03` plus a small set of benchmark programs. Examples `01`–`06` all type-check with no diagnostics (`docs/Phase3Conformance.md`), but `02`, `04`, `05` and `06` cannot run as written: each calls a member that no rule defines yet (sub-plan §3). `04` and `05` join the slice as their blockers close and do not hold up M10. `06` and `02` are left out: `06` pending a decision on `Monad` members for sum data, `02` until M11.
+
+The slice is deliberately naive, and does not conform to the spec's guarantees:
+
+| Concern | Slice behaviour | Replaced by |
+|---|---|---|
+| Quantities | Every binding treated as ω | M10 |
+| Placement | Every boxed value is `Heap` with a header | M10 lifetime classes, Phase 4 region lowering |
+| Reference counting | `dup` at every additional use, `drop` at last use. No reuse, no borrowing | Phase 4 Perceus inserter |
+| Representation | One fixed default per capability classification (the rule table in `phase-3-typer.md` §5.8). No scoring, no packed layouts | M11 |
+| Folds | Closure call per step, intermediate structures allocated. Rules 7.4.b.1 and 7.4.b.2 not implemented | Phase 4 fold specializer |
+| Effects | Runtime effects as direct calls, abortive operations by checked abort. No capturing handlers | Phase 4 evidence passer |
+| Parallelism | None | Phase 4 |
+
+### Deliverables
+
+| Component | Description |
+|---|---|
+| Core IR, minimal monomorphizer and lowering | Only what the required set exercises. Abortive effects by checked abort; no evidence vectors yet |
+| Naive RC inserter | The table above |
+| **LLVM IR emitter** (`backend/EmitLLVM.scala`) and a small runtime (allocation, counts, console) | Kept and extended by Phase 4 |
+| `ExampleRunSuite` | Golden standard output per example for a fixed standard input, plus a leak check (allocations equal frees) |
+| Runtime benchmarks (`bench/runtime/`) | Five programs, each stressing one thing a later milestone claims to improve: binary trees, a counted loop, a list pipeline, a record-heavy workload, an abort-heavy loop (sub-plan §4.9) |
+| Baseline record (`docs/baselines/`) | Per benchmark: wall time, peak resident memory, allocation count, RC operation count. The runtime keeps the two counters |
+
+### Milestone
+
+`ExampleRunSuite` passes for `01` and `03`, and the baseline record is committed (sub-plan milestone 4.0.M5). M10 may start then. Every later milestone that claims a runtime effect reports the same four numbers against the baseline.
+
+---
+
 ## Phase 4: Code Generation (to LLVM IR)
 
 ### Compilation pipeline
@@ -851,6 +890,7 @@ All 11 example programs type-check with correct capability classifications, repr
 Typed + capability-closed + quantity-checked + representation-selected AST
   → Monomorphization (specialize generic functions per concrete representation)
   → Match desugaring (match → fold calls)
+  → Fold specialization and fusion (guaranteed; `spec/type_system.md` Rules 7.4.b.1, 7.4.b.2)
   → Perceus insertion (dup/drop/reuse token placement, guided by quantities and lifetime classes)
   → Region lowering (data-stack marks and resets, destinations, class witnesses, evacuations)
   → Evidence passing (effect operations → evidence vector lookups)
@@ -866,6 +906,7 @@ Phase 4 strictly follows Phase 3's recheck phases. Capability sets, quantities, 
 |---|---|
 | **Monomorphizer** (`backend/Monomorphizer.scala`) | Specialize generic functions for concrete representations chosen in Phase 3 |
 | **Match desugarer** (`transform/MatchDesugar.scala`) | Convert `match` to `fold` calls, `if` to `bool.fold`. Implemented as a `MiniPhase` |
+| **Fold specializer** (`transform/FoldSpecializer.scala`) | Guaranteed by the spec, not an optimization level. Inlines lambda and statically known function arguments of auto-derived `fold` / `unfold` (Rule 7.4.b.2), and fuses an `unfold` consumed by exactly one `fold` into a loop with no intermediate structure (Rule 7.4.b.1). `to_nat(n).fold(...)` compiles to a counted loop. Runs after match desugaring, because desugaring produces more `fold` calls, and before Perceus, so the fused structure never gets reference counts |
 | **Perceus inserter** (`perceus/PerceusInserter.scala`) | Insert `dup`/`drop` operations guided by quantity × lifetime class (`spec/memory_management.md` §3.2). 0-quantity bindings: erased. 1-quantity bindings: no RC, direct reuse. ω-quantity bindings: Perceus RC only when `Heap` or `Region`; other classes are freed by their region |
 | **Region lowering** (`backend/Regions.scala`) | Chunked data stacks, scope marks and resets, drop lists, counted regions, destinations, class witnesses and evacuations per `spec/memory_management.md` §6–§7 |
 | **Evidence passer** (`effects/EvidencePasser.scala`) | Compile effects to evidence vector lookups |
@@ -888,7 +929,7 @@ Phase 4 strictly follows Phase 3's recheck phases. Capability sets, quantities, 
 
 ### Milestone
 
-All example programs compile to LLVM IR (`.ll`), `llc` / `clang` produce a native binary, and the binaries run correctly.
+All example programs compile to LLVM IR (`.ll`), `llc` / `clang` produce a native binary, and the binaries run correctly. The emitted IR for a fused `unfold`-then-`fold` contains no allocation for the intermediate structure, and the IR for a `fold` with a lambda argument contains no indirect call per step.
 
 ---
 
@@ -924,7 +965,7 @@ Profile-guided optimization for representation selection.
 | **Instrumented mode** | Compiler flag that inserts profiling counters into generated LLVM IR (or delegates to LLVM's built-in PGO instrumentation pass) |
 | **Profile reader** | Reads profile data and feeds it back into compilation |
 | **Representation optimizer** | Narrows representation choices further based on profile data |
-| **Hot-path specializer** | Inline frequently-called closures, eliminate dynamic dispatch on hot paths |
+| **Hot-path specializer** | Inline frequently-called closures, eliminate dynamic dispatch on hot paths. Covers only what Phase 4's guaranteed fold specialization does not: closures passed to user-defined higher-order functions and calls whose target is known only from a profile |
 
 ### PGO-driven decisions
 

@@ -3,9 +3,18 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4.8
+   Status:        DRAFT v0.4.9
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
-   Last revised:  2026-05-02
+   Last revised:  2026-11-19
+
+   Refinements in v0.4.9
+   ---------------------
+   - **`fip` modifier on `fn` declarations** added. `fip fn f(...)` and
+     `fip(strict) fn f(...)` declare a checked in-place contract (see
+     spec/memory_management.md §18). `fip` is now a reserved word;
+     `strict` is contextual and reserved only inside `fip( ... )`.
+     The parser accepts the modifier from milestone M10 on
+     (docs/plans/phase-3-typer.md §5.7).
 
    Refinements in v0.4.8
    ---------------------
@@ -297,14 +306,15 @@ DEDENT          = (* synthetic token: closing of an indented block *) ;
 
 (* KEYWORDS:
      as      cap         data        do          effect      else
-     extends false       fn          forall      handle      if
-     implies impossible  in          is          let         linear
-     match   mod         of          prop        pub         resume
-     return  Self        satisfies   suchThat    true        type
-     unreachable         use         with                                  *)
+     extends false       fip         fn          forall      handle
+     if      implies     impossible  in          is          let
+     linear  match       mod         of          prop        pub
+     resume  return      Self        satisfies   suchThat    true
+     type    unreachable use         with                                  *)
 (* `phantom` removed in v0.4.1 — phantom-ness is now inferred from usage.
    `linear` added in v0.4.2 — modifier on `effect` declarations.
-   `suchThat` added in v0.4.4 — filter clause in `forall` quantifiers. *)
+   `suchThat` added in v0.4.4 — filter clause in `forall` quantifiers.
+   `fip` added in v0.4.9 — modifier on `fn` declarations. *)
 
 
 (* ============================================================
@@ -488,7 +498,13 @@ TypeAliasRhs
    ============================================================ *)
 
 FnDecl
-    = "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" FnReturnType WithClause? FnBody
+    = FipModifier? "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" FnReturnType WithClause? FnBody
+    ;
+
+(* Checked in-place contract (v0.4.9); see spec/memory_management.md §18.
+   `strict` is a contextual word, recognised only here. *)
+FipModifier
+    = "fip" ( "(" "strict" ")" )?
     ;
 
 FnParamList
@@ -1121,7 +1137,7 @@ Whitespace       = (* space; tab is a v0.3 error *) ;
    The anchor sets, by context, are:
 
      Top-level item:
-       `use`, `fn`, `cap`, `data`, `effect`, `linear`, `type`, `mod`,
+       `use`, `fn`, `fip`, `cap`, `data`, `effect`, `linear`, `type`, `mod`,
        `pub`, UPPER_IDENT (start of a satisfies declaration), EOF.
 
      Block body:

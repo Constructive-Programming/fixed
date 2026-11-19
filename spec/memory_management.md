@@ -36,7 +36,7 @@ It does **not** specify:
 - `spec/quantities.md` v0.2 — Rule Q5.X family, Rule Q6.1 (erasure soundness), Rule Q7.2 (FBIP hook). The parallel composition rule referenced in §17 is pending there.
 - `spec/effects.md` v0.2 — §6 handler semantics, §7 evidence passing, Rule E3.5 (linear effects).
 - `spec/pattern_matching.md` v0.2 — §8 match compilation.
-- `spec/properties.md` v0.2 — §9 (verified props inform reuse and bounds-check elision).
+- `spec/properties.md` v0.2 — §9 (`proved` props, Rule P7.7, inform reuse and bounds-check elision).
 
 Theoretical basis and prior art (facts checked against the sources in November 2026):
 
@@ -601,7 +601,7 @@ Representation scoring must account for this. `spec/type_system.md` §6.5.4 "acc
 
 ## 17. Structured parallelism
 
-This section depends on the parallel composition rule pending in `spec/quantities.md`. It fixes the memory side only.
+Fork sites and the quantity rule for lanes are `spec/quantities.md` Rule Q5.13. This section fixes the memory side only.
 
 ### 17.1 Lanes (Rule MM17.1)
 
@@ -671,7 +671,8 @@ error[E110]: fip contract violated: heap allocation (Rule MM18.1(1))
 - quantity, lifetime class, and whether RC operations are emitted;
 - a **reason chain** for every class other than `Frame` and `Inline`, for example: "`Heap`: reachable from a continuation that escapes `handle` at 08:187 via `remaining.push`";
 - evacuation sites, drop lists, counted regions and their roots;
-- per function: the signature facts of §20.2 and the verified `fip` level.
+- per function: the signature facts of §20.2 and the verified `fip` level;
+- per `fold` / `unfold`: whether it is a fork site and, when it is not, the reason (`spec/quantities.md` Rule Q5.13.d).
 
 `--format json` gives the same data machine-readably (implementation plan, "Agent-Friendly CLI"). An AI agent reads the reason chains directly instead of reverse-engineering placement from generated code.
 
@@ -792,7 +793,7 @@ The `Lock` handler is installed once and consumed by `Lock.release`. Its continu
 - **OQ-PR4 — Borrow leakage through closures.** A borrowed parameter captured by a closure must not outlive the borrow. Rule MM5.2(a) and Rule PR5.6 cover escaping closures; the details belong to the borrow analyzer.
 - **OQ-PR5 — Tail-call guarantees.** Rule PR7.3 requires TCO for drop functions, and `fip(strict)` needs loops for list-shaped folds. The contract for general code is still open.
 - **OQ-PR6 — Reuse fingerprint algorithm.** Implementation-defined until a second compiler exists.
-- **OQ-MM1 — Grammar for `fip`.** `fip fn` and `fip(strict) fn` need an addition to `spec/syntax_grammar.ebnf`. Whether to add FP²'s `fip(n)` (at most n allocations) is open.
+- **OQ-MM1 — Grammar for `fip`.** `fip fn` and `fip(strict) fn` are in `spec/syntax_grammar.ebnf` v0.4.9 (`FipModifier` on `FnDecl`). Still open: FP²'s `fip(n)` (at most n allocations), and whether a capability method requirement or a `satisfies` method may carry the modifier.
 - **OQ-MM2 — Chunk sizes and pools.** First-chunk size, the growth factor and fiber/lane pool policy are implementation-defined until measured.
 - **OQ-MM3 — N versus relocation.** Whether the compiler should prefer more growable stacks or relocation with holes (§6.3).
 - **OQ-MM4 — Cohesive-group detection.** Rule MM5.4 states the conditions; how far M10 searches for groups (one function, one call tree, across modules) is open.
@@ -807,7 +808,7 @@ The `Lock` handler is installed once and consumed by `Lock.release`. Its continu
 | `spec/quantities.md` | Quantities drive §9; M10 also computes the facts in §20; the pending parallel composition rule underlies §17 |
 | `spec/effects.md` | §6 and §7 drive §14; Rule E3.5 drives §14.5; §7.5 drives §14.6 |
 | `spec/pattern_matching.md` | §8 decision trees are the input to §10 |
-| `spec/properties.md` | Verified props inform reuse and bounds-check elision |
+| `spec/properties.md` | `proved` props (Rule P7.7) inform reuse and bounds-check elision |
 | `spec/stdlib.md` | `.clone()` is the explicit copy; borrow inference (§13) is the implicit mechanism |
 | `docs/references/scala3-compiler-reference.md` | Recheck pattern (§5.4) |
 | `docs/plans/implementation-plan.md` | Phase 4 deliverables (`perceus/PerceusInserter.scala`, region and witness emission); Phase 6 PGO witness specialization |
