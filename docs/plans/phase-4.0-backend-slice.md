@@ -1,6 +1,6 @@
 # Phase 4.0 — Naive backend slice
 
-**Status:** Draft, not started
+**Status:** 4.0.M1 done; 4.0.M2 next
 **Parent:** `docs/plans/implementation-plan.md` (Phase 4.0) and `docs/plans/phase-3-typer.md` §1.3
 (row 4.0)
 **Runs:** after M7, **before M10**
@@ -51,12 +51,11 @@ each `main` reaches found:
 | `01_basics` | None found. Needs prelude members with no bodies (`show`, `concat`, numeric operators): §4.4 | runnable |
 | `03_option_result` | None found on the path `main` reaches. `builtin.parse_u64` needs an intrinsic | runnable |
 | `06_functor_monad` | `Maybe satisfies Optional` maps two constructors only. The comment says `fold`, `map`, `flat_map` and `pure` "are auto-derived from Maybe's structure". Spec §7.4 derives `fold`, `unfold`, `Functor`, accessors and `para`. It has no rule for `flat_map` or `pure` | spec gap; **left out** (decided) |
-| `04_json` | `Json.Object([("name", ...), ...])` passes a list literal of pairs where the field is `is Map of (String, Json)`. No rule says how a list literal becomes a `Map`. `Json.Array([...])` needs the same for `is Sequencing` | spec gap |
-| `05_phantom_types` | `cap Door` has `Self.fn new -> Self` and `fn name -> String`. `new` takes no arguments, so `door.name` has no value to return. `Quantity` is fine (`new(value)` feeds `value`) | example gap |
+| `04_json` | No data type in the file satisfies `Optional`, and `get_field`, `navigate` and `find` all produce `is Optional of ...` values, so §4.3 finds no representation. (The first version of this table named a list-to-`Map` rule. That was wrong: `04` declares its own `Json` with `List` fields, so the prelude's `Map`-typed `Json` is not involved.) | example gap, or M11's built-in `Optional` |
+| `05_phantom_types` | No data type satisfies `Door`, `TcpSocket` or `Quantity`; the file uses the product capabilities directly. That needs the auto-flat-struct candidate of `spec/type_system.md` §6.6. `TcpSocket` and `Quantity` then work (`new(port)` feeds `port`, `new(value)` feeds `value`). `Door` still does not: `new` takes no arguments, so `door.name` has no value to return | needs auto-flat-struct, plus an example gap |
 | `02_collections` | Values exist only as capability bounds (`range(1, 11)` returns `is ...`). Members such as `init`, `last`, `get` and `size` come from built-in representation candidates, which is what M11 defines | **left out** until M11 (decided) |
 
-This pass was not exhaustive. Milestone 4.0.M1 makes it exhaustive and records a decision per
-blocker.
+Milestone 4.0.M1 completed the pass for `01`, `03`, `04` and `05`; the per-member results are in §8.
 
 **Consequence for scope.** The slice's required set is `01` and `03` plus the benchmark programs of
 §4.9, which are written in the same subset. `04` and `05` join when their blockers close (4.0.M6)
@@ -108,11 +107,19 @@ Core. That is the reason to have an IR at all in a naive slice.
   Several: `error[B001]` listing them. This rule is the slice's stand-in for M11 and is deleted
   when M11 lands.
 
-**To verify in 4.0.M1:** the typer instantiates generic signatures per call and records resolved
-constructor calls (`TyperState.constructors`). Whether the recorded types are enough to recover
-each call's type arguments, and which `satisfies` member a method call resolved to, is not
-confirmed. If they are not, `LowerPhase` re-resolves through `Members` and `Satisfaction` with the
-concrete types.
+**Settled in 4.0.M1** (what the typer hands over, `CompilationUnit.typing`):
+
+- **Types: enough.** Every expression node has its type recorded, and `typeOf` substitutes solved
+  variables. A reference to a generic function records its *instantiated* arrow type, so matching
+  it against the declared signature recovers the call's type arguments. Inside a generic body the
+  types mention the body's own type parameters, which monomorphisation substitutes.
+- **Resolution: not recorded.** Which member a method call chose is lost: `Members.Candidate` is a
+  closure, and `typedMethodCall` keeps only the winner's type. The same holds for identifiers
+  (which symbol) and for static calls other than capability constructors (`constructors` records
+  those). Re-resolving in `LowerPhase` would duplicate the overload logic of `typedMethodCall`.
+  **Decision:** the typer records a resolution side table (tree → symbol, and for members the
+  satisfying type and member it came from), next to `TypeTable`. Added in 4.0.M3, its first
+  consumer; `TyperCpuBench` A/B required, as for M7.
 
 ### 4.4 Members with no body
 
@@ -229,12 +236,23 @@ slice, not errors in the program, and each disappears with the milestone that li
 | 4.0.M5 | Benchmarks and baseline | `docs/baselines/runtime-<date>.md` committed; rerunning reproduces allocation and RC counts exactly |
 | 4.0.M6 | Gated examples `04` and `05`, each when its blocker closes | Golden output per example, or the example stays listed with its open blocker |
 
+**4.0.M1 status: done.** Hand-off in `CompilationUnit.typing` with a test in `CompilerSuite`;
+§4.3 settled; audit in §8.
+
 **M10 may start after 4.0.M5.** 4.0.M6 runs alongside later work.
 
 **Perf:** the new phases must not slow the check-only path. `FrontEndBench` is re-run at 4.0.M2.
 
-**Size:** not estimated. 4.0.M1 is the sizing step; the earlier Phase 3 milestones each took one
-to two weeks, and this slice has five required milestones of uneven size.
+**Size (from the 4.0.M1 audit):** about 5 weeks for one contributor, 4 to 7.
+
+| Milestone | Estimate | Driver |
+|---|---|---|
+| 4.0.M2 | 1 week | Core, emitter, C runtime, `clang` in CI |
+| 4.0.M3 | 2 weeks | Monomorphisation, closures, derived `fold` / `unfold` including Rule 7.4.a.1, the resolution table, RC insertion |
+| 4.0.M4 | 1 to 1.5 weeks | Capability members through `satisfies` mappings, prelude bodies in Fixed, checked abort |
+| 4.0.M5 | 0.5 week | Five programs, runner, baseline record |
+
+Calibrated against Phase 3 milestones, which took one to two weeks each.
 
 ## 7. Open questions
 
@@ -244,11 +262,16 @@ to two weeks, and this slice has five required milestones of uneven size.
 2. ~~**`06`: `flat_map` and `pure` for sum data.**~~ **Decided:** `06` is left out of the slice.
    Whether spec §7.4 gets a derivation rule for `Monad` members, or the example writes the bodies,
    is decided separately.
-3. **`04`: a list literal where a `Map` or `Sequencing` bound is expected.** Needs a spec rule
-   (which capability a literal can construct, and through which members), or a change to the
-   example. `04` stays gated until then (agreed).
-4. **`05`: `Door.name`.** Change the example (`new(name: String)`), or define what an accessor
-   with no constructor argument returns. `05` stays gated until then (agreed).
+3. **`04`: no `Optional` representation.** Corrected by the 4.0.M1 audit (§3). Options: `04`
+   declares `data Maybe` and `Maybe satisfies Optional` as `03` does (one small edit), or `04`
+   waits for M11's built-in candidates. A prelude `Maybe` would not work: `03` and `06` declare
+   their own, and two satisfying constructors are ambiguous (`T011`). Proposed: edit the example.
+   `04` stays gated until then.
+4. **`05`: product capabilities with no satisfying data, and `Door.name`.** The auto-flat-struct
+   candidate (§6.6) is small for a product capability with one constructor whose parameters name
+   its accessors, so the slice could add it as a second stand-in next to §4.3. `Door` then still
+   needs an example change (`new(name: String)`) or a rule for an accessor with no constructor
+   parameter. `05` stays gated until then.
 5. ~~**`02`.**~~ **Decided:** left out until M11 defines the built-in candidates and their members.
 6. ~~**Integer overflow and division by zero.**~~ **Decided:** integer division by zero panics.
    Overflow wraps, as proposed. The spec states neither yet; both rules are written into
@@ -257,7 +280,71 @@ to two weeks, and this slice has five required milestones of uneven size.
    format (separators, nullary variants, strings quoted or not); it should be written into the
    spec at 4.0.M3.
 
-## 8. Audit (filled by 4.0.M1)
+## 8. Audit (4.0.M1)
 
-Empty until 4.0.M1. One row per member reachable from `main`, per example: the member, where its
-definition comes from (derived, prelude body, intrinsic), or the blocker and its decision.
+Members reachable from `main`, by where their definition comes from. "Prelude body" means a body
+written in Fixed in `resources/stdlib/prelude.fixed` (§4.4 source 2); "intrinsic" means the C
+runtime (§4.4 source 3).
+
+### `01_basics`: runnable
+
+| Member | Source |
+|---|---|
+| `Console.print_line`, `Console.read_line` | intrinsic (runtime effect) |
+| `String.concat` | intrinsic |
+| `u64.show` | intrinsic (scalar formatting) |
+| `+`, `-`, `==`, `>=` on `u64` and on `N` instantiated at `u64` | `Prim` |
+| `Nat.unfold`, `List.unfold` | derived, Rule 7.4.b |
+| `Nat.fold` with one callback per variant | derived, Rule 7.4.a |
+| `List.fold((), (_, i) -> ...)` | resolves to `Folding.fold(init, f)`: the derived per-variant fold rejects `()` as its first argument. Spec §7.4 derives no `Folding.fold`, so it is a **prelude body** on `List satisfies Folding`, written with the derived fold |
+| tuple `(b, a + b)`, `let (a, b) = acc`, `.first` | `Con` and `Field` on `Tuple`; `.first` is the accessor of Rule 7.4.d |
+| `fib_iter` at `N = u64`, literals `0`, `1` | monomorphisation; literals are `u64` constants |
+
+### `03_option_result`: runnable
+
+| Member | Source |
+|---|---|
+| `Console.print_line`, `String.concat`, `u64.show` | intrinsic |
+| `builtin.parse_u64(s)` | intrinsic, but its result is `is Result of (String, u64)`. The C side returns success and the number; `LowerPhase` builds the value with the constructors `Result.ok` / `Result.err` resolve to under §4.3 (`Outcome.Success`, `Outcome.Failure`). The runtime never builds a Fixed data value |
+| `Result.ok`, `Result.err` | `Outcome.Success`, `Outcome.Failure` through the `satisfies` mapping (recorded in `TyperState.constructors`) |
+| `Result.fold(on_ok, on_err)` on an `Outcome` | the derived fold of `Outcome`, with callbacks reordered **by constructor mapping** (`ok` → `Success`, `err` → `Failure`), not by position. Here the orders happen to agree |
+| `Fail.fail` inside `inner`, `handle ... Fail.fail(e) => ..., return(v) => ...` | checked abort (§4.6) |
+| `a / b`, `n * 2`, `b == 0` | `Prim`; integer division by zero panics (§7.6) |
+| nested `fn inner` | lifted to a top-level function; it captures nothing |
+
+Not reached from `main`: `Maybe`'s `satisfies` bodies, `unwrap_or`, `map_optional`, `and_then`,
+`Map`, `lookup_user_age`, `require_user_age`. They are type-checked but never lowered.
+
+### `04_json`: gated (§7.3)
+
+| Member | Source |
+|---|---|
+| `Json.fold` with `List of R` and `List of (Tuple of (String, R))` callbacks | derived, Rule 7.4.a.1 (folds through the `List` and `Tuple` functors) |
+| `List.length`, `Folding.find` | prelude bodies |
+| `List.map` | derived, Rule 7.4.c |
+| `repeat_str`, `join` | prelude bodies (a `Nat.unfold` then a fold; a fold) |
+| `bool.show`, `f64.show` | intrinsic. `f64` format undecided (§7.7) |
+| `String ==` | intrinsic |
+| `.first`, `.second` on `Tuple` | accessors, Rule 7.4.d |
+| `Optional.some`, `Optional.none`, `Optional.fold` | **blocker:** no satisfying data type in the file |
+
+### `05_phantom_types`: gated (§7.4)
+
+| Member | Source |
+|---|---|
+| `TcpSocket.new`, `.port`; `Quantity.new`, `.value` | **blocker:** product capabilities with no satisfying data; need auto-flat-struct |
+| `Door.new`, `.name` | **blocker:** as above, and `new` has no parameter for `name` |
+| `f64` arithmetic, `u16.show`, `f64.show` | `Prim`, intrinsic |
+| phantom `State` / `Unit` parameters | erased by monomorphisation: `Quantity of Meters` and `Quantity of Seconds` share one layout |
+
+### Findings that apply beyond the slice
+
+1. **The typer does not check that a called member has a definition.** `01`–`06` all type-check
+   while `02`, `04`, `05` and `06` call members with no body and no derivation rule. `B003` catches
+   this at lowering. The typer-side check belongs with "abstract-method coverage" in
+   `docs/Phase3Conformance.md`.
+2. **Spec §7.4 derives the per-variant `fold` but not `Folding.fold(init, f)`.** Every `data` that
+   satisfies `Folding` therefore needs a written body. The slice writes one for `List`. Whether a
+   recursive data type should derive `Folding.fold` as a left fold is a spec question.
+3. **A capability method implemented by a derived member is matched by constructor mapping**
+   (`Result.fold` on `Outcome`). The spec should state this rule; today it is implicit in the typer.

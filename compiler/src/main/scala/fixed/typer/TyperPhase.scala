@@ -15,7 +15,7 @@ object TyperPhase extends Phase:
     unit.tree.fold(unit) { tree =>
       val (symbols, namerDiags) = Namer.index(tree)
       val typed = typeBodies(tree, symbols)
-      unit.copy(symbols = typed.symbols).report(namerDiags ++ typed.diags)
+      unit.copy(symbols = typed.symbols, typing = Some(typed)).report(namerDiags ++ typed.diags)
     }
 
   /** Type every top-level `fn` body; returns the finished state. */

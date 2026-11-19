@@ -1,5 +1,7 @@
 package fixed
 
+import fixed.ast.Trees
+import fixed.core.Type
 import fixed.util.SourceFile
 
 class CompilerSuite extends munit.FunSuite:
@@ -20,6 +22,22 @@ class CompilerSuite extends munit.FunSuite:
       val f = new java.io.File("examples").listFiles(_.getName.startsWith(f"$i%02d_")).head
       assertEquals(compileFile(f.getPath).diagnostics, Nil, f.getName)
     }
+
+  test("4.0.M1: the typer hands its recorded types to later phases"):
+    val unit = compileFile("examples/01_basics.fixed")
+    val main = unit.tree.toList
+      .flatMap { case Trees.CompilationUnit(items, _) => items; case _ => Nil }
+      .collectFirst { case f: Trees.FnDecl if f.name == "main" => f }
+      .get
+    val stmts = main.body.collect { case Trees.Block(ss, _) => ss }.get
+    val call = stmts.last match
+      case a: Trees.Apply => a
+      case other          => fail(s"expected `print_fibs(20)`, got $other")
+    assertEquals(unit.typeOf(call), Some(Type.UnitType))
+
+    /** `print_fibs(20)`: the literal's variable is solved to the parameter's type. */
+    val literal = call.args.head
+    assertEquals(unit.typeOf(literal), Some(Type.PrimType("u64")))
 
   test("a unit with parse errors stops before the typer"):
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString("<test>", "fn f(x: i64 -> i64 = x\n")))
