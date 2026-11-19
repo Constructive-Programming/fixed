@@ -171,7 +171,7 @@ object Declarations:
       self: Option[Type]
   ): TyperState =
     sig match
-      case Type.ArrowType(lhs, ret, _) =>
+      case Type.ArrowType(lhs, ret, fx) =>
         val params = Members.params(lhs)
         if params.size != fn.params.size then
           s.error(
@@ -181,7 +181,7 @@ object Declarations:
           )
         else
           val locals = fn.params.map(_.name).zip(params) ++ self.map("self" -> _)
-          fn.body.fold(s)(Typer.typedMethodBody(s, _, owner, locals, scoped, ret))
+          fn.body.fold(s)(Typer.typedMethodBody(s, _, owner, locals, scoped, ret, fx, fn.name))
       case _ => s
 
   /** Rule 6.2: a member name a capability inherits from two parents, without declaring it itself,

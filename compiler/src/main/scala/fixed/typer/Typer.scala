@@ -3,7 +3,7 @@ package fixed.typer
 import scala.collection.immutable.IntMap
 
 import fixed.ast.{Tree, Trees}
-import fixed.core.{Context, EffectRow, Proto, SymKind, SymbolId, SymbolTable, Type, render}
+import fixed.core.{Context, EffectBound, EffectRow, Proto, SymKind, SymbolId, SymbolTable, Type, render}
 import fixed.util.{DiagCode, Diagnostic, Severity, Span, mapAccum}
 
 /** The type side table, keyed by tree identity.
@@ -34,7 +34,9 @@ final case class TyperState(
     errors: Int,
     members: MemberTables,
     obligations: List[(Type, Type, Span)],
-    constructors: List[(Trees.StaticCall, SymbolId, String)]
+    constructors: List[(Trees.StaticCall, SymbolId, String)],
+    row: List[(EffectBound, Span)],
+    rowChecks: List[RowCheck]
 ):
   def record(tree: Tree, t: Type): TyperState = copy(types = types.updated(tree, t))
 
@@ -64,15 +66,23 @@ final case class TyperState(
   def report(more: List[Diagnostic]): TyperState =
     copy(diags = more.reverse ++ diags, errors = errors + more.count(_.isError))
 
+  def warn(code: DiagCode, span: Span, message: String): TyperState =
+    copy(diags = Diagnostic(Severity.Warning, code, span, message) :: diags)
+
   /** A construct the typer does not handle yet (`T005`): a gap in the typer, not in the program. */
   def unsupported(span: Span, what: String): TyperState =
-    copy(diags = Diagnostic(Severity.Warning, DiagCode.T005, span, s"$what is not supported by the typer yet") :: diags)
+    warn(DiagCode.T005, span, s"$what is not supported by the typer yet")
 
-  /** Default unsolved literal variables, discharge the capability obligations recorded while
-    * typing, and order the diagnostics. Recorded types stay as typed; `typeOf` substitutes on read.
+  /** Check a body's effect row when the unit finishes. */
+  def checkRow(c: RowCheck): TyperState = copy(rowChecks = c :: rowChecks)
+
+  /** Check the effect rows recorded while typing (their arguments may solve literal variables),
+    * default unsolved literal variables, discharge the capability obligations, and order the
+    * diagnostics. Recorded types stay as typed; `typeOf` substitutes on read.
     */
   def finish: TyperState =
-    val defaulted = copy(unifier = unifier.applyDefaults)
+    val rows = rowChecks.reverse.foldLeft(this)(Effects.discharge)
+    val defaulted = rows.copy(unifier = rows.unifier.applyDefaults)
     val checked = obligations.reverse.foldLeft(defaulted) { case (si, (value, bound, span)) =>
       Satisfaction.discharge(si, value, bound, span)
     }
@@ -87,6 +97,8 @@ object TyperState:
       Nil,
       0,
       MemberTables(symbols),
+      Nil,
+      Nil,
       Nil,
       Nil
     )
@@ -133,9 +145,9 @@ object Typer:
       case other => (s.unsupported(other.span, other.getClass.getSimpleName), Type.NeverType)
     (check(s1, tree.span, t, pt).record(tree, t), t)
 
-  /** Reconcile an inferred type with the prototype. */
+  /** Reconcile an inferred type with the prototype; a function value's row meets the expected one. */
   private def check(s: TyperState, span: Span, t: Type, pt: Proto): TyperState =
-    pt.expected.fold(s)(unify(s, span, _, t))
+    pt.expected.fold(s)(e => Effects.meet(unify(s, span, e, t), span, e, t))
 
   private[typer] def unify(s: TyperState, span: Span, expected: Type, actual: Type): TyperState =
     solve(
@@ -221,13 +233,14 @@ object Typer:
       Context
   ): (TyperState, Type) =
     (s.unifier.resolve(fnType), args) match
-      case (Type.ArrowType(Type.TupleType(Nil), rhs, _), None) => (s, rhs)
-      case (other, None)                                       => (s, other)
-      case (Type.ArrowType(lhs, rhs, _), Some(as))             =>
+      case (Type.ArrowType(Type.TupleType(Nil), rhs, fx), None) => (Effects.perform(s, fx, span), rhs)
+      case (other, None)                                        => (s, other)
+      case (Type.ArrowType(lhs, rhs, fx), Some(as))             =>
         val params = Members.params(lhs)
+        val s1 = Effects.perform(s, fx, span)
         if params.size != as.size then
-          (s.error(DiagCode.T006, span, s"expected ${params.size} argument(s), got ${as.size}"), rhs)
-        else (params.zip(as).foldLeft(s) { case (si, (p, a)) => typedExpr(si, a, Proto.ExpectedType(p))._1 }, rhs)
+          (s1.error(DiagCode.T006, span, s"expected ${params.size} argument(s), got ${as.size}"), rhs)
+        else (params.zip(as).foldLeft(s1) { case (si, (p, a)) => typedExpr(si, a, Proto.ExpectedType(p))._1 }, rhs)
       case (Type.NeverType, _) => (s, Type.NeverType)
       case (other, _)          => (s.error(DiagCode.T007, span, s"${show(s, other)} is not a function"), Type.NeverType)
 
@@ -268,11 +281,11 @@ object Typer:
         (si2.copy(symbols = table).record(p, declared), ci.bind(p.name, id), acc :+ declared)
     }
     val bodyProto = expectedResult.fold(Proto.Wildcard)(Proto.ExpectedType(_))
-    val (s2, bodyType) = typedExpr(s1, t.body, bodyProto)(using inner)
+    val (s2, bodyType, row) = Effects.isolated(s1)(typedExpr(_, t.body, bodyProto)(using inner))
 
     /** The body was already checked against an expected result; report its mismatch once. */
     val result = expectedResult.getOrElse(bodyType)
-    (s2, Type.ArrowType(Type.TupleType(paramTypes), result, EffectRow.empty))
+    (s2, Type.ArrowType(Type.TupleType(paramTypes), result, Effects.rowOf(row)))
 
   /** `recv.m(args)` / `recv.m`: an instance member of the receiver's type. With several
     * candidates (a capability `fold` and a data type's derived `fold`), the first whose argument
@@ -374,10 +387,13 @@ object Typer:
     fn.body.fold(s) { body =>
       val params = s.symbols.membersOf(id).filter(d => d.kind == SymKind.ValueParam || d.kind == SymKind.TypeParam)
       val inner = Context(ctx.local ++ params.map(d => d.name -> d.id), ctx.global, id)
-      val expected = s.symbols(id).info match
-        case Type.ArrowType(_, ret, _) => Proto.ExpectedType(ret)
-        case _                         => Proto.Wildcard
-      typedExpr(s, body, expected)(using inner)._1
+      val d = s.symbols(id)
+      val (expected, fx) = d.info match
+        case Type.ArrowType(_, ret, fx) => (Proto.ExpectedType(ret), fx)
+        case _                          => (Proto.Wildcard, EffectRow.empty)
+      val (s1, _, row) = Effects.isolated(s)(typedExpr(_, body, expected)(using inner))
+      val main = d.name == "main" && d.owner == SymbolId.Root
+      s1.checkRow(RowCheck(row, fx, d.name, fn.span, unused = true, runtime = main))
     }
 
   /** A method body whose parameter types come from elsewhere (a capability's signature): `locals`
@@ -389,21 +405,25 @@ object Typer:
       owner: fixed.core.SymbolId,
       locals: List[(String, Type)],
       scoped: List[(String, fixed.core.SymbolId)],
-      ret: Type
+      ret: Type,
+      fx: EffectRow,
+      name: String
   ): TyperState =
     val start = Context(scoped.toMap, s.symbols.scope, owner)
     val (s1, ctx) = locals.foldLeft((s, start)) { case ((si, ci), (name, t)) =>
       val (table, id) = si.symbols.enter(name, owner, SymKind.Local, t, body.span)
       (si.copy(symbols = table), ci.bind(name, id))
     }
-    typedExpr(s1, body, Proto.ExpectedType(ret))(using ctx)._1
+    val (s2, _, row) = Effects.isolated(s1)(typedExpr(_, body, Proto.ExpectedType(ret))(using ctx))
+    s2.checkRow(RowCheck(row, fx, name, body.span, unused = false, runtime = false))
 
   /** `handle subject: clauses` (`spec/effects.md` §6). Operation clauses bind the operation's
     * parameters; inside them `resume(v)` takes the operation's result type and yields the
-    * handler's. The handler's type is the `return` clause's (else the subject's).
+    * handler's. The handler's type is the `return` clause's (else the subject's). Its row is the
+    * subject's minus the effects the clauses name, plus the clause bodies' rows (Rule E6.6).
     */
   private def typedHandle(s: TyperState, h: Trees.HandleExpr, pt: Proto)(using ctx: Context): (TyperState, Type) =
-    val (s1, subject) = typedExpr(s, h.subject, Proto.Wildcard)
+    val (s1, subject, performed) = Effects.isolated(s)(typedExpr(_, h.subject, Proto.Wildcard))
     val (s2, result) = (h.returnClause, pt) match
       case (None, _)                        => (s1, subject)
       case (Some(_), Proto.ExpectedType(e)) => (s1, e)
@@ -413,33 +433,53 @@ object Typer:
       val (si, ci) = Patterns.bind(s2, rc.param, subject)
       typedExpr(si, rc.body, Proto.ExpectedType(result))(using ci)._1
     }
-    val s4 = h.operationClauses.foldLeft(s3)((si, clause) => typedClause(si, clause, result))
-    (s4, result)
+    val (s4, handled) = mapAccum(s3, h.operationClauses)(typedClause(_, _, result, performed))
+    val names = handled.flatten
+    val passed = performed.filterNot((e, _) => names.exists(_._1 == e.sym))
+    (Effects.coverage(s4.copy(row = passed ++ s4.row), names, h.span), result)
 
-  private def typedClause(s: TyperState, c: Trees.OperationClause, result: Type)(using ctx: Context): TyperState =
+  /** An operation clause, its parameters bound to the operation's arguments for each instance of
+    * the effect the subject performs; the (effect, operation) it handles.
+    */
+  private def typedClause(s: TyperState, c: Trees.OperationClause, result: Type, performed: List[(EffectBound, Span)])(
+      using ctx: Context
+  ): (TyperState, Option[(SymbolId, String)]) =
     ctx.lookup(c.effect).filter(s.symbols(_).kind == SymKind.Effect) match
-      case None         => s.error(DiagCode.T001, c.span, s"not found: effect ${c.effect}")
+      case None         => (s.error(DiagCode.T001, c.span, s"not found: effect ${c.effect}"), None)
       case Some(effect) =>
         Members.static(s, effect, c.op, None) match
-          case Some((s1, Type.ArrowType(lhs, opResult, _))) =>
+          case Some((s1, Type.ArrowType(lhs, opResult, fx))) =>
             val params = Members.params(lhs)
-            if params.size != c.params.size then
-              s1.error(
-                DiagCode.T006,
-                c.span,
-                s"${c.effect}.${c.op} takes ${params.size} parameter(s), the clause binds ${c.params.size}"
-              )
-            else
-              val (s2, inner) = c.params.zip(params).foldLeft((s1, ctx)) { case ((si, ci), (p, t)) =>
-                Patterns.bind(si, p, t)(using ci)
-              }
-              typedExpr(s2, c.body, Proto.ExpectedType(result))(using inner.copy(resume = Some((opResult, result))))._1
-          case _ => s.error(DiagCode.T001, c.span, s"not found: operation ${c.effect}.${c.op}")
+            val instance = Type.TupleType(fx.effects.lastOption.fold(Nil)(_.args))
+            val s2 = performed.foldLeft(s1) { case (si, (e, _)) =>
+              if e.sym == effect then unify(si, c.span, Type.TupleType(e.args), instance) else si
+            }
+            val s3 =
+              if params.size != c.params.size then
+                s2.error(
+                  DiagCode.T006,
+                  c.span,
+                  s"${c.effect}.${c.op} takes ${params.size} parameter(s), the clause binds ${c.params.size}"
+                )
+              else
+                val (si, inner) = c.params.zip(params).foldLeft((s2, ctx)) { case ((sj, cj), (p, t)) =>
+                  Patterns.bind(sj, p, t)(using cj)
+                }
+                typedExpr(si, c.body, Proto.ExpectedType(result))(using
+                  inner.copy(resume = Some((opResult, result)))
+                )._1
+            (s3, Some(effect -> c.op))
+          case _ => (s.error(DiagCode.T001, c.span, s"not found: operation ${c.effect}.${c.op}"), None)
 
-  /** `resume(v)` inside an operation clause. */
+  /** `resume(v)` inside an operation clause; an abortive operation (`-> !`) has nothing to resume. */
   private def typedResume(s: TyperState, value: Option[Tree], span: Span)(using ctx: Context): (TyperState, Type) =
     ctx.resume match
       case None => (s.error(DiagCode.T009, span, "resume outside a handler's operation clause"), Type.NeverType)
+      case Some((Type.NeverType, _)) =>
+        (
+          s.error(DiagCode.T019, span, "resume in the clause of an abortive operation (its result is !)"),
+          Type.NeverType
+        )
       case Some((opResult, result)) =>
         val s1 =
           value.fold(unify(s, span, opResult, Type.UnitType))(v => typedExpr(s, v, Proto.ExpectedType(opResult))._1)

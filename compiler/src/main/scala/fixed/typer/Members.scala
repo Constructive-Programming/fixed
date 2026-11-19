@@ -2,7 +2,7 @@ package fixed.typer
 
 import scala.collection.immutable.IntMap
 
-import fixed.core.{EffectRow, SymKind, SymbolId, SymbolTable, Type}
+import fixed.core.{EffectBound, EffectRow, SymKind, SymbolId, SymbolTable, Type}
 import fixed.util.mapAccum
 
 /** Signature lookup for the typer: instantiation of generic signatures, instance members (data
@@ -65,9 +65,10 @@ object Members:
         val (u, v) =
           s.unifier.fresh(numeric = isNumeric(s, Type.TypeRef(id, Nil)), default = None, bounds = boundsOf(s, id))
         go(s.copy(unifier = u), Type.TypeRef(id, args), sub, m.updated(id.toInt, v))
-      case Type.TypeRef(id, args)    => rebuild(args)(Type.TypeRef(id, _))
-      case Type.CapRef(id, args)     => rebuild(args)(Type.CapRef(id, _))
-      case Type.ArrowType(l, r, fx)  => rebuild(List(l, r))(xs => Type.ArrowType(xs.head, xs(1), fx))
+      case Type.TypeRef(id, args)   => rebuild(args)(Type.TypeRef(id, _))
+      case Type.CapRef(id, args)    => rebuild(args)(Type.CapRef(id, _))
+      case Type.ArrowType(l, r, fx) =>
+        rebuild(l :: r :: fx.args)(xs => Type.ArrowType(xs.head, xs(1), fx.withArgs(xs.drop(2))))
       case Type.TupleType(ts)        => rebuild(ts)(Type.TupleType(_))
       case Type.IsBound(bs)          => rebuild(bs)(Type.IsBound(_))
       case Type.CapType(r)           => rebuild(r.toList)(xs => Type.CapType(xs.headOption))
@@ -221,7 +222,7 @@ object Members:
     d.kind match
       case SymKind.Effect =>
         s.symbols.membersOf(owner).find(m => m.kind == SymKind.Operation && m.name == name).map { op =>
-          instantiate(s, op.info, Subst(IntMap.empty, Set(owner, op.id)))
+          operation(s, owner, op.info, op.id)
         }
       case SymKind.Data =>
         s.symbols.variantsOf(owner).find(_.name == name) match
@@ -278,6 +279,16 @@ object Members:
     val (done, seed) = withParams.fresh
     val step = Type.ArrowType(Type.TupleType(List(seed)), Type.Layer(data, params, seed), EffectRow.empty)
     (done, Type.ArrowType(Type.TupleType(List(seed, step)), Type.TypeRef(data, params), EffectRow.empty))
+
+  /** An effect operation's signature, instantiated. Its row also names the effect itself, with the
+    * fresh `of` arguments, so calling the operation performs the effect (`spec/effects.md` §3.2).
+    */
+  private def operation(s: TyperState, effect: SymbolId, info: Type, op: SymbolId): (TyperState, Type) =
+    val (s1, args) = freshArgs(s, effect)
+    instantiate(s1, info, Subst(Subst.of(typeParamsOf(s1, effect), args), Set(op))) match
+      case (s2, Type.ArrowType(l, r, fx)) =>
+        (s2, Type.ArrowType(l, r, EffectRow(fx.effects :+ EffectBound(effect, args))))
+      case other => other
 
   def freshArgs(s: TyperState, data: SymbolId): (TyperState, List[Type]) =
     mapAccum(s, typeParamsOf(s, data)) { (si, p) =>
