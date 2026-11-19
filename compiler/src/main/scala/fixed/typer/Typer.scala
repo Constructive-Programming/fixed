@@ -423,7 +423,10 @@ object Typer:
     * subject's minus the effects the clauses name, plus the clause bodies' rows (Rule E6.6).
     */
   private def typedHandle(s: TyperState, h: Trees.HandleExpr, pt: Proto)(using ctx: Context): (TyperState, Type) =
-    val (s1, subject, performed) = Effects.isolated(s)(typedExpr(_, h.subject, Proto.Wildcard))
+    val (s1, subject, raw) = Effects.isolated(s)(typedExpr(_, h.subject, Proto.Wildcard))
+
+    /** ponytail: row variables solved after the subject (by a later callback) bypass this handler. */
+    val performed = raw.flatMap((e, span) => Effects.expand(s1, List(e)).map(_ -> span))
     val (s2, result) = (h.returnClause, pt) match
       case (None, _)                        => (s1, subject)
       case (Some(_), Proto.ExpectedType(e)) => (s1, e)

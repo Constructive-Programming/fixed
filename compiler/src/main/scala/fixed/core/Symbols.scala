@@ -145,7 +145,12 @@ extension (table: SymbolTable)
       case Type.NeverType           => "!"
       case Type.ArrowType(l, r, fx) =>
         val row = if fx.effects.isEmpty then ""
-        else fx.effects.map(e => table(e.sym).name + args(e.args)).mkString(" with ", " + ", "")
+        else
+          fx.effects
+            .map(e =>
+              if table(e.sym).kind == SymKind.TypeParam then render(e.args.head) else table(e.sym).name + args(e.args)
+            )
+            .mkString(" with ", " + ", "")
         val lhs = l match
           case Type.TupleType(List(p: (Type.ArrowType | Type.TupleType))) => s"(${render(p)})"
           case Type.TupleType(List(p))                                    => render(p)

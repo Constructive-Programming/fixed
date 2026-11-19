@@ -70,3 +70,19 @@ class EffectsSuite extends munit.FunSuite:
   test("main performs only effects the runtime handles (Rule E5.4)"):
     assertEquals(codes("use std.io.Console\nfn main() -> () with Console = Console.print_line(\"hi\")\n"), Nil)
     assertEquals(codes("fn main() -> () with Fail of String = Fail.fail(\"x\")\n"), List(DiagCode.T016))
+
+  test("a row variable carries a callback's other effects to the receiver's row (Rule E8.2)"):
+    val decls = ask + "effect Other:\n    fn other -> u64\n" +
+      "fn run(f: () -> u64 with Ask + E) -> u64 with E =\n    handle f():\n        Ask.ask(p) => resume(1)\n"
+    assertEquals(codes(decls + "fn g() -> u64 with Other = run(() -> Ask.ask(\"q\") + Other.other)\n"), Nil)
+    assertEquals(codes(decls + "fn g() -> u64 = run(() -> Ask.ask(\"q\") + Other.other)\n"), List(DiagCode.T015))
+    assertEquals(codes(decls + "fn g() -> u64 = run(() -> Ask.ask(\"q\"))\n"), Nil)
+
+  test("inside its own body, a row variable is rigid"):
+    val decls = ask + "fn each(f: () -> u64 with E) -> u64 with E = f()\n"
+    assertEquals(codes(decls), Nil)
+    assertEquals(codes(ask + "fn bad(f: () -> u64 with E) -> u64 = f()\n"), List(DiagCode.T015))
+    assertEquals(
+      codes(ask + "fn leak(f: () -> u64 with E) -> u64 with E = Ask.ask(\"q\")\n"),
+      List(DiagCode.T015, DiagCode.T017)
+    )

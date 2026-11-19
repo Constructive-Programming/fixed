@@ -48,21 +48,70 @@ object Effects:
       case Type.ArrowType(_, _, fx) if fx.effects.nonEmpty =>
         s.unifier.resolve(expected) match
           case Type.ArrowType(_, _, bound) if bound.effects.nonEmpty =>
-            s.checkRow(RowCheck(fx.effects.map(_ -> span), bound, "the expected function type", span, false, false))
+            absorb(
+              s,
+              fx,
+              bound
+            ).checkRow(RowCheck(fx.effects.map(_ -> span), bound, "the expected function type", span, false, false))
           case _ => perform(s, fx, span)
       case _ => s
+
+  /** A row variable (§8.1): an entry whose symbol is a type variable, its argument the variable
+    * itself (rigid inside its own signature's body) or the unification variable instantiating it.
+    */
+  private def isRowVar(s: TyperState, e: EffectBound): Boolean = s.symbols(e.sym).kind == SymKind.TypeParam
+
+  /** `es` with each solved row variable replaced by its solution, recursively. A solution is a
+    * tuple of effect references ending in the variable for the rest of the row.
+    */
+  def expand(s: TyperState, es: List[EffectBound]): List[EffectBound] =
+    es.flatMap { e =>
+      if !isRowVar(s, e) then List(e)
+      else
+        s.unifier.resolve(e.args.head) match
+          case Type.TupleType(items) => expand(s, items.map(entry(s, e.sym, _)))
+          case other                 => List(EffectBound(e.sym, List(other)))
+    }
+
+  private def entry(s: TyperState, rowVar: SymbolId, t: Type): EffectBound =
+    t match
+      case Type.TypeRef(sym, args) if s.symbols(sym).kind == SymKind.Effect => EffectBound(sym, args)
+      case Type.TypeRef(sym, _)                                             => EffectBound(sym, List(t))
+      case other                                                            => EffectBound(rowVar, List(other))
+
+  /** The unsolved unification variable ending `row`, if it is open. */
+  private def openTail(s: TyperState, row: List[EffectBound]): Option[Type.TypeVar] =
+    row.collectFirst { case e if isRowVar(s, e) => s.unifier.resolve(e.args.head) }.collect { case v: Type.TypeVar =>
+      v
+    }
+
+  /** Rule E8.2: a callback's effects that an open expected row does not name extend its row
+    * variable, so the receiving function's own `with E` performs them.
+    */
+  private def absorb(s: TyperState, fx: EffectRow, bound: EffectRow): TyperState =
+    val open = expand(s, bound.effects)
+    openTail(s, open).fold(s) { tail =>
+      val extra = expand(s, fx.effects).filterNot(e => open.exists(_.sym == e.sym) || openTail(s, List(e)).isDefined)
+      if extra.isEmpty then s
+      else
+        val (s1, rest) = s.fresh
+        val items = extra.map(e => if isRowVar(s, e) then e.args.head else Type.TypeRef(e.sym, e.args)) :+ rest
+        s1.tryUnify(tail, Type.TupleType(items)).getOrElse(s1)
+    }
 
   /** Rule E5.2: every performed effect is declared (`T015`); a declared one never performed is a
     * warning (`T017`); `main` declares only runtime effects (`T016`, Rule E5.4).
     */
   def discharge(s: TyperState, c: RowCheck): TyperState =
-    val declared = c.declared.effects
-    val checked = c.performed.reverse.foldLeft(s) { case (si, (e, span)) =>
+    val declared = expand(s, c.declared.effects)
+    val performed =
+      c.performed.flatMap((e, span) => expand(s, List(e)).filter(e1 => openTail(s, List(e1)).isEmpty).map(_ -> span))
+    val checked = performed.reverse.foldLeft(s) { case (si, (e, span)) =>
       declared.iterator.flatMap(d => if d.sym == e.sym then unifyArgs(si, d, e) else None).nextOption().getOrElse {
         si.error(DiagCode.T015, span, s"effect ${show(si, e)} is not declared by ${c.owner}")
       }
     }
-    val unused = if c.unused then declared.filterNot(d => c.performed.exists(_._1.sym == d.sym)) else Nil
+    val unused = if c.unused then declared.filterNot(d => performed.exists(_._1.sym == d.sym)) else Nil
     val warned = unused.foldLeft(checked) { (si, d) =>
       si.warn(DiagCode.T017, c.span, s"${c.owner} declares effect ${show(si, d)} but never performs it")
     }
@@ -79,7 +128,7 @@ object Effects:
     d.owner == SymbolId.Prelude && d.kind == SymKind.Effect && runtimeNames(d.name)
 
   def show(s: TyperState, e: EffectBound): String =
-    s.symbols.render(s.unifier.zonk(Type.TypeRef(e.sym, e.args)))
+    s.symbols.render(s.unifier.zonk(if isRowVar(s, e) then e.args.head else Type.TypeRef(e.sym, e.args)))
 
   /** Rule E5.3: a handler names an effect only by covering every one of its operations (`T018`). */
   def coverage(s: TyperState, clauses: List[(SymbolId, String)], span: Span): TyperState =

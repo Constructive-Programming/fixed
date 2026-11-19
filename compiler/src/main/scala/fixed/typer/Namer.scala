@@ -347,8 +347,16 @@ object Namer:
       case other                    => effectList(other)
     val (c1, resolved) = mapAccum(c, bounds) {
       case (ci, Trees.EffectBound(name, ofArg, span)) =>
-        val (ci1, args) = typeArgs(ci, ofArg)
-        resolve(ci1, name, span, "effect")(EffectBound(_, args))
+        ci.lookup(name).filter(ci.table(_).kind != SymKind.TypeParam) match
+          case Some(_) =>
+            val (ci1, args) = typeArgs(ci, ofArg)
+            resolve(ci1, name, span, "effect")(EffectBound(_, args))
+          case None =>
+            /** A row variable (`spec/effects.md` §8.1), introduced at first use like a type variable. */
+            val (ci1, id) = ci.lookup(name).fold(introduce(ci, name, Nil, span))((ci, _))
+            val ci2 =
+              if ofArg.isDefined then ci1.error(DiagCode.T005, span, s"row variable $name takes no arguments") else ci1
+            (ci2, Some(EffectBound(id, List(Type.TypeRef(id, Nil)))))
       case (ci, other) => (ci.error(DiagCode.T005, other.span, "not an effect"), None)
     }
     (c1, EffectRow(resolved.flatten))

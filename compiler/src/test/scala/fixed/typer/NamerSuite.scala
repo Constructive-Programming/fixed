@@ -70,9 +70,10 @@ class NamerSuite extends munit.FunSuite:
     assertEquals(diags, Nil)
     assert(triples(table).contains(("Clamped", SymKind.TypeAlias, "is N + between(lo, hi)")), triples(table))
 
-  test("unknown capabilities and effects are T001; duplicate definitions are T003"):
-    val (_, diags) = indexString("fn f(x: is Nope) -> () with Nada = ()\nfn f() -> () = ()\n")
-    assertEquals(diags.map(_.code), List(DiagCode.T003, DiagCode.T001, DiagCode.T001))
+  test("unknown capabilities are T001; an unknown name in a row is a row variable; duplicates are T003"):
+    val (table, diags) = indexString("fn f(x: is Nope) -> () with Nada = ()\nfn f() -> () = ()\n")
+    assertEquals(diags.map(_.code), List(DiagCode.T003, DiagCode.T001))
+    assert(triples(table).exists((n, k, _) => n == "Nada" && k == SymKind.TypeParam), triples(table))
 
   test("use std.io.X binds the stdlib declaration; unknown modules stay opaque imports"):
     val (table, diags) = indexString("use std.io.Console\nuse acme.Widget\n")
