@@ -437,6 +437,6 @@ The `return(Pat) => ...` clause's `Pat` is similarly irrefutable, matching the S
 | `spec/quantities.md` | Rule Q5.8 (pattern binder quantities), Rule Q5.9 (branching uses `⊔`) |
 | `spec/effects.md` | §6, §10 — handler clause pattern algebra |
 | `spec/properties.md` (TBD) | Match cases inside `prop` bodies are checked at quantity 0 — same rules apply |
-| `spec/memory_management.md` | Match-bound values' RC: each case's binders consume the scrutinee per their inferred quantity |
+| `spec/memory_management.md` | Match-bound values' RC and reuse: an exclusively owned scrutinee gives exclusively owned field binders and an unconditionally reusable cell; a shared scrutinee gives shared binders (`spec/quantities.md` Rule Q4.1.b) |
 | `docs/references/scala3-compiler-reference.md` | The dotc PatternMatcher transform (`transform/PatternMatcher.scala`) — Maranget's algorithm; reference implementation |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `typer/Exhaustiveness.scala`; Phase 4: `transform/MatchDesugar.scala` |

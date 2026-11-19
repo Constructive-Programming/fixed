@@ -138,17 +138,17 @@ linear effect Handle of R:
 
 **Compatibility.** A non-linear handler does not satisfy a linear-effect contract; declaring `linear effect E` requires every handler that handles E to be a `handle` block (handlers do not need to be marked `linear` — linearity is a property of the effect, not the handler).
 
-**Quantity-1 captures across linear clause bodies (resolves L6).** Because a linear effect's clause body runs at most once per `handle` block, the clause body itself has quantity 1 — see `spec/quantities.md` Rule Q7.4. A quantity-1 outer binding may therefore be captured into a linear-effect clause body without violating Rule Q7.1 (the standard "no quantity-1 capture into a quantity-ω closure" rule):
+**Exclusive captures across linear clause bodies (resolves L6).** Because a linear effect's clause body runs at most once per `handle` block, the clause body itself has quantity 1 — see `spec/quantities.md` Rule Q7.4. An exclusively owned outer value captured into a linear-effect clause body therefore stays exclusive:
 
 ```
 let lock_token = make_token()        // quantity 1
 handle (do: ... Lock.release):
     Lock.release =>
-        consume(lock_token)          // OK: clause body is quantity 1, see Rule Q7.4
+        consume(lock_token)          // exclusive: clause body is quantity 1, see Rule Q7.4
         resume(())
 ```
 
-The same capture into a *non-linear* clause body (e.g. `Console.print_line`) remains a Rule Q7.1 error.
+The same capture into a *non-linear* clause body (e.g. `Console.print_line`) is downgraded to `own`: the value is shared from then on (`spec/quantities.md` Rule Q5.7). It is not an error.
 
 ## 4. Effect rows
 
@@ -559,7 +559,7 @@ fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A) =
 |---|---|
 | `spec/syntax_grammar.ebnf` | All effect-related syntax |
 | `spec/type_system.md` | Effect declarations as type-level constructs (§9 forwards here); `!` typing (§5.6) |
-| `spec/quantities.md` | Rule Q5.11 (`resume` quantity 1); OQ-Q1 ↔ OQ-E1 |
+| `spec/quantities.md` | Rule Q5.11 (`resume` quantity 1); OQ-Q1 ↔ OQ-E1; Rule Q9.2 fixes the order in which argument effects are performed (left to right) |
 | `spec/memory_management.md` | §14: handler kinds, abort resets, fiber stacks for capturing handlers, continuation memory |
 | `spec/properties.md` (TBD) | Effects in `prop` bodies are forbidden — props are checked at quantity 0 (Rule Q5.5), and `prop` bodies are compile-time only |
 | `spec/pattern_matching.md` (TBD) | Handler clauses reuse pattern syntax; not effect-specific |

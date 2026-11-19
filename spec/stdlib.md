@@ -31,7 +31,7 @@ It does **not** specify:
 | `Ord`         | cap  | `<`/`<=`/`>`/`>=` operator support, extends `Eq` (§4.8)                 |
 | `Numeric`     | cap  | `+`/`-`/`*`/`/`/`%` operator support, extends `Eq + Ord` (§4.9)         |
 | `Show`        | cap  | `.show -> String` (§4.10)                                                |
-| `Clone`       | cap  | Explicit `.clone()`; primary path is borrow inference (§4.11)            |
+| `Clone`       | cap  | Explicit `.clone()`; never needed for ownership (§4.11)                  |
 
 > **Update from prior drafts.** Earlier drafts of `docs/plans/implementation-plan.md` listed `Pair` and `Ordering` as data types. The classification above supersedes that — they are caps, with `Tuple` (new) as the canonical concrete satisfier of `Pair`. See §6 for migration guidance.
 
@@ -237,7 +237,7 @@ cap Clone:
 
 Produces a value of the same type whose lifetime is independent of the receiver. Implementations are expected to perform a deep copy when the underlying representation is heap-allocated (refcount-incremented copy is acceptable when the representation is a refcounted shared structure — see `spec/memory_management.md`).
 
-**Relationship with borrow inference.** Perceus's borrow inference (`spec/memory_management.md` §13) is the *primary* mechanism for sharing values across multiple uses without allocation: when the typer can prove a value is read-only and not consumed, the call site reads in place rather than dup-then-drop. `.clone()` is the **explicit fallback** for cases where borrow inference cannot prove uniqueness (e.g., a value passed to a closure that may run multiple times) or where the program semantics genuinely require a separate copy (e.g., before-and-after comparisons, or staging an intermediate snapshot for later use).
+**Relationship with ownership inference.** `.clone()` is never needed to satisfy ownership. Demands (`spec/quantities.md` §4.1) decide what each call needs: a `read` parameter borrows, an `own` parameter takes a counted reference, and an `exclusive` parameter given a shared value makes the compiler call the callee's shared version, or copy the demanded part itself (Rule Q9.3). Values are immutable, so a copy is never observable and needs no `Clone`. `.clone()` remains for programs that want an independent value for their own reasons, for example to bound how long a large structure is kept alive.
 
 In current example code, `.clone()` was used defensively in places where borrow inference is expected to handle the duplication implicitly; the v0.4.5 sweep removed those calls. Programs that *need* an explicit duplicate continue to call `.clone()`; the typer ensures the receiver type satisfies `Clone`.
 

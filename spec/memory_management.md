@@ -1,8 +1,10 @@
 # Fixed Memory Management
 
-**Status:** Draft v0.2
+**Status:** Draft v0.3
 **Specifies:** how the compiler places, frees and reference-counts runtime values for Fixed v0.4.4 source: lifetime classes, data-stack regions, counted regions, the Perceus heap, destinations, class witnesses, reuse (FBIP), borrowing, effect-handler memory, structured parallelism, the `fip` contract and the memory report.
-**Last revised:** 2026-11-19
+**Last revised:** 2026-11-20
+
+**Changes from v0.2.** Reference-count traffic and reuse are decided by **demands** and **exclusive ownership** (`spec/quantities.md` §4.1), not by quantity 1: a binding used once is not necessarily a value owned once. Reuse is hybrid: unconditional for exclusively owned values, after a runtime `rc == 1` test for shared `Heap` values (Rule PR6.3). A caller holding a shared value calls the callee's shared version, or copies the demanded part beyond the version cap and into `fip` functions (`spec/quantities.md` Rule Q9.3). Borrowing is the `read` demand (§13). Closures whose parameter is `exclusive` carry two code pointers (Rule PR5.6). Escape facts, classes and demands are computed on Core after lowering (§20.3).
 
 **Changes from v0.1 (`spec/perceus.md`).** The document is renamed and widened. v0.1 specified a pure Perceus model in which stack allocation was keyed on quantity 1. v0.2 separates two axes: **quantity** (0 / 1 / ω, `spec/quantities.md`) decides reference-count traffic, and **lifetime class** (§3) decides placement. Most values live in headerless, refcount-free data-stack regions in the style of Goose; the Perceus heap and counted regions hold only values that are long-lived in the sense of Rule MM5.2. Perceus rules keep their `PR` identifiers so existing citations stay valid; new rules use `MM`. Rule PR3.1.a (SCC stack allocation gated on escape) is superseded by §5 and §15. OQ-PR2 is resolved for structured parallelism (§17).
 
@@ -71,17 +73,19 @@ Every runtime allocation is assigned exactly one **lifetime class**:
 
 `Dest(p)` is resolved at each call site to one of `Frame`, `Region` or `Heap` of the caller (§7.1). `Inline` is decided by representation selection (`spec/type_system.md` §6.5); M11 may demote any class to `Inline` but never promotes.
 
-### 3.2 Quantity × class (Rule MM3.2)
+### 3.2 Ownership × class (Rule MM3.2)
 
-Quantity decides reference-count traffic; class decides placement. The two are independent: a linear value can still escape (be returned), and a shared value can still die with its scope.
+Ownership (`spec/quantities.md` §4.1) decides reference-count traffic and reuse; class decides placement. The two are independent: an exclusively owned value can still escape (be returned), and a shared value can still die with its scope.
 
 | | `Frame` / `Dest` on a stack | `Region` | `Heap` | `Static` |
 |---|---|---|---|---|
-| **0** | erased | erased | erased | erased |
-| **1** | no RC; freed by reset | no RC; the single owner releases one region reference on consume | no RC ops; freed on consume (unique owner) | no RC |
-| **ω** | no RC; freed by reset | region-count `dup` / `drop` | Perceus `dup` / `drop` | no RC |
+| **erased (demand `0`)** | erased | erased | erased | erased |
+| **exclusively owned** | no RC; freed by reset; reused unconditionally | no RC; the single owner releases one region reference when it is consumed | no RC ops; freed or reused at its last use without a test | no RC |
+| **shared** | no RC; freed by reset; no reuse | region-count `dup` / `drop`; no reuse | Perceus `dup` / `drop`; reuse after `rc == 1` | no RC |
 
-**Consequence (the goal of this model).** Per-value reference-count operations exist only for values that are both quantity ω and `Heap`. Headers exist only on `Heap` values and once per `Region`.
+A `read` demand adds nothing to any cell: the callee borrows (§13).
+
+**Consequence (the goal of this model).** Per-value reference-count operations exist only for values that are both shared and `Heap`. Headers exist only on `Heap` values and once per `Region`.
 
 ## 4. The region-containment invariant
 
@@ -168,7 +172,7 @@ A cohesive group is allocated in a fresh counted region `r` (§6.4). Typical cas
 Values are immutable and have no identity, so the compiler may **copy** a value from one class to another without changing the meaning of the program. This is **evacuation**. The compiler inserts it where a value's assigned class turns out too short for a use that the analysis could not foresee at the allocation point, for example:
 
 - a `Frame` value passed to a parameter whose interface escape is `unbounded`;
-- a value passed to a `fip` function's quantity-1 parameter from a shared (ω) binding (§18.3);
+- a shared value passed to a `fip` function's `exclusive` parameter, or to any `exclusive` parameter once the callee's version cap is reached (§18.3, `spec/quantities.md` Rule Q9.3);
 - a subtree extracted from a packed blob to outlive it (§16.2).
 
 Evacuation makes analysis imprecision a performance cost, never a soundness hole. It is reported per site (§19).
@@ -255,7 +259,7 @@ witness(op, v, dest)    op ∈ { drop, dup, reuse_test, evacuate, size }
 |---|---|---|---|---|
 | `drop` | no-op | region decrement | Perceus decrement | no-op |
 | `dup` | identity | region increment | Perceus increment | identity |
-| `reuse_test` | unique iff quantity 1 (static) | false | `rc == 1` | false |
+| `reuse_test` | true iff exclusively owned (static) | false | true if exclusively owned (static), else `rc == 1` | false |
 | `evacuate(dest)` | copy into `dest` | copy into `dest` unless `dest` is this region | identity if `dest` is the heap, else copy | identity |
 | `size` | byte size | byte size | byte size | byte size |
 
@@ -292,8 +296,8 @@ The v0.1 rules that tied stack allocation to quantity 1 and a size budget, and R
 
 ### 8.2 `dup` and `drop` primitives (Rule PR3.2)
 
-- `dup(x)` — increment `x`'s count. No-op unless `x` is quantity ω and `Heap` or `Region`.
-- `drop(x)` — decrement `x`'s count; at zero, drop its fields and free the memory (heap) or free the region (§6.4). No-op for `Frame`, stack `Dest`, `Static`, `Inline` and `Erased`. Quantity-1 values use `consume` (Rule PR3.5).
+- `dup(x)` — increment `x`'s count. No-op unless `x` is shared and `Heap` or `Region`.
+- `drop(x)` — decrement `x`'s count; at zero, drop its fields and free the memory (heap) or free the region (§6.4). No-op for `Frame`, stack `Dest`, `Static`, `Inline` and `Erased`. Exclusively owned values use `consume` (Rule PR3.5).
 
 `dup` and `drop` are emitted by the compiler (§10); they are not user-visible. Where the class is unknown they are witness calls (§7.3).
 
@@ -303,25 +307,25 @@ For every binding `x` introduced at program point P, the compiler emits exactly 
 
 The last use of a binding is the last program point in IR order where the binding is referenced. The compiler emits `drop` immediately after the last use (or at branch entry, per §10.4).
 
-### 8.4 Quantity ω (Rule PR3.4)
+### 8.4 Shared values (Rule PR3.4)
 
-Quantity-ω bindings of class `Heap` or `Region` carry Perceus RC: `dup` at share points, `drop` at last use, conditional reuse (§11). Quantity-ω bindings of any other class carry no RC; their region frees them.
+Shared values of class `Heap` or `Region` carry Perceus RC: `dup` at share points, `drop` at last use, reuse after a runtime test (§11). Shared values of any other class carry no RC; their region frees them.
 
-### 8.5 Quantity 1 is `consume` (Rule PR3.5)
+### 8.5 Exclusive ownership is `consume` (Rule PR3.5)
 
-A quantity-1 binding has no `dup` and no count-aware `drop`. Its single use is a **`consume`**: the value is moved, and the binding is dead afterwards. For `Frame` and stack `Dest` values, `consume` is a no-op. For `Heap` values, `consume` transfers ownership, and the final owner frees without testing a count. For `Region` values, the final owner releases its single region reference.
+An exclusively owned value (`spec/quantities.md` Rule Q4.1.b) has no `dup` and no count-aware `drop`. Its last use is a **`consume`**: the value is moved, and the binding is dead afterwards. For `Frame` and stack `Dest` values, `consume` is a no-op. For `Heap` values, `consume` transfers ownership, and the final owner frees without testing a count. For `Region` values, the final owner releases its single region reference.
 
-This is what makes FBIP guaranteed for quantity-1 bindings: at the consume site, the memory is unique to this code path.
+This is what makes FBIP guaranteed for exclusively owned values: at the consume site, the memory is unique to this code path. Quantity 1 alone does not give this: a binding used once may hold a shared value.
 
-## 9. Quantity-driven simplification
+## 9. Demand-driven simplification
 
-| Quantity | Allocation | RC ops | Reuse |
+| Value | Allocation | RC ops | Reuse |
 |---|---|---|---|
-| **0** | None | None | N/A — the value does not exist at runtime. |
-| **1** | By class (§5). | No `dup`; no count `drop`; `consume` at the use site. | Guaranteed — the last use is the only use. |
-| **ω** | By class (§5). | `dup` / `drop` only if `Heap` or `Region`. | `Heap`: conditional on `rc == 1`. `Frame`: none (§11.3). |
+| **Erased** (demand `0`) | None | None | N/A — the value does not exist at runtime. |
+| **Exclusively owned** | By class (§5). | No `dup`; no count `drop`; `consume` at the last use. | Guaranteed, no test. |
+| **Shared** | By class (§5). | `dup` / `drop` only if `Heap` or `Region`. | `Heap`: after `rc == 1`. `Frame`, `Region`: none (§11.3). |
 
-Quantity removes RC operations for 0 and 1; class removes them for ω values outside the heap. Together they confine per-value RC to ω ∧ `Heap` (Rule MM3.2).
+A `read` demand costs nothing at the call (§13). Exclusivity removes RC operations; class removes them for shared values outside the heap. Together they confine per-value RC to shared ∧ `Heap` (Rule MM3.2).
 
 ## 10. RC insertion algorithm
 
@@ -329,11 +333,12 @@ The compiler implements the Reinking et al. (2021) algorithm, restricted to bind
 
 ### 10.1 Input form (Rule PR5.1)
 
-The pass runs after match desugaring (`spec/pattern_matching.md` §8) and consumes the decision tree plus, per binding, its quantity and class (§20).
+The pass runs after match desugaring (`spec/pattern_matching.md` §8) and consumes the decision tree plus, per binding, its ownership and class (§20).
 
 Input invariants:
 
-- Every binding is annotated with its quantity and lifetime class.
+- Every binding is annotated with its ownership (exclusive or shared, per part), and every parameter with its demand.
+- Every binding is annotated with its lifetime class.
 - Every value has a chosen representation (`spec/type_system.md` §6.5).
 - Match expressions are decision trees, not match cases.
 
@@ -361,10 +366,10 @@ For each program point P, the live set is the set of bindings whose values may s
 
 A binding leaving the live set after its last use gets `drop`. A binding used in K positions gets K−1 `dup`s.
 
-- Quantity-0 bindings: skipped.
-- Quantity-1 bindings: no `dup`; `consume` at the single use (Rule Q7.1 guarantees one use).
-- Quantity-ω bindings of class `Heap` or `Region`: the standard algorithm.
-- Quantity-ω bindings of any other class: skipped; the region frees them.
+- Erased bindings: skipped.
+- Exclusively owned bindings: no `dup`; `consume` at the last use. A use that keeps the value while the binding stays live makes it shared from there on (`spec/quantities.md` Rule Q4.1.b).
+- Shared bindings of class `Heap` or `Region`: the standard algorithm.
+- Shared bindings of any other class: skipped; the region frees them.
 
 ### 10.4 Branching (Rule PR5.4)
 
@@ -372,10 +377,12 @@ At a branch point, for each RC-tracked binding `x` in the live set: if a branch 
 
 ### 10.5 Function calls (Rule PR5.5)
 
-At a call `g(a, b, …)`:
+At a call `g(a, b, …)`, arguments evaluated left to right and moved when the call starts (`spec/quantities.md` Rule Q9.2):
 
-- For an owned parameter: at the argument's last use, ownership transfers (no `dup`); otherwise `dup` at this position.
-- For a borrowed parameter (§13): no `dup` / `drop` transfer.
+- For a `read` parameter (§13): no `dup` / `drop` transfer.
+- For an `own` parameter: at the argument's last use, ownership transfers (no `dup`); otherwise `dup` at this position.
+- For an `exclusive` parameter: if the argument is exclusively owned, this is its last use, and no other argument or capture of the call reaches it (Rule Q9.4), it is moved into the exclusive version of `g`. Otherwise the call goes to `g`'s shared version, or, beyond the version cap and for a `fip` callee, the demanded part is copied first (Rule Q9.3).
+- For a `0` parameter: no value is passed; an effectful argument is still evaluated.
 - If the parameter's interface escape is `unbounded` and the argument is not `Heap`, `Region` or `Static`: evacuate (Rule MM5.5).
 
 ### 10.6 Closures (Rule PR5.6)
@@ -388,7 +395,9 @@ A closure capturing a binding `y`:
 
 A closure whose environment does not escape its creation scope is itself `Frame` (no header). An escaping closure is `Heap` and its captures follow Rule MM4.1: a `Frame` capture of an escaping closure is long-lived by Rule MM5.2(a) and is placed accordingly.
 
-For quantity-1 captures, the closure must itself be quantity 1 (Rule Q7.1).
+An exclusively owned capture stays exclusive only if the closure is called at most once; otherwise it is downgraded to `own` and shared (`spec/quantities.md` Rule Q5.7).
+
+**Two entry points.** A closure whose parameter is `exclusive` carries two code pointers: the closure body compiled for exclusive input, and compiled for shared input. A call through a closure whose identity is unknown at compile time (a function-typed parameter, a closure taken from a data structure) picks the pointer statically from what the caller holds, exactly as a direct call picks the version. The cost is one word in such a closure and the second body; there is no runtime test. Closures with no `exclusive` parameter have one code pointer.
 
 ## 11. Reuse analysis (FBIP)
 
@@ -410,17 +419,19 @@ match list:
     List.Nil => List.Nil
 ```
 
-For quantity ω, `drop_to_reuse` returns the memory if `rc == 1` and otherwise decrements and returns a null token, so the constructor allocates fresh.
+For an exclusively owned `x`, `drop_to_reuse` returns the memory unconditionally. For a shared `Heap` `x`, it returns the memory if `rc == 1` and otherwise decrements and returns a null token, so the constructor allocates fresh. This dynamic path is Koka's technique; it catches values that were shared but whose other owners have died by the time of the reuse, which no static analysis can see in general.
 
 ### 11.2 Reuse fingerprints (Rule PR6.2)
 
 Two shapes match for reuse iff they have the same byte size after padding, the same alignment and the same field kind sequence. Matching is by fingerprint, not nominal type, so variants of different types can reuse each other's memory.
 
-### 11.3 Quantity-driven reuse (Rule PR6.3)
+### 11.3 Ownership-driven reuse (Rule PR6.3)
 
-- Quantity 1: reuse is unconditional, in any class. Linearity guarantees uniqueness statically.
-- Quantity ω, `Heap`: reuse is conditional on `rc == 1` at runtime.
-- Quantity ω, `Frame` or `Region`: no reuse. Without a count, uniqueness is unknown, and the memory is freed with its region anyway.
+Reuse is **hybrid**: static where exclusivity is proved, dynamic for shared heap values.
+
+- Exclusively owned (`spec/quantities.md` Rule Q4.1.b): reuse is unconditional, in any class. Exclusivity is proved statically, through `exclusive` demands and the shared versions of Rule Q9.3. Quantity 1 alone is not enough.
+- Shared, `Heap`: reuse is conditional on `rc == 1` at runtime.
+- Shared, `Frame` or `Region`: no reuse. Without a count, uniqueness is unknown, and the memory is freed with its region anyway.
 
 ### 11.4 Reuse across regions (Rule MM11.4)
 
@@ -488,7 +499,7 @@ The compiler must guarantee tail-call optimization for compiler-emitted drop fun
 
 ### 13.1 Borrow analysis (Rule PR8.1)
 
-A function parameter `p` is **borrowed** iff the body never stores `p` in a constructed value, never returns `p` (or a value containing `p`), and never passes `p` to an owned parameter. The analysis is a fixed point over the call graph.
+A function parameter `p` is **borrowed** iff its demand is `read` (`spec/quantities.md` Rule Q4.1): the body never stores `p` in a constructed value, never returns `p` (or a value containing `p`), and never passes `p` to an `own` or `exclusive` parameter. The analysis is a fixed point over the call graph, the same fixed point that infers every demand.
 
 Lean's heuristic also applies: a parameter that is the subject of a reuse token is owned, because borrowing it would block the reuse.
 
@@ -534,7 +545,7 @@ Installing a handler records a mark on every data stack in use. When an abortive
 The subject of a capturing handler runs on **fiber data stacks** owned by the handler installation: a fresh scratch stack and fresh growable stacks, small first chunks (§6.1), drawn from a per-thread pool.
 
 - Capturing the continuation freezes the native stack segment and the fiber stacks together.
-- The continuation object is quantity 1 (Rule Q5.11) and `Heap`. It owns its fiber stacks. `resume` continues on them; when the resumed computation finishes, or the continuation is dropped unresumed, the fiber stacks return to the pool.
+- The continuation object is resumed at most once (Rule Q5.11), exclusively owned and `Heap`. It owns its fiber stacks. `resume` continues on them; when the resumed computation finishes, or the continuation is dropped unresumed, the fiber stacks return to the pool.
 - **Local capture.** The continuation cannot outlive the `handle` expression, and the `handle` expression lies inside the scopes of every outer `Frame` region. Suspended frames may therefore keep borrowing outer `Frame` values.
 - **Escaping capture.** A `Frame` value of an outer scope that the continuation can reach, and whose scope may end before the continuation is dropped, is long-lived by Rule MM5.2(a). It is promoted to its long-lived class, or evacuated into the fiber at install time.
 - The subject's result, and values flowing to the handler's result, are built in the handler's destination or evacuated there when the handler returns.
@@ -545,13 +556,13 @@ Multi-shot resume (OQ-Q1) would break single ownership of the fiber stacks and r
 
 ### 14.4 Continuation memory (Rule PR9.1)
 
-The continuation object (§14.3) has a header and is quantity 1: no `dup`, `consume` at `resume`, freed (or reused for another continuation) after the resume.
+The continuation object (§14.3) has a header and is exclusively owned (it is resumed at most once, Rule Q5.11): no `dup`, `consume` at `resume`, freed (or reused for another continuation) after the resume.
 
 ### 14.5 Linear effect handlers (Rule PR9.2)
 
 A linear effect (`spec/effects.md` §3.5) allows at most one operation per code path. Its handler frame lives only during the subject's evaluation; linearity prevents a residual continuation from outliving the handler.
 
-**Quantity-1 captures across linear clause bodies (Rule PR9.2.a).** Per Rule Q7.4, a linear-effect clause body has quantity 1, so a quantity-1 outer binding captured into it generates no `dup`. Non-linear clause bodies remain quantity-ω closures (Rule Q5.7); capturing a quantity-1 binding into one is a Rule Q7.1 violation. Rules Q7.4 and PR9.2.a are contingent on OQ-Q5 and gated by the same flag as `linear effect`.
+**Exclusive captures across linear clause bodies (Rule PR9.2.a).** Per Rule Q7.4, a linear-effect clause body has quantity 1, so an exclusively owned outer value captured into it stays exclusive and generates no `dup`. Non-linear clause bodies remain quantity-ω closures (Rule Q5.7); an exclusive capture into one is downgraded to `own` and shared, which is not an error. Rules Q7.4 and PR9.2.a are contingent on OQ-Q5 and gated by the same flag as `linear effect`.
 
 ### 14.6 Tail-resume (Rule PR9.3)
 
@@ -637,7 +648,7 @@ A function declared `fip fn` is rejected unless inference shows that the functio
 4. register nothing on a drop list;
 5. use **bounded** data-stack space: the number of bytes bumped per call has a static upper bound. Bumps inside a `fold` / `unfold` step count once, because they reset per step (Rule MM5.1).
 
-Allowed: writing into destinations supplied by the caller, `Frame` temporaries within the bound, and unconditional reuse of quantity-1 cells. Native stack use is bounded by the fold structure (a `fold` over a tree uses depth proportional to the tree's depth).
+Allowed: writing into destinations supplied by the caller, `Frame` temporaries within the bound, and unconditional reuse of exclusively owned cells. Native stack use is bounded by the fold structure (a `fold` over a tree uses depth proportional to the tree's depth).
 
 ### 18.2 `fip(strict) fn` (Rule MM18.2)
 
@@ -648,7 +659,7 @@ The FP² meaning. In addition to Rule MM18.1:
 
 ### 18.3 Arguments of `fip` functions (Rule MM18.3)
 
-A parameter that a `fip` function reuses must be quantity 1 in its signature, so reuse is unconditional and needs no count test. Koka checks uniqueness at runtime and falls back to copying; Fixed proves it statically. A caller that passes a quantity-ω binding to such a parameter gets an evacuation inserted at the call site. The caller is then not `fip` itself, and the evacuation is reported (and warned in hot code, W110).
+A parameter that a `fip` function reuses must be `exclusive` in its signature (`spec/quantities.md` §4.1), so reuse is unconditional and needs no count test. Koka checks uniqueness at runtime and falls back to allocating; for `fip` functions Fixed proves it statically. A `fip` function has no shared version, so a caller holding a shared value copies the demanded part at the call site (an evacuation, `spec/quantities.md` Rule Q9.3). The caller is then not `fip` itself, and the evacuation is reported (and warned in hot code, W110).
 
 ### 18.4 Diagnostics (Rule MM18.4)
 
@@ -680,9 +691,9 @@ error[E110]: fip contract violated: heap allocation (Rule MM18.1(1))
 
 ### 20.1 Per binding and per construct (Rule MM20.1)
 
-Quantity inference (M10, `docs/plans/phase-3-typer.md` §5.7) computes, in the same walk that counts usages:
+M10 (`docs/plans/phase-3.4-qtt.md`) computes, in one walk over Core after lowering, together with demands:
 
-- **Per binding:** quantity; **escape set** ⊆ {`result`, `field(b)`, `closure(c, escapes?)`, `continuation(h, escapes?)`, `carried(loop)`, `lane-shared(fork)`, `unbounded`}; lifetime class (§5.3), with `Inline` left to M11; the reason chain (§19).
+- **Per binding:** quantity; ownership (exclusive or shared, per part); **escape set** ⊆ {`result`, `field(b)`, `closure(c, escapes?)`, `continuation(h, escapes?)`, `carried(loop)`, `lane-shared(fork)`, `unbounded`}; lifetime class (§5.3), with `Inline` left to M11; the reason chain (§19).
 - **Per scope:** the allocations reset at its end; drop-list registrations.
 - **Per `fold` / `unfold`:** whether the step is garbage-free for the carried value (Rule MM5.2(b)).
 - **Per cohesive group:** its root and members (Rule MM5.4).
@@ -696,7 +707,8 @@ Escape facts are data flow and do not depend on representation, so all of the ab
 
 These facts appear in every function signature, and in module interfaces for separate compilation:
 
-- **Per parameter:** quantity; mode (borrowed or owned); escape ∈ {`none`, `into-result`, `unbounded`}; class-polymorphic or fixed (decides whether a witness is passed, §7.3).
+- **Per parameter:** demand per part (`0`, `read`, `own`, `exclusive`; `spec/quantities.md` Rule Q4.1.a), which replaces the separate quantity and borrowed/owned mode; escape ∈ {`none`, `into-result`, `unbounded`}; class-polymorphic or fixed (decides whether a witness is passed, §7.3).
+- **Versions:** which combinations of exclusive and shared input have a compiled version, and the call sites that copy because the cap was reached (`spec/quantities.md` Rule Q9.3).
 - **Result:** destination-polymorphic or a fixed class.
 - **Stack demand:** the maximum number of growable stacks in use at once, and the static bound on scratch bumps if one exists.
 - **`fip` level:** none, `fip` or `fip(strict)`.
@@ -707,8 +719,10 @@ Lean ships borrow annotations in its interface files in the same way.
 
 | Runs after | Provides |
 |---|---|
-| Quantity inference, M10 (`spec/quantities.md` §4) | Quantities, escape sets, lifetime classes, signature facts (§20) |
-| Representation selection, M11 (`spec/type_system.md` §6.5) | Representations, `Inline` demotions, N, copy-out sites, fingerprints |
+| Quantity inference (`spec/quantities.md` §4), on the typed tree | Occurrence quantities; `E072`, `T021` |
+| Lowering to Core, carrying source spans | Monomorphic ANF with every allocation and generated member visible |
+| Demand and memory inference, M10, on Core | Demands, ownership, versions, escape sets, lifetime classes, signature facts (§20) |
+| Representation selection, M11 (`spec/type_system.md` §6.5), on Core | Representations, `Inline` demotions, N, copy-out sites, fingerprints |
 | Match desugaring (`spec/pattern_matching.md` §8) | Decision-tree IR |
 | Property verification (`spec/properties.md` §7) | Verified facts (informs reuse) |
 
@@ -730,6 +744,8 @@ Fixed has no backend yet. Every performance statement in this document is a hypo
 - Relocation-on-growth waste versus a larger N (§6.3).
 - Retention by counted regions and blobs, and the copy-out volume (§6.4, §16.2).
 - Deferred dups in lanes (§17.3).
+- How many versions per function shared input produces (`spec/quantities.md` Rule Q9.3), how often the cap forces a copy, and the code-size cost.
+- How often the dynamic `rc == 1` path (§11.1) reuses a cell that static exclusivity missed. If it is rare, the shared version could drop the test.
 
 ## 22. Worked examples
 
@@ -741,7 +757,7 @@ fn count_pairs(x: i64, y: i64) -> i64 =
     pair.first + pair.second           // two borrowed reads
 ```
 
-`pair` is quantity ω but `Frame`: no header, no `dup`, no `drop`. The region frees it at return. Under v0.1, this would have been a heap allocation with a `dup` / `drop` pair that borrow analysis then removed.
+`pair` is quantity ω (read twice) and `Frame`: no header, no `dup`, no `drop`. Both reads are `read` demands, so `pair` stays exclusively owned throughout. The region frees it at return. Under v0.1, this would have been a heap allocation with a `dup` / `drop` pair that borrow analysis then removed.
 
 ### 22.2 Match with reuse (FBIP)
 
@@ -752,7 +768,7 @@ fn map(list: List of A, f: A -> B) -> List of B =
         List.Nil => List.Nil
 ```
 
-If `list` is quantity 1, each `Cons` cell is reused unconditionally in whatever class it lives in, provided the new fields satisfy Rule MM11.4. If `list` is ω and `Heap`, reuse is conditional on `rc == 1`. If `list` is ω and `Frame`, the result is built in the destination and the old cells die with their region.
+`map` demands `exclusive` on the list cells and `own` on the elements. A caller passing an exclusively owned list gets the exclusive version: each `Cons` cell is reused unconditionally in whatever class it lives in, provided the new fields satisfy Rule MM11.4. A caller passing a shared list gets the shared version: for a `Heap` list, reuse is conditional on `rc == 1`; for a `Frame` list, the result is built in the destination and the old cells die with their region.
 
 ### 22.3 Fold with per-step temporaries
 
@@ -770,7 +786,7 @@ fn index(lines: List of String) -> Map of (String, u64) =
     lines.fold(Map.empty, (m, line) -> m.insert(key_of(line), line.length()))
 ```
 
-If `m` is quantity 1 and `insert` reuses the path it rebuilds, the step is garbage-free (Rule MM5.2(b)). `m` then lives in the caller's destination and is updated in place. If the old map version is shared elsewhere, the replaced path nodes become garbage each step, so `m` is long-lived and goes to `Heap`. The report states which.
+If `m` is exclusively owned and `insert` reuses the path it rebuilds, the step is garbage-free (Rule MM5.2(b)). `m` then lives in the caller's destination and is updated in place. If the old map version is shared elsewhere, the replaced path nodes become garbage each step, so `m` is long-lived and goes to `Heap`. The report states which.
 
 ### 22.5 Linear effect handler
 
@@ -805,7 +821,7 @@ The `Lock` handler is installed once and consumed by `Lock.release`. Its continu
 |---|---|
 | `spec/syntax_grammar.ebnf` | `fip fn` needs a grammar addition (OQ-MM1); otherwise this pass runs on lowered IR |
 | `spec/type_system.md` | §6.5 consumes quantity and escape facts and decides `Inline`; §6.5.4 scoring uses class eligibility and copy-out volume; §7.5 SCCs (§15) |
-| `spec/quantities.md` | Quantities drive §9; M10 also computes the facts in §20; the pending parallel composition rule underlies §17 |
+| `spec/quantities.md` | Demands and exclusive ownership (§4.1) drive §9–§11; shared versions and copying (Rule Q9.3); evaluation order (Rule Q9.2); M10 also computes the facts in §20; the parallel composition rule underlies §17 |
 | `spec/effects.md` | §6 and §7 drive §14; Rule E3.5 drives §14.5; §7.5 drives §14.6 |
 | `spec/pattern_matching.md` | §8 decision trees are the input to §10 |
 | `spec/properties.md` | `proved` props (Rule P7.7) inform reuse and bounds-check elision |

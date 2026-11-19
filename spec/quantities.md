@@ -1,8 +1,15 @@
 # Fixed Quantities (QTT)
 
-**Status:** Draft v0.3
-**Specifies:** quantity inference for Fixed v0.4.4 source.
-**Last revised:** 2026-11-19
+**Status:** Draft v0.4
+**Specifies:** quantity and demand inference for Fixed v0.4.4 source.
+**Last revised:** 2026-11-20
+
+**Changes from v0.3.**
+- **Demands** (§4.1) decide ownership at runtime: `0`, `read`, `own` or `exclusive`, per part of a value. A parameter's demand is a contract. A caller that cannot pass an exclusively owned value to an `exclusive` parameter calls the callee's **shared version** instead (§9.3). Quantities (§3, §5) stay, but only count occurrences: erasure, closure call counts, `resume` and diagnostics.
+- §9 rewritten: an argument contributes according to where its value goes, not where its name appears. The v0.3 rule scaled every binder inside an argument by the parameter's quantity, which contradicted §10.1.
+- New Rule Q9.2 fixes evaluation order (left to right; moves take effect when the call starts) and Rule Q9.4 forbids aliasing an exclusive argument.
+- §7 reframed as exclusivity. Linearity errors (`E071`) arise only from declared obligations: `fip` parameters, `resume`, linear effects.
+- Effectful arguments are evaluated even when their value is erased (Rule Q6.1.3).
 
 **Changes from v0.2.**
 - New Rule Q5.13 (parallel composition): where the compiler may evaluate parts of a `fold` / `unfold` in parallel lanes, and how quantities compose across lanes. There is no surface syntax; fork sites are found automatically.
@@ -36,6 +43,10 @@ It does **not** specify:
 - Atkey, *"Syntax and Semantics of Quantitative Type Theory"*, LICS 2018. The mathematical model.
 - Brady, *"Idris 2: Quantitative Type Theory in Practice"*, ECOOP 2021. A production implementation Fixed broadly follows for the inference shape.
 - Reinking et al., *"Perceus: Garbage Free Reference Counting with Reuse"*, PLDI 2021. The RC interaction model that quantity ω feeds into.
+- Barendsen and Smetsers, *"Uniqueness Typing for Functional Languages with Graph Rewriting Semantics"*, MSCS 1996 (Clean). Uniqueness as a property of the value, which `exclusive` demands are.
+- Marshall, Vollmer and Orchard, *"Linearity and Uniqueness: An Entente Cordiale"*, ESOP 2022. Why a binding used once (linearity) is not a value owned once (uniqueness); §4.1 keeps the two apart.
+- Ullrich and de Moura, *"Counting Immutable Beans"*, IFL 2019 (Lean 4). Inferred borrowed parameters; the `read` demand.
+- Lorenzen, Leijen and Swierstra, *"FP²: Fully in-Place Functional Programming"*, ICFP 2023. The `fip` contract.
 
 ## 3. The quantity semiring
 
@@ -85,7 +96,12 @@ Identity: `1`. `0` is annihilator.
 
 ## 4. Inference architecture
 
-Quantity inference is a **Recheck-style phase** (see `docs/references/scala3-compiler-reference.md` §5.4). It runs:
+Two analyses run, with different inputs:
+
+- **Quantities** (§3, §5) count occurrences on the typed tree, after the typer. They give erasure, closure call counts (Rule Q5.7), the `resume` check (Rule Q5.11), linear effects and the unused-binding warning, all with source positions.
+- **Demands** (§4.1) are data flow over Core, the backend IR, after lowering and monomorphisation. Core sees every allocation and every compiler-generated member (derived `fold`, `unfold`, `map`), and one instance per type, which is where the shared versions of §9.3 are chosen. Lowering carries source spans into Core, so demand diagnostics (`E110`) still point at source. Representation selection consumes demands and therefore also runs on Core (`spec/memory_management.md` §20.3).
+
+The rest of this section describes the quantity analysis as originally designed. Quantity inference is a **Recheck-style phase** (see `docs/references/scala3-compiler-reference.md` §5.4). It runs:
 
 | Runs after | Provides input |
 |---|---|
@@ -103,6 +119,35 @@ Quantity inference is a **Recheck-style phase** (see `docs/references/scala3-com
 The pass is **bidirectional**: the typer carries an *expected quantity* (a prototype) down the tree, and synthesises an *actual quantity* up. A binding's quantity is the actual quantity at the point of declaration. Mismatches between expected and actual yield typed errors per §6.1, §7.1, §8.1.
 
 The pass is **whole-function**: it sees a function's body in its entirety to compute usage counts. Cross-function quantity propagation goes through the function signature (each parameter has its inferred quantity baked into the signature; call sites consume arguments at that quantity).
+
+### 4.1 Demands (Rule Q4.1)
+
+A **demand** states what a function does with a value it receives, and so what its caller must hand over:
+
+| Demand | The callee may | The caller passes |
+|---|---|---|
+| `0` | ignore the value | nothing; the value is erased (an effectful argument is still evaluated, Rule Q6.1.3) |
+| `read` | read it during the call, never keep it | the value itself; no count change (borrowed, `spec/memory_management.md` §13) |
+| `own` | keep it, once or several times | a counted reference, moved on the caller's last use |
+| `exclusive` | overwrite it in place on some path | an exclusively owned value, or else it calls the shared version (§9.3) |
+
+The demands are ordered `0 < read < own < exclusive`. Keeping a value twice needs nothing more from the caller than keeping it once, so "kept several times" is `own`; the extra reference is the callee's own `dup`.
+
+**Rule Q4.1.a (per part).** A demand applies to a part of a value. A data parameter has one demand per field slot of its type, and a recursive field shares the demand of the slot it recurses to, so the description stays finite. `map` over a list demands `exclusive` on the list cells and `own` on the elements. `bump` (§9.3) demands `exclusive` on the first cell and `own` on its tail.
+
+**Rule Q4.1.b (exclusive ownership).** A value is **exclusively owned** at a program point iff no other live reference to it can exist there. It is exclusively owned when it is:
+
+1. a fresh constructor application, literal or call result;
+2. a parameter received under an `exclusive` demand (the caller guaranteed it), on the parts that demand covers;
+3. a field of an exclusively owned value that the enclosing `match` consumes, on the parts covered by (2) or (1);
+
+and only until the first use that keeps it (`own`) while the binding stays live. After that it is shared.
+
+**Rule Q4.1.c (demand of a parameter).** A parameter's demand is the greatest demand among its uses. A use counts as `exclusive` only where the parameter is still exclusively owned (Rule Q4.1.b): its last use on that path, with no earlier use that kept it. Otherwise the use counts as `own`.
+
+**Rule Q4.1.d (relation to quantities).** Quantity 0 and demand `0` coincide. Otherwise the two are independent: a binding of quantity 1 may demand `read` (one comparison), and a binding of quantity ω may be passed to an `exclusive` parameter at its last use.
+
+Demands are inferred, never written; a function states a demand only through the `fip` contract (§7.5).
 
 ## 5. Quantity inference rules
 
@@ -130,7 +175,7 @@ fn identity(x: i64) -> i64 = x            // x used once → quantity 1
 fn const_zero(x: i64) -> i64 = 0          // x used zero times → quantity 0 (warning unless _x)
 ```
 
-The inferred quantity is part of the function's signature; call sites consume arguments at that quantity (§9).
+The inferred quantity is part of the function's signature. What the caller must hand over is the parameter's demand (Rule Q4.1.c), not its quantity: `identity` demands `own` of `x`, and `double` demands `read` of a scalar `x`. For unboxed scalars only `0` and non-`0` produce different code.
 
 ### 5.3 `of` value-params (Rule Q5.3)
 
@@ -174,6 +219,8 @@ g(1) + g(2)                        // g used twice → q' = ω; so y contributes
 ```
 
 Because closures may be called arbitrarily many times by their own callers (their `q'` is generally `ω`), captured bindings typically end up at quantity ω. A closure called exactly once preserves its captured bindings' quantities.
+
+**Demands of captures.** A capture's demand is the closure body's demand on it. If the body demands `exclusive` but the closure may be called more than once (`q' = ω`), the capture is downgraded to `own`: a second call would find it already overwritten. A closure whose own parameter is `exclusive` carries **two code pointers**, one compiled for exclusive input and one for shared input (`spec/memory_management.md` Rule PR5.6). A call through an unknown closure picks the pointer statically from what the caller holds. This costs one word per such closure and no runtime test.
 
 ### 5.8 Pattern bindings (Rule Q5.8)
 
@@ -251,8 +298,8 @@ An effect row is a typing fact (`spec/effects.md` §5), not a prop, so "pure" ne
 1. `e1 ∥ e2` gives every binding the same quantity as `e1; e2`. Whether the compiler forks at an admissible site therefore never changes an inferred quantity or any diagnostic of this document.
 2. A quantity-1 binding is used by at most one lane, since `1 + 1 = ω`.
 3. A binding used by two or more lanes is quantity ω. It gets the escape fact `lane-shared(fork)` (`spec/memory_management.md` Rule MM20.1), and the lanes borrow it for the duration of the fork.
-4. The folded value itself: when it is quantity 1, its recursive fields are separate pattern bindings (Rule Q5.8) and each lane consumes exactly one of them, so in-place reuse (§7.2) stays available inside every lane. When it is quantity ω, the lanes borrow it.
-5. Each lane's result is quantity 1 at the join. It is consumed once, by the node function (sites 1 and 2) or by `op` (site 3).
+4. The folded value itself: when it is exclusively owned (Rule Q4.1.b), its recursive fields are separate pattern bindings (Rule Q5.8) and each lane consumes exactly one of them, so in-place reuse (§7.2) stays available inside every lane. When it is shared, the lanes borrow it (`read`).
+5. Each lane's result is fresh, hence exclusively owned, at the join. It is consumed once, by the node function (sites 1 and 2) or by `op` (site 3).
 
 The function arguments of a `fold` are closures that run once per node, so the bindings they capture are already scaled by ω under Rule Q5.7. Forking adds nothing to that.
 
@@ -274,6 +321,7 @@ Before code generation, the typer verifies:
    - Other quantity-0 bindings' definitions (transitively).
    - Phantom positions (§5.4).
 2. No quantity-0 binding flows into a quantity-1 or quantity-ω position.
+3. Erasing an argument (demand `0`) removes its value, not its evaluation. An argument expression with a non-empty effect row is still evaluated for its effects (`spec/effects.md` §5); only a pure argument is removed entirely.
 
 Violations emit `error[E070]: erased binding used at runtime`, citing the offending position.
 
@@ -283,28 +331,29 @@ Some quantity-0 bindings carry compile-time-known values (e.g., `of` value-param
 
 Materialisation is bounded to cases where the value is statically known. A quantity-0 binding without a static value (e.g., a phantom type, which has no value at all) cannot be materialised and remains pure type-level.
 
-## 7. Linearity (quantity 1)
+## 7. Exclusivity
 
-A quantity-1 binding is **used exactly once**. The compiler verifies this and emits errors for zero or multiple uses.
+Quantity 1 says a binding is used once. That does not make the value exclusively owned (Rule Q4.1.d). In-place reuse depends on the value, so the rules of this section are stated for `exclusive` demands and exclusively owned values.
 
-### 7.1 Linearity-check (Rule Q7.1)
+### 7.1 Declared obligations (Rule Q7.1)
 
-For every quantity-1 binding `x`:
+Inference alone cannot be violated: a binding used twice simply has quantity ω and demand at most `own`. Errors arise only where something is **declared**:
 
-1. Across all reachable code paths, `x` is consumed exactly once. (Branches are checked using `⊔` per Rule Q5.9.)
-2. `x` is not captured by a closure of quantity ω (since the closure may run multiple times). It may be captured by a quantity-1 closure.
+1. a `fip fn` parameter that the function reuses must be `exclusive` (§7.5, `spec/memory_management.md` Rule MM18.3);
+2. `resume` runs at most once on every path (Rule Q5.11, `E072`);
+3. a linear effect is performed at most once (Rule Q7.4, contingent on OQ-Q5).
 
-Violations: `error[E071]: linear binding used <0 or 2+> times`.
+Capturing an exclusively owned value in a closure that may run several times is not an error. The capture is downgraded to `own` (Rule Q5.7), and the value is shared from then on.
 
-### 7.2 FBIP / in-place mutation (Rule Q7.2)
+Violations: `error[E071]: <obligation> not met`, naming which of the three applies.
 
-A quantity-1 binding's last use is the only use, so the underlying memory may be **reused in place** rather than allocated fresh. This is the hook for Functional-But-In-Place (FBIP) optimization.
+### 7.2 FBIP / in-place reuse (Rule Q7.2)
 
-When a constructor is applied to a quantity-1 receiver of the same shape, Perceus may emit a reuse rather than allocate. Details in `spec/memory_management.md`.
+An exclusively owned value's memory may be **reused in place** at its last use rather than freed and allocated again. This is Functional-But-In-Place (FBIP). Where the value is exclusively owned, reuse is unconditional and needs no count test. A shared `Heap` value may still be reused after a runtime test (`rc == 1`, Koka's technique; `spec/memory_management.md` Rule PR6.3). Fixed is therefore hybrid: static where exclusivity is proved, dynamic for shared heap values.
 
 ### 7.3 No RC overhead (Rule Q7.3)
 
-A quantity-1 binding has no `dup`/`drop` operations inserted by Perceus. The single use consumes the value; there is no need to count references.
+An exclusively owned value needs no `dup` or count-aware `drop`. Its last use moves it, and its final owner frees or reuses it without testing a count (`spec/memory_management.md` Rule PR3.5).
 
 ### 7.4 Linear-effect handler clauses (Rule Q7.4) — **Proposal, contingent on OQ-Q5; resolves L6**
 
@@ -312,7 +361,7 @@ A quantity-1 binding has no `dup`/`drop` operations inserted by Perceus. The sin
 
 A handler clause body for a `linear effect` (per `spec/effects.md` §3.5) is itself a **quantity-1 closure**. The clause runs at most once per `handle` block (Rule E3.5.c — at-most-once semantics), so the body's quantity inherits from the effect's linearity rather than defaulting to ω as a regular closure body would.
 
-Consequence: a quantity-1 outer binding **may be captured** by a linear-effect clause body. The capture's contribution to the outer scope's usage of that binding is the join of (clause-body usage) and (other-paths usage), bounded above by 1 because the clause runs at most once.
+Consequence: an exclusively owned outer value captured by a linear-effect clause body **stays exclusive** there, because the clause runs at most once (Rule Q5.7 with `q' = 1`). The capture's contribution to the outer scope's usage of that binding is the join of (clause-body usage) and (other-paths usage), bounded above by 1.
 
 ```
 let lock_token = make_token()        // quantity 1
@@ -323,50 +372,72 @@ handle (do: ... Lock.release):
 // total quantity of lock_token across the handle block: 1 (consumed in the clause)
 ```
 
-The standard Rule Q7.1 prohibition ("quantity-1 binding may not be captured by a quantity-ω closure") **still applies** to non-linear handler clauses. A capture across a non-linear clause boundary is rejected:
+A non-linear clause body may run once per operation performed, so the same capture there is downgraded to `own` (Rule Q5.7): `lock_token` becomes shared and `consume` gets the shared version. This is not an error (Rule Q7.1); it costs the in-place reuse.
 
-```
-let lock_token = make_token()
-handle (do: ... Console.print_line):
-    Console.print_line(msg) =>
-        consume(lock_token)          // error: Console is non-linear; clause body is quantity ω;
-                                      //        Rule Q7.1 forbids capture of a quantity-1 binding here.
-        resume(())
-```
+If OQ-Q5 closes the other way (effect rows do not participate in QTT quantity), Rule Q7.4 is withdrawn and every handler clause downgrades its exclusive captures.
 
-If OQ-Q5 closes the other way (effect rows do not participate in QTT quantity), Rule Q7.4 is withdrawn and Rule Q7.1 applies uniformly to all handler clauses regardless of effect linearity.
+### 7.5 Demanding exclusivity: `fip fn`
 
-### 7.5 Demanding linearity: `fip fn`
+Quantities and demands are inferred, so most programs never state one. A function that must run in place states that with the `fip fn` contract (`spec/memory_management.md` §18). The compiler then rejects the function (`error[E110]`) if inference finds an allocation on the heap, a reference-count operation or an unbounded data-stack use. Every parameter such a function reuses must be `exclusive` (Rule MM18.3), which is where Rule Q7.1.1 gets a declared obligation to check. A `fip` function has no shared version, so a caller holding a shared value copies the demanded part into it (§9.3). This resolves OQ-Q2.
 
-Quantities are inferred, so most programs never state one. Inference alone cannot be violated: a binding used twice is simply ω. A function that must run in place states that with the `fip fn` contract (`spec/memory_management.md` §18). The compiler then rejects the function (`error[E110]`) if inference finds an allocation on the heap, a reference-count operation or an unbounded data-stack use. Every parameter such a function reuses must be quantity 1 in its signature (Rule MM18.3), which is where Rule Q7.1 gets a declared obligation to check. This resolves OQ-Q2.
+## 8. Shared values
 
-## 8. Unrestricted (quantity ω)
-
-A quantity-ω binding is **freely shared**. Whether it costs reference counting depends on its lifetime class (`spec/memory_management.md` §3.2): values that live in a data-stack region carry no RC. For `Heap` and `Region` values, the Perceus pass inserts:
+A value that is not exclusively owned is **shared**: a quantity-ω binding that kept it, a parameter received under `own`, or a field of a shared value. Whether it costs reference counting depends on its lifetime class (`spec/memory_management.md` §3.2): values that live in a data-stack region carry no RC. For `Heap` and `Region` values, the Perceus pass inserts:
 
 1. **`dup` operations** at every share point (when a binding is used in more than one downstream position).
 2. **`drop` operations** at every consumption point that is not the last use.
-3. **Reuse opportunities** at the last use, when the value's representation matches a constructor application of the same shape.
+3. **Reuse opportunities** at the last use, when the value's representation matches a constructor application of the same shape, after a runtime `rc == 1` test (Rule Q7.2).
 
-Quantity ω is the default for most user code and bears no programmer obligation.
+Sharing is the default for most user code and bears no programmer obligation.
 
-## 9. Composition under operations
+## 9. Arguments and calls
 
-When a binding is consumed at a function-call argument position, the binding's contribution to the call site is `q_arg · q_param`, where:
+### 9.1 Where an argument's value goes (Rule Q9.1)
 
-- `q_arg` is the quantity at which the argument is observed in the caller's context.
-- `q_param` is the quantity inferred for the parameter from the callee's body (Rule Q5.2).
+At a call, each binding contributes according to where its **value** goes, not where its name appears in the argument:
+
+1. **Passed as itself.** In `f(y)`, `y` meets the parameter's demand.
+2. **Stored inside a composite argument.** In `f(List.Cons(y, rest))`, `y` meets the demand of the field it lands in, within the parameter's demand (Rule Q4.1.a). If `f` overwrites only the outer cell, `y` is merely `own`.
+3. **Read to compute a new value.** In `go(i - 1, b, a + b)`, `+` reads `a`; the demand on `go`'s parameter applies to the sum, not to `a`.
+4. **Captured by a lambda argument.** The closure body's demand on the capture, scaled by how often the callee calls the closure (Rule Q5.7).
+5. **Demand `0`.** The argument's value is erased; its evaluation remains if it has effects (Rule Q6.1.3).
+
+For quantities, the same rule applies: an argument expression is evaluated once, so a binding used inside a composite argument is counted once, while a binding passed as itself, and a lambda argument's captures, are scaled by the parameter's quantity. The v0.3 rule scaled every binding inside an argument, which in a strict language counts work that never happens twice and contradicted §10.1.
 
 ```
-fn pair_double(x: i64) -> i64 = x + x       // x: ω
+fn pair_double(x: String) -> String = x ++ x     // x: own (kept twice)
 
-fn caller(y: i64) -> i64 =
-    pair_double(y)                            // y consumed at quantity 1 (one arg position)
-                                              // ·  pair_double's param x has quantity ω
-                                              // = y contributes ω to caller
+fn caller(y: String) -> String =
+    pair_double(y)                                // y passed as itself: own
 ```
 
-For a chain of nested calls, quantities multiply along the chain.
+### 9.2 Evaluation order (Rule Q9.2)
+
+Arguments are evaluated **left to right**, and a call's receiver before its arguments. A move into an `own` or `exclusive` parameter takes effect **when the call starts**, after every argument has been evaluated. A read of a binding in a sibling argument therefore happens before the binding is moved. This rule also fixes the order in which argument effects are performed.
+
+### 9.3 Shared versions (Rule Q9.3)
+
+When a caller passes a shared value to an `exclusive` parameter, it calls the callee's **shared version** instead: an instance compiled for shared input on that parameter. The shared version allocates the cells it rebuilds, shares the parts it does not touch, and for `Heap` input may still reuse after a runtime `rc == 1` test (Rule Q7.2). The caller knows statically which kind of value it holds, so the choice is made at compile time.
+
+```
+fn bump(xs: List of u64) -> List of u64 =
+    match xs:
+        List.Cons(h, t) => List.Cons(h + 1, t)     // xs: exclusive on the first cell, own on t
+        List.Nil => List.Nil
+
+fn main() -> () with Console =
+    let a = upto(3)                                 // fresh: exclusively owned
+    let b = bump(a)                                 // a is used again below: shared version
+    Console.print_line(a.show())
+```
+
+Had `main` printed `a` before calling `bump`, the call would be `a`'s last use, `a` would still be exclusively owned, and the exclusive version would overwrite `a`'s cell in place.
+
+Versions are built only for the combinations of exclusive and shared parameters actually called, as monomorphisation builds only the type instances used. A function has at most a fixed number of versions (implementation-defined; 4 is the reference value). Beyond that cap, and for calls into a `fip fn` (which has no shared version), the caller **copies the demanded part** of a shared value and calls the exclusive version: the cells the demand covers are copied, the parts it does not cover are shared. Copying is the strategy Neut applies to every share (`spec/memory_management.md` §7.3); Fixed applies it only here. Values are immutable, so a copy is never observable. Every copy site is reported by `--explain-memory` (`spec/memory_management.md` §19).
+
+### 9.4 Aliasing (Rule Q9.4)
+
+An argument meets an `exclusive` demand only if no other argument or capture of the same call reaches the same value or a part of it. `f(a, a)`, `f(xs, xs.tail)`, and `f(a, () -> a.length())` with `f`'s first parameter `exclusive` all call the shared version: otherwise the callee could overwrite what it reads through the other argument.
 
 ## 10. Worked examples (from `examples/*.fixed`)
 
@@ -388,7 +459,9 @@ Quantity walk for `go`'s parameters under Rule Q5.9 (branching uses join):
 - `a` in then-branch: 1; in else-branch: 1 (in `a + b`). Join: 1. Total in body: `0 + (1 ⊔ 1) = 1`.
 - `b` in then-branch: 0; in else-branch: 2 (in `b` and in `a + b`). Join: ω. Total: `0 + (0 ⊔ ω) = ω`.
 
-So `go`'s parameters have quantities `(i: ω, a: 1, b: ω)`. `a` is linear; `i` and `b` are unrestricted.
+So `go`'s parameters have quantities `(i: ω, a: 1, b: ω)`. Under Rule Q9.1 the else-branch's `a + b` counts `a` once even though `go`'s parameter `b` is ω: the sum is computed once.
+
+The parameters are unboxed scalars, so their demands are `read` (`i`, compared and subtracted) and `own` (`a`, `b`, returned or passed on), and the code is the same for every non-zero demand.
 
 ### 10.2 `examples/05_phantom_types.fixed` — `Door` and `Quantity`
 
@@ -429,7 +502,8 @@ let result = x.value + x.lo                     // x.value: runtime read; x.lo: 
 
 - **OQ-Q3 — Closure-of-closure quantities.** Rule Q5.7's multiplication composes through one closure layer. For nested closures (a closure that returns a closure that captures the outer scope), the composition is straightforward by induction, but worked examples will reveal corner cases. Add concrete worked examples in v0.2 of this doc once the typer is implemented.
 
-- **OQ-Q4 — Quantity polymorphism.** A truly generic `id : T -> T` could be quantity-polymorphic — the parameter's quantity equals the call site's. Idris 2 has limited quantity polymorphism; Fixed has so far inferred everything. Decision deferred until benchmark code shows the need.
+- **OQ-Q4 — Quantity polymorphism.** A truly generic `id : T -> T` could be quantity-polymorphic — the parameter's quantity equals the call site's. Idris 2 has limited quantity polymorphism; Fixed has so far inferred everything. Shared versions (Rule Q9.3) give ownership polymorphism by monomorphisation; whether anything beyond that is needed waits for benchmark code.
+- **OQ-Q7 — Version cap.** Rule Q9.3 caps versions per function (reference value 4) and copies beyond it. The right cap, and whether large functions should get only a shared version, are to be measured (`spec/memory_management.md` §21).
 
 - **OQ-Q5 — Effect operations and quantities.** Effect ops (e.g., `Console.print_line`) currently follow Rule Q5.2. Whether *effect rows* themselves participate in quantity (e.g., a "linear effect" that may be performed at most once) is a separate research question, related to OQ-Q1. The proposed semantics live in `spec/effects.md` §3.5 (re-opened OQ-E5 in v0.2.1) and stand non-normative pending closure of this question.
 
@@ -444,6 +518,6 @@ let result = x.value + x.lo                     // x.value: runtime read; x.lo: 
 | `spec/properties.md` (TBD) | Static-vs-PBT verification of `prop` bodies; this doc only states they're checked at quantity 0 (Rule Q5.5) |
 | `spec/effects.md` (TBD) | Effect-row composition; this doc fixes only `resume`'s quantity (Rule Q5.11) |
 | `spec/pattern_matching.md` (TBD) | Match desugaring; pattern bindings (Rule Q5.8) follow standard rules |
-| `spec/memory_management.md` | Quantity × lifetime class decides RC: ω ∧ `Heap`/`Region` → dup/drop; quantity 1 → consume and reuse in place; quantity 0 → erased. M10 also computes the escape facts and classes of §20 there |
+| `spec/memory_management.md` | Demand and exclusivity × lifetime class decide RC and reuse: exclusive → move and reuse in place; shared ∧ `Heap`/`Region` → dup/drop and `rc == 1` reuse; `0` → erased. M10 also computes the escape facts and classes of §20 there |
 | `docs/references/scala3-compiler-reference.md` | The Recheck pattern (§5.4) that this pass adopts |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `qtt/QuantityChecker.scala` (Recheck phase) |

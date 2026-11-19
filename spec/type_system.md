@@ -352,7 +352,7 @@ A body that fails Phase 1 is a compile error against the cap declaration, not ag
 
 **Phase 2 — Per-satisfaction Recheck (cap-closure phase).** When a `Type satisfies Cap` declaration is processed, the cap's default bodies are **re-checked** against the satisfying type's concrete signatures, but only for *quantities* (per `spec/quantities.md` §5.12) and *effects* (per `spec/effects.md`). Types are guaranteed compatible by cap-closure (the satisfaction is rejected at this phase if the satisfying type's signatures are not assignable to the cap's declared signatures). The re-check therefore catches:
 
-- Quantity mismatches: the satisfying type's `fold` is quantity 1 in some position, and a default body's call expects quantity ω there (or vice versa).
+- Quantity and demand mismatches: the satisfying type's `fold` demands `exclusive` in some position, and a default body passes a shared value there (it then calls `fold`'s shared version, `spec/quantities.md` Rule Q9.3), or the quantities differ.
 - Effect-row mismatches: the satisfying type's method performs effects the default body's `with`-clause does not declare.
 
 A body that passes Phase 1 but fails Phase 2 is a compile error against the *satisfaction* (not the cap declaration), with the satisfying type named in the diagnostic.
@@ -797,7 +797,7 @@ The compiler iterates `step` until no recursive seeds remain. The combination of
 **Rule 7.4.b.1 (Guaranteed fusion).** Function recursion is not available (functions are total), so every loop in a Fixed program is a `fold`, and a counted loop is an `unfold` followed by a `fold`. The compiler therefore **must** remove the intermediate structure, with no allocation for it, when all of these hold:
 
 1. The result of an `unfold` (or of a conversion the compiler derives from one, such as `to_nat`) is consumed by exactly one `fold`.
-2. That result has quantity 1 (`spec/quantities.md`): nothing else observes it.
+2. That result is used once (quantity 1, `spec/quantities.md` §5): nothing else observes it. Exclusive ownership is not required, because the structure is never built.
 3. Both calls resolve to auto-derived `fold` / `unfold` (Rules 7.4.a, 7.4.b) after monomorphisation.
 
 Outside this class the compiler is permitted, but not required, to fuse.

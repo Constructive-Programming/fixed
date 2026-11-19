@@ -1,260 +1,178 @@
-# Phase 3.4 — Quantities and lifetimes (M10)
+# Phase 3.4 — Quantities, demands and lifetimes (M10)
 
-**Status:** 3.4.M1 done. M2–M4 wait on decisions D1–D5 (§8)
+**Status:** 3.4.M1 done. Design settled (decisions §8); 3.4.M2 next.
 **Parent:** `docs/plans/phase-3-typer.md` §1.3 (Part B, M10) and §5.7
-**Runs:** after M7 and the Phase 4.0 slice, **before M9**
-**Spec:** `spec/quantities.md` §3–§9 (semiring, Rules Q5.1–Q5.13, Q6.1, Q7.1),
-`spec/memory_management.md` §3, §5, §13.1, §14.1, §18, §19, §20
+**Runs:** after M7 and the Phase 4.0 slice, **before M9**. The quantity walk runs after the typer;
+everything else runs on Core after lowering.
+**Spec:** `spec/quantities.md` v0.4 (§3–§5 quantities, §4.1 demands, §7 exclusivity, §9 arguments,
+evaluation order, shared versions, aliasing), `spec/memory_management.md` v0.3 (§3, §5, §10, §11,
+§13, §14.1, §17, §18, §19, §20)
 **Measured against:** `docs/baselines/runtime-2026-11-19.md`
 
 ## 1. Goal
 
 After M10, every binding and every function of a checked unit has the record of
-`spec/memory_management.md` §20, and the backend uses the part of it that changes the baseline.
+`spec/memory_management.md` §20, and the backend uses it, so the baseline numbers move.
 
-1. **Every binding has a quantity** (0, 1 or ω) by Rules Q5.1–Q5.12.
-2. **`resume` is checked.** `E072` for two `resume`s on one path (Rule Q5.11). `E070` (Rule Q6.1)
-   is deferred: for inferred quantities it cannot fire, because a binding used at runtime is not
-   0. It needs declared-0 bindings (`of` value-params read at runtime, Rule Q6.2), which arrive
-   with example `11` once it type-checks.
-3. **Every binding has an escape set and a lifetime class** (Rules MM5.1–MM5.3), with a reason
-   chain for every class other than `Frame`.
-4. **Every function has signature facts** (Rule MM20.2): per-parameter quantity, mode (borrowed or
-   owned) and escape; result destination; `fip` level.
-5. **`fip fn` is checked** (Rule MM18.1, `E110`).
-6. **`fixed compile --explain-memory [--format json]` prints the record** (§19).
-7. **The backend consumes the record** (decision D1): erased parameters disappear, borrowed
-   parameters lose their `dup` / `drop`, statically unique cells are reused or freed without a
-   count test. The four baseline numbers are re-measured and committed.
+1. **Occurrence quantities** (0, 1, ω) on the typed tree: `E072` (two `resume`s on one path),
+   `T021` (unused binding). Done in 3.4.M1.
+2. **Demands** per parameter and per part of a value (`0`, `read`, `own`, `exclusive`;
+   `spec/quantities.md` Rule Q4.1), inferred on Core, with exclusive ownership per binding.
+3. **Versions.** A call that passes a shared value to an `exclusive` parameter goes to the callee's
+   shared version (Rule Q9.3). Versions are built only for the combinations called, capped per
+   function; beyond the cap, and into `fip` functions, the caller copies the demanded part (the
+   Neut strategy, applied only here). A closure with an `exclusive` parameter carries two code
+   pointers (Rule PR5.6).
+4. **Escape sets, lifetime classes, cohesive groups, garbage-free carry, handler kinds, fork-site
+   facts** (Rules MM5.1–MM5.4, MM14.1, Q5.13), with reason chains.
+5. **Signature facts** (Rule MM20.2) and the **`fip` check** (`E110`, `E071`).
+6. **`fixed compile --explain-memory [--format json]`** prints the record, including every copy
+   site (§19).
+7. **The backend consumes it** and a new baseline is committed.
 
 ## 2. Non-goals
 
-- **`Region`, cohesive groups, packed blobs, growable-stack count N** (Rules MM5.4, MM6, MM16). No
-  runtime exists to consume them before Phase 4 region lowering. M10 classifies such values as
-  `Heap` with the reason `region candidate` (decision D3).
-- **Lanes and fork decisions** (Rule Q5.13). No backend forks yet. Rule Q5.13.b.1 makes forking
-  quantity-neutral, so nothing in M10 depends on it. The memory report says `fork: not
-  implemented` per fold.
-- **`Frame` placement in the backend.** The data stack, destinations and witnesses are Phase 4
-  region lowering. M10 computes `Frame` and `Dest` classes and reports them. The backend still
-  allocates them on the heap.
+- **Region, frame and destination lowering in the backend.** M10 computes `Frame`, `Dest` and
+  `Region` classes and cohesive groups and reports them; the data stacks, counted regions and
+  destinations that would place values there are Phase 4 region lowering. The backend still
+  allocates every boxed value on the heap.
+- **Forking.** Fork sites are recorded (Rule Q5.13.d); no lane runs in parallel before Phase 4.
 - **Linear effects** (Rule Q7.4). Contingent on OQ-Q5.
-- **Quantity polymorphism** (OQ-Q4). Each function has one set of facts.
-- **Separate compilation.** Signature facts live in the unit's typing, not in an interface file.
+- **Separate compilation.** Signature facts live in the unit, not in an interface file.
 
 ## 3. Design
 
-### 3.1 Where the analysis runs: the typed tree, one walk
+### 3.1 Two analyses, two IRs
 
-The parent plan sketches M10 as a Recheck phase with a `QtyEnv`. M6 and M7 replaced their recheck
-walks with work inside the typer, because a second traversal roughly doubled per-node cost. M10
-keeps a separate walk, for three reasons:
+- **Quantities on the typed tree** (3.4.M1, `fixed.qtt.QuantityPhase`). Occurrence counting needs
+  source positions and nothing else. Its table is not consumed by the backend.
+- **Demands and memory facts on Core.** Demands are data flow over values. They need every
+  allocation, the generated members (derived `fold`, `unfold`, `map`, list members), and one
+  instance per type, where versions are chosen. Core has all three; the typed tree has none. Lean
+  and Koka run borrow and reuse inference on their core IR for the same reasons.
 
-- **Quantities need whole bodies.** A `let`'s quantity is the sum over the rest of the block
-  (Rule Q5.1), known only after the block is typed. Unification variables are solved by then, so
-  the walk reads final types.
-- **Escape facts need every function's facts** (borrow inference, Rule PR8.1, is a fixed point
-  over the call graph). That cannot happen while bodies are still being typed one by one.
-- **The walk is cheaper than typing.** It reads the type table and the resolution table and
-  does no unification.
+Core today carries no source positions. **Lowering records a span on every `Let`, every function
+and every parameter** (3.4.M2), so `E110`, `E071` and the memory report point at source.
 
-The walk runs over the same typed trees the backend lowers: the unit's functions and the prelude
-function bodies, after `Declarations.check`. It is a new phase object, `QuantityPhase`, run by the
-compiler after `TyperPhase` when the typer reports no errors.
+Consequence for M11: representation selection reads these facts, so it also runs on Core after
+lowering (`spec/memory_management.md` §20.3), not as a typed-tree recheck.
 
-The alternative, analysing Core after lowering, is simpler for escape facts (ANF, monomorphic),
-but loses source spans for `E070` / `E110`, runs after M9 should have used the result, and would
-have to be redone for separate compilation. It is rejected.
+### 3.2 Demand inference (Rule Q4.1)
 
-### 3.2 Output: a side table keyed by binder
+Per function instance, a backward walk over Core computes, for each boxed variable, the demand of
+its uses:
 
-`QuantityTable`, held in `CompilationUnit` next to `typing`:
+- `Field` reads, `Prim` operands, `If` and `Switch` scrutinees: `read`.
+- `Con` fields, `Ret`, `Closure` captures: `own`.
+- `Call` and `CallClosure` arguments: the callee parameter's demand (Rule Q9.1.1); a lambda
+  argument's captures scaled by the call count (Rule Q9.1.4).
+- A `Con` whose layout matches a dead variable's cell, on the same path, after that variable's last
+  use: the variable is `exclusive` there (the reuse site, drop-guided per Rule MM11.5).
 
-- `binding: IdentityHashMap[Tree, BindingFacts]` keyed by the binder tree (`Param`, `LetStmt`
-  pattern binder, lambda parameter, match-case binder). `BindingFacts(quantity, escape: Set[Escape],
-  cls: LifetimeClass, unique: Boolean, reasons: List[Reason])`.
-- `signature: Map[String, SignatureFacts]` keyed by function name, as `Lower.decls` is.
-- `folds: IdentityHashMap[Tree, FoldFacts]` per `fold` / `unfold` call: garbage-free carry and
-  the fork status.
-- `handlers: IdentityHashMap[Tree, HandlerKind]` per `handle`.
+Per part (Rule Q4.1.a): one demand per field slot of the parameter's data type; a recursive field
+shares the slot it recurses to. A field read `x.f` followed by a use of the result propagates the
+result's demand to `x`'s slot `f`.
 
-The backend looks binders up by tree identity, the same way it reads types today. Lowering keeps
-the binder tree for each Core variable it creates from one.
+A parameter's demand is the greatest of its uses, with `exclusive` downgraded to `own` where an
+earlier use kept the value (Rule Q4.1.c). Recursion and mutual recursion: start every parameter at
+`0`, iterate the call graph to the fixed point. The lattice has height 4 per slot.
 
-### 3.3 Quantities (Rules Q5.1–Q5.12)
+**Ownership per binding** (Rule Q4.1.b): fresh `Con` and call results are exclusive; parameters
+are exclusive on the parts their demand covers (in the exclusive version) or shared (in the shared
+version); a `Field` of an exclusive, consumed value is exclusive on covered parts; a use that keeps
+a still-live value makes it shared. **Aliasing** (Rule Q9.4): an argument is exclusive at a call
+only if no other argument or capture of that call reaches it.
 
-The walk returns, per expression, a usage map `Map[Binder, Quantity]`:
+**Evaluation order** (Rule Q9.2): lowering already evaluates arguments left to right and calls
+after the last argument. 3.4.M2 adds a test that pins this.
 
-- **Sequencing and arguments add** (Rules Q5.1, Q5.10). A call scales each argument's usage by the
-  callee parameter's quantity (§9).
-- **Branches join** (Rule Q5.9): `if`, `match` cases, `handle` clauses.
-- **Closures multiply** (Rule Q5.7). The closure's own quantity is not known when its body is
-  walked, so a capture counts as ω unless the closure binding is quantity 1. That needs the
-  closure's uses first: closures bound by `let` are walked after the rest of the block. A lambda
-  passed directly as an argument takes the callee parameter's quantity; derived `fold` / `unfold`
-  / `map` call their function arguments once per element, so ω.
-- **Pattern binders** follow Rule Q5.1 within their case (Rule Q5.8).
-- **Prop bodies are skipped** (Rule Q5.5).
-- **`of` value-params and phantom type params are 0** (Rules Q5.3, Q5.4).
-- **Recursion.** A self-call scales by the parameter quantities of the function being inferred.
-  Start every parameter at 0 and iterate to the fixed point. The lattice has height 3, so this
-  terminates in at most 3 rounds per strongly connected component.
-- **Derived and generated members** (Field, CapMember, DerivedFold resolutions; prelude bodies) get
-  their facts from a fixed table in `QuantityPhase` (the receiver of `fold` is 1, the function
-  arguments ω, a field read borrows its object).
-- **Default-bodied cap methods** (Rule Q5.12) are walked once at ω skeletons. Re-checking at each
-  satisfying type waits for `satisfies` method bodies to be lowered (slice §9 open item).
+### 3.3 Versions (Rule Q9.3)
 
-Unused bindings get a warning `T021` unless the name starts with `_` (Rule Q5.1). Examples
-`01`–`06` raise none. `07`–`11` stop at typer errors before this phase runs.
+The lowering's instance names gain an ownership suffix: `bump[u64]` and `bump[u64]#s` (shared on
+the first exclusive parameter). Instances are requested on demand by call sites, as type instances
+are today, so only called combinations exist. Cap: 4 versions per function; a call beyond it
+copies the demanded part with a generated `copy_T` (one per data type, copying the slots the
+demand covers and `dup`-ing the rest) and calls the exclusive version. Calls into `fip` functions
+always copy.
 
-**Arguments are evaluated once** (finding of 3.4.M1, decision D5). Read literally, §9 scales every
-binder in an argument by the parameter's quantity. Then in §10.1's `go(i - 1, b, a + b)` the
-binder `a` would be ω, because `a + b` goes to `go`'s ω parameter `b`; but §10.1 says `a` is 1.
-Fixed is strict, so `a + b` is computed once and `a` is used once. The walk scales only a binder
-passed as itself, and a lambda argument's captures. Quantity 0 erases the whole argument. This
-gives both §9's example (`pair_double(y)`: `y` is ω) and §10.1's (`go` is `(ω, 1, ω)`).
+Closures: a lambda whose parameter is `exclusive` is compiled twice; the closure object holds
+both code pointers (slot 0 and slot 1). `CallClosure` picks the slot from the argument's ownership.
 
-**Cost.** Measured with `QuantityCpuBench` (thread CPU time, examples `01`–`06`): the walk costs
-25.4% of typer time (108 µs against 424 µs). Integer binder ids and callee-first walking took it
-there from 296%.
+### 3.4 Escape, classes and the rest (Rules MM5.1–MM5.4, MM14.1, Q5.13)
 
-### 3.4 Uniqueness: a gap in the spec
+The same walk records escape sets (`result`, `field(b)`, `closure(c, escapes?)`,
+`continuation(h, escapes?)`, `carried(loop)`, `lane-shared(fork)`, `unbounded`) and assigns classes
+in the order of Rule MM5.3: `Erased`, `Static`, `Frame(s)` / `Dest(result)`, `Region(r)` for
+cohesive groups (Rule MM5.4; search limited to one call tree per OQ-MM4), `Heap`. Garbage-free carry
+is checked at constructor level per `fold` / `unfold`. Handler kinds come from clause shapes. Fork
+sites: tree folds and unfolds with empty rows are admissible; sequence folds wait for M9's proved
+associativity (recorded as conditional). Every non-`Frame` class gets its reason chain.
 
-Rules Q7.2, PR6.3 and MM3.2 say a quantity-1 binding may be reused "unconditionally" and "freed
-on consume". Quantity 1 says the *binding* is used once. It does not say the *value* has no other
-owner:
+### 3.5 `fip` (Rule MM18.1)
 
-```
-fn second(xs: List of u64) -> List of u64 =
-    match xs:
-        List.Cons(_, t) => drop_head(t)     // t is quantity 1
-        List.Nil => List.Nil
-```
+Checked item by item on the facts above; reused parameters must be `exclusive` (`E071` otherwise);
+violations are `E110` with the reason chain.
 
-If the caller still holds `xs`, then `t` is shared, and reusing `t`'s cell in `drop_head` without
-a count test corrupts the caller's list. This is the difference between linearity and uniqueness
-(Marshall, Vollmer and Orchard, "Linearity and Uniqueness: An Entente Cordiale", ESOP 2022).
+### 3.6 Backend consumption
 
-M10 therefore computes a separate **unique** flag. A quantity-1 value is unique iff it comes from:
-
-- a constructor application or a literal;
-- a call result (results are owned and fresh, Rule MM7.1);
-- a parameter whose caller passes unique arguments at every call site, or a `fip` function's
-  quantity-1 parameter (callers evacuate otherwise, Rule MM18.3);
-- a field of a unique value that is consumed by the same `match`.
-
-Unconditional reuse and count-free freeing apply only to unique values. Other quantity-1 values
-keep Perceus's runtime `rc == 1` test. Decision D2 asks to amend Rules Q7.2, PR6.3 and MM3.2 to
-say this.
-
-### 3.5 Escape sets and classes (Rules MM5.1–MM5.3, MM20.1)
-
-The same walk records, per binder, where its value flows:
-
-- `result` when it reaches the function's result;
-- `field(b)` when it is stored into a value bound to `b`;
-- `closure(c, escapes?)` when captured, with `escapes?` from `c`'s own escape set;
-- `continuation(h, escapes?)` when reachable from a capturing clause of `h`;
-- `carried(loop)` for the seed of an `unfold` and the accumulator of a `fold`;
-- `unbounded` when passed to a parameter whose escape is `unbounded`.
-
-`field(b)` and `closure(c, true)` propagate: the value escapes wherever `b` or `c` does. Classes
-then follow Rule MM5.3 in order: `Erased`, `Static`, `Frame(s)` / `Dest(result)`, and `Heap` for
-the rest. Every `Heap` gets the reason chain that sent it there.
-
-**Garbage-free carry** (Rule MM5.2(b)) is checked at constructor level for each `fold` / `unfold`:
-the step must build its new carried value from the cells of the old one, or from new cells reachable
-from it. The corpus folds mostly carry scalars, which are trivially garbage-free.
-
-**Handler kinds** (Rule MM14.1) come from the clause shapes the typer already checked (M7):
-abortive, tail-resumptive, capturing-local, capturing-escaping.
-
-### 3.6 Signature facts and borrowing (Rules MM20.2, PR8.1)
-
-A parameter is **borrowed** iff the body never stores it, never returns it, and never passes it to
-an owned parameter (Rule PR8.1). This is a fixed point over the call graph: start with every
-parameter borrowed, demote on evidence, repeat until nothing changes. A parameter that is the
-subject of a reuse is owned (Lean's rule). Escape per parameter is `none`, `into-result` or
-`unbounded`.
-
-### 3.7 `fip` (Rule MM18.1)
-
-With classes and uniqueness known, `fip fn` is checked item by item. Items 1–4 read the facts of
-the function and everything it calls. Item 5 (bounded scratch) counts `Frame` allocations outside
-fold steps. `fip(strict)` adds "no scratch" and "every fold is a loop" (list-shaped folds only).
-Violations are `E110` with the reason chain. A reused parameter that is not quantity 1 is `E071`
-(Rule MM18.3).
-
-### 3.8 Backend consumption (decision D1)
-
-Three changes, each small, each measured:
-
-1. **Erasure.** Quantity-0 parameters and bindings are not lowered. Call sites drop the argument.
-2. **Borrowed parameters** (Rule PR8.2). No `dup` at the call site, no `drop` at callee exit. `Rc`
-   gains a set of borrowed parameters that it never owns.
-3. **Static uniqueness.** A `Field` read from a unique, consumed value moves the field instead of
-   `dup` + later `drop` of the parent. The parent's cell is then freed without dropping its
-   children, or reused by a constructor of the same layout in the same branch (Rule PR6.1, drop
-   guided per Rule MM11.5).
-
-Expected effect, before measuring: `bintrees` and `list_pipeline` lose most `dup`s, since every
-node is read once by the derived `fold` and is unique when built by `unfold`. `records` gains
-reuse (`discount` rebuilds an `Order` from a unique `Order`). Allocations fall only where reuse
-fires. Wall time is a hypothesis.
-
-Runtime reuse for non-unique values (`rc == 1` tests) and drop specialisation stay in the Phase 4
-Perceus inserter.
+1. **Erasure.** Demand-`0` parameters are not passed; an effectful argument is still evaluated.
+2. **Borrowing.** `read` parameters: no `dup` at the call, no `drop` in the callee.
+3. **Exclusive versions.** Exclusively owned values: field reads move instead of `dup`, the cell
+   is reused unconditionally by a matching `Con` on the same path, or freed without dropping moved
+   fields.
+4. **Shared versions.** Shared `Heap` values: reuse after `rc == 1` (`fx_reuse` in the runtime;
+   Koka's path, Rule PR6.3), else allocate.
+5. **Copies** at the sites §3.3 names.
 
 ## 4. Milestones
 
 | # | Content | Done when |
 |---|---|---|
-| 3.4.M1 ✅ | `QuantityPhase`, `QuantityTable`, quantities (§3.3), `E072`, `T021` | `QuantityPhaseSuite`: §10.1's `go` is `(ω, 1, ω)`, one test per rule; examples `01`–`06` raise no new diagnostics |
-| 3.4.M2 | Uniqueness (§3.4), escape sets, classes, reason chains, garbage-free carry, handler kinds (§3.5), signature facts and borrowing (§3.6) | Suite tests per escape kind and class; every example gets a full record; no binding without a class |
-| 3.4.M3 | `--explain-memory`, `--format json` (§19); `fip` check, `E110`, `E071` (§3.7) | Golden report for `01`; `fip` accept / reject tests per Rule MM18.1 item |
-| 3.4.M4 | Backend consumption (§3.8); new baseline record | Goldens and leak checks still pass; `docs/baselines/runtime-<date>.md` with the four numbers per program and the difference to the 4.0 baseline |
+| 3.4.M1 ✅ | Occurrence quantities on the typed tree; `E072`, `T021` | `QuantityPhaseSuite` (§10.1's `go` is `(ω, 1, ω)`); examples `01`–`06` raise no new diagnostics; walk costs 25.4% of typer time |
+| 3.4.M2 | Spans in Core; demand inference per part; ownership; aliasing; evaluation-order test; signature demands | `DemandSuite`: `bump`, `map`, `insert`, `pair_double`, `push`, aliasing cases; every Core function of examples `01`–`05` and the benchmarks has demands |
+| 3.4.M3 | Versions and copies; two-pointer closures | Suite: shared caller gets `#s`, last-use caller gets the exclusive version, cap triggers a copy; goldens unchanged |
+| 3.4.M4 | Escape sets, classes, cohesive groups, garbage-free carry, handler kinds, fork facts, reason chains | Suite per escape kind, class and handler kind; no binding without a class |
+| 3.4.M5 | `--explain-memory`, `--format json`; `fip` check | Golden report for `01`; accept and reject tests per Rule MM18.1 item |
+| 3.4.M6 | Backend consumption (§3.6); new baseline | Goldens and leak checks pass; an aliasing program and a shared-list program prove the unsound cases stay correct; `docs/baselines/runtime-<date>.md` with the four numbers and the change against 4.0 |
 
-Each milestone ends with the full gate (tests, lint, duplicate detector) and the typer benchmark.
-The walk must not add more than 25% to typer time on the corpus; if it does, the exit ramp of
-`phase-3-typer.md` §4.1.2 applies (fold into the typer's final pass).
+Each milestone ends with the full gate. Core analyses are timed against lowering plus emission on
+the benchmarks and reported; there is no fixed budget until a first measurement exists.
 
 ## 5. Tests
 
-- `QuantityPhaseSuite`: per rule of §3.3, per escape kind, per class, per handler kind, per `fip`
-  item; each from a short Fixed snippet, asserting facts by binder name.
-- `EmitSuite` (existing): goldens and leak checks catch any unsound borrow or reuse. Add one
-  program per §3.8 change that fails if the change is unsound (a shared list whose tail is passed
-  to a reusing function).
-- Corpus: `examples/01`–`11` produce no new errors.
+- `QuantityPhaseSuite` (M1), `DemandSuite` (M2–M3), `MemorySuite` (M4–M5): short Fixed snippets
+  lowered to Core, asserting facts by function and parameter name.
+- `EmitSuite`: goldens and leak checks catch unsound reuse. Add programs that would corrupt memory
+  if exclusivity were wrong: a shared list passed to a reusing function and printed afterwards;
+  `f(xs, xs.tail)` with an exclusive first parameter; an exclusive capture in a closure called
+  twice.
 
 ## 6. Risks
 
 | Risk | Mitigation |
 |---|---|
-| Unsound uniqueness frees a shared cell | §3.4 rules are conservative; the leak checker plus `FIXED_RT_STATS` double-free detection (add a freed-cell poison in debug builds) |
-| Closure quantities need the closure's uses first, which reorders the walk | Walk `let`-bound lambdas after the block's remainder; lambdas in argument position use the parameter's quantity |
-| Generated Core members (fold, map) have no typed tree to walk | Fixed fact table (§3.3), checked by the leak checker on every benchmark |
-| The 25% budget is exceeded | Exit ramp, §4 |
+| Unsound exclusivity frees or overwrites a shared cell | Conservative rules (§3.2); the corruption programs of §5; debug runtime poisons freed cells |
+| Versions multiply code size | Cap of 4; report version counts per function; `spec/memory_management.md` §21 hypothesis |
+| Per-part demands on mutually recursive data blow up | One demand per field slot of each type in the SCC; shared slots for recursive fields |
+| Spans make Core larger and slower | One `Span` per `Let`; measured in M2 |
 
-## 7. Spec amendments this plan needs
+## 7. Spec amendments made
 
-- `spec/quantities.md` Rule Q7.2 and `spec/memory_management.md` Rules PR6.3, MM3.2: "quantity 1"
-  becomes "quantity 1 and unique" (D2).
-- `spec/memory_management.md` §20.1: cohesive groups and lane facts are recorded by the phase that
-  first consumes them (D3).
-- New codes: `E072` (two `resume`s on one path), `T021` (unused binding). `E070`, `E071`, `E110`
-  already exist in the spec.
-- `spec/quantities.md` §9: an argument expression is evaluated once; only a binder passed as itself
-  and a lambda argument's captures scale by the parameter's quantity (D5).
+`spec/quantities.md` v0.4 and `spec/memory_management.md` v0.3 (2026-11-20), plus
+`spec/type_system.md` (Rules 6.1.1, 7.4.b.1), `spec/pattern_matching.md` §12, `spec/stdlib.md`
+§4.11 and `spec/effects.md` (§3.5, cross-references).
 
-## 8. Decisions for review
+## 8. Decisions
 
-- **D1 — Backend consumption inside M10.** Recommended: yes, the three changes of §3.8, so the
-  baseline moves at M10. Alternative: M10 is analysis only and Phase 4 consumes it.
-- **D2 — Uniqueness separate from quantity 1** (§3.4). Recommended: yes, amend the three rules.
-- **D3 — Defer `Region`, cohesive groups and lanes** to the phase that consumes them. Recommended:
-  yes.
-- **D4 — Typed-tree walk after the typer** (§3.1), not inside it and not on Core. Recommended: yes.
-  3.4.M1 is built this way.
-- **D5 — Strict argument scaling** (§3.3). Recommended: yes, amend §9 as in §7.
+| # | Decision |
+|---|---|
+| D1 | The backend consumes M10's facts inside M10 (§3.6) |
+| D2 | A quantity-1 parameter is a contract; a caller with a shared value calls a shared version (b), and copies only beyond the cap and into `fip` functions |
+| D3 | `Region`, cohesive groups and fork facts are analysed now (M4); runtime lowering stays in Phase 4 |
+| D4 | Hybrid: occurrence quantities on the typed tree, demands and memory facts on Core with spans |
+| D5 | Demands per part (`0`, `read`, `own`, `exclusive`); arguments count by where their value goes (Rule Q9.1) |
+| A1 | `own` and `exclusive` are separate demands |
+| A2 | Closures with an `exclusive` parameter carry two code pointers |
+| A3 | Cap versions per function; beyond it, copy the demanded part (Neut's strategy) and report it |
+| A4 | M11 runs on Core after lowering |
+| A5 | Reuse is hybrid: static for exclusive values, `rc == 1` for shared `Heap` values (Rule PR6.3) |
