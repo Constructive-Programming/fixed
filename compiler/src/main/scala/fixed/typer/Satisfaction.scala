@@ -1,6 +1,7 @@
 package fixed.typer
 
-import fixed.core.{SymKind, SymbolId, Type}
+import fixed.core.{SymKind, SymbolId, Type, render}
+import fixed.util.{DiagCode, Span}
 
 /** Does a type satisfy a capability? `docs/plans/phase-3.1-capability-closure.md` §3.3–§3.4.
   *
@@ -48,6 +49,28 @@ object Satisfaction:
       case Type.AppliedVar(id, _) => unsolved(s, id, cap)
       case _: Type.ArrowType      => None
       case _                      => Some(s)
+
+  /** Check that `value` satisfies every entry of `bound` (an `is ...` chain or a capability):
+    * capabilities through [[holds]], primitives and named types by unification; refinement calls
+    * are prop obligations for M9. Failures are `T010`.
+    */
+  def discharge(s: TyperState, value: Type, bound: Type, span: Span): TyperState =
+    val entries = bound match
+      case Type.IsBound(bs) => Members.expandAliases(s.symbols, bs)
+      case other            => List(other)
+    entries.foldLeft(s) { (si, entry) =>
+      entry match
+        case Type.CapRef(c, args)   => holds(si, value, c, args).getOrElse(fail(si, value, entry, span))
+        case _: Type.RefinementType => si
+        case named                  =>
+          si.unifier.unify(named, value, Members.isNumeric(si, _)) match
+            case Right(u) => si.copy(unifier = u.copy(obligations = Nil))
+            case Left(_)  => fail(si, value, entry, span)
+    }
+
+  private def fail(s: TyperState, value: Type, entry: Type, span: Span): TyperState =
+    val r = s.symbols.render
+    s.error(DiagCode.T010, span, s"${r(s.unifier.zonk(value))} does not satisfy ${r(s.unifier.zonk(entry))}")
 
   /** An unsolved variable satisfies what its instantiation bound reaches; an unbounded one, anything. */
   private def unsolved(s: TyperState, id: Int, cap: SymbolId): Option[TyperState] =

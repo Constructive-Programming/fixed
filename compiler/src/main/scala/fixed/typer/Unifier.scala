@@ -18,7 +18,8 @@ final case class Unifier(
     defaults: IntMap[Type],
     varBounds: IntMap[List[Type]],
     tuple: Option[SymbolId],
-    next: Int
+    next: Int,
+    obligations: List[(Type, Type)]
 ):
 
   def fresh(numeric: Boolean, default: Option[Type], bounds: List[Type] = Nil): (Unifier, Type) =
@@ -84,14 +85,16 @@ final case class Unifier(
       case (Type.NeverType, _) | (_, Type.NeverType)                                        => Right(this)
       case (Type.TypeVar(x), Type.TypeVar(y)) if x == y                                     => Right(this)
       case (Type.AppliedVar(x, xs), Type.AppliedVar(y, ys)) if x == y && xs.size == ys.size => unifyAll(xs, ys, numeric)
-      case (Type.AppliedVar(x, xs), Type.TypeRef(sym, ys))        => bindHead(x, false, sym, xs, ys, numeric)
-      case (Type.AppliedVar(x, xs), Type.CapRef(sym, ys))         => bindHead(x, true, sym, xs, ys, numeric)
-      case (Type.TypeRef(sym, ys), Type.AppliedVar(x, xs))        => bindHead(x, false, sym, xs, ys, numeric)
-      case (Type.CapRef(sym, ys), Type.AppliedVar(x, xs))         => bindHead(x, true, sym, xs, ys, numeric)
-      case (Type.TypeVar(x), t)                                   => bind(x, t, numeric)
-      case (t, Type.TypeVar(y))                                   => bind(y, t, numeric)
-      case (Capabilities(xs), Capabilities(ys))                   => unifyShared(xs, ys, numeric)
-      case (_: Type.IsBound, _) | (_, _: Type.IsBound)            => Right(this)
+      case (Type.AppliedVar(x, xs), Type.TypeRef(sym, ys))              => bindHead(x, false, sym, xs, ys, numeric)
+      case (Type.AppliedVar(x, xs), Type.CapRef(sym, ys))               => bindHead(x, true, sym, xs, ys, numeric)
+      case (Type.TypeRef(sym, ys), Type.AppliedVar(x, xs))              => bindHead(x, false, sym, xs, ys, numeric)
+      case (Type.CapRef(sym, ys), Type.AppliedVar(x, xs))               => bindHead(x, true, sym, xs, ys, numeric)
+      case (bound @ Capabilities(_), Type.TypeVar(y)) if constrained(y) => Right(oblige(Type.TypeVar(y), bound))
+      case (Type.TypeVar(x), t)                                         => bind(x, t, numeric)
+      case (t, Type.TypeVar(y))                                         => bind(y, t, numeric)
+      case (bound @ Capabilities(xs), value @ Capabilities(ys))   => oblige(value, bound).unifyShared(xs, ys, numeric)
+      case (bound: Type.IsBound, value)                           => Right(oblige(value, bound))
+      case (_, _: Type.IsBound)                                   => Right(this)
       case (Type.ArrowType(l1, r1, _), Type.ArrowType(l2, r2, _)) =>
         unify(l1, l2, numeric).flatMap(_.unify(r1, r2, numeric))
       case (Type.TupleType(xs), Type.TupleType(ys)) if xs.size == ys.size => unifyAll(xs, ys, numeric)
@@ -105,11 +108,25 @@ final case class Unifier(
         unifyAll(List(x, y), List(a, b), numeric)
 
       /** A capability used as a type is an anonymous bound: checked by capability closure (M6). */
-      case (_: Type.CapRef, _) | (_, _: Type.CapRef)                                          => Right(this)
+      case (bound: Type.CapRef, value) => Right(oblige(value, bound))
+      case (_, _: Type.CapRef)         => Right(this)
       case (Type.Layer(d1, xs, s1), Type.Layer(d2, ys, s2)) if d1 == d2 && xs.size == ys.size =>
         unifyAll(xs :+ s1, ys :+ s2, numeric)
       case (x, y) if x == y => Right(this)
       case _                => Left(())
+
+  /** A variable that already carries a bound, or is a numeric literal, keeps its own constraints
+    * when it meets an expected bound: binding it to the bound would forget them. It gets an
+    * obligation instead and stays unsolved.
+    */
+  private def constrained(id: Int): Boolean =
+    varBounds.contains(id) || numericVars.contains(id) || defaults.contains(id)
+
+  /** `value` must satisfy the expected `bound`: an obligation the capability-closure pass checks
+    * once types are solved (`docs/plans/phase-3.1-capability-closure.md` §3.1). An abstract value
+    * met where a concrete type is expected is not yet an obligation (constructor resolution, §3.7).
+    */
+  private def oblige(value: Type, bound: Type): Unifier = copy(obligations = (value, bound) :: obligations)
 
   /** Solve `?x of xs = sym of ys`: `?x` becomes the constructor `sym`, the arguments unify
     * right-aligned (an applied variable fixes only the trailing, element arguments).
@@ -204,4 +221,4 @@ object Unifier:
       case Type.AppliedVar(id, _)                => Type.AppliedVar(id, args)
       case other                                 => other
 
-  val empty: Unifier = Unifier(Vector.empty, BitSet.empty, IntMap.empty, IntMap.empty, None, 0)
+  val empty: Unifier = Unifier(Vector.empty, BitSet.empty, IntMap.empty, IntMap.empty, None, 0, Nil)

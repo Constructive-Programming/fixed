@@ -46,8 +46,8 @@ item are in `docs/plans/phase-3-typer.md` §3.6–§3.9.
 
 | Gap | Where it closes |
 |---|---|
-| Capability satisfaction: an `is ...` bound or a capability used as a type accepts any type; only arguments of a capability named on both sides are unified | M6 capability closure |
-| `Numeric` reached through `extends` (only a direct `Numeric` bound counts) | M6 |
+| ~~Capability satisfaction for values flowing into an `is ...` bound~~ — enforced since 3.1.M2 (`T010`). Still lenient: an abstract `is ...` value used where a concrete type is expected | M6 (3.1.M5 constructor resolution) |
+| ~~`Numeric` reached through `extends`~~ — done in 3.1.M1 | — |
 | `satisfies` declaration bodies and mappings, and cap / effect method bodies, are not typed | M6 |
 | Effect rows: `with` clauses are recorded but never checked; calling an effect operation needs no handler | M7 effect inference |
 | `prop` bodies, `forall`, `implies` (reported as `T005` warnings) | M9 property verifier |

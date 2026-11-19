@@ -209,3 +209,33 @@ class TyperSuite extends munit.FunSuite:
 
   test("M5: a bounded type variable's missing member is an error, not a gap"):
     assertEquals(codes(typedUnit("fn f(c: C is Empty) -> u64 = c.size\n")), List(DiagCode.T001))
+
+  test("3.1.M2: values flowing into `is` bounds must satisfy them (T010)"):
+    val sum = "fn total(xs: is Folding of (N is Numeric)) -> N = xs.fold(0, (a, x) -> a + x)\n"
+    assertEquals(typedUnit(sum + "fn ok(xs: List of u64) -> u64 = total(xs)\n").diags, Nil)
+    assertEquals(codes(typedUnit(sum + "fn bad(s: String) -> u64 = total(s)\n")), List(DiagCode.T010))
+    val show = "fn render(x: is Show) -> String = x.show()\ndata Fn1:\n    Fn1(f: u64 -> u64)\n"
+    assertEquals(typedUnit(show + "fn ok(n: u64) -> String = render(n)\n").diags, Nil)
+    assertEquals(codes(typedUnit(show + "fn bad(f: Fn1) -> String = render(f)\n")), List(DiagCode.T010))
+
+  test("3.1.M2: capability arguments are checked; bounded variables keep their own bounds"):
+    val decls = "fn first_u64(xs: is Folding of u64) -> u64 = xs.fold(0, (a, x) -> x)\n"
+    assertEquals(codes(typedUnit(decls + "fn bad(xs: List of String) -> u64 = first_u64(xs)\n")), List(DiagCode.T010))
+    val chain =
+      "fn make() -> R is Folding + Functor = make()\nfn need_folding(x: is Folding) -> () = ()\nfn need_functor(x: is Functor) -> () = ()\n"
+    assertEquals(
+      typedUnit(chain + "fn use_both() -> () =\n    let x = make()\n    need_functor(x)\n    need_folding(x)\n").diags,
+      Nil
+    )
+
+  test("3.1.M2: a type variable passed where its bound does not reach the capability is T010"):
+    assertEquals(
+      codes(typedUnit("fn need_num(x: is Numeric) -> () = ()\nfn bad(c: C is Show) -> () = need_num(c)\n")),
+      List(DiagCode.T010)
+    )
+    assertEquals(
+      typedUnit(
+        "cap Ring extends Numeric\nfn need_num(x: is Numeric) -> () = ()\nfn ok(c: C is Ring) -> () = need_num(c)\n"
+      ).diags,
+      Nil
+    )

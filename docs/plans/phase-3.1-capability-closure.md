@@ -162,8 +162,8 @@ For `T satisfies C`, mapped through `closure(C)`:
 
 | # | Milestone | Verification |
 |---|---|---|
-| 3.1.M1 | Closure and satisfaction resolver; transitive `Numeric` | Unit tests of `satisfies(T, C)` over the stdlib and corpus types |
-| 3.1.M2 | Obligations during typing, discharged after the unit; the `is`-bound and capability-as-type leniency removed from the unifier | `01`–`06` still clean; negative tests (`String` into `is Numeric`, `List of String` into `is Folding of u64`) report `T010` |
+| 3.1.M1 ✅ | Closure and satisfaction resolver; transitive `Numeric` | Unit tests of `satisfies(T, C)` over the stdlib and corpus types |
+| 3.1.M2 ✅ | Obligations during typing, discharged after the unit; the `is`-bound and capability-as-type leniency removed from the unifier | `01`–`06` still clean; negative tests (`String` into `is Numeric`, `List of String` into `is Folding of u64`) report `T010` |
 | 3.1.M3 | `satisfies` declaration checks (coverage, mappings, abstract methods, diamond) | Corpus `satisfies` blocks pass; negative tests for each rule |
 | 3.1.M4 | Cap default bodies and `satisfies` method bodies typed | `03`'s `Maybe satisfies Optional` bodies type-check; a bad body reports against the declaration |
 | 3.1.M5 | Constructor resolution with refinement strip | `Optional.some(x)` against a `Maybe`-backed expected type resolves; an ambiguity reports `T011` |
@@ -181,3 +181,17 @@ time.
    the prelude `Folding`, not a user one. Proposal: satisfactions are keyed by capability symbol,
    so shadowing is exact, and examples that redeclare stdlib caps keep working on their own
    declarations.
+
+## 7. Implementation notes
+
+- **3.1.M1:** `MemberTables.closure`; `Satisfaction.holds(s, t, cap, args)`, where arguments
+  unify with the satisfying type's trailing arguments; auto-derivation per §3.4.
+- **3.1.M2:**
+  - The unifier records `(value, bound)` when an *expected* `is ...` bound or capability meets a
+    value; `Typer.solve` tags it with the span; `TyperState.finish` discharges after literal
+    defaults.
+  - A variable that already has a bound, or is a numeric literal, gets an obligation instead of
+    being bound to the expected bound, which would forget its own constraints.
+  - Still lenient, until constructor resolution (3.1.M5): an *abstract* value met where a
+    concrete type is expected.
+  - Cost: thread-CPU A/B against 3.1.M1 is about +1.5%.
