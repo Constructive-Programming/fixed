@@ -30,9 +30,7 @@ final class Lower(unit: CompilationUnit) extends Generated:
   private val represent = Representation(unit)
 
   /** Top-level functions with bodies: the prelude's, then the unit's (which shadow them). */
-  private val decls: Map[String, Trees.FnDecl] =
-    val own = unit.tree.toList.flatMap { case Trees.CompilationUnit(items, _) => items; case _ => Nil }
-    (fixed.typer.Stdlib.prelude ++ own).collect { case f: Trees.FnDecl if f.body.isDefined => f.name -> f }.toMap
+  private val decls: Map[String, Trees.FnDecl] = fixed.typer.Stdlib.functions(unit.tree)
 
   /** Every function instance reachable from `main`, or the problems found. */
   def program: Either[List[Diagnostic], List[Fn]] =
@@ -428,10 +426,7 @@ final class Lower(unit: CompilationUnit) extends Generated:
 
   /** An abortive effect operation (`-> !`): record the effect and its payload, then abort (`Aborts`). */
   private def operation(s: Trees.StaticCall, effect: SymbolId, args: List[Tree], sc: Scope)(k: K): Expr =
-    val abortive = symbols.membersOf(effect).find(_.name == s.method).exists(_.info match
-      case Type.ArrowType(_, Type.NeverType, _) => true
-      case _                                    => false)
-    if !abortive then
+    if !Members.abortive(symbols, effect, s.method) then
       problems +=
         problem(DiagCode.B002, s.span, s"`${s.qualifier}.${s.method}`: only abortive operations are supported")
       k(Atom.UnitC)

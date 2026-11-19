@@ -14,6 +14,12 @@ import fixed.util.mapAccum
   */
 object Members:
 
+  /** Whether operation `op` of effect `effect` is abortive: its result is `!` (Rule E3.3). */
+  def abortive(symbols: SymbolTable, effect: SymbolId, op: String): Boolean =
+    symbols.membersOf(effect).find(_.name == op).exists(_.info match
+      case Type.ArrowType(_, Type.NeverType, _) => true
+      case _                                    => false)
+
   /** A member found by lookup, instantiated only when a call uses it; `origin` says where it came
     * from, for the backend (`Resolution`).
     */

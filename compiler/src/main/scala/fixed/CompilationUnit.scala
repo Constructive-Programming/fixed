@@ -14,7 +14,8 @@ final case class CompilationUnit(
     tree: Option[Tree] = None,
     symbols: SymbolTable = SymbolTable.empty,
     diagnostics: List[Diagnostic] = Nil,
-    typing: Option[TyperState] = None
+    typing: Option[TyperState] = None,
+    quantities: Option[fixed.qtt.QuantityTable] = None
 ):
   def hasErrors: Boolean = diagnostics.exists(_.isError)
 

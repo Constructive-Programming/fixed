@@ -1,6 +1,6 @@
 # Phase 3.4 — Quantities and lifetimes (M10)
 
-**Status:** Draft, awaiting review (decisions D1–D4 in §8)
+**Status:** 3.4.M1 done. M2–M4 wait on decisions D1–D5 (§8)
 **Parent:** `docs/plans/phase-3-typer.md` §1.3 (Part B, M10) and §5.7
 **Runs:** after M7 and the Phase 4.0 slice, **before M9**
 **Spec:** `spec/quantities.md` §3–§9 (semiring, Rules Q5.1–Q5.13, Q6.1, Q7.1),
@@ -13,8 +13,10 @@ After M10, every binding and every function of a checked unit has the record of
 `spec/memory_management.md` §20, and the backend uses the part of it that changes the baseline.
 
 1. **Every binding has a quantity** (0, 1 or ω) by Rules Q5.1–Q5.12.
-2. **Erasure and `resume` are checked.** `E070` for a quantity-0 binding used at runtime (Rule
-   Q6.1). `E072` for two `resume`s on one path (Rule Q5.11).
+2. **`resume` is checked.** `E072` for two `resume`s on one path (Rule Q5.11). `E070` (Rule Q6.1)
+   is deferred: for inferred quantities it cannot fire, because a binding used at runtime is not
+   0. It needs declared-0 bindings (`of` value-params read at runtime, Rule Q6.2), which arrive
+   with example `11` once it type-checks.
 3. **Every binding has an escape set and a lifetime class** (Rules MM5.1–MM5.3), with a reason
    chain for every class other than `Frame`.
 4. **Every function has signature facts** (Rule MM20.2): per-parameter quantity, mode (borrowed or
@@ -103,9 +105,19 @@ The walk returns, per expression, a usage map `Map[Binder, Quantity]`:
 - **Default-bodied cap methods** (Rule Q5.12) are walked once at ω skeletons. Re-checking at each
   satisfying type waits for `satisfies` method bodies to be lowered (slice §9 open item).
 
-Unused bindings get a warning `T021` unless the name starts with `_` (Rule Q5.1). The corpus has
-some of these (example `05`'s `door`), so the warning is checked against all examples before it is
-switched on.
+Unused bindings get a warning `T021` unless the name starts with `_` (Rule Q5.1). Examples
+`01`–`06` raise none. `07`–`11` stop at typer errors before this phase runs.
+
+**Arguments are evaluated once** (finding of 3.4.M1, decision D5). Read literally, §9 scales every
+binder in an argument by the parameter's quantity. Then in §10.1's `go(i - 1, b, a + b)` the
+binder `a` would be ω, because `a + b` goes to `go`'s ω parameter `b`; but §10.1 says `a` is 1.
+Fixed is strict, so `a + b` is computed once and `a` is used once. The walk scales only a binder
+passed as itself, and a lambda argument's captures. Quantity 0 erases the whole argument. This
+gives both §9's example (`pair_double(y)`: `y` is ω) and §10.1's (`go` is `(ω, 1, ω)`).
+
+**Cost.** Measured with `QuantityCpuBench` (thread CPU time, examples `01`–`06`): the walk costs
+25.4% of typer time (108 µs against 424 µs). Integer binder ids and callee-first walking took it
+there from 296%.
 
 ### 3.4 Uniqueness: a gap in the spec
 
@@ -198,7 +210,7 @@ Perceus inserter.
 
 | # | Content | Done when |
 |---|---|---|
-| 3.4.M1 | `QuantityPhase` skeleton, `QuantityTable`, quantities (§3.3), `E070`, `E072`, `T021` | `QuantityPhaseSuite`: the worked examples of `spec/quantities.md` §10 (`go`: `i` ω, `a` 1, `b` ω; `Door`'s `State` 0), one test per rule; all examples check with no new errors |
+| 3.4.M1 ✅ | `QuantityPhase`, `QuantityTable`, quantities (§3.3), `E072`, `T021` | `QuantityPhaseSuite`: §10.1's `go` is `(ω, 1, ω)`, one test per rule; examples `01`–`06` raise no new diagnostics |
 | 3.4.M2 | Uniqueness (§3.4), escape sets, classes, reason chains, garbage-free carry, handler kinds (§3.5), signature facts and borrowing (§3.6) | Suite tests per escape kind and class; every example gets a full record; no binding without a class |
 | 3.4.M3 | `--explain-memory`, `--format json` (§19); `fip` check, `E110`, `E071` (§3.7) | Golden report for `01`; `fip` accept / reject tests per Rule MM18.1 item |
 | 3.4.M4 | Backend consumption (§3.8); new baseline record | Goldens and leak checks still pass; `docs/baselines/runtime-<date>.md` with the four numbers per program and the difference to the 4.0 baseline |
@@ -233,6 +245,8 @@ The walk must not add more than 25% to typer time on the corpus; if it does, the
   first consumes them (D3).
 - New codes: `E072` (two `resume`s on one path), `T021` (unused binding). `E070`, `E071`, `E110`
   already exist in the spec.
+- `spec/quantities.md` §9: an argument expression is evaluated once; only a binder passed as itself
+  and a lambda argument's captures scale by the parameter's quantity (D5).
 
 ## 8. Decisions for review
 
@@ -242,3 +256,5 @@ The walk must not add more than 25% to typer time on the corpus; if it does, the
 - **D3 — Defer `Region`, cohesive groups and lanes** to the phase that consumes them. Recommended:
   yes.
 - **D4 — Typed-tree walk after the typer** (§3.1), not inside it and not on Core. Recommended: yes.
+  3.4.M1 is built this way.
+- **D5 — Strict argument scaling** (§3.3). Recommended: yes, amend §9 as in §7.
