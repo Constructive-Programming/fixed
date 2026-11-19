@@ -538,6 +538,6 @@ fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String =
 | `spec/quantities.md` | Rule Q5.5 (prop bodies at quantity 0), Q5.9 / Q5.10 (semiring usage) |
 | `spec/effects.md` | Effects forbidden in props (§4.2 here); linear effects (§3.5 there) as resource-lifecycle alternative to OQ-P6 |
 | `spec/pattern_matching.md` | Rule M6.2 (refinement-aided exhaustiveness) shares prop-evidence machinery |
-| `spec/perceus.md` (TBD) | Verified props inform reuse decisions and bounds-check elision |
+| `spec/memory_management.md` | Verified props inform reuse decisions and bounds-check elision |
 | `docs/references/scala3-compiler-reference.md` | Phase-indexed denotations (§4.4) — verified props annotate symbols |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `caps/PropVerifier.scala`; structured error reporting per the project-wide CLI guidelines |

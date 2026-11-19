@@ -607,7 +607,7 @@ Formal specification documents that pin down semantics before implementation.
 | `spec/type_system.md` | Capability classification rules, `of`/`Part`/`Self of B` semantics, representation selection, inference |
 | `spec/effects.md` | Algebraic effects semantics, effect rows, evidence-passing compilation |
 | `spec/pattern_matching.md` | Desugaring rules (`match` → `fold`), exhaustiveness checking algorithm |
-| `spec/perceus.md` | Reference counting insertion, reuse analysis (FBIP), drop specialization, borrowing optimization |
+| `spec/memory_management.md` | Lifetime classes and regions, class witnesses, reference counting insertion, reuse analysis (FBIP), drop specialization, borrowing, `fip` contract (formerly `spec/perceus.md`) |
 | `spec/properties.md` | `prop` semantics, static verification vs property-based testing fallback, `forall`/`implies`, composability with `extends` |
 | `spec/quantities.md` | QTT quantity inference (0/1/ω), interaction with Perceus RC, erasure rules for 0-quantity bindings, linearity checking for 1-quantity bindings, soundness argument for dependent types + RC |
 
@@ -851,7 +851,8 @@ All 11 example programs type-check with correct capability classifications, repr
 Typed + capability-closed + quantity-checked + representation-selected AST
   → Monomorphization (specialize generic functions per concrete representation)
   → Match desugaring (match → fold calls)
-  → Perceus insertion (dup/drop/reuse token placement, guided by QTT quantities)
+  → Perceus insertion (dup/drop/reuse token placement, guided by quantities and lifetime classes)
+  → Region lowering (data-stack marks and resets, destinations, class witnesses, evacuations)
   → Evidence passing (effect operations → evidence vector lookups)
   → LLVM IR emission (textual .ll for the prototype; in-process bindings later if needed)
   → llc / clang → native binary
@@ -865,7 +866,8 @@ Phase 4 strictly follows Phase 3's recheck phases. Capability sets, quantities, 
 |---|---|
 | **Monomorphizer** (`backend/Monomorphizer.scala`) | Specialize generic functions for concrete representations chosen in Phase 3 |
 | **Match desugarer** (`transform/MatchDesugar.scala`) | Convert `match` to `fold` calls, `if` to `bool.fold`. Implemented as a `MiniPhase` |
-| **Perceus inserter** (`perceus/PerceusInserter.scala`) | Insert `dup`/`drop` operations guided by QTT quantities. 0-quantity bindings: erased (no code). 1-quantity bindings: no RC, direct reuse. ω-quantity bindings: full Perceus RC (dup on share, drop on last use, reuse tokens on unique) |
+| **Perceus inserter** (`perceus/PerceusInserter.scala`) | Insert `dup`/`drop` operations guided by quantity × lifetime class (`spec/memory_management.md` §3.2). 0-quantity bindings: erased. 1-quantity bindings: no RC, direct reuse. ω-quantity bindings: Perceus RC only when `Heap` or `Region`; other classes are freed by their region |
+| **Region lowering** (`backend/Regions.scala`) | Chunked data stacks, scope marks and resets, drop lists, counted regions, destinations, class witnesses and evacuations per `spec/memory_management.md` §6–§7 |
 | **Evidence passer** (`effects/EvidencePasser.scala`) | Compile effects to evidence vector lookups |
 | **LLVM IR emitter** (`backend/EmitLLVM.scala`) | Emit textual LLVM IR (.ll). Prototype strategy: shell out to `llc` / `clang` for native code generation. |
 
@@ -876,13 +878,13 @@ Phase 4 strictly follows Phase 3's recheck phases. Capability sets, quantities, 
 | Sum capability (e.g., `Optional`) | `{ i8, [N x i8] }` — tag + payload bytes; payload accessed via `bitcast` to the variant's struct type |
 | Data type (e.g., `Color`, `Expr`) | Same shape as sum capability; `data` declarations name the variants |
 | Product capability (e.g., `Config`) | LLVM literal struct: `{ field1_t, field2_t, ... }` |
-| Recursive capability (e.g., `Sequencing` backed by linked list) | Heap-allocated `ptr` (LLVM opaque pointer) to `{ rc_header, payload }` |
+| Recursive capability (e.g., `Sequencing` backed by linked list) | `ptr` (LLVM opaque pointer) to the payload; `{ rc_header, payload }` only when the value is `Heap` (`spec/memory_management.md` §3.1) |
 | Capability satisfied by contiguous array (e.g., `RandomAccess + Sized`) | `{ i64 len, i64 cap, ptr data }` |
 | Closure | `{ ptr code, ptr env }` (opaque pointers, LLVM 15+) |
 | Block lambda | Same as closure (syntactic difference only) |
 | Effect operation | Evidence vector load (`getelementptr` + `load`) + `call ptr` indirect call |
 | `resume` | Direct `call` (single-shot) |
-| Refcount | `{ i64 rc, ... }` header on heap allocations; ops via `atomicrmw` |
+| Refcount | `{ i64 rc, ... }` header on `Heap` values only; non-atomic ops (`spec/memory_management.md` §17.2) |
 
 ### Milestone
 
@@ -929,6 +931,8 @@ Profile-guided optimization for representation selection.
 - Sequential-only fold access → contiguous array (even if capabilities didn't require it)
 - Heap allocation → stack allocation (when lifetime is short and bounded)
 - Dynamic dispatch → monomorphized (when callee is statically known in practice)
+- Class witness → guarded direct code or specialization (when one lifetime class dominates a call site, `spec/memory_management.md` §7.4)
+- Hot-code evacuation (warning W110) judged by profile instead of the static fold-step heuristic
 - Closure allocation → inlined (when closure is called exactly once)
 - Linked list → contiguous array (when profiling shows random access patterns despite only `Sequencing` being required)
 

@@ -220,9 +220,9 @@ cap Clone:
     fn clone -> Self
 ```
 
-Produces a value of the same type whose lifetime is independent of the receiver. Implementations are expected to perform a deep copy when the underlying representation is heap-allocated (refcount-incremented copy is acceptable when the representation is a refcounted shared structure — see `spec/perceus.md`).
+Produces a value of the same type whose lifetime is independent of the receiver. Implementations are expected to perform a deep copy when the underlying representation is heap-allocated (refcount-incremented copy is acceptable when the representation is a refcounted shared structure — see `spec/memory_management.md`).
 
-**Relationship with borrow inference.** Perceus's borrow inference (`spec/perceus.md` §8) is the *primary* mechanism for sharing values across multiple uses without allocation: when the typer can prove a value is read-only and not consumed, the call site reads in place rather than dup-then-drop. `.clone()` is the **explicit fallback** for cases where borrow inference cannot prove uniqueness (e.g., a value passed to a closure that may run multiple times) or where the program semantics genuinely require a separate copy (e.g., before-and-after comparisons, or staging an intermediate snapshot for later use).
+**Relationship with borrow inference.** Perceus's borrow inference (`spec/memory_management.md` §13) is the *primary* mechanism for sharing values across multiple uses without allocation: when the typer can prove a value is read-only and not consumed, the call site reads in place rather than dup-then-drop. `.clone()` is the **explicit fallback** for cases where borrow inference cannot prove uniqueness (e.g., a value passed to a closure that may run multiple times) or where the program semantics genuinely require a separate copy (e.g., before-and-after comparisons, or staging an intermediate snapshot for later use).
 
 In current example code, `.clone()` was used defensively in places where borrow inference is expected to handle the duplication implicitly; the v0.4.5 sweep removed those calls. Programs that *need* an explicit duplicate continue to call `.clone()`; the typer ensures the receiver type satisfies `Clone`.
 

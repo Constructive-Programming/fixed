@@ -25,7 +25,7 @@ It does **not** specify:
 
 - The base type system or capability machinery — see `spec/type_system.md`.
 - Resume's quantity (single-shot vs multi-shot) beyond a brief recap — see `spec/quantities.md` Rule Q5.11.
-- How Perceus interacts with handler-captured continuations — see `spec/perceus.md`.
+- Memory of handler-captured continuations, abort resets and fiber stacks — see `spec/memory_management.md` §14.
 - How `!` (the never type) is typed beyond the effect-relevant rules — see `spec/type_system.md` §5.6.
 
 ## 2. Dependencies and theoretical basis
@@ -560,7 +560,7 @@ fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A) =
 | `spec/syntax_grammar.ebnf` | All effect-related syntax |
 | `spec/type_system.md` | Effect declarations as type-level constructs (§9 forwards here); `!` typing (§5.6) |
 | `spec/quantities.md` | Rule Q5.11 (`resume` quantity 1); OQ-Q1 ↔ OQ-E1 |
-| `spec/perceus.md` (TBD) | Continuation memory management; refcount interaction with captured clauses |
+| `spec/memory_management.md` | §14: handler kinds, abort resets, fiber stacks for capturing handlers, continuation memory |
 | `spec/properties.md` (TBD) | Effects in `prop` bodies are forbidden — props are checked at quantity 0 (Rule Q5.5), and `prop` bodies are compile-time only |
 | `spec/pattern_matching.md` (TBD) | Handler clauses reuse pattern syntax; not effect-specific |
 | `docs/references/scala3-compiler-reference.md` | Recheck pattern; effect inference is a Recheck pass like quantity inference |

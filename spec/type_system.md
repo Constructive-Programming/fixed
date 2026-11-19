@@ -24,7 +24,7 @@ It does **not** define:
 - Effect-row inference and evidence-passing compilation — see `spec/effects.md`.
 - `prop` static verification and PBT fallback — see `spec/properties.md`.
 - `match → fold` desugaring and exhaustiveness checking — see `spec/pattern_matching.md`.
-- Perceus reference-counting insertion — see `spec/perceus.md`.
+- Memory management (lifetime classes, regions, Perceus reference counting) — see `spec/memory_management.md`.
 - Capability-set narrowing into concrete representations (the algorithm) — touched in §4.5; full treatment lives with the compiler implementation, with PGO-driven decisions documented separately.
 
 ## 2. Dependencies
@@ -546,7 +546,8 @@ The representation-selection pass determines, for each value (binding, parameter
 For each value, the pass collects:
 
 - **Bound set** — the union of all `is`-bounds the value must satisfy across its lifetime: declaration site, assignment LHS, parameter positions, return positions. Closed under `extends` (§6.2) and alias distribution (§5.8).
-- **Quantity context** — the QTT quantity assigned to the value (§7.3.b, `spec/quantities.md`). Quantity 1 (linear) opens stack-allocation possibilities; quantity ω requires representations compatible with Perceus reference counting.
+- **Quantity context** — the QTT quantity assigned to the value (§7.3.b, `spec/quantities.md`).
+- **Lifetime class and escape set** — computed by M10 (`spec/memory_management.md` §5, §20). The class, not the quantity, decides placement: only `Heap` and `Region` values need representations compatible with reference counting. The pass may demote any class to `Inline`, never promote it.
 - **PGO data** — when available, profile observations from prior runs of the program or its predecessors.
 
 #### 6.5.2 Candidate pool
@@ -575,7 +576,7 @@ If zero candidates are viable, emit `error[E060]: no representation satisfies <b
 
 For each viable candidate, compute a **performance score** as a weighted linear combination over these dimensions:
 
-- **Allocation cost** — bytes per instance and allocator pressure. Stack > arena > heap-with-RC-header.
+- **Allocation cost** — bytes per instance and allocator pressure, given the value's lifetime class (`spec/memory_management.md` §3.1): `Inline` > `Static` > `Frame` / stack `Dest` > `Region` > `Heap`. Packed candidates are charged for expected copy-out of escaping subtrees (`spec/memory_management.md` §16.2).
 - **Access fit** — how well the candidate's strengths match the operations actually invoked on the value: `RandomAccess + Sized` ⇒ array beats list; sequential-fold ⇒ either acceptable; key-lookup ⇒ hash-map beats list.
 - **Memory footprint** — total bytes including headers, padding, and discriminator tags, per typical instance.
 - **Locality** — contiguous layouts score higher for fold-heavy use; pointer-chased layouts lose cache lines and amortise across allocator slabs.
@@ -633,7 +634,7 @@ Committing a representation re-checks every abstract constructor-requirement cal
 
 Bound sets are **canonicalised** (sorted, deduplicated, alias-expanded, `extends`-flattened) and hashed. Two values with the same canonical bound set and quantity context share their selection result — selection is computed once per canonical key.
 
-Mutually recursive `data` types (§7.5) form a strongly-connected component on the data-dependency graph. Selection runs **once per SCC**, not once per member; all members of a recursive group adopt a unified representation strategy (heap-allocated co-recursive group with shared refcount header). A future relaxation may allow per-member rep within an SCC when the inter-member references are tail-position only.
+Mutually recursive `data` types (§7.5) form a strongly-connected component on the data-dependency graph. Selection runs **once per SCC**, not once per member; all members of a recursive group adopt a unified representation strategy (a co-recursive group with one shared header layout when its values are `Heap`). A future relaxation may allow per-member rep within an SCC when the inter-member references are tail-position only.
 
 #### 6.5.9 Open questions
 
@@ -693,7 +694,7 @@ A variant constructor call passes arguments **positionally**, with trailing argu
 
 ### 7.2 Recursive data
 
-A `data` declaration is recursive iff at least one variant has a field whose type mentions the data type itself (transitively). Recursive data is heap-allocated by default (see `spec/perceus.md`).
+A `data` declaration is recursive iff at least one variant has a field whose type mentions the data type itself (transitively). Recursive data gets a lifetime class like any other value; recursion alone does not force heap allocation (see `spec/memory_management.md` §5).
 
 ```
 data Tree of A:
@@ -875,7 +876,7 @@ data Node:
 
 **Rule 7.5.** Mutual recursion across `data` declarations is supported. The Namer pass enters all data symbols with lazy completers; the Typer pass forces them as needed, breaking cycles via fixed-point iteration on the data dependency graph (the same mechanism used for mutual `cap` declarations).
 
-Representation: data types in a strongly-connected component of the data dependency graph are co-allocated. The compiler treats them as a single recursive group requiring heap allocation; refcount headers are shared per-node, and the compiler may emit a unified tag space across the group when this enables better packing. See `spec/perceus.md` for refcount details.
+Representation: data types in a strongly-connected component of the data dependency graph are co-allocated. The compiler treats them as a single recursive group; when its values are `Heap`, refcount headers share one layout across the group, and the compiler may emit a unified tag space across the group when this enables better packing. Placement follows the lifetime class of each value. See `spec/memory_management.md` §15.
 
 Self-recursion (a single data type referencing itself) is the trivial 1-element SCC and is handled by the same rule.
 
@@ -1140,6 +1141,6 @@ Subtyping in Fixed is intentionally narrow:
 | `spec/effects.md` (TBD) | Effect rows, evidence passing, handler semantics |
 | `spec/properties.md` (TBD) | `prop` semantics, static verification, PBT fallback, `forall`/`implies` |
 | `spec/pattern_matching.md` (TBD) | `match → fold` desugaring, exhaustiveness |
-| `spec/perceus.md` (TBD) | Perceus RC insertion, drop specialization |
+| `spec/memory_management.md` | Lifetime classes, regions, Perceus RC insertion, drop specialization; consumes §6.5 output |
 | `docs/references/scala3-compiler-reference.md` | Reference patterns from dotc — bidirectional typing, Recheck pattern |
 | `docs/plans/implementation-plan.md` | Phase plan, open design questions migrated above |

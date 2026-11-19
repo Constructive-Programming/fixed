@@ -1,7 +1,7 @@
 # L6 — Linear effect handler clause capturing a quantity-1 outer binding
 
 **Status:** Open. Pick one option. **Contingent on OQ-Q5** (whether effect rows participate in QTT quantity).
-**Affects:** spec/effects.md §3.5 (Proposal), spec/quantities.md Rule Q7.1, spec/perceus.md §9.
+**Affects:** spec/effects.md §3.5 (Proposal), spec/quantities.md Rule Q7.1, spec/memory_management.md §14 (formerly perceus.md §9).
 
 ## Problem
 
@@ -55,7 +55,7 @@ The choice is fundamentally tied to OQ-Q5: there is no consistent design where l
 
 Spec edits if Option 1 chosen:
 - `quantities.md` add Rule Q7.x: "A handler clause body for a linear effect has quantity 1. It may capture quantity-1 outer bindings; the captured binding's contribution to outer-scope quantity is the join of clause-body usage and outer-scope usage, both bounded above by 1."
-- `perceus.md` §9: clarify that quantity-1 captures into linear-effect clause bodies generate no `dup`.
+- `memory_management.md` §14 (formerly `perceus.md` §9): clarify that quantity-1 captures into linear-effect clause bodies generate no `dup`.
 - `effects.md` §3.5 (proposal section): add a "linear clause" example with capture.
 
 Spec edits if Option 2 chosen (fallback):

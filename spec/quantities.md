@@ -18,7 +18,7 @@ This document specifies how the compiler assigns **QTT quantities** (0, 1, ω) t
 
 It does **not** specify:
 
-- The Perceus RC algorithm itself, its dup/drop placement, or reuse analysis — see `spec/perceus.md`.
+- Placement (lifetime classes, regions), the Perceus RC algorithm, its dup/drop placement, and reuse analysis — see `spec/memory_management.md`. Quantity inference also computes the escape facts and lifetime classes that document needs (`spec/memory_management.md` §20); their rules live there.
 - Effect-handler semantics in detail — see `spec/effects.md`. (Only `resume`'s quantity is specified here.)
 - Property-verification mechanics — see `spec/properties.md`. (Only that `prop` bodies are checked at quantity 0 is specified here.)
 - Pattern-matching desugaring — see `spec/pattern_matching.md`.
@@ -39,7 +39,7 @@ Three quantities form a commutative **semiring** over `{0, 1, ω}`:
 |---|---|---|
 | **0** | Erased | Generates no runtime code; exists only at the type level. |
 | **1** | Linear | Used exactly once; enables in-place mutation (FBIP) and skips RC. |
-| **ω** | Unrestricted | Freely shared; managed by Perceus reference counting. |
+| **ω** | Unrestricted | Freely shared; reference-counted only if its lifetime class is `Heap` or `Region` (`spec/memory_management.md` §3.2). |
 
 ### 3.1 Addition (combining usages)
 
@@ -266,7 +266,7 @@ Violations: `error[E071]: linear binding used <0 or 2+> times`.
 
 A quantity-1 binding's last use is the only use, so the underlying memory may be **reused in place** rather than allocated fresh. This is the hook for Functional-But-In-Place (FBIP) optimization.
 
-When a constructor is applied to a quantity-1 receiver of the same shape, Perceus may emit a reuse rather than allocate. Details in `spec/perceus.md`.
+When a constructor is applied to a quantity-1 receiver of the same shape, Perceus may emit a reuse rather than allocate. Details in `spec/memory_management.md`.
 
 ### 7.3 No RC overhead (Rule Q7.3)
 
@@ -304,7 +304,7 @@ If OQ-Q5 closes the other way (effect rows do not participate in QTT quantity), 
 
 ## 8. Unrestricted (quantity ω)
 
-A quantity-ω binding is **freely shared**. The Perceus pass inserts:
+A quantity-ω binding is **freely shared**. Whether it costs reference counting depends on its lifetime class (`spec/memory_management.md` §3.2): values that live in a data-stack region carry no RC. For `Heap` and `Region` values, the Perceus pass inserts:
 
 1. **`dup` operations** at every share point (when a binding is used in more than one downstream position).
 2. **`drop` operations** at every consumption point that is not the last use.
@@ -404,6 +404,6 @@ let result = x.value + x.lo                     // x.value: runtime read; x.lo: 
 | `spec/properties.md` (TBD) | Static-vs-PBT verification of `prop` bodies; this doc only states they're checked at quantity 0 (Rule Q5.5) |
 | `spec/effects.md` (TBD) | Effect-row composition; this doc fixes only `resume`'s quantity (Rule Q5.11) |
 | `spec/pattern_matching.md` (TBD) | Match desugaring; pattern bindings (Rule Q5.8) follow standard rules |
-| `spec/perceus.md` (TBD) | Consumes quantity-ω bindings → dup/drop; quantity-1 bindings → reuse-in-place; quantity-0 bindings → erased before Perceus runs |
+| `spec/memory_management.md` | Quantity × lifetime class decides RC: ω ∧ `Heap`/`Region` → dup/drop; quantity 1 → consume and reuse in place; quantity 0 → erased. M10 also computes the escape facts and classes of §20 there |
 | `docs/references/scala3-compiler-reference.md` | The Recheck pattern (§5.4) that this pass adopts |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `qtt/QuantityChecker.scala` (Recheck phase) |
