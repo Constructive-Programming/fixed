@@ -97,8 +97,12 @@ object Declarations:
             else
               params.zip(fields).foldLeft(s3) { case (si, (p, f)) =>
                 si.unifier.unify(p, f, Members.isNumeric(si, _)) match
-                  case Right(u) => si.copy(unifier = u.copy(obligations = Nil))
-                  case Left(_)  =>
+                  /** A field may refine an `is ...` parameter (Rule 8.1.a): it must satisfy the bound. */
+                  case Right(u) =>
+                    u.obligations.foldLeft(si.copy(unifier = u.copy(obligations = Nil))) { case (sj, (value, bound)) =>
+                      Satisfaction.discharge(sj, value, bound, span)
+                    }
+                  case Left(_) =>
                     val r = si.symbols.render
                     si.error(
                       DiagCode.T010,
