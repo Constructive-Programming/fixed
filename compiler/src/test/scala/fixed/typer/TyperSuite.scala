@@ -239,3 +239,39 @@ class TyperSuite extends munit.FunSuite:
       ).diags,
       Nil
     )
+
+  private val optionalCap =
+    "cap Opt:\n    Self.fn some(value: Part) -> Self\n    Self.fn none -> Self\ndata Maybe of A:\n    Just(value: A)\n    Nothing\n"
+
+  test("3.1.M3: satisfies covers every constructor requirement exactly once"):
+    assertEquals(typedUnit(optionalCap + "Maybe satisfies Opt:\n    Just as some\n    Nothing as none\n").diags, Nil)
+    assertEquals(codes(typedUnit(optionalCap + "Maybe satisfies Opt:\n    Just as some\n")), List(DiagCode.T010))
+    assertEquals(
+      codes(typedUnit(optionalCap + "Maybe satisfies Opt:\n    Just as some\n    Just as some\n    Nothing as none\n")),
+      List(DiagCode.T014)
+    )
+    assertEquals(
+      codes(typedUnit(optionalCap +
+        "Maybe satisfies Opt:\n    Just as some\n    Nothing as none\n    Nothing as other\n")),
+      List(DiagCode.T014)
+    )
+    assertEquals(typedUnit(optionalCap + "Maybe satisfies Opt:\n    Just as some\n    impossible as none\n").diags, Nil)
+
+  test("3.1.M3: a mapped variant's fields must fit the requirement's parameters"):
+    assertEquals(
+      codes(typedUnit(optionalCap + "Maybe satisfies Opt:\n    Nothing as some\n    Just as none\n")),
+      List(DiagCode.T010, DiagCode.T010)
+    )
+    assertEquals(
+      codes(typedUnit(optionalCap + "Maybe satisfies Opt:\n    Jus as some\n    Nothing as none\n")),
+      List(DiagCode.T001)
+    )
+
+  test("3.1.M3: a member inherited from two parents with different shapes is T013"):
+    val caps = "cap A:\n    fn go(x: u64) -> u64\ncap B:\n    fn go -> u64\n"
+    assertEquals(codes(typedUnit(caps + "cap C extends A + B\n")), List(DiagCode.T013))
+    assertEquals(typedUnit(caps + "cap C extends A + B:\n    fn go -> u64\n").diags, Nil)
+
+  test("3.1.M3: the stdlib's own satisfies declarations pass the checks"):
+    val (table, _) = Namer.index(Parser.parse(SourceFile.fromString("<empty>", "")).tree)
+    assertEquals(Declarations.check(TyperState(table), Stdlib.prelude).finish.diags, Nil)
