@@ -4,7 +4,8 @@ import scala.collection.immutable.{BitSet, IntMap}
 
 import fixed.core.{SymbolId, Type}
 
-/** A persistent substitution over [[Type.TypeVar]]s. A variable may be required to be `Numeric`;
+/** A persistent substitution over [[Type.TypeVar]]s. `bindings` is indexed by variable id (ids are
+  * dense); an unbound variable's slot holds the variable itself. A variable may be required to be `Numeric`;
   * a literal's variable carries the type it defaults to when nothing else solves it (`i64` /
   * `f64`); a variable instantiated from a bounded type variable keeps that bound, so members
   * resolve on it before it is solved. `tuple` is the `Tuple` data type, which a 2-tuple equals.
@@ -12,7 +13,7 @@ import fixed.core.{SymbolId, Type}
   * `numeric` is supplied by the typer: it decides whether a solved type satisfies `Numeric`.
   */
 final case class Unifier(
-    bindings: IntMap[Type],
+    bindings: Vector[Type],
     numericVars: BitSet,
     defaults: IntMap[Type],
     varBounds: IntMap[List[Type]],
@@ -24,6 +25,7 @@ final case class Unifier(
     val v = Type.TypeVar(next)
     (
       copy(
+        bindings = bindings :+ v,
         numericVars = if numeric then numericVars.incl(next) else numericVars,
         defaults = default.fold(defaults)(defaults.updated(next, _)),
         varBounds = if bounds.isEmpty then varBounds else varBounds.updated(next, bounds),
@@ -38,11 +40,14 @@ final case class Unifier(
   /** Follow variable bindings until an unbound variable or a non-variable type. */
   def resolve(t: Type): Type =
     t match
-      case Type.TypeVar(id)          => bindings.get(id).fold(t)(resolve)
+      case Type.TypeVar(id) =>
+        bindings(id) match
+          case Type.TypeVar(`id`) => t
+          case bound              => resolve(bound)
       case Type.AppliedVar(id, args) =>
-        bindings.get(id).fold(t) { head =>
-          resolve(Unifier.applyHead(resolve(head), args))
-        }
+        bindings(id) match
+          case Type.TypeVar(`id`) => t
+          case head               => resolve(Unifier.applyHead(resolve(head), args))
       case _ => t
 
   /** `t` with every bound variable replaced, recursively. */
@@ -199,4 +204,4 @@ object Unifier:
       case Type.AppliedVar(id, _)                => Type.AppliedVar(id, args)
       case other                                 => other
 
-  val empty: Unifier = Unifier(IntMap.empty, BitSet.empty, IntMap.empty, IntMap.empty, None, 0)
+  val empty: Unifier = Unifier(Vector.empty, BitSet.empty, IntMap.empty, IntMap.empty, None, 0)

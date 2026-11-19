@@ -90,7 +90,7 @@ object Typer:
     val (s1, t) = tree match
       case _: Trees.IntLit           => literal(s, i64)
       case _: Trees.FloatLit         => literal(s, f64)
-      case _: Trees.StringLit        => (s, ctx.scope.get("String").fold(Type.PrimType("String"))(Type.TypeRef(_, Nil)))
+      case _: Trees.StringLit        => (s, ctx.lookup("String").fold(Type.PrimType("String"))(Type.TypeRef(_, Nil)))
       case _: Trees.CharLit          => (s, Type.PrimType("char"))
       case _: Trees.BoolLit          => (s, bool)
       case _: Trees.UnitLit          => (s, Type.UnitType)
@@ -143,7 +143,7 @@ object Typer:
   private def isNumeric(s: TyperState, t: Type): Boolean = Members.isNumeric(s, t)
 
   private def typedIdent(s: TyperState, name: String, span: Span)(using ctx: Context): (TyperState, Type) =
-    ctx.scope.get(name) match
+    ctx.lookup(name) match
       case None     => (s.error(DiagCode.T001, span, s"not found: $name"), Type.NeverType)
       case Some(id) =>
         val d = s.symbols(id)
@@ -209,7 +209,7 @@ object Typer:
   private def typedList(s: TyperState, elems: List[Tree])(using ctx: Context): (TyperState, Type) =
     val (s0, elem) = s.fresh
     val s1 = elems.foldLeft(s0)((si, e) => typedExpr(si, e, Proto.ExpectedType(elem))._1)
-    (s1, ctx.scope.get("List").fold(Type.NeverType)(Type.TypeRef(_, List(elem))))
+    (s1, ctx.lookup("List").fold(Type.NeverType)(Type.TypeRef(_, List(elem))))
 
   /** `if c: a else: b` — `c` is `bool`; both branches meet the prototype (or the first branch's type). */
   private def typedIf(s: TyperState, t: Trees.IfExpr, pt: Proto)(using Context): (TyperState, Type) =
@@ -235,7 +235,7 @@ object Typer:
           case None    =>
             si.fresh
         val si2 = p.typeAnn.fold(si1) { ann =>
-          val (table, annotated, diags) = Namer.translate(si1.symbols, ci.scope, ci.owner, ann)
+          val (table, annotated, diags) = Namer.translate(si1.symbols, ci.frames, ci.owner, ann)
           unify(si1.copy(symbols = table).report(diags), p.span, annotated, declared)
         }
         val (table, id) = si2.symbols.enter(p.name, ci.owner, SymKind.Local, declared, p.span)
@@ -254,8 +254,8 @@ object Typer:
     */
   private def typedMethodCall(s: TyperState, t: Trees.MethodCall)(using ctx: Context): (TyperState, Type) =
     t.receiver match
-      case Trees.Ident("builtin", _) if !ctx.scope.contains("builtin") => intrinsic(s, t)
-      case receiver                                                    =>
+      case Trees.Ident("builtin", _) if ctx.lookup("builtin").isEmpty => intrinsic(s, t)
+      case receiver                                                   =>
         val (s1, recv) = typedExpr(s, receiver, Proto.Wildcard)
         s1.unifier.resolve(recv) match
           case Type.NeverType => (s1, Type.NeverType)
@@ -300,7 +300,7 @@ object Typer:
 
   /** `T.m(args)` / `T.m`: an effect operation, a data constructor or derived `unfold`. */
   private def typedStaticCall(s: TyperState, t: Trees.StaticCall, pt: Proto)(using ctx: Context): (TyperState, Type) =
-    ctx.scope.get(t.qualifier) match
+    ctx.lookup(t.qualifier) match
       case None        => (s.error(DiagCode.T001, t.span, s"not found: ${t.qualifier}"), Type.NeverType)
       case Some(owner) =>
         val layer = pt.expected.map(s.unifier.resolve).collect { case l: Type.Layer => l }
@@ -346,7 +346,7 @@ object Typer:
   def typedFnBody(s: TyperState, id: fixed.core.SymbolId, fn: Trees.FnLike)(using ctx: Context): TyperState =
     fn.body.fold(s) { body =>
       val params = s.symbols.membersOf(id).filter(d => d.kind == SymKind.ValueParam || d.kind == SymKind.TypeParam)
-      val inner = Context(ctx.scope ++ params.map(d => d.name -> d.id), id)
+      val inner = Context(ctx.local ++ params.map(d => d.name -> d.id), ctx.global, id)
       val expected = s.symbols(id).info match
         case Type.ArrowType(_, ret, _) => Proto.ExpectedType(ret)
         case _                         => Proto.Wildcard
@@ -372,7 +372,7 @@ object Typer:
     (s4, result)
 
   private def typedClause(s: TyperState, c: Trees.OperationClause, result: Type)(using ctx: Context): TyperState =
-    ctx.scope.get(c.effect).filter(s.symbols(_).kind == SymKind.Effect) match
+    ctx.lookup(c.effect).filter(s.symbols(_).kind == SymKind.Effect) match
       case None         => s.error(DiagCode.T001, c.span, s"not found: effect ${c.effect}")
       case Some(effect) =>
         Members.static(s, effect, c.op, None) match

@@ -17,7 +17,7 @@ class TyperSuite extends munit.FunSuite:
     val rep = new Reporter(src)
     val tree = new Parser(new Scanner(src, rep), rep).parseExpr()
     assert(!rep.hasErrors, rep.formatAll)
-    given Context = Context(table.scope, SymbolId.Root)
+    given Context = Context(Map.empty, table.scope, SymbolId.Root)
     val (s, _) = Typer.typedExpr(TyperState(table), tree, Proto.Wildcard)
     val done = s.finish
     (done, tree, done.symbols.render(done.typeOf(tree).get))
@@ -63,7 +63,7 @@ class TyperSuite extends munit.FunSuite:
       case other => fail(s"unexpected $other")
     val fnId = table.scope(fn.name)
     val params = table.denotations.filter(d => d.owner == fnId).map(d => d.name -> d.id)
-    given Context = Context(table.scope ++ params, fnId)
+    given Context = Context(params.toMap, table.scope, fnId)
     val (st, ty) = Typer.typedExpr(TyperState(table), body, Proto.Wildcard)
     val done = st.finish
     (done, done.symbols.render(done.unifier.zonk(ty)))

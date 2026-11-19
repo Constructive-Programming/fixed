@@ -86,6 +86,7 @@ JMH, corpus of 11 examples, `FrontEndBench`:
 | Presized identity table (2 forks) | 849 ± 28 | 4.8× |
 | Precomputed capability member tables | 829 ± 48 | 4.7× |
 | No redundant resolution in `unify` (identity fast path, loop `unifyAll`) | 779 ± 32 | 4.4× |
+| Follow-up round: layered scopes (Namer and typer), unindexed top-level members, dense `Vector` unifier bindings, tuple-free member-table keys | ~5% below the previous row, thread-CPU A/B | ~4.2× |
 
 The Namer is ~104 µs of `typer`. The remaining body-typing cost is spread across the persistent
 unifier (`resolve`, `unify`, ~15%), the identity table (~8%), scope maps (`Context.bind`,
@@ -102,4 +103,17 @@ the allocation (iterators instead of materialized member vectors) changed time b
 noise. A leaner `TyperState` is therefore not a clear win, and was not done.
 
 What remains is a per-node constant factor (~250 ns per expression node) spread over many small
-costs, plus the Namer (~15%, re-run per unit for user declarations).
+costs, plus the Namer (~13%, re-run per unit for user declarations).
+
+The follow-up round's numbers are relative. The machine's load average was 5–11, which made
+wall-clock JMH unreliable (±10–20%), so each change was checked with `TyperCpuBench` (thread CPU
+time, which excludes time spent descheduled) alternating the baseline tree and the candidate tree.
+The layered Namer scope was first *slower*: an iterator-based lookup on every name. A plain loop
+fixed it. Dense `Vector` bindings cut `resolve` from 7.7% to 1.7% of samples. After the round no
+single entry exceeds ~6% of samples: `mapAccum` overhead, scope lookups, the type table and
+symbol entry.
+
+Conclusion: tuning has taken the typer from ~12× to ~4.2× the parser. The profile is now flat.
+Reaching 2× would need a different representation in the hot path (for example, typing into
+mutable per-run arrays instead of threading persistent state through every node). That is a design
+decision for Part B, not more tuning.

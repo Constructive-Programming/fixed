@@ -25,7 +25,7 @@ object Namer:
       case other                           => List(other)
     val (entered, decls) = mapAccum(stdlib.copy(owner = SymbolId.Root), items)(enterTopLevel)
     val typed = typeAll(entered, decls.flatten)
-    (typed.table.copy(scope = typed.scope), typed.diags.reverse)
+    (typed.table.copy(scope = typed.global), typed.diags.reverse)
 
   /** The stdlib, indexed once: prelude names bound, modules recorded for `use`. Pure, so shared. */
   private lazy val stdlib: Ctx =
@@ -39,30 +39,32 @@ object Namer:
     }
     typeAll(withModules, preludeDecls.flatten ++ moduleDecls.flatten)
 
-  /** Translate a type annotation met inside a body (a lambda parameter's) in `scope`; type
+  /** Translate a type annotation met inside a body (a lambda parameter's) in `frames`; type
     * variables it introduces are owned by `owner`.
     */
-  def translate(table: SymbolTable, scope: Map[String, SymbolId], owner: SymbolId, tree: Tree)
+  def translate(table: SymbolTable, frames: List[Map[String, SymbolId]], owner: SymbolId, tree: Tree)
       : (SymbolTable, Type, List[Diagnostic]) =
-    val (c, t) = typeOf(Ctx.at(table, scope, owner), tree)
+    val (c, t) = typeOf(Ctx.at(table, frames, owner), tree)
     (c.table, t, c.diags.reverse)
 
-  /** Enter a `fn` declared inside a body and type its signature in `scope`. */
-  def nestedFn(table: SymbolTable, scope: Map[String, SymbolId], owner: SymbolId, fn: Trees.FnDecl)
+  /** Enter a `fn` declared inside a body and type its signature in `frames`. */
+  def nestedFn(table: SymbolTable, frames: List[Map[String, SymbolId]], owner: SymbolId, fn: Trees.FnDecl)
       : (SymbolTable, SymbolId, List[Diagnostic]) =
-    val (c, id) = member(Ctx.at(table, scope, owner), fn, SymKind.Fn)
+    val (c, id) = member(Ctx.at(table, frames, owner), fn, SymKind.Fn)
     (c.table, id, c.diags.reverse)
 
   private def typeAll(c: Ctx, decls: List[(Tree, SymbolId)]): Ctx =
     decls.foldLeft(c) { case (ci, (tree, id)) => typeDecl(ci, tree, id) }
 
-  /** Threaded Namer state. `table` and `diags` (newest first) are global; `scope`, `owner` and
-    * `sigLocals` (type variables introduced by the signature being typed) are lexical.
+  /** Threaded Namer state. `table` and `diags` (newest first) are global; `frames`, `owner` and
+    * `sigLocals` (type variables introduced by the signature being typed) are lexical. `frames` is
+    * the scope innermost first: a signature binds into its own small frame instead of copying the
+    * large global one.
     */
   final private case class Ctx(
       table: SymbolTable,
       diags: List[Diagnostic],
-      scope: Map[String, SymbolId],
+      frames: List[Map[String, SymbolId]],
       owner: SymbolId,
       sigLocals: Set[String],
       modules: Map[String, Map[String, SymbolId]]
@@ -71,22 +73,34 @@ object Namer:
       val (t, id) = table.enter(name, owner, kind, info, span)
       (copy(table = t), id)
 
-    def bind(name: String, id: SymbolId): Ctx = copy(scope = scope.updated(name, id))
+    def bind(name: String, id: SymbolId): Ctx = copy(frames = frames.head.updated(name, id) :: frames.tail)
+
+    def lookup(name: String): Option[SymbolId] =
+      @scala.annotation.tailrec
+      def loop(fs: List[Map[String, SymbolId]]): Option[SymbolId] =
+        if fs.isEmpty then None
+        else
+          val found = fs.head.get(name)
+          if found.isDefined then found else loop(fs.tail)
+      loop(frames)
+
+    /** The outermost frame: the top-level scope. */
+    def global: Map[String, SymbolId] = frames.last
 
     def error(code: DiagCode, span: Span, message: String): Ctx =
       copy(diags = Diagnostic(Severity.Error, code, span, message) :: diags)
 
     /** Run `f` in a fresh lexical frame owned by `owner`; keep its symbols and diagnostics, drop its bindings. */
     def nested[A](owner: SymbolId)(f: Ctx => (Ctx, A)): (Ctx, A) =
-      val (inner, a) = f(copy(owner = owner, sigLocals = Set.empty))
+      val (inner, a) = f(copy(frames = Map.empty :: frames, owner = owner, sigLocals = Set.empty))
       (copy(table = inner.table, diags = inner.diags), a)
 
   private object Ctx:
-    def empty(owner: SymbolId): Ctx = at(SymbolTable.empty, Map.empty, owner)
+    def empty(owner: SymbolId): Ctx = Ctx(SymbolTable.empty, Nil, List(Map.empty), owner, Set.empty, Map.empty)
 
     /** A frame over an existing table and scope, for signatures met inside bodies. */
-    def at(table: SymbolTable, scope: Map[String, SymbolId], owner: SymbolId): Ctx =
-      Ctx(table, Nil, scope, owner, Set.empty, Map.empty)
+    def at(table: SymbolTable, frames: List[Map[String, SymbolId]], owner: SymbolId): Ctx =
+      Ctx(table, Nil, Map.empty :: frames, owner, Set.empty, Map.empty)
 
   /** Enter a top-level item's name(s); returns the declarations pass 2 must type. */
   private def enterTopLevel(c: Ctx, item: Tree): (Ctx, List[(Tree, SymbolId)]) =
@@ -114,7 +128,7 @@ object Namer:
       case _ => (c, Nil)
 
   private def declare(c: Ctx, tree: Tree, name: String, kind: SymKind): (Ctx, List[(Tree, SymbolId)]) =
-    val c1 = c.scope.get(name).filter(c.table(_).owner == SymbolId.Root) match
+    val c1 = c.lookup(name).filter(c.table(_).owner == SymbolId.Root) match
       case Some(_) => c.error(DiagCode.T003, tree.span, s"duplicate definition: $name")
       case None    => c
     val (c2, id) = c1.enter(name, kind, Type.UnitType, tree.span)
@@ -207,8 +221,8 @@ object Namer:
   private def ofParams(c: Ctx, params: List[Tree]): (Ctx, List[Type]) =
     val (c1, ts) = mapAccum(c, params) { (ci, p) =>
       p match
-        case fp: Trees.FnParam                                           => (valueParam(ci, fp)._1, None)
-        case Trees.TypeRef(name, None, span) if !ci.scope.contains(name) =>
+        case fp: Trees.FnParam                                          => (valueParam(ci, fp)._1, None)
+        case Trees.TypeRef(name, None, span) if ci.lookup(name).isEmpty =>
           val (ci1, id) = introduce(ci, name, Nil, span)
           (ci1, Some(Type.TypeRef(id, Nil)))
         case other =>
@@ -227,7 +241,7 @@ object Namer:
         (c1, Type.SelfType(args.headOption))
       case Trees.TypeRef(name, ofArg, span) =>
         val (c1, args) = typeArgs(c, ofArg)
-        c1.scope.get(name) match
+        c1.lookup(name) match
           case Some(id)               => (c1, reference(c1, id, args))
           case None if name == "Part" => (c1, Type.PartType)
           case None                   =>
@@ -336,7 +350,7 @@ object Namer:
       case single                      => List(single)
 
   private def resolve[A](c: Ctx, name: String, span: Span, what: String)(f: SymbolId => A): (Ctx, Option[A]) =
-    c.scope.get(name) match
+    c.lookup(name) match
       case Some(id) => (c, Some(f(id)))
       case None     => (c.error(DiagCode.T001, span, s"not found: $what $name"), None)
 
@@ -344,7 +358,7 @@ object Namer:
     * (`-> N is positive()`) adds the bounds to it; re-binding an outer or global name is an error.
     */
   private def introduce(c: Ctx, name: String, bounds: List[Type], span: Span): (Ctx, SymbolId) =
-    (c.scope.get(name), c.sigLocals(name)) match
+    (c.lookup(name), c.sigLocals(name)) match
       case (Some(id), true) =>
         val prev = c.table(id).info match
           case Type.IsBound(caps) => caps

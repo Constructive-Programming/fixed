@@ -52,9 +52,11 @@ final case class SymbolTable(
   def enter(name: String, owner: SymbolId, kind: SymKind, info: Type, span: Span): (SymbolTable, SymbolId) =
     val id = SymbolId(nextId)
 
-    /** Locals are never looked up as members, so they skip the owner index. */
+    /** Locals and top-level / prelude declarations are never looked up as members, so they skip
+      * the owner index.
+      */
     val indexed =
-      if kind == SymKind.Local then children
+      if kind == SymKind.Local || owner == SymbolId.Root || owner == SymbolId.Prelude then children
       else children.updated(owner.toInt, children.getOrElse(owner.toInt, Vector.empty) :+ id)
     val params =
       if kind == SymKind.TypeParam then typeParams.updated(owner.toInt, typeParams.getOrElse(owner.toInt, Nil) :+ id)
