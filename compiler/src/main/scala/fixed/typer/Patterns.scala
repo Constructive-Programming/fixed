@@ -25,7 +25,7 @@ object Patterns:
         bindAll(s2, elems.zip(vars))
       case p: Trees.DataVariantPat                               => variant(s, p, t)
       case Trees.StructDestructurePat(typeName, fields, _, span) =>
-        ctx.scope.get(typeName).filter(s.symbols(_).kind == SymKind.Data) match
+        ctx.lookup(typeName).filter(s.symbols(_).kind == SymKind.Data) match
           case None       => (s.error(DiagCode.T001, span, s"not found: data $typeName"), ctx)
           case Some(data) =>
             val (s1, args) = Members.freshArgs(s, data)
@@ -58,7 +58,7 @@ object Patterns:
     val fromScrutinee = s.unifier.resolve(t) match
       case Type.TypeRef(id, _) if s.symbols(id).kind == SymKind.Data => Some(id)
       case _                                                         => None
-    val data = p.qualifier.flatMap(ctx.scope.get).filter(s.symbols(_).kind == SymKind.Data).orElse(fromScrutinee)
+    val data = p.qualifier.flatMap(ctx.lookup).filter(s.symbols(_).kind == SymKind.Data).orElse(fromScrutinee)
     data.flatMap(d =>
       s.symbols.variantsOf(d).find(_.name == p.variant).map(d -> _)
     ) match
@@ -128,7 +128,7 @@ object Patterns:
 
   /** Type a nested `fn` declaration met in a block: signature via the Namer, then its body. */
   def nestedFn(s: TyperState, fn: Trees.FnDecl)(using ctx: Context): (TyperState, Context) =
-    val (table, id, diags) = Namer.nestedFn(s.symbols, ctx.scope, ctx.owner, fn)
+    val (table, id, diags) = Namer.nestedFn(s.symbols, ctx.frames, ctx.owner, fn)
     val s1 = s.copy(symbols = table).report(diags)
     val inner = ctx.bind(fn.name, id)
     (Typer.typedFnBody(s1, id, fn)(using inner), inner)

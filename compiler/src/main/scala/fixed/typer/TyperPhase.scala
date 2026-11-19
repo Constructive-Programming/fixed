@@ -26,5 +26,5 @@ object TyperPhase extends Phase:
 
   private def typeFnBody(s: TyperState, fn: Trees.FnDecl): TyperState =
     s.symbols.scope.get(fn.name).filter(s.symbols(_).kind == SymKind.Fn) match
-      case Some(id) => Typer.typedFnBody(s, id, fn)(using Context(s.symbols.scope, id))
+      case Some(id) => Typer.typedFnBody(s, id, fn)(using Context(Map.empty, s.symbols.scope, id))
       case None     => s

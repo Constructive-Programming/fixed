@@ -14,27 +14,30 @@ final case class MemberEntry(cap: SymbolId, written: Option[List[Type]], member:
   * a pure function of signatures, which the Namer fixes before bodies are typed.
   */
 final class MemberTables private (symbols: SymbolTable):
-  private val built = scala.collection.mutable.HashMap.empty[Int, Map[(SymKind, String), List[MemberEntry]]]
+  private val built = scala.collection.mutable.HashMap.empty[Int, Map[SymKind, Map[String, List[MemberEntry]]]]
 
   def lookup(cap: SymbolId, kind: SymKind, name: String): List[MemberEntry] =
     val cache = if symbols(cap).owner == SymbolId.Prelude then MemberTables.stdlib else built
-    cache.getOrElseUpdate(cap.toInt, MemberTables.table(symbols, cap)).getOrElse((kind, name), Nil)
+    cache.getOrElseUpdate(cap.toInt, MemberTables.table(symbols, cap)).get(kind).flatMap(_.get(name)).getOrElse(Nil)
 
 object MemberTables:
   def apply(symbols: SymbolTable): MemberTables = new MemberTables(symbols)
 
   /** Stdlib capabilities have the same ids and signatures in every unit (indexed once). */
-  private val stdlib = scala.collection.concurrent.TrieMap.empty[Int, Map[(SymKind, String), List[MemberEntry]]]
+  private val stdlib = scala.collection.concurrent.TrieMap.empty[Int, Map[SymKind, Map[String, List[MemberEntry]]]]
 
-  private[typer] def table(symbols: SymbolTable, root: SymbolId): Map[(SymKind, String), List[MemberEntry]] =
+  private[typer] def table(symbols: SymbolTable, root: SymbolId): Map[SymKind, Map[String, List[MemberEntry]]] =
     reached(symbols, root, None, BitSet.empty)
       .flatMap { case (cap, written) =>
         symbols
           .membersOf(cap)
           .filter(m => m.kind == SymKind.Method || m.kind == SymKind.StaticMethod)
-          .map(m => (m.kind, m.name) -> MemberEntry(cap, written, m))
+          .map(m => MemberEntry(cap, written, m))
       }
-      .groupMap(_._1)(_._2)
+      .groupBy(_.member.kind)
+      .view
+      .mapValues(_.groupBy(_.member.name))
+      .toMap
 
   /** `cap` and what its `extends` chain reaches, depth first, with the arguments written there. */
   private def reached(symbols: SymbolTable, cap: SymbolId, written: Option[List[Type]], seen: BitSet)
