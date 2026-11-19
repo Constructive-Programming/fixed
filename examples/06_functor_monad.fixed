@@ -4,7 +4,7 @@
 // Demonstrates:
 //   - HKT syntax: `Self of B` for type-constructor returns
 //   - Functor/Monad capability hierarchy using `extends`
-//   - `satisfies` connecting Maybe data type to Optional cap
+//   - `satisfies` connecting MyMaybe data type to Optional cap
 //   - `do` notation as sugar for flat_map chains
 //   - Generic functions that work over any Monad
 //   - Auto-derived fold, map, flat_map, pure from data structure
@@ -38,14 +38,14 @@ cap Optional extends Monad:
     fn fold(on_some: Part -> R, on_none: () -> R) -> R
 
 // A concrete data type satisfies Optional (and thus Monad + Functor):
-data Maybe of A:
+data MyMaybe of A:
     Just(value: A)
     Nothing
 
-Maybe satisfies Optional:
+MyMaybe satisfies Optional:
     Just as some
     Nothing as none
-// fold, map, flat_map, pure are auto-derived from Maybe's structure
+// fold, map, flat_map, pure are auto-derived from MyMaybe's structure
 
 // --- Generic monadic functions ---
 

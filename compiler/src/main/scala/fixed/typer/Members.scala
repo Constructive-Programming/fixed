@@ -14,8 +14,11 @@ import fixed.util.mapAccum
   */
 object Members:
 
-  /** A member found by lookup, instantiated only when a call uses it. */
-  type Candidate = () => (TyperState, Type)
+  /** A member found by lookup, instantiated only when a call uses it; `origin` says where it came
+    * from, for the backend (`Resolution`).
+    */
+  final case class Candidate(origin: Resolution, run: () => (TyperState, Type)):
+    def apply(): (TyperState, Type) = run()
 
   private val numericPrims = Set("i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64")
 
@@ -126,9 +129,11 @@ object Members:
         val d = s.symbols(id)
         d.kind match
           case SymKind.Data =>
-            field(s, id, args, name).map(f => () => f).toList ++
+            field(s, id, args, name).toList ++
               capMember(s, s.symbols.satisfies.getOrElse(d.name, Nil), t, name) ++
-              Option.when(name == "fold" && s.symbols.variantsOf(id).nonEmpty)(() => derivedFold(s, id, args))
+              Option.when(name == "fold" && s.symbols.variantsOf(id).nonEmpty)(
+                Candidate(Resolution.DerivedFold(id), () => derivedFold(s, id, args))
+              )
           case SymKind.TypeParam => capMember(s, boundsOf(s, id), t, name)
           case _                 => Nil
       case t @ Type.PrimType(n) =>
@@ -143,12 +148,14 @@ object Members:
     else capMember(s, autoDerived.flatMap(s.symbols.scope.get).map(Type.CapRef(_, Nil)), resolved, name)
 
   /** A field of a single-variant data type, as a zero-argument member. */
-  private def field(s: TyperState, data: SymbolId, args: List[Type], name: String): Option[(TyperState, Type)] =
+  private def field(s: TyperState, data: SymbolId, args: List[Type], name: String): Option[Candidate] =
     s.symbols.variantsOf(data).toList match
       case variant :: Nil =>
-        s.symbols.fieldsOf(variant.id).find(_.name == name).map { f =>
+        val fields = s.symbols.fieldsOf(variant.id).toList
+        fields.find(_.name == name).map { f =>
           val (s1, t) = instantiate(s, f.info, Subst(Subst.of(typeParamsOf(s, data), args), Set.empty))
-          (s1, Type.ArrowType(Type.TupleType(Nil), t, EffectRow.empty))
+          val found = (s1, Type.ArrowType(Type.TupleType(Nil), t, EffectRow.empty))
+          Candidate(Resolution.Field(variant.id, fields.indexOf(f)), () => found)
         }
       case _ => None
 
@@ -173,7 +180,11 @@ object Members:
           val params = typeParamsOf(s, e.cap)
           val args = if capArgs.nonEmpty then capArgs else recvArgs.takeRight(params.size)
           val part = partOverride.orElse(capArgs.lastOption).orElse(recvArgs.lastOption)
-          () => instantiate(s, e.member.info, Subst(Subst.of(params, args), Set(e.member.id, e.cap), Some(recv), part))
+          Candidate(
+            Resolution.CapMember(e.cap, e.member.id),
+            () =>
+              instantiate(s, e.member.info, Subst(Subst.of(params, args), Set(e.member.id, e.cap), Some(recv), part))
+          )
         }
       case _ => Nil
     }

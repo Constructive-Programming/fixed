@@ -17,6 +17,10 @@ data Json:
 data Tuple of (A, B):
     Tuple(first: A, second: B)
 
+data Maybe of A:
+    Just(value: A)
+    Nothing
+
 data Nat:
     Zero
     Succ(pred: Nat)
@@ -109,6 +113,9 @@ List satisfies Sequencing:
 List satisfies Folding
 List satisfies Functor
 List satisfies Filtering
+Maybe satisfies Optional:
+    Just as some
+    Nothing as none
 Json satisfies Show
 Json satisfies Eq
 Tuple satisfies Pair:

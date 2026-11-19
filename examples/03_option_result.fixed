@@ -29,21 +29,21 @@ cap Result of (E, A):
 
 // --- Data types are concrete providers via `satisfies` ---
 
-data Maybe of A:
+data MyMaybe of A:
     Just(value: A)
     Nothing
 
-Maybe satisfies Optional:
+MyMaybe satisfies Optional:
     Just as some
     Nothing as none
     fn isDefined = match self:
-        Maybe.Nothing => false
-        Maybe.Just(_) => true
+        MyMaybe.Nothing => false
+        MyMaybe.Just(_) => true
     fn map(f: Part -> B) = match self:
-        Maybe.Nothing => Maybe.Nothing
-        Maybe.Just(a) => Maybe.Just(f(a))
-    fn orElse(other: Maybe of Part) = match self:
-        Maybe.Nothing => other
+        MyMaybe.Nothing => MyMaybe.Nothing
+        MyMaybe.Just(a) => MyMaybe.Just(f(a))
+    fn orElse(other: MyMaybe of Part) = match self:
+        MyMaybe.Nothing => other
         _ => self
 
 data Outcome of (E, A):
@@ -69,7 +69,7 @@ effect Fail of E:
 // --- Utility functions ---
 // These use capability fold (Optional is a cap, not data — no match allowed).
 // Construction via cap constructors (Optional.some, Optional.none) is valid —
-// resolved to Maybe.Just / Maybe.Nothing via the satisfaction mapping.
+// resolved to MyMaybe.Just / MyMaybe.Nothing via the satisfaction mapping.
 
 fn unwrap_or(opt: is Optional of A, default: A) -> A =
     opt.fold((value) -> value, () -> default)

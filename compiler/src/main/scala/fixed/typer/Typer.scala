@@ -13,15 +13,26 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span, mapAccum}
   * are only ever overwrites of the same key with the newer type: a failed overload trial types the
   * same argument trees the winning attempt then re-records, so no stale entry survives a call.
   */
-final class TypeTable private (entries: java.util.IdentityHashMap[Tree, Type]):
+final class TypeTable private (
+    entries: java.util.IdentityHashMap[Tree, Type],
+    resolutions: java.util.IdentityHashMap[Tree, Resolution]
+):
   def updated(tree: Tree, t: Type): TypeTable =
     val _ = entries.put(tree, t)
     this
 
   def get(tree: Tree): Option[Type] = Option(entries.get(tree))
 
+  /** Record which member a call resolved to (the winner among candidates). */
+  def resolved(tree: Tree, r: Resolution): TypeTable =
+    val _ = resolutions.put(tree, r)
+    this
+
+  def resolution(tree: Tree): Option[Resolution] = Option(resolutions.get(tree))
+
 object TypeTable:
-  def empty: TypeTable = TypeTable(java.util.IdentityHashMap[Tree, Type](1024))
+  def empty: TypeTable =
+    TypeTable(java.util.IdentityHashMap[Tree, Type](1024), java.util.IdentityHashMap[Tree, Resolution](256))
 
 /** Threaded typer state (`docs/plans/phase-3-typer.md` §3.4): the type side table, the symbol
   * table (local bindings join it), the unifier and the diagnostics so far (newest first).
@@ -315,8 +326,12 @@ object Typer:
                   val (si, member) = c()
                   applyArgs(si, member, t.args, t.span)
                 val firstAttempt = attempt(first)
-                if rest.isEmpty || firstAttempt._1.errors == errors then firstAttempt
-                else rest.iterator.map(attempt).find(_._1.errors == errors).getOrElse(firstAttempt)
+                val (winner, (s2, result)) =
+                  if rest.isEmpty || firstAttempt._1.errors == errors then (first, firstAttempt)
+                  else
+                    rest.iterator.map(c => (c, attempt(c))).find(_._2._1.errors == errors)
+                      .getOrElse((first, firstAttempt))
+                (s2.copy(types = s2.types.resolved(t, winner.origin)), result)
 
   /** `x |> f(a, ...)` is `f(x, a, ...)`; `x |> f` is `f(x)`. The spec gives `|>` only a grammar
     * (`spec/syntax_grammar.ebnf` PipeExpr); first-argument insertion is the typer's reading.

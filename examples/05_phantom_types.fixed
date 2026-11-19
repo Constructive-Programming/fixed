@@ -28,7 +28,7 @@ cap Open
 // but never as a field or method-signature type. See type_system.md §5.9.
 
 cap Door of (State):
-    Self.fn new -> Self  // only callable as Door of Locked .new
+    Self.fn new(name: String) -> Self
     fn name -> String
 
 // State transition functions — each consumes the door in one state
@@ -38,16 +38,16 @@ fn unlock(door: is Door of Locked) -> is Door of Unlocked =
     // In the runtime representation, this is essentially a no-op —
     // the phantom type changes but the data is the same.
     // The compiler can optimize this to a move (or reuse in-place).
-    Door.new  // compiler infers Door of Unlocked from return type
+    Door.new(door.name)  // compiler infers Door of Unlocked from return type
 
 fn lock(door: is Door of Unlocked) -> is Door of Locked =
-    Door.new
+    Door.new(door.name)
 
 fn open(door: is Door of Unlocked) -> is Door of Open =
-    Door.new
+    Door.new(door.name)
 
 fn close(door: is Door of Open) -> is Door of Unlocked =
-    Door.new
+    Door.new(door.name)
 
 // This function is polymorphic over the state — it works on any door.
 // Quine's "reflection": the same type variable `S` constrains both input and output.
@@ -147,7 +147,7 @@ fn kinematic_distance(
 
 fn main() -> () with Console =
     // --- Door state machine ---
-    let door = Door.new              // Door of Locked
+    let door = Door.new("front")     // Door of Locked
     let door = unlock(door)           // Door of Unlocked
     let door = open(door)             // Door of Open
     let door = close(door)            // Door of Unlocked

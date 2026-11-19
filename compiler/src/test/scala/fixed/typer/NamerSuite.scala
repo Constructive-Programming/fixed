@@ -83,7 +83,8 @@ class NamerSuite extends munit.FunSuite:
     assert(!table.scope.contains("FileSystem"))
 
   test("satisfies declarations are recorded by type name"):
-    val (table, diags) = indexString("data Maybe of A:\n    Just(value: A)\n    Nothing\nMaybe satisfies Optional\n")
+    val (table, diags) =
+      indexString("data Perhaps of A:\n    Just(value: A)\n    Nothing\nPerhaps satisfies Optional\n")
     assertEquals(diags, Nil)
-    assertEquals(table.satisfies("Maybe").map(table.render), List("Optional"))
+    assertEquals(table.satisfies("Perhaps").map(table.render), List("Optional"))
     assert(table.satisfies("u64").map(table.render).contains("Show"))

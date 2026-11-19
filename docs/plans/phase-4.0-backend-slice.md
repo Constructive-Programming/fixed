@@ -1,6 +1,6 @@
 # Phase 4.0 — Naive backend slice
 
-**Status:** 4.0.M1 and 4.0.M2 done; 4.0.M3 next
+**Status:** 4.0.M1–M3 done; 4.0.M4 next
 **Parent:** `docs/plans/implementation-plan.md` (Phase 4.0) and `docs/plans/phase-3-typer.md` §1.3
 (row 4.0)
 **Runs:** after M7, **before M10**
@@ -237,6 +237,8 @@ slice, not errors in the program, and each disappears with the milestone that li
 | 4.0.M5 | Benchmarks and baseline | `docs/baselines/runtime-<date>.md` committed; rerunning reproduces allocation and RC counts exactly |
 | 4.0.M6 | Gated examples `04` and `05`, each when its blocker closes | Golden output per example, or the example stays listed with its open blocker |
 
+**4.0.M3 status: done.** `01_basics` matches its golden output. See §9.
+
 **4.0.M2 status: done.** See §9.
 
 **4.0.M1 status: done.** Hand-off in `CompilationUnit.typing` with a test in `CompilerSuite`;
@@ -265,12 +267,16 @@ Calibrated against Phase 3 milestones, which took one to two weeks each.
 2. ~~**`06`: `flat_map` and `pure` for sum data.**~~ **Decided:** `06` is left out of the slice.
    Whether spec §7.4 gets a derivation rule for `Monad` members, or the example writes the bodies,
    is decided separately.
-3. **`04`: no `Optional` representation.** Corrected by the 4.0.M1 audit (§3). Options: `04`
+3. ~~**`04`: no `Optional` representation.**~~ **Decided:** the prelude gets `data Maybe` and
+   `Maybe satisfies Optional` (`spec/stdlib.md` §3.5); `03` and `06` rename their own to `MyMaybe`
+   to avoid the name-keyed `satisfies` table colliding. Done in 4.0.M3. Original options: Corrected by the 4.0.M1 audit (§3). Options: `04`
    declares `data Maybe` and `Maybe satisfies Optional` as `03` does (one small edit), or `04`
    waits for M11's built-in candidates. A prelude `Maybe` would not work: `03` and `06` declare
    their own, and two satisfying constructors are ambiguous (`T011`). Proposed: edit the example.
    `04` stays gated until then.
-4. **`05`: product capabilities with no satisfying data, and `Door.name`.** The auto-flat-struct
+4. ~~**`05`: product capabilities with no satisfying data, and `Door.name`.**~~ **Decided:** the
+   slice implements the auto-flat-struct candidate, and `Door` takes `new(name: String)`. The example
+   change is done in 4.0.M3; the candidate lands with the `is C` rule in 4.0.M4. Original options: The auto-flat-struct
    candidate (§6.6) is small for a product capability with one constructor whose parameters name
    its accessors, so the slice could add it as a second stand-in next to §4.3. `Door` then still
    needs an example change (`new(name: String)`) or a rule for an accessor with no constructor
@@ -380,3 +386,24 @@ Not reached from `main`: `Maybe`'s `satisfies` bodies, `unwrap_or`, `map_optiona
   before the gate so a missing compiler fails loudly.
 - **Perf:** `FrontEndBench` not rerun. The check-only path does no new work; `TyperPhase` only
   keeps a reference to the state it already built.
+
+### 4.0.M3
+
+- **Typer:** `Resolution` side table (`typer/Resolution.scala`, stored next to `TypeTable`): which
+  candidate a method call chose (field, capability member, derived `fold`). `TyperCpuBench`: about
+  1,000 µs per corpus pass after, 1,100 before (noise; no regression).
+- **Core:** `Con`, `Field`, `Switch`, `Closure`, `CallClosure`. Layout per Rule PR3.1 with every field
+  in an 8-byte slot, boxed fields first; a closure keeps its code pointer in slot 0 and is tagged
+  `0xFFFFFFFF`. Nullary variants and closures without captures are static objects.
+- **Reference counting:** `Field` borrows its object; the object is dropped after the read and a
+  boxed result is dup'ed. Branches (`If`, `Switch`) take the variables their arms use.
+- **Lowering:** monomorphisation by instance (`f[u64]`), solving type parameters by matching the
+  declared signature against the reference's recorded type; lambdas as code functions with
+  captures found from the lowered body; `match` on data with variant, binder and `_` patterns;
+  tuple `let` patterns; tuples as the prelude's `Tuple`.
+- **Generated members:** derived `fold` (Rule 7.4.a, recursive fields folded first), derived
+  `unfold` (Rule 7.4.b, the layer is a separate allocation), and `Folding.fold(init, f)` as a left
+  fold on list-shaped data. `ponytail:` the last is generated until prelude bodies land (4.0.M4).
+  Rule 7.4.a.1 (folding through `List` and `Tuple`) is not implemented; `04` needs it.
+- **`01_basics`:** 734 allocations, 734 frees, 651 `dup`s, 1,533 `drop`s for the golden input.
+- **Examples:** prelude `Maybe` added, `03` / `06` renamed to `MyMaybe`, `05`'s `Door` takes a name.

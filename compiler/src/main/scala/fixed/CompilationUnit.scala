@@ -21,5 +21,7 @@ final case class CompilationUnit(
   /** The type the typer recorded for `tree`, solved variables substituted. */
   def typeOf(tree: Tree): Option[Type] = typing.flatMap(_.typeOf(tree))
 
+  def resolutionOf(tree: Tree): Option[fixed.typer.Resolution] = typing.flatMap(_.types.resolution(tree))
+
   /** This unit with `more` appended to its diagnostics. */
   def report(more: List[Diagnostic]): CompilationUnit = copy(diagnostics = diagnostics ++ more)

@@ -14,10 +14,11 @@ final class EmitLLVM:
   private val aliases = mutable.Map.empty[String, String]
   private val strings = mutable.LinkedHashMap.empty[String, String]
   private val declared = mutable.LinkedHashMap.empty[String, String]
+  private val statics = mutable.LinkedHashMap.empty[String, String]
 
   def program(fns: List[Fn]): String =
     val bodies = fns.map(function).mkString("\n")
-    val globals = strings.map((s, name) => stringGlobal(name, s)).mkString
+    val globals = strings.map((s, name) => stringGlobal(name, s)).mkString + statics.values.mkString
     val decls = (EmitLLVM.always ++ declared.values).mkString("\n")
     s"$globals\n$decls\n\n$bodies"
 
@@ -27,7 +28,7 @@ final class EmitLLVM:
     line("entry:")
     val (result, _) = value(fn.body, "entry")
     line(s"  ret ${EmitLLVM.llType(fn.ret)} $result")
-    s"define ${EmitLLVM.llType(fn.ret)} @fx_u_${fn.name}($params) {\n$out}\n"
+    s"define ${EmitLLVM.llType(fn.ret)} ${EmitLLVM.user(fn.name)}($params) {\n$out}\n"
 
   /** Emit `e`, starting in block `label`; its result operand and the block it ends in. */
   private def value(e: Expr, label: String): (String, String) =
@@ -46,19 +47,76 @@ final class EmitLLVM:
       case Rhs.If(c, t, f)       =>
         val n = ids.next()
         line(s"  br i1 ${operand(c)}, label %then.$n, label %else.$n")
-        line(s"then.$n:")
-        val (tv, tl) = value(t, s"then.$n")
-        line(s"  br label %join.$n")
-        line(s"else.$n:")
-        val (ev, el) = value(f, s"else.$n")
-        line(s"  br label %join.$n")
-        line(s"join.$n:")
-        line(s"  %${x.name} = phi ${EmitLLVM.llType(x.ctype)} [ $tv, %$tl ], [ $ev, %$el ]")
-        s"join.$n"
+        join(x, n, List(s"then.$n" -> t, s"else.$n" -> f))
+      case Rhs.Switch(v, cases) =>
+        val n = ids.next()
+        line(s"  %tagp.$n = getelementptr inbounds i8, ptr ${operand(v)}, i64 8")
+        line(s"  %tag.$n = load i32, ptr %tagp.$n")
+        val labelled = cases.zipWithIndex.map { case ((tag, c), i) => (tag, s"case.$n.$i", c) }
+        val branches = labelled.init.map((tag, l, _) => s"i32 $tag, label %$l").mkString(" ")
+        line(s"  switch i32 %tag.$n, label %${labelled.last._2} [ $branches ]")
+        join(x, n, labelled.map((_, l, c) => l -> c))
+      case Rhs.Con(tag, Nil) =>
+        val name = s"nullary.$tag"
+        statics(name) =
+          s"@$name = private unnamed_addr constant <{ i64, i32, i32 }> <{ i64 -1, i32 $tag, i32 0 }>, align 8\n"
+        aliases(x.name) = s"@$name"
+        label
+      case Rhs.Con(tag, fields) =>
+        val types = fields.map(_.tpe)
+        allocate(x, tag, Layout.boxedCount(types), fields.size)
+        store(x, fields.zip(Layout.slots(types)))
+        label
+      case Rhs.Field(obj, slot) =>
+        line(s"  %${x.name}.p = getelementptr inbounds i8, ptr ${operand(obj)}, i64 ${16 + 8 * slot}")
+        line(s"  %${x.name} = load ${EmitLLVM.llType(x.ctype)}, ptr %${x.name}.p")
+        label
+      case Rhs.Closure(code, Nil) =>
+        val name = s"closure.$code"
+        statics(name) = s"@\"$name\" = private unnamed_addr constant <{ i64, i32, i32, ptr }> " +
+          s"<{ i64 -1, i32 ${Layout.closureTag}, i32 0, ptr ${EmitLLVM.user(code)} }>, align 8\n"
+        aliases(x.name) = s"@\"$name\""
+        label
+      case Rhs.Closure(code, captures) =>
+        val types = captures.map(_.tpe)
+        allocate(x, Layout.closureTag, Layout.boxedCount(types), captures.size + 1)
+        line(s"  store ptr ${EmitLLVM.user(code)}, ptr %${x.name}.0")
+        store(x, captures.zip(Layout.slots(types, first = 1)))
+        label
+      case Rhs.CallClosure(c, args) =>
+        val n = ids.next()
+        line(s"  %code.$n.p = getelementptr inbounds i8, ptr ${operand(c)}, i64 16")
+        line(s"  %code.$n = load ptr, ptr %code.$n.p")
+        val argList = typed(c :: args)
+        line(s"  %${x.name} = call ${EmitLLVM.llType(x.ctype)} %code.$n($argList)")
+        label
+
+  /** Emit each branch in its own block and join their results with a phi; the join block. */
+  private def join(x: Var, n: Int, branches: List[(String, Expr)]): String =
+    val results = branches.map { (l, e) =>
+      line(s"$l:")
+      val (v, end) = value(e, l)
+      line(s"  br label %join.$n")
+      s"[ $v, %$end ]"
+    }
+    line(s"join.$n:")
+    line(s"  %${x.name} = phi ${EmitLLVM.llType(x.ctype)} ${results.mkString(", ")}")
+    s"join.$n"
+
+  private def allocate(x: Var, tag: Int, nptr: Int, slots: Int): Unit =
+    line(s"  %${x.name} = call ptr @fx_alloc(i32 $tag, i32 $nptr, i64 ${8 * slots})")
+    line(s"  %${x.name}.0 = getelementptr inbounds i8, ptr %${x.name}, i64 16")
+
+  private def store(x: Var, fields: List[(Atom, Int)]): Unit =
+    fields.foreach { (a, slot) =>
+      val n = ids.next()
+      line(s"  %st.$n = getelementptr inbounds i8, ptr %${x.name}, i64 ${16 + 8 * slot}")
+      line(s"  store ${EmitLLVM.llType(a.tpe)} ${operand(a)}, ptr %st.$n")
+    }
 
   private def call(x: Var, f: String, args: List[Atom], runtime: Boolean): Unit =
-    val argList = args.map(a => s"${EmitLLVM.llType(a.tpe)} ${operand(a)}").mkString(", ")
-    if !runtime then line(s"  %${x.name} = call ${EmitLLVM.llType(x.ctype)} @fx_u_$f($argList)")
+    val argList = typed(args)
+    if !runtime then line(s"  %${x.name} = call ${EmitLLVM.llType(x.ctype)} ${EmitLLVM.user(f)}($argList)")
     else
       val ret = if x.ctype == CType.Unit then "void" else EmitLLVM.llType(x.ctype)
       declared(f) = s"declare $ret @$f(${args.map(a => EmitLLVM.llType(a.tpe)).mkString(", ")})"
@@ -95,6 +153,8 @@ final class EmitLLVM:
       case (PrimOp.Eq | PrimOp.Ne, CType.Unit) => emit(s"icmp ${if op == PrimOp.Eq then "eq" else "ne"} i8 0, 0")
       case _                                   => emit(s"${EmitLLVM.instruction(op, t)} $ty $ops")
 
+  private def typed(as: List[Atom]): String = as.map(a => s"${EmitLLVM.llType(a.tpe)} ${operand(a)}").mkString(", ")
+
   private def operand(a: Atom): String =
     a match
       case Var(name, _)                     => aliases.getOrElse(name, s"%$name")
@@ -122,8 +182,12 @@ object EmitLLVM:
   private val always = List(
     "declare void @fx_dup(ptr)",
     "declare void @fx_drop(ptr)",
-    "declare void @fx_panic_div() noreturn"
+    "declare void @fx_panic_div() noreturn",
+    "declare ptr @fx_alloc(i32, i32, i64)"
   )
+
+  /** A user function's LLVM name, quoted: instance names carry type arguments. */
+  def user(name: String): String = s"@\"fx_u_$name\""
 
   def llType(t: CType): String =
     t match

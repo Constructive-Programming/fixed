@@ -40,6 +40,15 @@ class EmitSuite extends munit.FunSuite:
 
   private val header = "use std.io.Console\n\n"
 
+  /** Examples with golden files (`examples/golden/<name>.in`, `.out`): the slice's required set. */
+  private val goldens = List("01_basics")
+
+  goldens.foreach { name =>
+    test(s"example $name matches its golden output"):
+      val golden = (ext: String) => java.nio.file.Files.readString(Path.of("examples", "golden", s"$name.$ext"))
+      check(name, java.nio.file.Files.readString(Path.of("examples", s"$name.fixed")), golden("out"), golden("in"))
+  }
+
   test("hello world"):
     check(
       "hello",
@@ -109,3 +118,35 @@ class EmitSuite extends munit.FunSuite:
     assertEquals(out, "false\n")
     assertEquals(code, 101)
     assert(err.contains("panic: integer division by zero"), err)
+
+  test("data, match, tuples, closures with captures, generic instances"):
+    val src = header +
+      """|data Shape:
+         |    Circle(r: f64)
+         |    Rect(w: f64, h: f64)
+         |    Named(label: String, inner: Shape)
+         |
+         |fn area(s: Shape) -> f64 =
+         |    s.fold((r) -> 3.0 * r * r, (w, h) -> w * h, (_, a) -> a)
+         |
+         |fn describe(s: Shape) -> String =
+         |    match s:
+         |        Shape.Named(label, _) => label
+         |        _ => "anonymous"
+         |
+         |fn swap(p: (A, B)) -> (B, A) =
+         |    let (a, b) = p
+         |    (b, a)
+         |
+         |fn upto(n: u64) -> List of u64 =
+         |    List.unfold(0, (i) -> if i >= n: List.Nil else: List.Cons(i, i + 1))
+         |
+         |fn main() -> () with Console =
+         |    let s = Shape.Named("box", Shape.Rect(2.0, 3.5))
+         |    Console.print_line(describe(s).concat(" ").concat(area(s).show()))
+         |    let suffix = "!"
+         |    upto(3).fold((), (_, i) -> Console.print_line(i.show().concat(suffix)))
+         |    let p = swap(("x", 7))
+         |    Console.print_line(p.second.concat(p.first.show()))
+         |""".stripMargin
+    check("data", src, "box 7.0\n0!\n1!\n2!\nx7\n")

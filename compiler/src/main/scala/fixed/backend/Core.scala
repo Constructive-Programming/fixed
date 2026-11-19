@@ -46,6 +46,27 @@ enum Rhs:
   case Call(fn: String, args: List[Atom], runtime: Boolean)
   case If(cond: Atom, thenBranch: Expr, elseBranch: Expr)
 
+  /** A data value (or tuple): variant `tag` with `fields` in declaration order. A value with no
+    * fields is a static object. Consumes the fields.
+    */
+  case Con(tag: Int, fields: List[Atom])
+
+  /** Read payload slot `slot` of `obj` (see [[Layout]]). Borrows: `obj` is not consumed, and a
+    * boxed result is dup'ed by reference counting.
+    */
+  case Field(obj: Atom, slot: Int)
+
+  /** Branch on `scrutinee`'s tag. The last case is also the default. */
+  case Switch(scrutinee: Atom, cases: List[(Int, Expr)])
+
+  /** A closure of code function `code`, whose first parameter is the closure itself. A closure
+    * with no captures is a static object. Consumes the captures.
+    */
+  case Closure(code: String, captures: List[Atom])
+
+  /** Call a closure. Consumes the closure and the arguments. */
+  case CallClosure(closure: Atom, args: List[Atom])
+
 enum Expr:
   case Let(x: Atom.Var, rhs: Rhs, body: Expr)
   case Ret(a: Atom)
@@ -68,9 +89,48 @@ object Core:
       case Expr.Let(_, rhs, body) =>
         val own = rhs match
           case Rhs.Call(f, _, false) => Set(f)
+          case Rhs.Closure(code, _)  => Set(code)
           case Rhs.If(_, t, f)       => callees(t) ++ callees(f)
+          case Rhs.Switch(_, cases)  => cases.flatMap((_, c) => callees(c)).toSet
           case _                     => Set.empty[String]
         own ++ callees(body)
       case Expr.Dup(_, b)  => callees(b)
       case Expr.Drop(_, b) => callees(b)
       case Expr.Ret(_)     => Set.empty
+
+  /** Every variable `e` uses but does not bind, of any type: a lambda's captures. */
+  def freeVars(e: Expr): Set[Atom.Var] =
+    def atoms(as: List[Atom]): Set[Atom.Var] = as.collect { case v: Atom.Var => v }.toSet
+    def rhs(r: Rhs): Set[Atom.Var] =
+      r match
+        case Rhs.Move(a)            => atoms(List(a))
+        case Rhs.Prim(_, as)        => atoms(as)
+        case Rhs.Call(_, as, _)     => atoms(as)
+        case Rhs.If(c, t, f)        => atoms(List(c)) ++ freeVars(t) ++ freeVars(f)
+        case Rhs.Con(_, fs)         => atoms(fs)
+        case Rhs.Field(o, _)        => atoms(List(o))
+        case Rhs.Switch(x, cases)   => atoms(List(x)) ++ cases.flatMap((_, c) => freeVars(c))
+        case Rhs.Closure(_, cs)     => atoms(cs)
+        case Rhs.CallClosure(c, as) => atoms(c :: as)
+    e match
+      case Expr.Let(x, r, body) => rhs(r) ++ (freeVars(body) - x)
+      case Expr.Ret(a)          => atoms(List(a))
+      case Expr.Dup(x, b)       => freeVars(b) + x
+      case Expr.Drop(x, b)      => freeVars(b) + x
+
+/** Payload layout of a heap object (`spec/memory_management.md` Rule PR3.1, slice §4.3): every field
+  * takes an 8-byte slot; boxed fields come first, so the header's `nptr` covers them and one
+  * generic drop frees any object. A closure's slot 0 holds its code pointer.
+  */
+object Layout:
+
+  /** The tag that marks a closure (its slot 0 is code, not a boxed field). */
+  val closureTag: Int = -1
+
+  /** The slot of each field, in declaration order. */
+  def slots(fields: List[CType], first: Int = 0): List[Int] =
+    val boxed = fields.zipWithIndex.filter(_._1.boxed).map(_._2)
+    val order = boxed ++ fields.indices.filterNot(boxed.contains)
+    fields.indices.map(i => first + order.indexOf(i)).toList
+
+  def boxedCount(fields: List[CType]): Int = fields.count(_.boxed)

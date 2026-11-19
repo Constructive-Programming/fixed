@@ -20,6 +20,7 @@ It does **not** specify:
 | `Json`        | data | Closed sum (6 variants) the programmer matches on by variant           |
 | `Tuple`       | data | Single-variant product type (the concrete carrier behind `Pair`)       |
 | `Nat`         | data | Closed sum (`Zero` + `Succ`) — recursion-scheme example                |
+| `Maybe`       | data | Closed sum (`Just` + `Nothing`); the prelude's satisfier of `Optional` (§3.5) |
 | `Optional`    | cap  | Abstract presence-or-absence; representation chosen per use            |
 | `Result`      | cap  | Abstract success-or-failure; representation chosen per use             |
 | `Pair`        | cap  | Abstract two-projection container; `Tuple` is the canonical satisfier |
@@ -74,6 +75,20 @@ data Nat:
     Zero
     Succ(pred: Nat)
 ```
+
+### 3.5 `data Maybe`
+
+```
+data Maybe of A:
+    Just(value: A)
+    Nothing
+
+Maybe satisfies Optional:
+    Just as some
+    Nothing as none
+```
+
+The prelude's satisfier of `Optional` (§4.1), so a program that uses `Optional` without declaring a data type for it has a representation. A program that declares its own `cap Optional` hides the prelude's, together with this satisfaction. Added for the Phase 4.0 backend slice (`docs/plans/phase-4.0-backend-slice.md` §7.3); M11's built-in representation candidates may later make it unnecessary.
 
 ## 4. Capability declarations (normative shape)
 
