@@ -24,10 +24,7 @@ object Rc:
         val live = free(body)
         val handed = consumed(rhs).toSet
         val dead = owned -- live -- handed
-        val branched = rhs match
-          case Rhs.If(c, t, f)      => Rhs.If(c, go(t, handed), go(f, handed))
-          case Rhs.Switch(s, cases) => Rhs.Switch(s, cases.map((tag, c) => (tag, go(c, handed))))
-        val rest = Let(x, branched, go(body, (owned & live) ++ Core.boxedVar(x)))
+        val rest = Let(x, rhs.mapBranches(go(_, handed)), go(body, (owned & live) ++ Core.boxedVar(x)))
         drops(dead, handed.filter(live).foldLeft(rest: Expr)((acc, v) => Dup(v, acc)))
       case Let(x, rhs, body) =>
         val live = free(body)
@@ -55,6 +52,7 @@ object Rc:
       case Rhs.Con(_, fs)         => boxed(fs)
       case Rhs.Closure(_, cs)     => boxed(cs)
       case Rhs.CallClosure(c, as) => boxed(c :: as)
+      case Rhs.Catch(_, as)       => boxed(as)
       case Rhs.Field(_, _)        => Nil
       case Rhs.If(c, t, f)        => (boxed(List(c)).toSet ++ free(t) ++ free(f)).toList
       case Rhs.Switch(s, cases)   => (boxed(List(s)).toSet ++ cases.flatMap((_, c) => free(c))).toList

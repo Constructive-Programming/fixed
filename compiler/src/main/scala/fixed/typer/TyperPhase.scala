@@ -2,7 +2,7 @@ package fixed.typer
 
 import fixed.CompilationUnit
 import fixed.ast.{Tree, Trees}
-import fixed.core.{Context, Phase, SymKind, SymbolTable}
+import fixed.core.{Context, Phase, SymKind, SymbolId, SymbolTable}
 
 /** Namer, then Typer: types the body of every top-level `fn` against its declared return type,
   * then checks `satisfies` and capability declarations (3.1.M3).
@@ -24,7 +24,13 @@ object TyperPhase extends Phase:
       case Trees.CompilationUnit(items, _) => items
       case _                               => Nil
     val bodies = items.collect { case f: Trees.FnDecl => f }.foldLeft(TyperState(symbols))(typeFnBody)
-    Declarations.check(bodies, items).finish
+    val withPrelude =
+      Stdlib.prelude.collect { case f: Trees.FnDecl if f.body.isDefined => f }.foldLeft(bodies)(typePreludeFn)
+    Declarations.check(withPrelude, items).finish
+
+  /** A prelude function with a body, unless the unit declares its own of the same name. */
+  private def typePreludeFn(s: TyperState, fn: Trees.FnDecl): TyperState =
+    if s.symbols.scope.get(fn.name).exists(s.symbols(_).owner == SymbolId.Prelude) then typeFnBody(s, fn) else s
 
   private def typeFnBody(s: TyperState, fn: Trees.FnDecl): TyperState =
     s.symbols.scope.get(fn.name).filter(s.symbols(_).kind == SymKind.Fn) match

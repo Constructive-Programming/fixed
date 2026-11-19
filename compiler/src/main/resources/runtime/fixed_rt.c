@@ -52,12 +52,14 @@ void *fx_alloc(uint32_t tag, uint32_t nptr, size_t payload) {
 }
 
 void fx_dup(fx_header *h) {
+    if (!h) return; /* the zero result of an aborted call */
     n_dup++;
     if (h->rc > 0) h->rc++;
 }
 
 /* ponytail: recursive; a long list exhausts the native stack. Phase 4 drops by tail call (Rule PR7.3). */
 void fx_drop(fx_header *h) {
+    if (!h) return;
     n_drop++;
     if (h->rc < 0) return;
     if (--h->rc == 0) {
@@ -70,6 +72,34 @@ void fx_drop(fx_header *h) {
 }
 
 void fx_panic_div(void) { fx_die("panic: integer division by zero", 101); }
+
+/* ---- checked abort for abortive effect operations (slice §4.6) ---- */
+
+static bool aborting;
+static int64_t abort_effect;
+static void *abort_payload;
+
+void fx_abort(int64_t effect, void *payload) {
+    aborting = true;
+    abort_effect = effect;
+    abort_payload = payload;
+}
+
+bool fx_aborting(void) { return aborting; }
+
+/* True, and the abort cleared, if the program is aborting with `effect`. */
+bool fx_abort_catch(int64_t effect) {
+    if (!aborting || abort_effect != effect) return false;
+    aborting = false;
+    return true;
+}
+
+/* The caught payload; ownership passes to the handler clause. */
+void *fx_abort_payload(void) {
+    void *p = abort_payload;
+    abort_payload = NULL;
+    return p;
+}
 
 /* ---- strings ---- */
 
@@ -120,6 +150,24 @@ fx_string *fx_read_line(void) {
     free(line);
     return s;
 }
+
+/* ---- parsing (builtin.parse_u64) ---- */
+
+static bool parse_ok;
+
+uint64_t fx_parse_u64(fx_string *s) {
+    char *end = NULL;
+    uint64_t v = 0;
+    parse_ok = s->len > 0 && s->bytes[0] >= '0' && s->bytes[0] <= '9';
+    if (parse_ok) {
+        v = strtoull(s->bytes, &end, 10);
+        parse_ok = end == s->bytes + s->len;
+    }
+    fx_drop(&s->h);
+    return parse_ok ? v : 0;
+}
+
+bool fx_parse_ok(void) { return parse_ok; }
 
 /* ---- scalar formatting ---- */
 

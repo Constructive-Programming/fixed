@@ -96,9 +96,24 @@ cap Clone:
 cap Concat:
     fn concat(other: Self) -> Self
 
-// String helpers the examples use; Phase 5 decides where they live.
-fn repeat_str(s: String, times: u64) -> String
-fn join(parts: is Sequencing of String, separator: String) -> String
+// String helpers the examples use; Phase 5 decides where they live. They have bodies, so the
+// backend slice can compile them (docs/plans/phase-4.0-backend-slice.md §4.4).
+fn repeat_str(s: String, times: u64) -> String =
+    Nat.unfold(times, (k: u64) ->
+        if k == 0:
+            Nat.Zero
+        else:
+            Nat.Succ(k - 1)
+    ).fold(() -> "", (acc) -> acc.concat(s))
+
+fn join(parts: is Folding of String, separator: String) -> String =
+    parts.fold(("", true), (acc, part) ->
+        let (out, first) = acc
+        if first:
+            (part, false)
+        else:
+            (out.concat(separator).concat(part), false)
+    ).first
 
 effect Fail of E:
     fn fail(error: E) -> !

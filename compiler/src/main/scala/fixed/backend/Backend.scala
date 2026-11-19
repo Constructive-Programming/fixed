@@ -14,7 +14,7 @@ object Backend:
 
   /** LLVM IR for `unit`, which must have passed the typer without errors. */
   def compile(unit: CompilationUnit): Either[List[Diagnostic], String] =
-    Lower(unit).program.map(fns => EmitLLVM().program(fns.map(Rc(_))))
+    Lower(unit).program.map(fns => EmitLLVM().program(Aborts(fns).map(Rc(_))))
 
   /** Write `ir` next to `out`, then link it with the runtime into the executable `out`. */
   def ship(ir: String, out: Path): Either[Diagnostic, Path] =

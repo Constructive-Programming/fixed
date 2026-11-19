@@ -33,6 +33,14 @@ enum Atom:
       case UnitC        => CType.Unit
       case StrC(_)      => CType.Boxed
 
+extension (rhs: Rhs)
+  /** `rhs` with `f` applied to each branch of an `If` or `Switch`; other right-hand sides unchanged. */
+  def mapBranches(f: Expr => Expr): Rhs =
+    rhs match
+      case Rhs.If(c, t, e)      => Rhs.If(c, f(t), f(e))
+      case Rhs.Switch(s, cases) => Rhs.Switch(s, cases.map((tag, c) => (tag, f(c))))
+      case other                => other
+
 /** Scalar operations. `Widen` converts to the result variable's wider type of the same kind. */
 enum PrimOp:
   case Add, Sub, Mul, Div, Rem, Eq, Ne, Lt, Le, Gt, Ge, Neg, Not, Widen
@@ -67,6 +75,9 @@ enum Rhs:
   /** Call a closure. Consumes the closure and the arguments. */
   case CallClosure(closure: Atom, args: List[Atom])
 
+  /** Call a `handle` subject function: like `Call`, but not followed by an abort test (`Aborts`). */
+  case Catch(fn: String, args: List[Atom])
+
 enum Expr:
   case Let(x: Atom.Var, rhs: Rhs, body: Expr)
   case Ret(a: Atom)
@@ -90,6 +101,7 @@ object Core:
         val own = rhs match
           case Rhs.Call(f, _, false) => Set(f)
           case Rhs.Closure(code, _)  => Set(code)
+          case Rhs.Catch(f, _)       => Set(f)
           case Rhs.If(_, t, f)       => callees(t) ++ callees(f)
           case Rhs.Switch(_, cases)  => cases.flatMap((_, c) => callees(c)).toSet
           case _                     => Set.empty[String]
@@ -112,6 +124,7 @@ object Core:
         case Rhs.Switch(x, cases)   => atoms(List(x)) ++ cases.flatMap((_, c) => freeVars(c))
         case Rhs.Closure(_, cs)     => atoms(cs)
         case Rhs.CallClosure(c, as) => atoms(c :: as)
+        case Rhs.Catch(_, as)       => atoms(as)
     e match
       case Expr.Let(x, r, body) => rhs(r) ++ (freeVars(body) - x)
       case Expr.Ret(a)          => atoms(List(a))

@@ -1,6 +1,6 @@
 # Phase 4.0 — Naive backend slice
 
-**Status:** 4.0.M1–M3 done; 4.0.M4 next
+**Status:** 4.0.M1–M4 done, and 4.0.M6 for `04` and `05`; 4.0.M5 (benchmarks, baseline) next
 **Parent:** `docs/plans/implementation-plan.md` (Phase 4.0) and `docs/plans/phase-3-typer.md` §1.3
 (row 4.0)
 **Runs:** after M7, **before M10**
@@ -237,6 +237,8 @@ slice, not errors in the program, and each disappears with the milestone that li
 | 4.0.M5 | Benchmarks and baseline | `docs/baselines/runtime-<date>.md` committed; rerunning reproduces allocation and RC counts exactly |
 | 4.0.M6 | Gated examples `04` and `05`, each when its blocker closes | Golden output per example, or the example stays listed with its open blocker |
 
+**4.0.M4 status: done.** `03` matches its golden output, and so do `04` and `05` (4.0.M6). See §9.
+
 **4.0.M3 status: done.** `01_basics` matches its golden output. See §9.
 
 **4.0.M2 status: done.** See §9.
@@ -407,3 +409,31 @@ Not reached from `main`: `Maybe`'s `satisfies` bodies, `unwrap_or`, `map_optiona
   Rule 7.4.a.1 (folding through `List` and `Tuple`) is not implemented; `04` needs it.
 - **`01_basics`:** 734 allocations, 734 frees, 651 `dup`s, 1,533 `drop`s for the golden input.
 - **Examples:** prelude `Maybe` added, `03` / `06` renamed to `MyMaybe`, `05`'s `Door` takes a name.
+
+### 4.0.M4 (and 4.0.M6 for `04`, `05`)
+
+- **`is C` rule and auto-flat-struct** (`backend/Representation.scala`): a capability-bound type is
+  represented by the single data type in scope satisfying every bound; with none, a product
+  capability is its own flat struct (`spec/type_system.md` §6.6), fields read by name.
+- **Bounded parameters are specialised per call:** a parameter typed `is C` takes the concrete
+  type of the argument, and the instance name records it (`join[List of String]`). Needed because a
+  bound alone can be ambiguous: in the prelude, `List` and `Maybe` (through `Optional`) both
+  satisfy `Folding`.
+- **Capability members on representing data:** a sum capability's `fold` calls the data's derived
+  fold with callbacks reordered by constructor mapping (`Result.fold` on `Outcome`); an
+  unresolved capability constructor (`Optional.some` with no expected type) maps through
+  `constructorsOf` on the representing data.
+- **Abortive effects** (`backend/Aborts.scala`, runtime `fx_abort*`): checked abort as planned in
+  §4.6. A `handle` subject is its own function, called without the abort test; each clause tests
+  its effect. Leak check passes on the abort path (`EmitSuite` abort test, `03` with bad input).
+- **Also:** nested `fn` (a closure bound to its name), list literals, `|>`, `builtin.parse_u64`.
+- **Prelude bodies in Fixed:** `repeat_str` and `join`; the typer now types prelude function
+  bodies. `join` takes `is Folding of String` instead of `is Sequencing of String`: `Sequencing`
+  has no fold, so the old signature had no possible body.
+- **Generated, not written in Fixed** (`backend/Generated.scala`, `ponytail:` until `satisfies`
+  bodies are lowered): derived `map` (Rule 7.4.c), fold through functors (Rule 7.4.a.1), and
+  `Folding.fold`, `length`, `find` on list-shaped data.
+- **Not done:** lowering of `satisfies` method bodies (`03`'s `MyMaybe` bodies are not reached from
+  `main`); user handlers that resume (`B002`).
+- **Counts for the golden inputs** (allocations = frees in every case): `01` 734, `03` 5, `04` 182,
+  `05` 48.

@@ -27,7 +27,7 @@ final class EmitLLVM:
     val params = fn.params.map(p => s"${EmitLLVM.llType(p.ctype)} %${p.name}").mkString(", ")
     line("entry:")
     val (result, _) = value(fn.body, "entry")
-    line(s"  ret ${EmitLLVM.llType(fn.ret)} $result")
+    line(s"  ret ${EmitLLVM.llType(fn.ret)} ${zeroIfUnit(result, fn.ret)}")
     s"define ${EmitLLVM.llType(fn.ret)} ${EmitLLVM.user(fn.name)}($params) {\n$out}\n"
 
   /** Emit `e`, starting in block `label`; its result operand and the block it ends in. */
@@ -44,6 +44,7 @@ final class EmitLLVM:
       case Rhs.Move(a)           => aliases(x.name) = operand(a); label
       case Rhs.Prim(op, args)    => prim(x, op, args, label)
       case Rhs.Call(f, args, rt) => call(x, f, args, rt); label
+      case Rhs.Catch(f, args)    => call(x, f, args, runtime = false); label
       case Rhs.If(c, t, f)       =>
         val n = ids.next()
         line(s"  br i1 ${operand(c)}, label %then.$n, label %else.$n")
@@ -97,7 +98,7 @@ final class EmitLLVM:
       line(s"$l:")
       val (v, end) = value(e, l)
       line(s"  br label %join.$n")
-      s"[ $v, %$end ]"
+      s"[ ${zeroIfUnit(v, x.ctype)}, %$end ]"
     }
     line(s"join.$n:")
     line(s"  %${x.name} = phi ${EmitLLVM.llType(x.ctype)} ${results.mkString(", ")}")
@@ -152,6 +153,16 @@ final class EmitLLVM:
         emit(s"${if s then "sext" else "zext"} $ty $ops to ${EmitLLVM.llType(x.ctype)}")
       case (PrimOp.Eq | PrimOp.Ne, CType.Unit) => emit(s"icmp ${if op == PrimOp.Eq then "eq" else "ne"} i8 0, 0")
       case _                                   => emit(s"${EmitLLVM.instruction(op, t)} $ty $ops")
+
+  /** A unit operand used at another type is dead code after an abort or `!`: a zero of that type. */
+  private def zeroIfUnit(v: String, t: CType): String =
+    if v != "0" then v
+    else
+      t match
+        case CType.Boxed    => "null"
+        case CType.Float(_) => "0.0"
+        case CType.Bool     => "false"
+        case _              => v
 
   private def typed(as: List[Atom]): String = as.map(a => s"${EmitLLVM.llType(a.tpe)} ${operand(a)}").mkString(", ")
 

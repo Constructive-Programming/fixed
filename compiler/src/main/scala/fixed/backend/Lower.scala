@@ -5,7 +5,7 @@ import scala.collection.mutable
 import fixed.CompilationUnit
 import fixed.ast.{Tree, Trees}
 import fixed.backend.Atom.Var
-import fixed.core.{SymKind, SymbolId, Type, render}
+import fixed.core.{SymKind, SymbolId, SymbolTable, Type, render}
 import fixed.typer.{Members, Resolution}
 import fixed.util.{DiagCode, Diagnostic, Severity, Span}
 
@@ -15,46 +15,49 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
   * parameters to concrete types. Derived members (`fold`, `unfold`, `Folding.fold`) are generated
   * as Core functions. Constructs beyond the current milestone are `B005`.
   */
-final class Lower(unit: CompilationUnit):
+final class Lower(unit: CompilationUnit) extends Generated:
   private type Env = Map[String, Var]
   private type Sigma = Map[SymbolId, Type]
-  private type K = Atom => Expr
 
   /** Lexical bindings and the type substitution of the instance being lowered. */
-  final private case class Scope(env: Env, sigma: Sigma):
+  final private case class Scope(env: Env, sigma: Sigma, bounds: Map[Type, Type] = Map.empty):
     def bind(name: String, v: Var): Scope = copy(env = env.updated(name, v))
 
   private val ids = Iterator.from(1)
   private val problems = mutable.ArrayBuffer.empty[Diagnostic]
-  private val symbols = unit.symbols
+  protected val symbols: SymbolTable = unit.symbols
   private val fns = mutable.LinkedHashMap.empty[String, Fn]
+  private val represent = Representation(unit)
 
+  /** Top-level functions with bodies: the prelude's, then the unit's (which shadow them). */
   private val decls: Map[String, Trees.FnDecl] =
-    unit.tree.toList
-      .flatMap { case Trees.CompilationUnit(items, _) => items; case _ => Nil }
-      .collect { case f: Trees.FnDecl => f.name -> f }
-      .toMap
+    val own = unit.tree.toList.flatMap { case Trees.CompilationUnit(items, _) => items; case _ => Nil }
+    (fixed.typer.Stdlib.prelude ++ own).collect { case f: Trees.FnDecl if f.body.isDefined => f.name -> f }.toMap
 
   /** Every function instance reachable from `main`, or the problems found. */
   def program: Either[List[Diagnostic], List[Fn]] =
     if !decls.contains("main") then Left(List(problem(DiagCode.B003, Span.NoSpan, "no `main` function")))
     else
-      val _ = instance("main")(function(decls("main"), Map.empty, "main"))
+      val _ = instance("main")(function(decls("main"), Map.empty, Map.empty, "main"))
       if problems.isEmpty then Right(fns.values.toList) else Left(problems.toList)
 
   /** Build function `name` once. A recursive request meets the placeholder entered first. */
-  private def instance(name: String)(build: => Fn): String =
+  protected def instance(name: String)(build: => Fn): String =
     if !fns.contains(name) then
       fns(name) = Fn(name, Nil, CType.Unit, Expr.Ret(Atom.UnitC))
       fns(name) = build
     name
 
-  private def function(decl: Trees.FnDecl, sigma: Sigma, name: String): Fn =
+  /** Instance `name` of `decl`: `sigma` for its type parameters, `bounds` for its capability-bound
+    * parameter types (each replaced by the concrete argument type at the call).
+    */
+  private def function(decl: Trees.FnDecl, sigma: Sigma, bounds: Map[Type, Type], name: String): Fn =
     val (paramTypes, ret) = symbols(symbols.scope(decl.name)).info match
-      case Type.ArrowType(lhs, r, _) => (Members.params(lhs).map(Lower.subst(_, sigma)), Lower.subst(r, sigma))
-      case other                     => (Nil, other)
+      case Type.ArrowType(lhs, r, _) =>
+        (Members.params(lhs).map(concrete(_, sigma, bounds)), concrete(r, sigma, bounds))
+      case other => (Nil, other)
     val params = decl.params.zip(paramTypes).map((p, t) => fresh(p.name, ctype(t, p.span)))
-    val sc = Scope(decl.params.map(_.name).zip(params).toMap, sigma)
+    val sc = Scope(decl.params.map(_.name).zip(params).toMap, sigma, bounds)
     Fn(name, params, ctype(ret, decl.span), decl.body.fold(Expr.Ret(Atom.UnitC))(tail(_, sc)))
 
   private def expr(t: Tree, sc: Scope)(k: K): Expr =
@@ -75,26 +78,55 @@ final class Lower(unit: CompilationUnit):
       case u: Trees.UnaryOp          => unaryOp(u, sc)(k)
       case i: Trees.IfExpr           =>
         expr(i.cond, sc)(c => bind(Rhs.If(c, tail(i.thenBranch, sc), tail(i.elseBranch, sc)), i, sc)(k))
-      case a @ Trees.Apply(f @ Trees.Ident(name, span), args, _) if !sc.env.contains(name) && isFn(name) =>
-        if decls.contains(name) then call(name, typeOf(f, sc), args, a, sc)(k)
-        else unsupported(span, s"call of `$name`, which has no body (prelude bodies arrive in 4.0.M4)", k)
-      case a @ Trees.Apply(fn, args, _) =>
-        expr(fn, sc)(c => all(args, sc)(as => bind(Rhs.CallClosure(c, as), a, sc)(k)))
-      case l: Trees.LambdaExpr => lambda(l, sc)(k)
-      case m: Trees.MethodCall => method(m, sc)(k)
-      case s: Trees.StaticCall => static(s, sc)(k)
-      case m: Trees.MatchExpr  => matchExpr(m, sc)(k)
-      case other               => unsupported(other.span, other.getClass.getSimpleName, k)
+      case Trees.Apply(fn, args, _) => application(fn, args, t, sc)(k)
+      case Trees.ListExpr(elems, _) =>
+        val listType = typeOf(t, sc)
+        all(elems, sc)(as => listOf(as, listType, t)(k))
+      case Trees.Pipe(lhs, Trees.Apply(fn, args, _), _) => application(fn, lhs :: args, t, sc)(k)
+      case Trees.Pipe(lhs, fn, _)                       => application(fn, List(lhs), t, sc)(k)
+      case l: Trees.LambdaExpr                          => lambda(l, sc)(k)
+      case m: Trees.MethodCall                          => method(m, sc)(k)
+      case s: Trees.StaticCall                          => static(s, sc)(k)
+      case m: Trees.MatchExpr                           => matchExpr(m, sc)(k)
+      case h: Trees.HandleExpr                          => handle(h, sc)(k)
+      case other                                        => unsupported(other.span, other.getClass.getSimpleName, k)
 
   private def tail(t: Tree, sc: Scope): Expr = expr(t, sc)(Expr.Ret(_))
+
+  /** `fn(args)`, typed as `result`: a top-level function instance, or a closure call. */
+  private def application(fn: Tree, args: List[Tree], result: Tree, sc: Scope)(k: K): Expr =
+    fn match
+      case f @ Trees.Ident(name, span) if !sc.env.contains(name) && isFn(name) =>
+        if decls.contains(name) then call(name, typeOf(f, sc), args, result, sc)(k)
+        else unsupported(span, s"call of `$name`, which has no body", k)
+      case _ => expr(fn, sc)(c => all(args, sc)(as => bind(Rhs.CallClosure(c, as), result, sc)(k)))
+
+  /** A list literal: `Cons` cells built from the last element back, ending in the static `Nil`. */
+  private def listOf(elems: List[Atom], listType: Type, t: Tree)(k: K): Expr =
+    dataOf(listType) match
+      case Some((list, _)) =>
+        val cons = symbols.variantsOf(list).indexWhere(_.name == "Cons")
+        val nil = fresh("nil", CType.Boxed)
+        val cells = elems.foldRight((List.empty[(Var, Rhs)], nil: Atom)) { case (e, (lets, next)) =>
+          val cell = fresh("cell", CType.Boxed)
+          ((cell, Rhs.Con(cons, List(e, next))) :: lets, cell)
+        }
+        val (lets, head) = cells
+        Expr.Let(
+          nil,
+          Rhs.Con(symbols.variantsOf(list).indexWhere(_.name == "Nil"), Nil),
+          lets.reverse.foldRight(k(head))((l, acc) => Expr.Let(l._1, l._2, acc))
+        )
+      case None => unsupported(t.span, s"a list literal of type ${symbols.render(listType)}", k)
 
   private def block(stmts: List[Tree], sc: Scope)(k: K): Expr =
     stmts match
       case Nil                        => k(Atom.UnitC)
       case (l: Trees.LetExpr) :: rest =>
         expr(l.init, sc)(a => bindPattern(l.pattern, a, typeOf(l.init, sc), sc)(block(rest, _)(k)))
-      case last :: Nil => expr(last, sc)(k)
-      case e :: rest   => expr(e, sc)(_ => block(rest, sc)(k))
+      case (f: Trees.FnDecl) :: rest => nestedFn(f, sc)(c => block(rest, sc.bind(f.name, c))(k))
+      case last :: Nil               => expr(last, sc)(k)
+      case e :: rest                 => expr(e, sc)(_ => block(rest, sc)(k))
 
   /** Bind `pat` to the value `a` of type `t`: binders, `_` and tuple patterns of those. */
   private def bindPattern(pat: Tree, a: Atom, t: Type, sc: Scope)(k: Scope => Expr): Expr =
@@ -161,8 +193,16 @@ final class Lower(unit: CompilationUnit):
     val params = symbols.typeParamsOf(id)
     val solved = Lower.solve(params.toSet, symbols(id).info, fnType, Map.empty)
     val sigma = params.map(p => p -> solved.getOrElse(p, Type.UnitType)).toMap
-    val inst = if params.isEmpty then name else params.map(p => symbols.render(sigma(p))).mkString(s"$name[", ",", "]")
-    val _ = instance(inst)(function(decls(name), sigma, inst))
+    val declared = symbols(id).info match
+      case Type.ArrowType(lhs, _, _) => Members.params(lhs)
+      case _                         => Nil
+    val bounds = declared.zip(args.map(typeOf(_, sc))).collect {
+      case (d @ (_: Type.IsBound | _: Type.CapRef), actual: Type.CapRef)                => d -> actual
+      case (d @ (_: Type.IsBound | _: Type.CapRef), actual) if dataOf(actual).isDefined => d -> actual
+    }.toMap
+    val typeArgs = params.map(sigma) ++ declared.flatMap(bounds.get)
+    val inst = if typeArgs.isEmpty then name else typeArgs.map(symbols.render(_)).mkString(s"$name[", ",", "]")
+    val _ = instance(inst)(function(decls(name), sigma, bounds, inst))
     all(args, sc)(as => bind(Rhs.Call(inst, as, runtime = false), t, sc)(k))
 
   /** A lambda becomes a code function taking the closure first; its captures are the variables
@@ -172,21 +212,46 @@ final class Lower(unit: CompilationUnit):
     val (paramTypes, ret) = typeOf(l, sc) match
       case Type.ArrowType(lhs, r, _) => (Members.params(lhs), r)
       case _                         => (Nil, Type.UnitType)
-    val params = l.params.zip(paramTypes).map((p, pt) => fresh(p.name, ctype(pt, p.span)))
-    val inner = l.params.map(_.name).zip(params).foldLeft(sc)((s, np) => s.bind(np._1, np._2))
-    val body = tail(l.body, inner)
+    val (params, inner) = withParams(l.params.map(_.name).zip(paramTypes.map(ctype(_, l.span))), sc)
+    closure(params, tail(l.body, inner), ctype(ret, l.span))(k)
+
+  /** Fresh variables for parameters `named`, and `sc` with them bound. */
+  private def withParams(named: List[(String, CType)], sc: Scope): (List[Var], Scope) =
+    val params = named.map((n, t) => fresh(n, t))
+    (params, named.map(_._1).zip(params).foldLeft(sc)((s, np) => s.bind(np._1, np._2)))
+
+  /** A closure over `body`: a code function taking the closure first, then `params`. Its captures
+    * are the variables `body` uses but does not bind, loaded from the closure on entry.
+    */
+  protected def closure(params: List[Var], body: Expr, ret: CType)(k: Var => Expr): Expr =
     val captures = (Core.freeVars(body) -- params).toList.sortBy(_.name)
     val env = fresh("env", CType.Boxed)
     val slots = Layout.slots(captures.map(_.ctype), first = 1)
     val loaded = captures.zip(slots).foldRight(body)((cs, acc) => Expr.Let(cs._1, Rhs.Field(env, cs._2), acc))
     val code = s"lambda.${ids.next()}"
-    fns(code) = Fn(code, env :: params, ctype(ret, l.span), loaded)
-    bind(Rhs.Closure(code, captures), l, sc)(k)
+    fns(code) = Fn(code, env :: params, ret, loaded)
+    val x = fresh("closure", CType.Boxed)
+    Expr.Let(x, Rhs.Closure(code, captures), k(x))
 
   private def method(m: Trees.MethodCall, sc: Scope)(k: K): Expr =
     val recvType = typeOf(m.receiver, sc)
     val args = m.args.getOrElse(Nil)
-    unit.resolutionOf(m) match
+    (m.receiver, unit.resolutionOf(m)) match
+      case (Trees.Ident("builtin", _), _) if !sc.env.contains("builtin") => intrinsic(m, sc)(k)
+      case (_, None) if productField(recvType, m.method).isDefined       => fieldRead(recvType, m, sc)(k)
+      case (_, resolution) => resolved(m, recvType, args, resolution, sc)(k)
+
+  private def resolved(
+      m: Trees.MethodCall,
+      recvType: Type,
+      args: List[Tree],
+      resolution: Option[Resolution],
+      sc: Scope
+  )(
+      k: K
+  ): Expr =
+    lazy val listLike = dataOf(recvType).exists((d, _) => listShaped(d))
+    resolution match
       case Some(Resolution.Field(variant, index)) =>
         dataOf(recvType) match
           case Some((data, dargs)) =>
@@ -202,11 +267,101 @@ final class Lower(unit: CompilationUnit):
             expr(m.receiver, sc)(r => expr(arg, sc)(a => runtime("fx_str_concat", List(r, a), m, sc)(k)))
           case ("Show", "show", Nil) if Lower.scalar(recvType).isDefined || isStringType(recvType) =>
             expr(m.receiver, sc)(r => show(r, recvType, m, sc)(k))
-          case ("Folding", "fold", List(_, _)) if dataOf(recvType).exists((d, _) => listShaped(d)) =>
+          case ("Folding", "fold", List(_, _)) if listLike =>
             generatedCall(recvType, m, sc)((d, a) => foldLeft(d, a, typeOf(m, sc), m.span))(k)
-          case (c, name, _) =>
+          case (_, "fold", _) if mappedFold(cap, recvType, args.size).isDefined =>
+            val order = mappedFold(cap, recvType, args.size).get
+            val (data, dargs) = dataOf(recvType).get
+            val f = derivedFold(data, dargs, typeOf(m, sc), m.span)
+            expr(m.receiver, sc)(r =>
+              all(args, sc)(as => bind(Rhs.Call(f, r :: order.map(as(_)), runtime = false), m, sc)(k))
+            )
+          case ("Functor", "map", List(_)) if dataOf(recvType).isDefined =>
+            val newElem = dataOf(typeOf(m, sc)).flatMap(_._2.lastOption).getOrElse(Type.UnitType)
+            generatedCall(recvType, m, sc)(derivedMap(_, _, newElem, m.span))(k)
+          case ("Sequencing", "length", Nil) if listLike =>
+            generatedCall(recvType, m, sc)(length(_, _, typeOf(m, sc), m.span))(k)
+          case ("Folding", "find", List(_)) if listLike =>
+            val raw = unit.typeOf(m).getOrElse(Type.NeverType)
+            val optional = Members.expandAliases(
+              symbols,
+              raw match
+                case Type.IsBound(bs) => bs
+                case other            => List(other)
+            ).collectFirst { case Type.CapRef(c, _) => c }
+            optional match
+              case Some(opt) => generatedCall(recvType, m, sc)(find(_, _, opt, typeOf(m, sc), m.span))(k)
+              case None      => unsupported(m.span, s"`find` returning ${symbols.render(raw)}", k)
+          case (_, name, Nil) if productField(recvType, name).isDefined => fieldRead(recvType, m, sc)(k)
+          case (c, name, _)                                             =>
             unsupported(m.span, s"member $c.$name on ${symbols.render(recvType)} (arrives in 4.0.M4)", k)
       case None => unsupported(m.span, s"member `${m.method}`", k)
+
+  /** A sum capability's `fold` on the data type representing it: callbacks follow the capability's
+    * constructor requirements; the data's derived fold takes them in variant order. For each
+    * variant, the index of the argument that handles it.
+    */
+  private def mappedFold(cap: SymbolId, recvType: Type, arity: Int): Option[List[Int]] =
+    dataOf(recvType).flatMap { (data, _) =>
+      val ctors = symbols.membersOf(cap).filter(_.kind == SymKind.StaticMethod).map(_.name).toList
+      val variants = symbols.variantsOf(data).map(_.name).toList
+      val variantOf = ctors.map(c => symbols.constructorsOf(cap, c).find(_._1 == symbols(data).name).map(_._2))
+      Option.when(ctors.size == arity && variantOf.forall(_.isDefined) && variantOf.flatten.toSet == variants.toSet)(
+        variants.map(v => variantOf.indexOf(Some(v)))
+      )
+    }
+
+  private def fieldRead(recvType: Type, m: Trees.MethodCall, sc: Scope)(k: K): Expr =
+    expr(m.receiver, sc)(r => bind(Rhs.Field(r, productField(recvType, m.method).get), m, sc)(k))
+
+  /** The slot of field `name` of an auto-flat-struct or single-variant data value. */
+  private def productField(t: Type, name: String): Option[Int] =
+    t match
+      case Type.CapRef(c, args) =>
+        val fs = represent.fields(c, args)
+        Option(fs.indexWhere(_._1 == name)).filter(_ >= 0).map(Layout.slots(fs.map(f => ctype(f._2, Span.NoSpan)))(_))
+      case _ =>
+        dataOf(t).flatMap { (data, args) =>
+          symbols.variantsOf(data).toList match
+            case List(v) =>
+              val names = symbols.fieldsOf(v.id).map(_.name).toList
+              val types = fieldTypes(data, args, v.id)
+              Option(names.indexOf(name)).filter(_ >= 0).map(Layout.slots(types.map(ctype(_, Span.NoSpan)))(_))
+            case _ => None
+        }
+
+  /** `builtin.parse_u64(s)`: the C side parses; the result is built with the constructors that
+    * `Result.ok` and `Result.err` map to on the representing data type.
+    */
+  private def intrinsic(m: Trees.MethodCall, sc: Scope)(k: K): Expr =
+    val result = typeOf(m, sc)
+    (m.method, m.args.getOrElse(Nil), dataOf(result), symbols.scope.get("Result")) match
+      case ("parse_u64", List(arg), Some((data, _)), Some(cap)) =>
+        val tagOf = (ctor: String) =>
+          symbols.constructorsOf(cap, ctor).find(_._1 == symbols(data).name)
+            .map(c => symbols.variantsOf(data).indexWhere(_.name == c._2)).getOrElse(0)
+        expr(arg, sc) { a =>
+          val (v, ok) = (fresh("n", CType.Int(64, signed = false)), fresh("ok", CType.Bool))
+          val (yes, no) = (fresh("yes", CType.Boxed), fresh("no", CType.Boxed))
+          Expr.Let(
+            v,
+            Rhs.Call("fx_parse_u64", List(a), runtime = true),
+            Expr.Let(
+              ok,
+              Rhs.Call("fx_parse_ok", Nil, runtime = true),
+              bind(
+                Rhs.If(
+                  ok,
+                  Expr.Let(yes, Rhs.Con(tagOf("ok"), List(v)), Expr.Ret(yes)),
+                  Expr.Let(no, Rhs.Con(tagOf("err"), List(Atom.StrC("not a number"))), Expr.Ret(no))
+                ),
+                m,
+                sc
+              )(k)
+            )
+          )
+        }
+      case _ => unsupported(m.span, s"`builtin.${m.method}`", k)
 
   /** Call the function `gen` generates for the receiver's data type: receiver first, then arguments. */
   private def generatedCall(recvType: Type, m: Trees.MethodCall, sc: Scope)(gen: (SymbolId, List[Type]) => String)(
@@ -255,8 +410,102 @@ final class Lower(unit: CompilationUnit):
             }
           case Some((data, variant)) if hasVariant(data, variant) =>
             val tag = symbols.variantsOf(data).indexWhere(_.name == variant)
-            all(args, sc)(as => bind(Rhs.Con(tag, as), s, sc)(k))
-          case _ => unsupported(s.span, s"`${s.qualifier}.${s.method}`", k)
+            construct(tag, args, s, sc)(k)
+          case _ =>
+            owner.map(symbols(_)) match
+              case Some(cap) if cap.kind == SymKind.Cap && capVariant(cap.id, s.method, typeOf(s, sc)).isDefined =>
+                val tag = capVariant(cap.id, s.method, typeOf(s, sc)).get
+                construct(tag, args, s, sc)(k)
+              case Some(cap) if represent.constructor(cap.id).exists(_.name == s.method) =>
+                construct(0, args, s, sc)(k)
+              case Some(effect) if effect.kind == SymKind.Effect => operation(s, effect.id, args, sc)(k)
+              case _ => unsupported(s.span, s"`${s.qualifier}.${s.method}`", k)
+
+  private def construct(tag: Int, args: List[Tree], t: Tree, sc: Scope)(k: K): Expr =
+    all(args, sc)(as => bind(Rhs.Con(tag, as), t, sc)(k))
+
+  private def effectId(effect: SymbolId): Atom = Atom.IntC(BigInt(effect.toInt), CType.Int(64, signed = true))
+
+  /** An abortive effect operation (`-> !`): record the effect and its payload, then abort (`Aborts`). */
+  private def operation(s: Trees.StaticCall, effect: SymbolId, args: List[Tree], sc: Scope)(k: K): Expr =
+    val abortive = symbols.membersOf(effect).find(_.name == s.method).exists(_.info match
+      case Type.ArrowType(_, Type.NeverType, _) => true
+      case _                                    => false)
+    if !abortive then
+      problems +=
+        problem(DiagCode.B002, s.span, s"`${s.qualifier}.${s.method}`: only abortive operations are supported")
+      k(Atom.UnitC)
+    else
+      all(args, sc) { as =>
+        val payload = as.headOption.getOrElse(Atom.StrC(""))
+        if !payload.tpe.boxed then unsupported(s.span, "an abortive operation with a scalar payload", k)
+        else
+          val u = fresh("abort", CType.Unit)
+          Expr.Let(
+            u,
+            Rhs.Call(
+              "fx_abort",
+              List(effectId(effect), payload),
+              runtime = true
+            ),
+            k(Atom.UnitC)
+          )
+      }
+
+  /** `handle subject: clauses` for abortive operations (slice §4.6). The subject runs as its own
+    * function (a `Catch` call); each clause tests whether its effect aborted it.
+    */
+  private def handle(h: Trees.HandleExpr, sc: Scope)(k: K): Expr =
+    val subjectType = typeOf(h.subject, sc)
+    val body = tail(h.subject, sc)
+    val captures = Core.freeVars(body).toList.sortBy(_.name)
+    val code = s"handle.${ids.next()}"
+    fns(code) = Fn(code, captures, ctype(subjectType, h.span), body)
+    val v = fresh("subject", ctype(subjectType, h.span))
+    val resultType = ctype(typeOf(h, sc), h.span)
+    val returned =
+      h.returnClause.fold(Expr.Ret(v): Expr)(rc => bindPattern(rc.param, v, subjectType, sc)(tail(rc.body, _)))
+    val normal = guarded("fx_aborting", Expr.Ret(Atom.UnitC), returned, resultType)
+    val dispatch = h.operationClauses.foldRight(normal) { (c, otherwise) =>
+      symbols.scope.get(c.effect) match
+        case Some(effect) =>
+          val caught = Rhs.Call(
+            "fx_abort_catch",
+            List(effectId(effect)),
+            runtime = true
+          )
+          val payload = fresh("payload", CType.Boxed)
+          val clause = Expr.Let(
+            payload,
+            Rhs.Call("fx_abort_payload", Nil, runtime = true),
+            c.params.headOption.fold(tail(c.body, sc))(p => bindPattern(p, payload, Type.UnitType, sc)(tail(c.body, _)))
+          )
+          guardedBy(caught, clause, otherwise, resultType)
+        case None => unsupportedThen(c.span, s"effect `${c.effect}`", otherwise)
+    }
+    Expr.Let(v, Rhs.Catch(code, captures), bind(Rhs.If(Atom.BoolC(true), dispatch, Expr.Ret(Atom.UnitC)), h, sc)(k))
+
+  private def guarded(test: String, yes: Expr, no: Expr, rt: CType): Expr =
+    guardedBy(Rhs.Call(test, Nil, runtime = true), yes, no, rt)
+
+  private def guardedBy(test: Rhs, yes: Expr, no: Expr, rt: CType): Expr =
+    val (flag, out) = (fresh("flag", CType.Bool), fresh("out", rt))
+    Expr.Let(flag, test, Expr.Let(out, Rhs.If(flag, yes, no), Expr.Ret(out)))
+
+  /** A nested `fn` is a closure bound to its name. */
+  private def nestedFn(f: Trees.FnDecl, sc: Scope)(k: Var => Expr): Expr =
+    symbols.denotations.find(d =>
+      d.kind == SymKind.Fn && d.name == f.name && d.span.start >= f.span.start && d.span.end <= f.span.end
+    ) match
+      case Some(d) =>
+        val ps = symbols.membersOf(d.id).filter(_.kind == SymKind.ValueParam).toList
+        val ret = d.info match
+          case Type.ArrowType(_, r, _) => concrete(r, sc.sigma, sc.bounds)
+          case _                       => Type.UnitType
+        val (params, inner) =
+          withParams(ps.map(p => p.name -> ctype(concrete(p.info, sc.sigma, sc.bounds), f.span)), sc)
+        closure(params, f.body.fold(Expr.Ret(Atom.UnitC))(tail(_, inner)), ctype(ret, f.span))(k)
+      case None => unsupportedThen(f.span, s"nested fn `${f.name}`", k(fresh(f.name, CType.Boxed)))
 
   /** `match` on a data value: one `Switch` branch per variant, taken from the first case covering it. */
   private def matchExpr(m: Trees.MatchExpr, sc: Scope)(k: K): Expr =
@@ -280,110 +529,10 @@ final class Lower(unit: CompilationUnit):
         }
       case _ => unsupported(m.span, s"`match` on ${symbols.render(t)} or with guards", k)
 
-  /** Rule 7.4.a: `x.fold(on_v1, ..., on_vn)`, recursive fields folded first. */
-  private def derivedFold(data: SymbolId, args: List[Type], r: Type, span: Span): String =
-    val name = generatedName(data, args, "fold", symbols.render(r))
-    instance(name) {
-      val x = fresh("x", CType.Boxed)
-      val callbacks = symbols.variantsOf(data).toList.map(v => fresh(s"on_${v.name}", CType.Boxed))
-      val rt = ctype(r, span)
-      val branches = perVariant(data, args, x, ctype(_, span)) { (tag, loaded) =>
-        chain(loaded, data, rt)(f => Rhs.Call(name, f :: callbacks, runtime = false))(as =>
-          Rhs.CallClosure(callbacks(tag), as)
-        )
-      }
-      Fn(name, x :: callbacks, rt, switch(x, branches, rt))
-    }
-
-  /** Rule 7.4.b: `D.unfold(seed, step)`. The step returns one layer whose recursive fields hold
-    * seeds; each is unfolded in turn. (The layer is a separate allocation: fusion is Phase 4.)
-    */
-  private def derivedUnfold(data: SymbolId, args: List[Type], seed: Atom, span: Span): String =
-    val seedType = seed.tpe
-    val name = generatedName(data, args, "unfold", seedType.toString)
-    instance(name) {
-      val s = fresh("seed", seedType)
-      val step = fresh("step", CType.Boxed)
-      val layer = fresh("layer", CType.Boxed)
-      val branches = perVariant(data, args, layer, t => if Lower.isSelf(t, data) then seedType else ctype(t, span)) {
-        (tag, loaded) =>
-          chain(loaded, data, CType.Boxed)(f => Rhs.Call(name, List(f, step), runtime = false))(Rhs.Con(tag, _))
-      }
-      Fn(
-        name,
-        List(s, step),
-        CType.Boxed,
-        Expr.Let(layer, Rhs.CallClosure(step, List(s)), switch(layer, branches, CType.Boxed))
-      )
-    }
-
-  /** `Folding.fold(init, f)` on a list-shaped data type: a left fold. ponytail: generated here until
-    * prelude bodies in Fixed arrive (4.0.M4, slice §4.4); spec §7.4 does not derive it.
-    */
-  private def foldLeft(data: SymbolId, args: List[Type], accType: Type, span: Span): String =
-    val name = generatedName(data, args, "foldLeft", symbols.render(accType))
-    instance(name) {
-      val rt = ctype(accType, span)
-      val (xs, init, f) = (fresh("xs", CType.Boxed), fresh("init", rt), fresh("f", CType.Boxed))
-      val branches = perVariant(data, args, xs, ctype(_, span)) { (_, loaded) =>
-        (loaded.find(l => !Lower.isSelf(l._1, data)), loaded.find(l => Lower.isSelf(l._1, data))) match
-          case (Some((_, elem)), Some((_, rest))) =>
-            val (acc, res) = (fresh("acc", rt), fresh("res", rt))
-            Expr.Let(
-              acc,
-              Rhs.CallClosure(f, List(init, elem)),
-              Expr.Let(res, Rhs.Call(name, List(rest, acc, f), runtime = false), Expr.Ret(res))
-            )
-          case _ => Expr.Ret(init)
-      }
-      Fn(name, List(xs, init, f), rt, switch(xs, branches, rt))
-    }
-
-  private def generatedName(data: SymbolId, args: List[Type], member: String, at: String): String =
-    s"${symbols.render(Type.TypeRef(data, args))}.$member[$at]"
-
-  /** One `Switch` branch per variant of `data`: `obj`'s fields loaded, then `body(tag, fields)`. */
-  private def perVariant(data: SymbolId, args: List[Type], obj: Var, fieldType: Type => CType)(
-      body: (Int, List[(Type, Var)]) => Expr
-  ): List[(Int, Expr)] =
-    symbols.variantsOf(data).toList.zipWithIndex.map { (v, tag) =>
-      val types = fieldTypes(data, args, v.id)
-      val cts = types.map(fieldType)
-      val vars = cts.map(fresh("f", _))
-      val loads = vars.zip(Layout.slots(cts))
-      (tag, loads.foldRight(body(tag, types.zip(vars)))((l, acc) => Expr.Let(l._1, Rhs.Field(obj, l._2), acc)))
-    }
-
-  /** Replace each recursive field by `recurse(field)`, then return `finish(fields)`. */
-  private def chain(loaded: List[(Type, Var)], data: SymbolId, rt: CType)(recurse: Var => Rhs)(
-      finish: List[Atom] => Rhs
-  ): Expr =
-    loaded match
-      case Nil =>
-        val res = fresh("r", rt)
-        Expr.Let(res, finish(Nil), Expr.Ret(res))
-      case (t, f) :: rest =>
-        val tailOf = (done: Atom) => chain(rest, data, rt)(recurse)(as => finish(done :: as))
-        if Lower.isSelf(t, data) then
-          val rec = fresh("rec", if rt == CType.Boxed then CType.Boxed else rt)
-          Expr.Let(rec, recurse(f), tailOf(rec))
-        else tailOf(f)
-
-  private def switch(obj: Var, branches: List[(Int, Expr)], rt: CType): Expr =
-    val res = fresh("res", rt)
-    Expr.Let(res, Rhs.Switch(obj, branches), Expr.Ret(res))
-
-  /** Every variant has no fields, or one recursive field and one element field. */
-  private def listShaped(data: SymbolId): Boolean =
-    symbols.variantsOf(data).forall { v =>
-      val fs = symbols.fieldsOf(v.id).toList
-      fs.isEmpty || (fs.size == 2 && fs.count(f => Lower.isSelf(f.info, data)) == 1)
-    }
-
   private def hasVariant(data: SymbolId, name: String): Boolean = symbols.variantsOf(data).exists(_.name == name)
 
   /** A data type and its arguments: a data reference, a tuple (the prelude's `Tuple`) or an unfold layer. */
-  private def dataOf(t: Type): Option[(SymbolId, List[Type])] =
+  protected def dataOf(t: Type): Option[(SymbolId, List[Type])] =
     t match
       case Type.TypeRef(id, args) if symbols(id).kind == SymKind.Data && !isStringType(t) => Some(id -> args)
       case Type.TupleType(ts)     => symbols.scope.get("Tuple").map(_ -> ts)
@@ -391,9 +540,9 @@ final class Lower(unit: CompilationUnit):
       case _                      => None
 
   /** A variant's field types for data arguments `args`; inside a layer, recursive fields hold the seed. */
-  private def fieldTypes(data: SymbolId, args: List[Type], variant: SymbolId): List[Type] =
+  protected def fieldTypes(data: SymbolId, args: List[Type], variant: SymbolId): List[Type] =
     val sigma = symbols.typeParamsOf(data).zip(args).toMap
-    symbols.fieldsOf(variant).map(f => Lower.subst(f.info, sigma)).toList
+    symbols.fieldsOf(variant).map(f => concrete(f.info, sigma)).toList
 
   private def runtime(name: String, args: List[Atom], t: Tree, sc: Scope)(k: K): Expr =
     bind(Rhs.Call(name, args, runtime = true), t, sc)(k)
@@ -408,9 +557,13 @@ final class Lower(unit: CompilationUnit):
     val x = fresh("t", ctype(typeOf(t, sc), t.span))
     Expr.Let(x, rhs, k(x))
 
-  private def fresh(base: String, t: CType): Var = Var(s"$base.${ids.next()}", t)
+  protected def fresh(base: String, t: CType): Var = Var(s"$base.${ids.next()}", t)
 
-  private def typeOf(t: Tree, sc: Scope): Type = Lower.subst(unit.typeOf(t).getOrElse(Type.NeverType), sc.sigma)
+  private def typeOf(t: Tree, sc: Scope): Type = concrete(unit.typeOf(t).getOrElse(Type.NeverType), sc.sigma, sc.bounds)
+
+  /** `t` at the instance's concrete types, with capability bounds replaced by their representation. */
+  private def concrete(t: Type, sigma: Sigma, bounds: Map[Type, Type] = Map.empty): Type =
+    represent(Lower.subst(Lower.replaceAll(t, bounds), sigma))
 
   private def isFn(name: String): Boolean = symbols.scope.get(name).exists(symbols(_).kind == SymKind.Fn)
 
@@ -420,11 +573,12 @@ final class Lower(unit: CompilationUnit):
       case Type.PrimType("String") => true
       case _                       => false
 
-  private def ctype(t: Type, span: Span): CType =
+  protected def ctype(t: Type, span: Span): CType =
     Lower.scalar(t).getOrElse(t match
-      case _ if isStringType(t) || dataOf(t).isDefined => CType.Boxed
-      case _: Type.ArrowType                           => CType.Boxed
-      case _                                           =>
+      case _ if isStringType(t) || dataOf(t).isDefined             => CType.Boxed
+      case _: Type.ArrowType                                       => CType.Boxed
+      case Type.CapRef(c, _) if represent.constructor(c).isDefined => CType.Boxed
+      case _                                                       =>
         problems += problem(DiagCode.B005, span, s"values of type ${symbols.render(t)} are not supported yet")
         CType.Unit)
 
@@ -466,6 +620,17 @@ object Lower:
       case _ if declared.ordinal == concrete.ordinal =>
         declared.children.zip(concrete.children).foldLeft(acc)((a, dc) => solve(params, dc._1, dc._2, a))
       case _ => acc
+
+  /** `t` with each type that is a key of `by` replaced by its value. */
+  def replaceAll(t: Type, by: Map[Type, Type]): Type =
+    if by.isEmpty then t else by.getOrElse(t, t.mapChildren(replaceAll(_, by)))
+
+  /** Whether `t` mentions data type `data` anywhere. */
+  def mentions(t: Type, data: SymbolId): Boolean = isSelf(t, data) || t.children.exists(mentions(_, data))
+
+  /** `t` with every occurrence of data type `data` replaced by `by`. */
+  def replace(t: Type, data: SymbolId, by: Type): Type =
+    if isSelf(t, data) then by else t.mapChildren(replace(_, data, by))
 
   def isSelf(t: Type, data: SymbolId): Boolean =
     t match

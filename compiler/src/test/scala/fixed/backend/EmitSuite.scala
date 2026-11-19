@@ -41,7 +41,7 @@ class EmitSuite extends munit.FunSuite:
   private val header = "use std.io.Console\n\n"
 
   /** Examples with golden files (`examples/golden/<name>.in`, `.out`): the slice's required set. */
-  private val goldens = List("01_basics")
+  private val goldens = List("01_basics", "03_option_result", "04_json", "05_phantom_types")
 
   goldens.foreach { name =>
     test(s"example $name matches its golden output"):
@@ -150,3 +150,25 @@ class EmitSuite extends munit.FunSuite:
          |    Console.print_line(p.second.concat(p.first.show()))
          |""".stripMargin
     check("data", src, "box 7.0\n0!\n1!\n2!\nx7\n")
+
+  test("abortive effect: the handler catches an abort raised inside a fold callback, and drops run"):
+    val src = header +
+      """|fn check(n: u64) -> u64 with Fail of String =
+         |    if n > 2:
+         |        Fail.fail("too big: ".concat(n.show()))
+         |    else:
+         |        n
+         |
+         |fn total(xs: List of u64) -> u64 with Fail of String =
+         |    xs.fold(0, (acc, x) -> acc + check(x))
+         |
+         |fn run(xs: List of u64) -> String =
+         |    handle total(xs):
+         |        Fail.fail(e) => e
+         |        return(v) => v.show()
+         |
+         |fn main() -> () with Console =
+         |    Console.print_line(run([1, 2]))
+         |    Console.print_line(run([1, 5, 2]))
+         |""".stripMargin
+    check("abort", src, "3\ntoo big: 5\n")
