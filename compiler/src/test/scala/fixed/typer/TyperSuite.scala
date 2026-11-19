@@ -326,3 +326,24 @@ class TyperSuite extends munit.FunSuite:
     assertEquals(resolved.constructors.map((_, _, v) => v), List("Simple"))
     val noDefault = cap + "data Simple(tasks: List of u64)\nSimple satisfies Queue:\n    Simple as empty\n"
     assertEquals(codes(typedUnit(noDefault)), List(DiagCode.T010))
+
+  test("Rule 8.1.a: a field may refine an is-bound parameter; it must satisfy the bound"):
+    val nel = "data Nel of A (head: A, tail: List of A)\n"
+    assertEquals(typedUnit(nel + "Nel satisfies Sequencing:\n    Nel as cons\n    impossible as empty\n").diags, Nil)
+    val bad = "data Bad of A (head: A, tail: u64)\n"
+    assertEquals(
+      codes(typedUnit(bad + "Bad satisfies Sequencing:\n    Bad as cons\n    impossible as empty\n")),
+      List(DiagCode.T010)
+    )
+
+  test("Rule 8.1.a: a resolved requirement call is typed against the variant's fields"):
+    val nel =
+      "data Nel of A (head: A, tail: List of A)\nNel satisfies Sequencing:\n    Nel as cons\n    impossible as empty\n"
+    assertEquals(
+      typedUnit(nel + "fn grow(x: u64, xs: List of u64) -> Nel of u64 = Sequencing.cons(x, xs)\n").diags,
+      Nil
+    )
+    assertEquals(
+      codes(typedUnit(nel + "fn grow(x: u64, n: Nel of u64) -> Nel of u64 = Sequencing.cons(x, n)\n")),
+      List(DiagCode.T002)
+    )

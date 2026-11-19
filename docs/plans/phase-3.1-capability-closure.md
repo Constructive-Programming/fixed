@@ -235,8 +235,16 @@ time.
   - abstract-method coverage for `satisfies`;
   - keeping a member's own type variables rigid inside `satisfies` bodies;
   - an abstract `is ...` value met where a concrete type is expected (still accepted);
-  - the Rule 8.1.a finding in `11` (`08` and `09` resolved by the field-default clause below).
+  - none of the example findings remain (resolved by the two Rule 8.1.a clauses below).
 - **Rule 8.1.a, field defaults** (decided in review):
   - Trailing fields that declare a default may be absent from the requirement; a resolved
     `Cap.ctor` call takes the requirement's parameters.
   - `08` `SimpleQueue` and `09` `VarMap` give their list field the default `List.Nil`.
+- **Rule 8.1.a, refining fields** (decided in review):
+  - A mapped variant's field may refine an `is ...` parameter. The mapping check discharges the
+    bound, so the field must satisfy it.
+  - A resolved `Cap.ctor` call is typed against the variant's fields (§8.5), so a wrong argument
+    is a call-site error. Abstract requirement calls are re-checked when M11 commits a
+    representation (`spec/type_system.md` §6.5.6).
+  - Prelude `Sequencing.cons` becomes `(h: Part, t: is Sequencing of Part) -> Self`, so `11`'s
+    `NonEmptyList(head, tail: List of A) as cons` is valid as written.

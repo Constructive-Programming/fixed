@@ -33,7 +33,7 @@ cap Sequencing:
     fn length -> u64
     fn head -> is Optional of Part
     fn tail -> Self
-    Self.fn cons(h: Part, t: Self) -> Self
+    Self.fn cons(h: Part, t: is Sequencing of Part) -> Self
     Self.fn empty -> Self
 
 cap Filtering:

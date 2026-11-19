@@ -529,7 +529,7 @@ Every cap declaration is assigned exactly one **classification** based on its me
 |---|---|---|
 | **Sum** | At least one `Self.fn ctor(...) -> Self` constructor requirement plus one `fn fold<R>(...)` member | `Optional`, `Result`, `Expr` |
 | **Product** | Exactly one `Self.fn ctor(...) -> Self` constructor requirement, plus accessor methods (`fn field -> T`) and no `fold` | `Config` (when expressed as a cap), `Message` |
-| **Recursive** | Any `Self.fn` constructor requirement whose parameter list contains `Self` | `Sequencing` (via `cons(h, t: Self) -> Self`) |
+| **Recursive** | Any `Self.fn` constructor requirement whose parameter list contains `Self` or a bound on the declaring cap itself | `Sequencing` (via `cons(h: Part, t: is Sequencing of Part) -> Self`) |
 | **Capability-only** | No `Self.fn` constructor requirements; only instance methods | `Folding`, `Functor`, `Filtering`, `Sized`, `RandomAccess` |
 | **Marker** | No methods at all (possibly with `prop` declarations) | `Locked`, `Open`, `Meters`, `Seconds`; refinement caps `between(lo, hi)` |
 
@@ -609,6 +609,8 @@ Implementations are conformant if they (a) use these defaults for unprofiled cod
 #### 6.5.6 Commit
 
 The selected representation is recorded on the symbol's denotation as a phase-indexed view (`docs/references/scala3-compiler-reference.md` §4.4). Subsequent passes — match-to-fold desugaring, Perceus insertion, code generation — see only the concrete representation.
+
+Committing a representation re-checks every abstract constructor-requirement call bound to it (a `Cap.ctor(args)` left unresolved by §8.5) against the chosen variant's fields: a field may refine its requirement parameter (Rule 8.1.a), so an argument accepted by the requirement can be rejected by the representation. Such a rejection is a type error at the call site.
 
 #### 6.5.7 Phase placement
 
@@ -928,6 +930,8 @@ Maybe satisfies Optional:
 (`Optional` here is the canonical sum cap from `examples/06_functor_monad.fixed`, declaring `Self.fn some(value: Part) -> Self` and `Self.fn none -> Self` as constructor requirements. The simplified `Optional` in `examples/02_collections.fixed` has no `Self.fn` requirements and is satisfied by auto-derivation alone — see §7.4.)
 
 **Rule 8.1.a (Variant-to-requirement).** Each `Variant as name` line provides a data variant as the implementation of one of the cap's `Self.fn` constructor requirements. The variant's field types must match (or be a refinement of) the corresponding requirement's parameter types, position by position. Trailing fields that declare a default value may be absent from the requirement: calling the requirement constructs the variant with those defaults.
+
+A field may *refine* its parameter: `cons(h: Part, t: is Sequencing of Part)` may map to a variant whose `tail` is `List of A`, because `List` satisfies `Sequencing`. This stays sound because a call is typed against the variant it resolves to (§8.5): `Sequencing.cons(x, t)` resolving to `List.Cons` checks `t` against `List of A`, at the call site. A requirement call that resolves to no constructor stays abstract until representation selection, which must re-check its arguments against the chosen variant's fields (§6.5).
 
 ```
 cap TaskQueue:
