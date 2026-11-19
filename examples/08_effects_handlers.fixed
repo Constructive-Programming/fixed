@@ -93,7 +93,7 @@ effect Channel of A:
 
 // Spawning concurrent tasks
 effect Async:
-    fn spawn(task: () -> () with Async) -> ()
+    fn spawn(task: () -> () with Async + E) -> () with E
     fn yield_now -> ()
 
 // --- A chat message ---
@@ -176,7 +176,7 @@ SimpleQueue satisfies TaskQueue:
 // run_scheduler: total schedulers also need an iteration bound (max_steps).
 // Each fold step pops one task from the queue, runs one effect, and updates
 // the queue. After max_steps or when the queue empties, the scheduler stops.
-fn run_scheduler(task: () -> () with Async, max_steps: u64) -> () =
+fn run_scheduler(task: () -> () with Async + E, max_steps: u64) -> () with E =
     let initial_queue = TaskQueue.empty.push(() ->
         handle task():
             Async.spawn(t) => resume(())
@@ -208,7 +208,7 @@ fn run_scheduler(task: () -> () with Async, max_steps: u64) -> () =
 
 // run_with_channel: same shape — bound the dispatcher with max_steps.
 // State is (buffer, current task). Each step intercepts one Channel op.
-fn run_with_channel(task: () -> () with Channel of A, max_steps: u64) -> () =
+fn run_with_channel(task: () -> () with Channel of A + E, max_steps: u64) -> () with E =
     Nat.unfold(max_steps, (k) ->
         if k == 0: Nat.Zero
         else: Nat.Succ(k - 1)
