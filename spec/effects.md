@@ -4,7 +4,7 @@
 **Specifies:** algebraic effect declarations, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.4 source.
 **Last revised:** 2026-11-19
 
-**Changes from v0.2.1.** Adds Rule E5.5.a (ambient pass-through): a callback whose expected function type declares no `with` clause passes its effects to the enclosing body.
+**Changes from v0.2.1.** Adds Rule E5.5.a (ambient pass-through): a callback whose expected function type declares no `with` clause passes its effects to the enclosing body. Adds Rule E8.1.a (how row variables are solved) and OQ-E8 (row-polymorphic data).
 
 **Changes from v0.2.** Re-opens OQ-E5: §3.5 (linear effects) is now marked **Proposal**, contingent on the resolution of OQ-Q5 in `spec/quantities.md` (whether effect rows participate in QTT quantity). The proposed semantics in §3.5 are unchanged in shape but no longer normative until OQ-Q5 is closed. No other semantic changes from v0.2; bump tracks the v0.4.4 source grammar.
 
@@ -463,7 +463,9 @@ fn map<E>(list: is List of A, f: A -> B with E) -> is List of B with E
 
 Here `E` is a row variable: any concrete row may be supplied. The function's row is exactly the row of the supplied callback.
 
-Row variables are bound by the function and follow the same scoping as type variables (Rule 4.1 in `spec/type_system.md`). Like type variables, row variables are introduced at first use.
+Row variables are bound by the function and follow the same scoping as type variables (Rule 4.1 in `spec/type_system.md`). Like type variables, row variables are introduced at first use: an upper-case name in a `with` row that names no effect is a row variable. A row variable takes no `of` arguments.
+
+**Rule E8.1.a (Solving row variables).** Inside the function's own body a row variable is rigid. It is an effect of its own, performed by calling anything whose row names it, and the body's `with` clause must name it too. At a call site each row variable is instantiated afresh. A callback whose row meets an expected row containing the variable adds the effects that the rest of the expected row does not name to the variable's solution. The solution is the union of what every such callback adds. A variable that no callback extends stands for the empty row.
 
 ### 8.2 Concrete-plus-row composition (Rule E8.2)
 
@@ -497,6 +499,7 @@ fn each<E>(list: is List of A, f: A -> () with E) -> () with E =
 - **OQ-E5 — Linear effects (re-opened in v0.2.1).** §3.5 sketches the proposed semantics: `linear effect E:` declares an effect whose ops are quantity 1 in the row. Closure depends on `spec/quantities.md` OQ-Q5 (whether effect rows participate in QTT quantity at all). Until OQ-Q5 closes, §3.5 is non-normative.
 - **OQ-E1 — Multi-shot handlers (deferred to v0.5+).** Linked to `spec/quantities.md` OQ-Q1. v0.4.4 keeps `resume` at quantity 1 per Rule Q5.11 and Rule E6.4. Multi-shot would require continuation copying or persistent continuation representation, both with significant memory overhead.
 - **OQ-E3 — Effect inheritance (deferred).** No `extends` for effects in v0.4.4. Adding `effect MyConsole extends Console: ...` is straightforward if stdlib needs it.
+- **OQ-E8 — Row-polymorphic data (deferred).** A data type cannot take a row variable, so a structure that stores callbacks (a task queue) fixes their row: `List of (() -> () with Async)`. A callback with an extra rigid row variable cannot be stored in it. `examples/08_effects_handlers.fixed`'s `run_scheduler` hits this case and keeps one `T015` until it is resolved.
 - **OQ-E4 — Higher-rank effect polymorphism (deferred).** A function whose argument is itself effect-polymorphic (`fn higher(g: forall E. (A -> B with E) -> ...)`) is not in v0.4.4. Defer until benchmark code reveals the need.
 
 **Closed (decided not to add):**

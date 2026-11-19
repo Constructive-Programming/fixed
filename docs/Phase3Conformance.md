@@ -54,7 +54,7 @@ item are in `docs/plans/phase-3-typer.md` §3.6–§3.9.
 | ~~Capability satisfaction for values flowing into an `is ...` bound~~ — enforced since 3.1.M2 (`T010`). Still lenient: an abstract `is ...` value used where a concrete type is expected | M6 (3.1.M5 constructor resolution) |
 | ~~`Numeric` reached through `extends`~~ — done in 3.1.M1 | — |
 | ~~`satisfies` mappings and bodies, cap default bodies~~ — checked since 3.1.M3 / 3.1.M4. Still open: effect operation bodies (none in the corpus) and abstract-method coverage | M6 follow-up |
-| ~~Effect rows~~ — checked since M7 (`T015`–`T019`, `docs/plans/phase-3.2-effects.md`). Still open: explicit row variables (§8), effect aliases (§4.5), linear effects (§3.5) | 3.2.M4 / follow-up |
+| ~~Effect rows~~ — checked since M7 (`T015`–`T019`, `docs/plans/phase-3.2-effects.md`). Row variables since 3.2.M4. Still open: row-polymorphic data (OQ-E8), effect aliases (§4.5), linear effects (§3.5) | follow-up |
 | `prop` bodies, `forall`, `implies` (reported as `T005` warnings) | M9 property verifier |
 | Quantities (linearity, erasure) | M10 QTT |
 | Representation: `Show`, `Eq` and `Clone` are assumed derivable for every type | M11 representation selection |
