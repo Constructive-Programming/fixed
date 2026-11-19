@@ -235,4 +235,8 @@ time.
   - abstract-method coverage for `satisfies`;
   - keeping a member's own type variables rigid inside `satisfies` bodies;
   - an abstract `is ...` value met where a concrete type is expected (still accepted);
-  - the Rule 8.1.a findings in `08`, `09` and `11`.
+  - the Rule 8.1.a finding in `11` (`08` and `09` resolved by the field-default clause below).
+- **Rule 8.1.a, field defaults** (decided in review):
+  - Trailing fields that declare a default may be absent from the requirement; a resolved
+    `Cap.ctor` call takes the requirement's parameters.
+  - `08` `SimpleQueue` and `09` `VarMap` give their list field the default `List.Nil`.

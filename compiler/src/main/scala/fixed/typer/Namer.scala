@@ -200,7 +200,8 @@ object Namer:
       val (ci2, info) = ci1.nested(vid) { cv =>
         val (cv1, fields) = mapAccum(cv, v.fields) { (cf, f) =>
           val (cf1, t) = typeOf(cf, f.typeAnn)
-          (cf1.enter(f.name, SymKind.Field, t, f.span)._1, t)
+          val (cf2, fid) = cf1.enter(f.name, SymKind.Field, t, f.span)
+          (if f.default.isDefined then cf2.copy(table = cf2.table.markDefaulted(fid)) else cf2, t)
         }
         (cv1, if fields.isEmpty then self else Type.ArrowType(Type.TupleType(fields), self, EffectRow.empty))
       }

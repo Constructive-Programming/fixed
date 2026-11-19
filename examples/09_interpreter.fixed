@@ -66,7 +66,7 @@ cap Env:
 
 // --- Concrete environment ---
 
-data VarMap(bindings: List of (is Pair of (String, f64)))
+data VarMap(bindings: List of (is Pair of (String, f64)) = List.Nil)
 
 VarMap satisfies Env:
     VarMap as empty

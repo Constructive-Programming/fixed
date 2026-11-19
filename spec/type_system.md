@@ -927,7 +927,17 @@ Maybe satisfies Optional:
 
 (`Optional` here is the canonical sum cap from `examples/06_functor_monad.fixed`, declaring `Self.fn some(value: Part) -> Self` and `Self.fn none -> Self` as constructor requirements. The simplified `Optional` in `examples/02_collections.fixed` has no `Self.fn` requirements and is satisfied by auto-derivation alone — see §7.4.)
 
-**Rule 8.1.a (Variant-to-requirement).** Each `Variant as name` line provides a data variant as the implementation of one of the cap's `Self.fn` constructor requirements. The variant's field types must match (or be a refinement of) the corresponding requirement's parameter types.
+**Rule 8.1.a (Variant-to-requirement).** Each `Variant as name` line provides a data variant as the implementation of one of the cap's `Self.fn` constructor requirements. The variant's field types must match (or be a refinement of) the corresponding requirement's parameter types, position by position. Trailing fields that declare a default value may be absent from the requirement: calling the requirement constructs the variant with those defaults.
+
+```
+cap TaskQueue:
+    Self.fn empty -> Self
+
+data SimpleQueue(tasks: List of (() -> ()) = List.Nil)
+
+SimpleQueue satisfies TaskQueue:
+    SimpleQueue as empty          // TaskQueue.empty constructs SimpleQueue(List.Nil)
+```
 
 **Rule 8.1.b (Coverage).** A complete `satisfies` declaration must map every `Self.fn` constructor requirement of the cap to a data variant (or, in the partial-satisfaction case below, to `impossible`):
 

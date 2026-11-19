@@ -168,7 +168,7 @@ cap TaskQueue:
     fn pop -> is Optional of (is Pair of (() -> (), Self))
     fn is_empty -> bool
 
-data SimpleQueue(tasks: List of (() -> ()))
+data SimpleQueue(tasks: List of (() -> ()) = List.Nil)
 
 SimpleQueue satisfies TaskQueue:
     SimpleQueue as empty

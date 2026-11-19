@@ -101,7 +101,17 @@ object Satisfaction:
         case _ => false
     candidates.filter((data, _) => fits(data)) match
       case List((data, variant)) =>
-        Members.static(s.copy(constructors = (call, data, variant) :: s.constructors), data, variant, None)
+        val arity =
+          s.members.lookup(cap, SymKind.StaticMethod, call.method).headOption.fold(0)(e => Members.arity(e.member.info))
+        Members.static(s.copy(constructors = (call, data, variant) :: s.constructors), data, variant, None).map {
+
+          /** The call has the requirement's shape: defaulted trailing fields are filled in (Rule 8.1.a). */
+          case (s1, Type.ArrowType(lhs, result, fx)) =>
+            val fields = Members.params(lhs)
+            if arity == 0 then (s1, result)
+            else (s1, Type.ArrowType(Type.TupleType(fields.take(arity)), result, fx))
+          case other => other
+        }
       case Nil     => None
       case several =>
         val names = several.map((d, v) => s"${s.symbols(d).name}.$v").mkString(", ")
