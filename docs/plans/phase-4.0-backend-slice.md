@@ -1,6 +1,6 @@
 # Phase 4.0 — Naive backend slice
 
-**Status:** 4.0.M1 done; 4.0.M2 next
+**Status:** 4.0.M1 and 4.0.M2 done; 4.0.M3 next
 **Parent:** `docs/plans/implementation-plan.md` (Phase 4.0) and `docs/plans/phase-3-typer.md` §1.3
 (row 4.0)
 **Runs:** after M7, **before M10**
@@ -221,8 +221,9 @@ allocations and RC operations, with the machine, the LLVM version and the input 
 | `B002` | handler clause kind not supported by the backend slice |
 | `B003` | member `m` is called but has no definition (no body, no derivation rule, no intrinsic) |
 | `B004` | `clang` not found or failed; its output is attached |
+| `B005` | construct not supported by the backend slice yet (names the milestone that adds it where known) |
 
-`B` codes are the backend's own, as `T` codes are the typer's. `B001`–`B003` are limits of the
+`B` codes are the backend's own, as `T` codes are the typer's. `B001`–`B003` and `B005` are limits of the
 slice, not errors in the program, and each disappears with the milestone that lifts the limit.
 
 ## 6. Milestones
@@ -235,6 +236,8 @@ slice, not errors in the program, and each disappears with the milestone that li
 | 4.0.M4 | `satisfies` mappings and bodies, the `is C` rule, prelude bodies in Fixed, abortive effects and `handle` | `03_option_result` matches its golden output; leak check passes, including on the abort path |
 | 4.0.M5 | Benchmarks and baseline | `docs/baselines/runtime-<date>.md` committed; rerunning reproduces allocation and RC counts exactly |
 | 4.0.M6 | Gated examples `04` and `05`, each when its blocker closes | Golden output per example, or the example stays listed with its open blocker |
+
+**4.0.M2 status: done.** See §9.
 
 **4.0.M1 status: done.** Hand-off in `CompilationUnit.typing` with a test in `CompilerSuite`;
 §4.3 settled; audit in §8.
@@ -348,3 +351,32 @@ Not reached from `main`: `Maybe`'s `satisfies` bodies, `unwrap_or`, `map_optiona
    recursive data type should derive `Folding.fold` as a left fold is a spec question.
 3. **A capability method implemented by a derived member is matched by constructor mapping**
    (`Result.fold` on `Outcome`). The spec should state this rule; today it is implicit in the typer.
+
+## 9. Implementation notes
+
+### 4.0.M2
+
+- **Code:** `compiler/src/main/scala/fixed/backend/`: `Core` (IR), `Lower` (typed tree to Core, in
+  continuation-passing style, worklist from `main`), `Rc` (§4.5), `EmitLLVM`, `Backend` (entry
+  points and the `clang` call). Runtime: `compiler/src/main/resources/runtime/fixed_rt.c`, written
+  next to the `.ll` file at `ship` time. CLI: `fixed compile <file> -o <out.ll>` and
+  `fixed ship <file> -o <exe>`.
+- **Covered:** integer, float, `bool`, `char` and `String` values; literals, arithmetic,
+  comparisons, `&&` / `||` (short-circuit, lowered to `if`), unary `-` and `!`, `let` with a binder
+  or `_`, blocks, `if`, calls of non-generic top-level functions, `concat`, `show` on scalars,
+  `String ==` / `!=`, `Console.print_line`, `Console.read_line`. Everything else is `B005`.
+- **Header layout.** Rule PR3.1's padding after the tag holds `nptr`, the number of boxed fields,
+  which come first in the payload. One generic `fx_drop` then frees any object. String constants
+  are static objects in the IR (count `-1`), never allocated, counted or freed.
+- **`f64` format** (§7.7): the shortest decimal that reads back as the same value. Plain notation
+  with at least one decimal for exponents -4 to 15 (`10.0`, `9.58`, `0.3333333333333333`),
+  scientific otherwise (`1e+300`), and `inf`, `-inf`, `NaN`. Still to go into `spec/stdlib.md`.
+- **Wrapping and panics** (§7.6): `+`, `-`, `*` wrap; integer `/` and `%` by zero exit with code 101
+  and `fixed: panic: integer division by zero`. `ponytail:` signed `MIN / -1` is undefined in LLVM
+  and traps on x86; it needs an explicit check if wrapping is to hold there too.
+- **Built-ins matched by name** (`concat`, `show`, `Console.*`) until the resolution table of
+  4.0.M3; `ponytail:` comments in `Lower` mark both places.
+- **Tests:** `EmitSuite`, five programs, each run with the leak check. CI runs `clang --version`
+  before the gate so a missing compiler fails loudly.
+- **Perf:** `FrontEndBench` not rerun. The check-only path does no new work; `TyperPhase` only
+  keeps a reference to the state it already built.

@@ -278,7 +278,7 @@ Optional body, wrapped at 72 columns.
 ```
 
 - **types:** `feat` `fix` `perf` `refactor` `test` `docs` `build` `ci` `chore` `revert`
-- **scopes:** `ast` `scanner` `parser` `typer` `driver` `util` `spec` `examples` `docs` `build` `bench`
+- **scopes:** `ast` `scanner` `parser` `typer` `backend` `runtime` `driver` `util` `spec` `examples` `docs` `build` `bench`
   (several: `feat(parser,spec): …`; breaking change: `refactor(ast)!: …`)
 - subject ≤ 72 chars, no trailing period, blank line before the body.
 

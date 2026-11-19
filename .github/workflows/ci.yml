@@ -48,5 +48,7 @@ jobs:
           java-version: "25"
       - uses: sbt/setup-sbt@v1
       - uses: coursier/cache-action@v9
+      # The backend tests link with clang; fail here, not in a skipped test, if it is missing.
+      - run: clang --version
       # Same gate as .githooks/pre-commit: scalafmt, scalafix, CPD, tests.
       - run: sbt check test

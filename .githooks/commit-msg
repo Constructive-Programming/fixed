@@ -9,7 +9,7 @@
 set -eu
 
 TYPES='feat|fix|perf|refactor|test|docs|build|ci|chore|revert'
-SCOPES='ast|scanner|parser|typer|driver|util|spec|examples|docs|build|bench'
+SCOPES='ast|scanner|parser|typer|backend|runtime|driver|util|spec|examples|docs|build|bench'
 
 # Drop git's comment lines and leading blank lines.
 msg=$(grep -v '^#' "$1" | sed '/./,$!d')

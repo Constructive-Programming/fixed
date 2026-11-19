@@ -1,20 +1,53 @@
 package fixed
 
-import fixed.ast.Trees
-import fixed.util.{Reporter, SourceFile}
+import java.nio.file.{Files, Path}
 
-/** Command-line entry point: `fixed <file.fixed>...`. Compiles each file, prints its diagnostics
-  * and a one-line summary of the parsed tree, and exits 1 if any file has errors.
+import fixed.ast.Trees
+import fixed.backend.Backend
+import fixed.util.{Diagnostic, Reporter, SourceFile}
+
+/** Command-line entry point.
+  *
+  *   - `fixed <file.fixed>...` checks each file, prints its diagnostics and a one-line summary.
+  *   - `fixed compile <file.fixed> -o <out.ll>` writes LLVM IR.
+  *   - `fixed ship <file.fixed> -o <exe>` builds a native executable with `clang`.
+  *
+  * Exit codes (implementation plan, "Agent-Friendly CLI"): 0 success, 1 compile error, 2 usage,
+  * 3 build failure.
   */
 object Main:
   def main(args: Array[String]): Unit =
-    val paths = args.toList.filterNot(_ == "--")
-    if paths.isEmpty then
-      Console.err.println("usage: fixed <file.fixed>...")
-      sys.exit(2)
-    val units = paths.map(p => Compiler.compile(CompilationUnit(SourceFile.fromPath(p))))
-    units.foreach(report)
-    sys.exit(if units.exists(_.hasErrors) then 1 else 0)
+    args.toList.filterNot(_ == "--") match
+      case "compile" :: file :: "-o" :: out :: Nil => sys.exit(backend(file)(ir => write(Path.of(out), ir)))
+      case "ship" :: file :: "-o" :: out :: Nil    =>
+        sys.exit(backend(file)(ir => Backend.ship(ir, Path.of(out)).fold(d => { print(file, d); 3 }, _ => 0)))
+      case Nil | ("compile" | "ship") :: _ =>
+        Console.err.println("usage: fixed <file.fixed>... | fixed compile|ship <file.fixed> -o <out>")
+        sys.exit(2)
+      case paths =>
+        val units = paths.map(p => Compiler.compile(CompilationUnit(SourceFile.fromPath(p))))
+        units.foreach(report)
+        sys.exit(if units.exists(_.hasErrors) then 1 else 0)
+
+  /** Check `file`, lower it to LLVM IR and hand the IR to `use`; exit code 1 on any error. */
+  private def backend(file: String)(use: String => Int): Int =
+    val unit = Compiler.compile(CompilationUnit(SourceFile.fromPath(file)))
+    if unit.hasErrors then
+      report(unit)
+      1
+    else
+      Backend.compile(unit) match
+        case Left(ds) =>
+          report(unit.report(ds))
+          1
+        case Right(ir) => use(ir)
+
+  private def write(out: Path, ir: String): Int =
+    val _ = Files.writeString(out, ir)
+    0
+
+  private def print(file: String, d: Diagnostic): Unit =
+    println(new Reporter(SourceFile.fromString(file, "")).format(d))
 
   private def report(unit: CompilationUnit): Unit =
     val reporter = new Reporter(unit.source)
