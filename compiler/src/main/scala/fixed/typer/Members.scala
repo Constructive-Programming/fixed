@@ -19,17 +19,14 @@ object Members:
 
   private val numericPrims = Set("i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64")
 
-  /** A primitive numeric type, or a type variable whose bound names `Numeric`. Transitive
-    * `extends Numeric` joins with capability closure (M6).
+  /** A primitive numeric type, or a type variable whose bound reaches `Numeric` (directly or
+    * through `extends`).
     */
   def isNumeric(s: TyperState, t: Type): Boolean =
     t match
-      case Type.PrimType(n)    => numericPrims(n)
-      case Type.TypeRef(id, _) =>
-        s.symbols(id).info match
-          case Type.IsBound(bs) =>
-            bs.exists { case Type.CapRef(c, _) => s.symbols(c).name == "Numeric"; case _ => false }
-          case _ => false
+      case Type.PrimType(n)                                               => numericPrims(n)
+      case Type.TypeRef(id, _) if s.symbols(id).kind == SymKind.TypeParam =>
+        s.symbols.scope.get("Numeric").exists(numeric => Satisfaction.boundsReach(s, boundsOf(s, id), numeric))
       case _ => false
 
   /** How to rewrite a signature: explicit replacements, owners whose type variables become fresh,
@@ -200,7 +197,7 @@ object Members:
     }
 
   /** A type variable's bound chain, aliases expanded. */
-  private def boundsOf(s: TyperState, param: SymbolId): List[Type] =
+  def boundsOf(s: TyperState, param: SymbolId): List[Type] =
     s.symbols(param).info match
       case Type.IsBound(bs) => expandAliases(s.symbols, bs)
       case _                => Nil
