@@ -61,7 +61,7 @@ object Declarations:
     */
   private def constructor(s: TyperState, typeName: String, variant: String, req: Denotation, span: Span)
       : TyperState =
-    s.symbols.scope.get(typeName).filter(s.symbols(_).kind == SymKind.Data) match
+    s.symbols.dataNamed(typeName) match
       case None       => s
       case Some(data) =>
         s.symbols.variantsOf(data).find(_.name == variant) match
@@ -126,7 +126,7 @@ object Declarations:
       case Trees.CapRef(name, _, _) => s.symbols.scope.get(name).filter(s.symbols(_).kind == SymKind.Cap)
       case _                        => None
     target.fold(s) { cap =>
-      val (s0, self) = s.symbols.scope.get(d.typeName).filter(s.symbols(_).kind == SymKind.Data) match
+      val (s0, self) = s.symbols.dataNamed(d.typeName) match
         case Some(data) =>
           val (si, args) = Members.freshArgs(s, data)
           (si, Type.TypeRef(data, args))
