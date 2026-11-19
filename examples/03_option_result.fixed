@@ -34,6 +34,8 @@ data Maybe of A:
     Nothing
 
 Maybe satisfies Optional:
+    Just as some
+    Nothing as none
     fn isDefined = match self:
         Maybe.Nothing => false
         Maybe.Just(_) => true

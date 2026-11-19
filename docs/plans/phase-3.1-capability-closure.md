@@ -164,7 +164,7 @@ For `T satisfies C`, mapped through `closure(C)`:
 |---|---|---|
 | 3.1.M1 ✅ | Closure and satisfaction resolver; transitive `Numeric` | Unit tests of `satisfies(T, C)` over the stdlib and corpus types |
 | 3.1.M2 ✅ | Obligations during typing, discharged after the unit; the `is`-bound and capability-as-type leniency removed from the unifier | `01`–`06` still clean; negative tests (`String` into `is Numeric`, `List of String` into `is Folding of u64`) report `T010` |
-| 3.1.M3 | `satisfies` declaration checks (coverage, mappings, abstract methods, diamond) | Corpus `satisfies` blocks pass; negative tests for each rule |
+| 3.1.M3 ✅ | `satisfies` declaration checks (coverage, mappings, abstract methods, diamond) | Corpus `satisfies` blocks pass; negative tests for each rule |
 | 3.1.M4 | Cap default bodies and `satisfies` method bodies typed | `03`'s `Maybe satisfies Optional` bodies type-check; a bad body reports against the declaration |
 | 3.1.M5 | Constructor resolution with refinement strip | `Optional.some(x)` against a `Maybe`-backed expected type resolves; an ambiguity reports `T011` |
 
@@ -195,3 +195,21 @@ time.
   - Still lenient, until constructor resolution (3.1.M5): an *abstract* value met where a
     concrete type is expected.
   - Cost: thread-CPU A/B against 3.1.M1 is about +1.5%.
+- **3.1.M3:**
+  - `Declarations.check` runs after body typing:
+    - mappings name constructor requirements the capability *itself* declares (inherited
+      requirements are covered by their own satisfactions or derivation, so `Maybe satisfies
+      Optional` need not map Monad's `pure`), at most once (`T014`);
+    - constructor mappings' fields unify with the requirement's parameters (`T010`);
+    - missing requirements are `T010`;
+    - Rule 6.2 diamonds are compared by parameter count (`T013`).
+  - Abstract-method coverage is deferred until bodies are typed (3.1.M4): auto-derivation of
+    `map` / `flat_map` / `pure` in the corpus goes beyond Rule 7.4 as written.
+  - Prelude: `Sequencing` gains `Self.fn empty`; `List satisfies Sequencing` and
+    `Tuple satisfies Pair` gain their mappings (`spec/stdlib.md` §5).
+  - `03`'s `Maybe satisfies Optional` gains `Just as some` / `Nothing as none`, which Rule 8.1.b
+    requires now that its `Optional` declares them.
+  - Real findings in the out-of-scope examples, each a Rule 8.1.a mismatch:
+    - `08`: `SimpleQueue as empty` maps a 1-field constructor to a 0-parameter requirement;
+    - `09`: `VarMap as empty`, the same;
+    - `11`: `NonEmptyList as cons` — its `tail: List of A` does not fit `cons`'s `Self`.

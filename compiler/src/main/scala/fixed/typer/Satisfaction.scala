@@ -63,9 +63,7 @@ object Satisfaction:
         case Type.CapRef(c, args)   => holds(si, value, c, args).getOrElse(fail(si, value, entry, span))
         case _: Type.RefinementType => si
         case named                  =>
-          si.unifier.unify(named, value, Members.isNumeric(si, _)) match
-            case Right(u) => si.copy(unifier = u.copy(obligations = Nil))
-            case Left(_)  => fail(si, value, entry, span)
+          si.tryUnify(named, value).getOrElse(fail(si, value, entry, span))
     }
 
   private def fail(s: TyperState, value: Type, entry: Type, span: Span): TyperState =
@@ -119,5 +117,5 @@ object Satisfaction:
       if provided.size < capArgs.size then Some(s)
       else
         provided.zip(capArgs).foldLeft(Option(s)) { case (acc, (p, a)) =>
-          acc.flatMap(si => si.unifier.unify(a, p, Members.isNumeric(si, _)).toOption.map(u => si.copy(unifier = u)))
+          acc.flatMap(_.tryUnify(a, p))
         }

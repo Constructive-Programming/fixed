@@ -34,6 +34,7 @@ cap Sequencing:
     fn head -> is Optional of Part
     fn tail -> Self
     Self.fn cons(h: Part, t: Self) -> Self
+    Self.fn empty -> Self
 
 cap Filtering:
     fn filter(pred: Part -> bool) -> Self
@@ -102,13 +103,16 @@ String satisfies Show
 String satisfies Concat
 String satisfies Eq
 String satisfies Ord
-List satisfies Sequencing
+List satisfies Sequencing:
+    Cons as cons
+    Nil as empty
 List satisfies Folding
 List satisfies Functor
 List satisfies Filtering
 Json satisfies Show
 Json satisfies Eq
-Tuple satisfies Pair
+Tuple satisfies Pair:
+    Tuple as pair
 bool satisfies Show
 bool satisfies Eq
 char satisfies Show
