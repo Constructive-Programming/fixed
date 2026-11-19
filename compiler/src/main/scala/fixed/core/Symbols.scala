@@ -1,6 +1,6 @@
 package fixed.core
 
-import scala.collection.immutable.IntMap
+import scala.collection.immutable.{BitSet, IntMap}
 
 import fixed.util.Span
 
@@ -44,7 +44,8 @@ final case class SymbolTable(
     typeParams: IntMap[List[SymbolId]],
     scope: Map[String, SymbolId],
     satisfies: Map[String, List[Type]],
-    constructors: Map[(Int, String), List[(String, String)]]
+    constructors: Map[(Int, String), List[(String, String)]],
+    defaulted: scala.collection.immutable.BitSet
 ):
 
   def apply(id: SymbolId): Denotation = entries(id.toInt - SymbolTable.firstId)
@@ -86,6 +87,11 @@ final case class SymbolTable(
   def fieldsOf(variant: SymbolId): Iterator[Denotation] = membersOf(variant).filter(_.kind == SymKind.Field)
 
   /** Record `typeName satisfies cap`. */
+  /** Record that field (or parameter) `id` declares a default value. */
+  def markDefaulted(id: SymbolId): SymbolTable = copy(defaulted = defaulted.incl(id.toInt))
+
+  def hasDefault(id: SymbolId): Boolean = defaulted.contains(id.toInt)
+
   /** The top-level data type called `name`, if any. */
   def dataNamed(name: String): Option[SymbolId] = scope.get(name).filter(apply(_).kind == SymKind.Data)
 
@@ -115,7 +121,7 @@ object SymbolTable:
   val firstId: Int = 2
 
   val empty: SymbolTable =
-    SymbolTable(Vector.empty, firstId, IntMap.empty, IntMap.empty, Map.empty, Map.empty, Map.empty)
+    SymbolTable(Vector.empty, firstId, IntMap.empty, IntMap.empty, Map.empty, Map.empty, Map.empty, BitSet.empty)
 
 extension (table: SymbolTable)
   /** Source-like rendering of `t`, with symbol names resolved through `table`. */

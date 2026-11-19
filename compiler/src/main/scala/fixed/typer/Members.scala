@@ -297,6 +297,12 @@ object Members:
   /** An arrow's left-hand side is always its parameter list, a `TupleType` of any arity, so a
     * single `()` parameter and no parameters stay distinct.
     */
+  /** A signature's parameter count (0 for a non-function). */
+  def arity(t: Type): Int =
+    t match
+      case Type.ArrowType(lhs, _, _) => params(lhs).size
+      case _                         => 0
+
   def params(lhs: Type): List[Type] =
     lhs match
       case Type.TupleType(ts) => ts

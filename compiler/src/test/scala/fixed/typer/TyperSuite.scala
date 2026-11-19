@@ -316,3 +316,13 @@ class TyperSuite extends munit.FunSuite:
     val none = typedUnit(optionalCap + "fn wrap(x: u64) -> is Opt of u64 = Opt.some(x)\n")
     assertEquals(none.diags, Nil)
     assertEquals(none.constructors, Nil)
+
+  test("Rule 8.1.a: trailing fields with defaults may be absent from the requirement"):
+    val cap = "cap Queue:\n    Self.fn empty -> Self\n    fn size -> u64\n"
+    val withDefault = cap + "data Simple(tasks: List of u64 = List.Nil)\nSimple satisfies Queue:\n    Simple as empty\n"
+    assertEquals(typedUnit(withDefault).diags, Nil)
+    val resolved = typedUnit(withDefault + "fn make() -> Simple = Queue.empty\n")
+    assertEquals(resolved.diags, Nil)
+    assertEquals(resolved.constructors.map((_, _, v) => v), List("Simple"))
+    val noDefault = cap + "data Simple(tasks: List of u64)\nSimple satisfies Queue:\n    Simple as empty\n"
+    assertEquals(codes(typedUnit(noDefault)), List(DiagCode.T010))

@@ -84,11 +84,15 @@ object Declarations:
             val params = sig match
               case Type.ArrowType(lhs, _, _) => Members.params(lhs)
               case _                         => Nil
-            if params.size != fields.size then
+
+            /** Rule 8.1.a: trailing fields with a default may be absent from the requirement. */
+            val omitted = s3.symbols.fieldsOf(v.id).drop(params.size).toList
+            if params.size > fields.size || !omitted.forall(f => s3.symbols.hasDefault(f.id)) then
               s3.error(
                 DiagCode.T010,
                 span,
-                s"$typeName.$variant has ${fields.size} field(s), ${req.name} takes ${params.size}"
+                s"$typeName.$variant has ${fields.size} field(s), ${req.name} takes ${params.size}" +
+                  (if params.size < fields.size then " (the extra fields need defaults)" else "")
               )
             else
               params.zip(fields).foldLeft(s3) { case (si, (p, f)) =>
@@ -185,7 +189,7 @@ object Declarations:
       s.symbols.membersOf(SymbolId(c)).filter(m => m.kind == SymKind.Method && !own(m.name)).toList
     }
     inherited.groupBy(_.name).foldLeft(s) { case (si, (name, ms)) =>
-      val arities = ms.map(m => arity(m.info)).distinct
+      val arities = ms.map(m => Members.arity(m.info)).distinct
       if arities.size <= 1 then si
       else
         si.error(
@@ -194,8 +198,3 @@ object Declarations:
           s"$name is inherited with incompatible signatures; declare it in ${si.symbols(cap).name}"
         )
     }
-
-  private def arity(t: Type): Int =
-    t match
-      case Type.ArrowType(lhs, _, _) => Members.params(lhs).size
-      case _                         => 0
