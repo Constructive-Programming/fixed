@@ -33,7 +33,9 @@ esac
 [ -n "$subject" ] || fail "empty message"
 printf '%s' "$subject" | grep -Eq "^($TYPES)\\(($SCOPES)(,($SCOPES))*\\)!?: [^ ].*$" \
   || fail "subject does not match the Conventional Commits format with a known type and scope"
-[ "${#subject}" -le 72 ] || fail "subject is ${#subject} chars (max 72)"
+# Count characters, not bytes: drop UTF-8 continuation bytes so dash (CI) and bash agree.
+length=$(printf '%s' "$subject" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')
+[ "$length" -le 72 ] || fail "subject is $length chars (max 72)"
 case "$subject" in *.) fail "subject ends with a period" ;; esac
 [ -z "$second" ] || fail "second line must be blank (separate subject and body)"
 exit 0
