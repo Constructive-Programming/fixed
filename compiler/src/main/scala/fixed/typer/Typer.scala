@@ -32,7 +32,8 @@ final case class TyperState(
     unifier: Unifier,
     diags: List[Diagnostic],
     errors: Int,
-    members: MemberTables
+    members: MemberTables,
+    obligations: List[(Type, Type, Span)]
 ):
   def record(tree: Tree, t: Type): TyperState = copy(types = types.updated(tree, t))
 
@@ -60,10 +61,15 @@ final case class TyperState(
   def unsupported(span: Span, what: String): TyperState =
     copy(diags = Diagnostic(Severity.Warning, DiagCode.T005, span, s"$what is not supported by the typer yet") :: diags)
 
-  /** Default unsolved literal variables and order the diagnostics. Recorded types stay as typed;
-    * `typeOf` substitutes on read, so the table is never rewritten wholesale.
+  /** Default unsolved literal variables, discharge the capability obligations recorded while
+    * typing, and order the diagnostics. Recorded types stay as typed; `typeOf` substitutes on read.
     */
-  def finish: TyperState = copy(unifier = unifier.applyDefaults, diags = diags.reverse)
+  def finish: TyperState =
+    val defaulted = copy(unifier = unifier.applyDefaults)
+    val checked = obligations.reverse.foldLeft(defaulted) { case (si, (value, bound, span)) =>
+      Satisfaction.discharge(si, value, bound, span)
+    }
+    checked.copy(diags = checked.diags.reverse)
 
 object TyperState:
   def apply(symbols: SymbolTable): TyperState =
@@ -73,7 +79,8 @@ object TyperState:
       Unifier.empty.copy(tuple = symbols.scope.get("Tuple")),
       Nil,
       0,
-      MemberTables(symbols)
+      MemberTables(symbols),
+      Nil
     )
 
 /** The bidirectional body typer (§5.2, §3.7–§3.9). Each routine records the tree's type in the
@@ -129,9 +136,20 @@ object Typer:
       s.unifier.unify(expected, actual, isNumeric(s, _))
     )(s"expected ${show(s, expected)}, got ${show(s, actual)}")
 
-  /** Adopt the unifier from `result`, or report `T002` with `message`. */
+  /** Adopt the unifier from `result`, moving the obligations it recorded to the state with `span`,
+    * or report `T002` with `message`.
+    */
   private def solve(s: TyperState, span: Span, result: Either[?, Unifier])(message: => String): TyperState =
-    result.fold(_ => s.error(DiagCode.T002, span, message), u => s.copy(unifier = u))
+    result.fold(
+      _ => s.error(DiagCode.T002, span, message),
+      u =>
+        if u.obligations.isEmpty then s.copy(unifier = u)
+        else
+          s.copy(
+            unifier = u.copy(obligations = Nil),
+            obligations = u.obligations.map((v, b) => (v, b, span)) ++ s.obligations
+          )
+    )
 
   private def show(s: TyperState, t: Type): String = s.symbols.render(s.unifier.zonk(t))
 
