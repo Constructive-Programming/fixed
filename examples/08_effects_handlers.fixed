@@ -164,11 +164,11 @@ fn listener(max_messages: u64) -> ()
 
 cap TaskQueue:
     Self.fn empty -> Self
-    fn push(task: () -> ()) -> Self
-    fn pop -> is Optional of (is Pair of (() -> (), Self))
+    fn push(task: () -> () with Async) -> Self
+    fn pop -> is Optional of (is Pair of (() -> () with Async, Self))
     fn is_empty -> bool
 
-data SimpleQueue(tasks: List of (() -> ()) = List.Nil)
+data SimpleQueue(tasks: List of (() -> () with Async) = List.Nil)
 
 SimpleQueue satisfies TaskQueue:
     SimpleQueue as empty
@@ -232,7 +232,7 @@ fn run_with_channel(task: () -> () with Channel of A, max_steps: u64) -> () =
 // Part 4: Nested handlers — putting it all together
 // =========================================================================
 
-fn main() -> () =
+fn main() -> () with FileSystem =
     // Example 1: I/O effects with nested handlers
     // Each `handle` removes one effect from the row.
     handle (do:
