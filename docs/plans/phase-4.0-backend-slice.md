@@ -1,6 +1,6 @@
 # Phase 4.0 — Naive backend slice
 
-**Status:** 4.0.M1–M4 done, and 4.0.M6 for `04` and `05`; 4.0.M5 (benchmarks, baseline) next
+**Status:** done (4.0.M1–M5; 4.0.M6 for `04` and `05`). M10 may start. `02` and `06` stay out.
 **Parent:** `docs/plans/implementation-plan.md` (Phase 4.0) and `docs/plans/phase-3-typer.md` §1.3
 (row 4.0)
 **Runs:** after M7, **before M10**
@@ -237,6 +237,8 @@ slice, not errors in the program, and each disappears with the milestone that li
 | 4.0.M5 | Benchmarks and baseline | `docs/baselines/runtime-<date>.md` committed; rerunning reproduces allocation and RC counts exactly |
 | 4.0.M6 | Gated examples `04` and `05`, each when its blocker closes | Golden output per example, or the example stays listed with its open blocker |
 
+**4.0.M5 status: done.** Baseline in `docs/baselines/runtime-2026-11-19.md`. See §9.
+
 **4.0.M4 status: done.** `03` matches its golden output, and so do `04` and `05` (4.0.M6). See §9.
 
 **4.0.M3 status: done.** `01_basics` matches its golden output. See §9.
@@ -437,3 +439,18 @@ Not reached from `main`: `Maybe`'s `satisfies` bodies, `unwrap_or`, `map_optiona
   `main`); user handlers that resume (`B002`).
 - **Counts for the golden inputs** (allocations = frees in every case): `01` 734, `03` 5, `04` 182,
   `05` 48.
+
+### 4.0.M5
+
+- **Programs** (`bench/runtime/`): `bintrees`, `nat_loop`, `list_pipeline`, `records`, `fail_chain`,
+  as planned in §4.9. Each states its size in a `// Size:` line; sizes are fixed in the source.
+- **Runner:** `bench/runtime/run.sh [RUNS]` builds them into `target/bench-runtime/`, runs each
+  RUNS times (default 5), and writes `docs/baselines/runtime-<date>.md`: best wall time, peak RSS,
+  allocations, frees, `dup`s and `drop`s, with commit, machine and toolchain.
+- **Baseline** (`docs/baselines/runtime-2026-11-19.md`, compiler at `5a824c1`): every program frees
+  everything it allocates. The counts show where later milestones should cut: for example
+  `list_pipeline` does 8.0 million allocations and 36 million RC operations for 2 million
+  elements, and `nat_loop` allocates a layer and a node per `Nat` step (fusion removes both).
+- **Sizes are bounded by the native stack:** derived `fold` / `unfold` and `fx_drop` recurse, so
+  lists stay at 10,000 elements and the work is repeated. Fusion, tail calls and iterative drops
+  (Phase 4) lift this.

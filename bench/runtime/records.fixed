@@ -1,0 +1,35 @@
+// Records: a list of 10000 orders, each rebuilt with one field changed, then totalled;
+// Size: 10,000 orders, 100 times
+// 100 times. Measures record allocation (reuse, inline layout).
+use std.io.Console
+
+data Order:
+    Order(id: u64, price: f64, qty: u64, note: String)
+
+fn orders(n: u64) -> List of Order =
+    List.unfold(0, (i) ->
+        if i >= n:
+            List.Nil
+        else:
+            List.Cons(Order.Order(i, 1.5, i % 7, "standard"), i + 1)
+    )
+
+fn discount(o: Order) -> Order =
+    Order.Order(o.id, o.price * 0.9, o.qty, o.note)
+
+fn total(os: List of Order) -> f64 =
+    os.fold(0.0, (acc, o) -> acc + o.price * 2.0)
+
+fn round() -> f64 =
+    total(orders(10000).map((o) -> discount(o)))
+
+fn upto(n: u64) -> List of u64 =
+    List.unfold(0, (i) ->
+        if i >= n:
+            List.Nil
+        else:
+            List.Cons(i, i + 1)
+    )
+
+fn main() -> () with Console =
+    Console.print_line(upto(100).fold(0.0, (acc, _) -> acc + round()).show())
