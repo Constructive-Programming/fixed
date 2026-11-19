@@ -113,6 +113,9 @@ Json satisfies Show
 Json satisfies Eq
 Tuple satisfies Pair:
     Tuple as pair
+bool satisfies Boolean:
+    Self as yes
+    Self as no
 bool satisfies Show
 bool satisfies Eq
 char satisfies Show

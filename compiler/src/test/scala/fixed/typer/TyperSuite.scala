@@ -275,3 +275,22 @@ class TyperSuite extends munit.FunSuite:
   test("3.1.M3: the stdlib's own satisfies declarations pass the checks"):
     val (table, _) = Namer.index(Parser.parse(SourceFile.fromString("<empty>", "")).tree)
     assertEquals(Declarations.check(TyperState(table), Stdlib.prelude).finish.diags, Nil)
+
+  test("3.1.M4: satisfies method bodies are typed against the member they implement"):
+    val base = optionalCap.replace("    Self.fn none -> Self\n", "    Self.fn none -> Self\n    fn present -> bool\n")
+    val ok = typedUnit(
+      base +
+        "Maybe satisfies Opt:\n    Just as some\n    Nothing as none\n    fn present = match self:\n        Maybe.Just(_) => true\n        Maybe.Nothing => false\n"
+    )
+    assertEquals(ok.diags, Nil)
+    val bad = typedUnit(base + "Maybe satisfies Opt:\n    Just as some\n    Nothing as none\n    fn present = 42\n")
+    assertEquals(codes(bad), List(DiagCode.T002))
+    val unknown =
+      typedUnit(base + "Maybe satisfies Opt:\n    Just as some\n    Nothing as none\n    fn absent = true\n")
+    assertEquals(codes(unknown), List(DiagCode.T014))
+
+  test("3.1.M4: cap default bodies see only what the capability promises"):
+    val ok = typedUnit("cap Sized2:\n    fn size -> u64\n    fn empty -> bool = self.size == 0\n")
+    assertEquals(ok.diags, Nil)
+    val bad = typedUnit("cap Sized2:\n    fn size -> u64\n    fn empty -> bool = self.length == 0\n")
+    assertEquals(codes(bad), List(DiagCode.T001))
