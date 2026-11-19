@@ -1,6 +1,6 @@
 # Phase 3.2 — Effect inference (M7)
 
-**Status:** Accepted; implementing 3.2.M1
+**Status:** Implemented (3.2.M1–M3); 3.2.M4 (row variables) follows
 **Parent:** `docs/plans/phase-3-typer.md` §1.3 (Part B, M7) and §5.4
 **Spec:** `spec/effects.md` §3.2–§3.3 (operations, abortive `!`), §4.1–§4.4 (rows), §5 (inference,
 `with` check, handler subtraction and coverage, `main`), §6.3–§6.6 (handlers)
@@ -161,6 +161,7 @@ documentation.
 | 3.2.M1 | Rows accumulate for operations, calls, method calls and lambdas (§3.2, §3.3); declared-row check at `finish`; `main`'s runtime set | `01`–`06` stay clean; negative tests for `T015`, `T016` and `T017`; the §3.2 pass-through and declared-row cases each have a test |
 | 3.2.M2 | `handle`: subtraction, clause binding to the subject's row, coverage, abortive `resume`, the handle's row | `03`'s `compute` is clean with its effects checked; `08`'s nested handler chain and `09`'s handlers report no effect errors; negative tests for `T018` and `T019` |
 | 3.2.M3 | `satisfies` and cap default bodies against member rows; spec Rule E5.5.a; conformance doc | A `satisfies` body performing an undeclared effect reports `T015`; `spec/effects.md` and `docs/Phase3Conformance.md` updated |
+| 3.2.M4 | Explicit row variables (§8.1–§8.2), decided in review as a follow-up | `08`'s concurrency signatures written with `with Channel of A + E` report no effect errors |
 
 **Perf:** `TyperCpuBench` A/B at each milestone. Row tracking must stay under 5% of typer time. Most
 calls have an empty row, so accumulation should be close to free.
@@ -191,3 +192,12 @@ calls have an empty row, so accumulation should be close to free.
     against `with Fail of u64` solves the literal to `u64`.
   - `satisfies` and cap default bodies are checked against the member's row without the
     unused-effect warning: a member's row bounds its implementations.
+  - Perf: thread-CPU A/B against `main` is about +4% (three rounds: +5.5%, +6.5%, +0.3%). JFR puts
+    the effect code itself at about 2% of typer samples.
+- **Corpus findings** (each decided in review):
+  - `08` `main` performs `FileSystem` through `read_config` and handles it nowhere. It now
+    declares `with FileSystem`, which the runtime handles; `spec/effects.md` §10.2 is corrected.
+  - `08` `TaskQueue` / `SimpleQueue` hold `() -> () with Async`, so `handle next_task()` really
+    removes `Async`. Before, the stored tasks' `Async` was charged to the pusher.
+  - `08`'s concurrency part needs row variables: `run_with_channel`'s task performs `Async`, and
+    `Async.spawn`'s tasks perform `Console` and `Channel`. That is 7 `T015`s, left for 3.2.M4.

@@ -40,7 +40,12 @@ item are in `docs/plans/phase-3-typer.md` §3.6–§3.9.
 - **Top-level exhaustiveness** (`T020`): every variant of a data scrutinee is named by an unguarded
   case. A `bool` match needs `true` and `false`; other scrutinee types need a catch-all.
 - **`Numeric`** for arithmetic operands and for type variables bounded by `Numeric` directly.
-- **`resume`** only inside an operation clause (`T009`).
+- **`resume`** only inside an operation clause (`T009`), and never after an abortive operation
+  (`T019`).
+- **Effect rows** (M7): every body's performed effects are declared by its `with` clause (`T015`;
+  an unused declared effect is a `T017` warning); `handle` removes the effects its clauses name and
+  covers all their operations (`T018`); `main` performs only runtime effects (`T016`). Callbacks
+  follow Rule E5.5.a (ambient pass-through).
 
 ## Not enforced (gaps)
 
@@ -49,7 +54,7 @@ item are in `docs/plans/phase-3-typer.md` §3.6–§3.9.
 | ~~Capability satisfaction for values flowing into an `is ...` bound~~ — enforced since 3.1.M2 (`T010`). Still lenient: an abstract `is ...` value used where a concrete type is expected | M6 (3.1.M5 constructor resolution) |
 | ~~`Numeric` reached through `extends`~~ — done in 3.1.M1 | — |
 | ~~`satisfies` mappings and bodies, cap default bodies~~ — checked since 3.1.M3 / 3.1.M4. Still open: effect operation bodies (none in the corpus) and abstract-method coverage | M6 follow-up |
-| Effect rows: `with` clauses are recorded but never checked; calling an effect operation needs no handler | M7 effect inference |
+| ~~Effect rows~~ — checked since M7 (`T015`–`T019`, `docs/plans/phase-3.2-effects.md`). Still open: explicit row variables (§8), effect aliases (§4.5), linear effects (§3.5) | 3.2.M4 / follow-up |
 | `prop` bodies, `forall`, `implies` (reported as `T005` warnings) | M9 property verifier |
 | Quantities (linearity, erasure) | M10 QTT |
 | Representation: `Show`, `Eq` and `Clone` are assumed derivable for every type | M11 representation selection |

@@ -58,7 +58,7 @@ Phase 3 is split into two parts: **Part A — Base typer (M1–M5, this plan)** 
 | # | Milestone | Sub-plan | Sketch |
 |---|---|---|---|
 | M6 ✅ | Capability closure (obligations discharged after typing, not a recheck walk) | `phase-3.1-capability-closure.md` | `extends` chain computed; `satisfies` scope resolved at every use site; cross-module coherence per §7.4.1 |
-| M7 | Effect inference recheck | `phase-3.2-effects.md` | With-clauses inferred; `do`/`handle` rows propagate; unhandled effect at `main` is `error[T015]` |
+| M7 ✅ | Effect inference (inline rows, not a recheck; see sub-plan) | `phase-3.2-effects.md` | With-clauses inferred; `do`/`handle` rows propagate; unhandled effect at `main` is `error[T015]` |
 | M9 | Property verifier recheck | `phase-3.3-properties.md` | Princess (per §5.6.1) discharges QF_LIA + propositional; rest queued as PBT obligations |
 | M10 | QTT recheck | `phase-3.4-qtt.md` | 0/1/ω inference; linearity + erasure check; runs **before** M9 to feed it |
 | M11 | Representation selector recheck | `phase-3.5-repr.md` | `ReprMap` per `spec/type_system.md` §6.5; consumes M6 + M10; re-checks abstract `Cap.ctor` calls against the chosen variant's fields (§6.5.6, Rule 8.1.a refinement) |

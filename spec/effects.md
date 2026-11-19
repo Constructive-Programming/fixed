@@ -533,7 +533,7 @@ Inference walk:
 
 ### 10.2 `examples/08_effects_handlers.fixed` — main with nested handlers
 
-The deeply nested `handle (do: ... ): clauses` chain in `main` removes one effect per nesting level: `Fail`, then `Log`, then `Console`. Each level subtracts its handled effect from the row that the next outer level sees. The outermost `handle` for `Console` reduces the row to empty — `main` declares no `with` clause, consistent with §5.4's rule that `main`'s row must be a subset of the runtime-installed stdlib effects (here, the runtime needn't install anything since `main` is fully self-handled).
+The deeply nested `handle (do: ... ): clauses` chain in `main` removes one effect per nesting level: `Fail`, then `Log`, then `Console`. Each level subtracts its handled effect from the row that the next outer level sees. The outermost `handle` for `Console` leaves `FileSystem`, which `read_config` performs and no clause handles. `main` declares `with FileSystem`, consistent with §5.4's rule that `main`'s row must be a subset of the runtime-installed stdlib effects: the runtime handles `FileSystem`.
 
 ### 10.3 `examples/06_functor_monad.fixed` — `sequence` (effect-poly callback)
 
