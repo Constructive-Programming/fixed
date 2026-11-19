@@ -20,6 +20,15 @@ final class MemberTables private (symbols: SymbolTable):
     val cache = if symbols(cap).owner == SymbolId.Prelude then MemberTables.stdlib else built
     cache.getOrElseUpdate(cap.toInt, MemberTables.table(symbols, cap)).get(kind).flatMap(_.get(name)).getOrElse(Nil)
 
+  private val closures = scala.collection.mutable.HashMap.empty[Int, BitSet]
+
+  /** `closure(cap)`: `cap` and every capability its `extends` chain reaches (spec §6.2). */
+  def closure(cap: SymbolId): BitSet =
+    closures.getOrElseUpdate(
+      cap.toInt,
+      BitSet.fromSpecific(MemberTables.reached(symbols, cap, None, BitSet.empty).map(_._1.toInt))
+    )
+
 object MemberTables:
   def apply(symbols: SymbolTable): MemberTables = new MemberTables(symbols)
 
@@ -40,7 +49,7 @@ object MemberTables:
       .toMap
 
   /** `cap` and what its `extends` chain reaches, depth first, with the arguments written there. */
-  private def reached(symbols: SymbolTable, cap: SymbolId, written: Option[List[Type]], seen: BitSet)
+  private[typer] def reached(symbols: SymbolTable, cap: SymbolId, written: Option[List[Type]], seen: BitSet)
       : List[(SymbolId, Option[List[Type]])] =
     val supers = symbols(cap).info match
       case Type.IsBound(bs) => Members.expandAliases(symbols, bs)
