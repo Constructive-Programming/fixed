@@ -377,6 +377,24 @@ object Typer:
       typedExpr(s, body, expected)(using inner)._1
     }
 
+  /** A method body whose parameter types come from elsewhere (a capability's signature): `locals`
+    * become `Local` bindings (with `self`), `scoped` are type variables already in the table.
+    */
+  def typedMethodBody(
+      s: TyperState,
+      body: Tree,
+      owner: fixed.core.SymbolId,
+      locals: List[(String, Type)],
+      scoped: List[(String, fixed.core.SymbolId)],
+      ret: Type
+  ): TyperState =
+    val start = Context(scoped.toMap, s.symbols.scope, owner)
+    val (s1, ctx) = locals.foldLeft((s, start)) { case ((si, ci), (name, t)) =>
+      val (table, id) = si.symbols.enter(name, owner, SymKind.Local, t, body.span)
+      (si.copy(symbols = table), ci.bind(name, id))
+    }
+    typedExpr(s1, body, Proto.ExpectedType(ret))(using ctx)._1
+
   /** `handle subject: clauses` (`spec/effects.md` §6). Operation clauses bind the operation's
     * parameters; inside them `resume(v)` takes the operation's result type and yields the
     * handler's. The handler's type is the `return` clause's (else the subject's).

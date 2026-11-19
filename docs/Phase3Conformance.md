@@ -48,7 +48,7 @@ item are in `docs/plans/phase-3-typer.md` §3.6–§3.9.
 |---|---|
 | ~~Capability satisfaction for values flowing into an `is ...` bound~~ — enforced since 3.1.M2 (`T010`). Still lenient: an abstract `is ...` value used where a concrete type is expected | M6 (3.1.M5 constructor resolution) |
 | ~~`Numeric` reached through `extends`~~ — done in 3.1.M1 | — |
-| `satisfies` declaration bodies and mappings, and cap / effect method bodies, are not typed | M6 |
+| ~~`satisfies` mappings and bodies, cap default bodies~~ — checked since 3.1.M3 / 3.1.M4. Still open: effect operation bodies (none in the corpus) and abstract-method coverage | M6 follow-up |
 | Effect rows: `with` clauses are recorded but never checked; calling an effect operation needs no handler | M7 effect inference |
 | `prop` bodies, `forall`, `implies` (reported as `T005` warnings) | M9 property verifier |
 | Quantities (linearity, erasure) | M10 QTT |

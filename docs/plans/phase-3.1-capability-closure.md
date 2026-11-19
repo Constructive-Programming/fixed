@@ -165,7 +165,7 @@ For `T satisfies C`, mapped through `closure(C)`:
 | 3.1.M1 ✅ | Closure and satisfaction resolver; transitive `Numeric` | Unit tests of `satisfies(T, C)` over the stdlib and corpus types |
 | 3.1.M2 ✅ | Obligations during typing, discharged after the unit; the `is`-bound and capability-as-type leniency removed from the unifier | `01`–`06` still clean; negative tests (`String` into `is Numeric`, `List of String` into `is Folding of u64`) report `T010` |
 | 3.1.M3 ✅ | `satisfies` declaration checks (coverage, mappings, abstract methods, diamond) | Corpus `satisfies` blocks pass; negative tests for each rule |
-| 3.1.M4 | Cap default bodies and `satisfies` method bodies typed | `03`'s `Maybe satisfies Optional` bodies type-check; a bad body reports against the declaration |
+| 3.1.M4 ✅ | Cap default bodies and `satisfies` method bodies typed | `03`'s `Maybe satisfies Optional` bodies type-check; a bad body reports against the declaration |
 | 3.1.M5 | Constructor resolution with refinement strip | `Optional.some(x)` against a `Maybe`-backed expected type resolves; an ambiguity reports `T011` |
 
 Perf: `TyperCpuBench` A/B at each milestone. Obligation discharge must stay under 10% of typer
@@ -213,3 +213,13 @@ time.
     - `08`: `SimpleQueue as empty` maps a 1-field constructor to a 0-parameter requirement;
     - `09`: `VarMap as empty`, the same;
     - `11`: `NonEmptyList as cons` — its `tail: List of A` does not fit `cons`'s `Self`.
+- **3.1.M4:**
+  - Cap default bodies are typed with `self` and `Self` as the capability's own anonymous bound,
+    so only declared members resolve.
+  - `satisfies` method bodies are typed against the member they implement (found through the
+    closure's tables), with `Self` the satisfying type and `Part` its element type; parameters
+    take the member's types by position; an unknown member is `T014`.
+  - The prelude gains `bool satisfies Boolean` (`spec/stdlib.md` §5), so `03`'s `isDefined ->
+    Boolean` bodies type-check.
+  - Still deferred: abstract-method coverage, and keeping a member's own type variables rigid
+    inside a `satisfies` body (they are instantiated flexibly).
