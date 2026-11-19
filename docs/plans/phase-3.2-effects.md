@@ -1,6 +1,6 @@
 # Phase 3.2 — Effect inference (M7)
 
-**Status:** Implemented (3.2.M1–M3); 3.2.M4 (row variables) follows
+**Status:** Implemented (3.2.M1–M4)
 **Parent:** `docs/plans/phase-3-typer.md` §1.3 (Part B, M7) and §5.4
 **Spec:** `spec/effects.md` §3.2–§3.3 (operations, abortive `!`), §4.1–§4.4 (rows), §5 (inference,
 `with` check, handler subtraction and coverage, `main`), §6.3–§6.6 (handlers)
@@ -201,3 +201,20 @@ calls have an empty row, so accumulation should be close to free.
     removes `Async`. Before, the stored tasks' `Async` was charged to the pusher.
   - `08`'s concurrency part needs row variables: `run_with_channel`'s task performs `Async`, and
     `Async.spawn`'s tasks perform `Console` and `Channel`. That is 7 `T015`s, left for 3.2.M4.
+- **3.2.M4, row variables** (§8.1–§8.2, Rule E8.1.a):
+  - The Namer reads an upper-case name in a `with` row that names no effect as a type variable,
+    introduced at first use. Its row entry is `EffectBound(var, List(TypeRef(var)))`, so
+    instantiation turns the argument into a fresh unification variable while the symbol still
+    marks the entry as a row variable. No new `Type` case or `TyperState` field is needed.
+  - A row variable's solution is a tuple of effect references ending in a fresh tail variable.
+    `Effects.absorb` extends an open tail with a callback's effects that the expected row does
+    not name; `Effects.expand` reads solutions at `handle` and at row checks. An unsolved tail is
+    the empty row.
+  - `08`'s `spawn`, `run_scheduler` and `run_with_channel` now carry `+ E`. That leaves one `T015`
+    plus one `T017` warning in `run_scheduler`: its queue stores a wrapper lambda that performs
+    the rigid `E`, and a data type cannot take a row variable. Kept as a known limit (decided in
+    review); `spec/effects.md` OQ-E8.
+  - An unknown name in a `with` row is now a row variable instead of `T001`. A typo still shows
+    up: the body's effect is undeclared (`T015`) and the variable is unused (`T017`).
+  - `ponytail:` a row variable extended after a `handle` subject is typed bypasses that handler.
+    It needs a callback met after the subject inside the same handler, which no example has.

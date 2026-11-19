@@ -95,7 +95,7 @@ object Effects:
       if extra.isEmpty then s
       else
         val (s1, rest) = s.fresh
-        val items = extra.map(e => if isRowVar(s, e) then e.args.head else Type.TypeRef(e.sym, e.args)) :+ rest
+        val items = extra.map(asType(s, _)) :+ rest
         s1.tryUnify(tail, Type.TupleType(items)).getOrElse(s1)
     }
 
@@ -127,8 +127,11 @@ object Effects:
     val d = s.symbols(effect)
     d.owner == SymbolId.Prelude && d.kind == SymKind.Effect && runtimeNames(d.name)
 
-  def show(s: TyperState, e: EffectBound): String =
-    s.symbols.render(s.unifier.zonk(if isRowVar(s, e) then e.args.head else Type.TypeRef(e.sym, e.args)))
+  def show(s: TyperState, e: EffectBound): String = s.symbols.render(s.unifier.zonk(asType(s, e)))
+
+  /** An entry as a type: an effect reference, or a row variable's own variable. */
+  private def asType(s: TyperState, e: EffectBound): Type =
+    if isRowVar(s, e) then e.args.head else Type.TypeRef(e.sym, e.args)
 
   /** Rule E5.3: a handler names an effect only by covering every one of its operations (`T018`). */
   def coverage(s: TyperState, clauses: List[(SymbolId, String)], span: Span): TyperState =
