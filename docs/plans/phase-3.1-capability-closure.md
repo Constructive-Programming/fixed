@@ -1,6 +1,6 @@
 # Phase 3.1 — Capability closure (M6)
 
-**Status:** Approved v0.2 — in progress
+**Status:** Implemented (3.1.M1–M5); follow-ups listed in §7
 **Parent:** `docs/plans/phase-3-typer.md` §1.3 (Part B, M6) and §5.3
 **Spec:** `spec/type_system.md` §6.1–§6.2 (members, `extends`), §7.4 (auto-derivation), §8
 (`satisfies`), §10.3–§10.4 (`is`-bound flow, subtyping)
@@ -166,7 +166,7 @@ For `T satisfies C`, mapped through `closure(C)`:
 | 3.1.M2 ✅ | Obligations during typing, discharged after the unit; the `is`-bound and capability-as-type leniency removed from the unifier | `01`–`06` still clean; negative tests (`String` into `is Numeric`, `List of String` into `is Folding of u64`) report `T010` |
 | 3.1.M3 ✅ | `satisfies` declaration checks (coverage, mappings, abstract methods, diamond) | Corpus `satisfies` blocks pass; negative tests for each rule |
 | 3.1.M4 ✅ | Cap default bodies and `satisfies` method bodies typed | `03`'s `Maybe satisfies Optional` bodies type-check; a bad body reports against the declaration |
-| 3.1.M5 | Constructor resolution with refinement strip | `Optional.some(x)` against a `Maybe`-backed expected type resolves; an ambiguity reports `T011` |
+| 3.1.M5 ✅ | Constructor resolution with refinement strip | `Optional.some(x)` against a `Maybe`-backed expected type resolves; an ambiguity reports `T011` |
 
 Perf: `TyperCpuBench` A/B at each milestone. Obligation discharge must stay under 10% of typer
 time.
@@ -223,3 +223,16 @@ time.
     Boolean` bodies type-check.
   - Still deferred: abstract-method coverage, and keeping a member's own type variables rigid
     inside a `satisfies` body (they are instantiated flexibly).
+- **3.1.M5:**
+  - The Namer records each `satisfies` constructor mapping by (capability, constructor).
+  - `Cap.ctor(args)` keeps the candidates that satisfy every capability of the expected bound
+    (refinement calls stripped, §8.5.1) or are the expected data type:
+    - one: it constructs that variant and records `(call, data, variant)` in
+      `TyperState.constructors`;
+    - several: `T011`;
+    - none, or an unknown expected type: the call stays abstract, as decided in §3.7.
+- **Follow-ups** (not in M6):
+  - abstract-method coverage for `satisfies`;
+  - keeping a member's own type variables rigid inside `satisfies` bodies;
+  - an abstract `is ...` value met where a concrete type is expected (still accepted);
+  - the Rule 8.1.a findings in `08`, `09` and `11`.

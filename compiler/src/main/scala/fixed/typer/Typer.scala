@@ -33,7 +33,8 @@ final case class TyperState(
     diags: List[Diagnostic],
     errors: Int,
     members: MemberTables,
-    obligations: List[(Type, Type, Span)]
+    obligations: List[(Type, Type, Span)],
+    constructors: List[(Trees.StaticCall, SymbolId, String)]
 ):
   def record(tree: Tree, t: Type): TyperState = copy(types = types.updated(tree, t))
 
@@ -86,6 +87,7 @@ object TyperState:
       Nil,
       0,
       MemberTables(symbols),
+      Nil,
       Nil
     )
 
@@ -329,7 +331,8 @@ object Typer:
       case Some(owner) =>
         val layer = pt.expected.map(s.unifier.resolve).collect { case l: Type.Layer => l }
         val kind = s.symbols(owner).kind
-        Members.static(s, owner, t.method, layer) match
+        val resolved = if kind == SymKind.Cap then Satisfaction.constructor(s, owner, t, pt) else None
+        resolved.orElse(Members.static(s, owner, t.method, layer)) match
           case Some((s1, member))             => applyArgs(s1, member, t.args, t.span)
           case None if kind != SymKind.Import =>
             (s.error(DiagCode.T001, t.span, s"not found: ${t.qualifier}.${t.method}"), Type.NeverType)

@@ -70,6 +70,50 @@ object Satisfaction:
     val r = s.symbols.render
     s.error(DiagCode.T010, span, s"${r(s.unifier.zonk(value))} does not satisfy ${r(s.unifier.zonk(entry))}")
 
+  /** Constructor resolution (spec §8.5, §8.5.1): `Cap.ctor(args)` against the expected type. The
+    * candidates are the data types whose `satisfies` maps `ctor`; a candidate fits when it
+    * satisfies every capability of the expected bound (refinement calls stripped) or is the
+    * expected data type.
+    *
+    * - **One fits:** the call constructs that variant and is recorded in `constructors`.
+    * - **Several fit:** `T011`.
+    * - **None fits, or the expected type is unknown:** `None`, so the call stays abstract until
+    *   representation selection.
+    */
+  def constructor(s: TyperState, cap: SymbolId, call: fixed.ast.Trees.StaticCall, pt: fixed.core.Proto)
+      : Option[(TyperState, Type)] =
+    val expected = pt.expected.map(s.unifier.resolve)
+    val candidates = s.symbols.constructorsOf(cap, call.method).flatMap { (typeName, variant) =>
+      s.symbols.dataNamed(typeName).map(_ -> variant)
+    }
+    def fits(data: SymbolId): Boolean =
+      expected match
+        case Some(Type.TypeRef(d, _)) if s.symbols(d).kind == SymKind.Data => d == data
+        case Some(Type.IsBound(bs))                                        =>
+          val (s1, args) = Members.freshArgs(s, data)
+          Members.expandAliases(s.symbols, bs).forall {
+            case Type.CapRef(c, cargs) => holds(s1, Type.TypeRef(data, args), c, cargs).isDefined
+            case _                     => true
+          }
+        case Some(Type.CapRef(c, cargs)) =>
+          val (s1, args) = Members.freshArgs(s, data)
+          holds(s1, Type.TypeRef(data, args), c, cargs).isDefined
+        case _ => false
+    candidates.filter((data, _) => fits(data)) match
+      case List((data, variant)) =>
+        Members.static(s.copy(constructors = (call, data, variant) :: s.constructors), data, variant, None)
+      case Nil     => None
+      case several =>
+        val names = several.map((d, v) => s"${s.symbols(d).name}.$v").mkString(", ")
+        Some((
+          s.error(
+            DiagCode.T011,
+            call.span,
+            s"ambiguous satisfaction for ${s.symbols(cap).name}.${call.method}: $names"
+          ),
+          Type.NeverType
+        ))
+
   /** An unsolved variable satisfies what its instantiation bound reaches; an unbounded one, anything. */
   private def unsolved(s: TyperState, id: Int, cap: SymbolId): Option[TyperState] =
     val bounds = s.unifier.boundsOf(id)

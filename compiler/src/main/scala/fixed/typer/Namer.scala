@@ -137,9 +137,17 @@ object Namer:
   private def typeDecl(c: Ctx, tree: Tree, id: SymbolId): Ctx =
     val (c1, info) = c.nested(id) { ci =>
       tree match
-        case Trees.SatisfiesDecl(typeName, capRef, _, _) =>
+        case Trees.SatisfiesDecl(typeName, capRef, mappings, _) =>
           val (ci1, cap) = capBound(ci, capRef)
-          (cap.fold(ci1)(ct => ci1.copy(table = ci1.table.satisfy(typeName, ct))), Type.UnitType)
+          val withCtors = cap match
+            case Some(Type.CapRef(c, _)) =>
+              mappings.foldLeft(ci1.table.satisfy(typeName, cap.get)) {
+                case (t, Trees.ConstructorMapping(variant, ctor, _)) => t.mapConstructor(c, ctor, typeName, variant)
+                case (t, _)                                          => t
+              }
+            case Some(other) => ci1.table.satisfy(typeName, other)
+            case None        => ci1.table
+          (ci1.copy(table = withCtors), Type.UnitType)
         case t: Trees.FnDecl                         => fnSignature(ci, t)
         case t: Trees.CapDecl                        => capSignature(ci, t)
         case t: Trees.DataDecl                       => dataSignature(ci, t, id)

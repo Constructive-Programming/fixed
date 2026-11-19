@@ -43,7 +43,8 @@ final case class SymbolTable(
     children: IntMap[Vector[SymbolId]],
     typeParams: IntMap[List[SymbolId]],
     scope: Map[String, SymbolId],
-    satisfies: Map[String, List[Type]]
+    satisfies: Map[String, List[Type]],
+    constructors: Map[(Int, String), List[(String, String)]]
 ):
 
   def apply(id: SymbolId): Denotation = entries(id.toInt - SymbolTable.firstId)
@@ -85,6 +86,18 @@ final case class SymbolTable(
   def fieldsOf(variant: SymbolId): Iterator[Denotation] = membersOf(variant).filter(_.kind == SymKind.Field)
 
   /** Record `typeName satisfies cap`. */
+  /** The top-level data type called `name`, if any. */
+  def dataNamed(name: String): Option[SymbolId] = scope.get(name).filter(apply(_).kind == SymKind.Data)
+
+  /** Record `typeName satisfies cap` mapping `variant as ctor` (for constructor resolution). */
+  def mapConstructor(cap: SymbolId, ctor: String, typeName: String, variant: String): SymbolTable =
+    val key = (cap.toInt, ctor)
+    copy(constructors = constructors.updated(key, constructors.getOrElse(key, Nil) :+ (typeName -> variant)))
+
+  /** The data types (with the variant) that implement `cap`'s constructor requirement `ctor`. */
+  def constructorsOf(cap: SymbolId, ctor: String): List[(String, String)] =
+    constructors.getOrElse((cap.toInt, ctor), Nil)
+
   def satisfy(typeName: String, cap: Type): SymbolTable =
     copy(satisfies = satisfies.updated(typeName, satisfies.getOrElse(typeName, Nil) :+ cap))
 
@@ -101,7 +114,8 @@ object SymbolTable:
     */
   val firstId: Int = 2
 
-  val empty: SymbolTable = SymbolTable(Vector.empty, firstId, IntMap.empty, IntMap.empty, Map.empty, Map.empty)
+  val empty: SymbolTable =
+    SymbolTable(Vector.empty, firstId, IntMap.empty, IntMap.empty, Map.empty, Map.empty, Map.empty)
 
 extension (table: SymbolTable)
   /** Source-like rendering of `t`, with symbol names resolved through `table`. */
