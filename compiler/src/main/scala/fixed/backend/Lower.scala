@@ -29,6 +29,12 @@ final class Lower(unit: CompilationUnit) extends Generated:
   private val fns = mutable.LinkedHashMap.empty[String, Fn]
   private val represent = Representation(unit)
 
+  /** Concrete typer type of each Core variable lowering could type (by variable name), and the
+    * source span of each variable and function. Read by `Demands` (3.4.M2).
+    */
+  val types: mutable.Map[String, Type] = mutable.HashMap.empty
+  val spans: mutable.Map[String, Span] = mutable.HashMap.empty
+
   /** Top-level functions with bodies: the prelude's, then the unit's (which shadow them). */
   private val decls: Map[String, Trees.FnDecl] = fixed.typer.Stdlib.functions(unit.tree)
 
@@ -54,7 +60,8 @@ final class Lower(unit: CompilationUnit) extends Generated:
       case Type.ArrowType(lhs, r, _) =>
         (Members.params(lhs).map(concrete(_, sigma, bounds)), concrete(r, sigma, bounds))
       case other => (Nil, other)
-    val params = decl.params.zip(paramTypes).map((p, t) => fresh(p.name, ctype(t, p.span)))
+    val params = decl.params.zip(paramTypes).map((p, t) => typed(fresh(p.name, ctype(t, p.span)), t, p.span))
+    spans(name) = decl.span
     val sc = Scope(decl.params.map(_.name).zip(params).toMap, sigma, bounds)
     Fn(name, params, ctype(ret, decl.span), decl.body.fold(Expr.Ret(Atom.UnitC))(tail(_, sc)))
 
@@ -151,7 +158,7 @@ final class Lower(unit: CompilationUnit) extends Generated:
         p match
           case Trees.WildcardPat(_) => fields(obj, rest.map(_._1), rest.map(_._2), sc)(k)
           case _                    =>
-            val x = fresh("f", ctype(ft, p.span))
+            val x = typed(fresh("f", ctype(ft, p.span)), ft, p.span)
             Expr.Let(
               x,
               Rhs.Field(obj, slot),
@@ -211,6 +218,7 @@ final class Lower(unit: CompilationUnit) extends Generated:
       case Type.ArrowType(lhs, r, _) => (Members.params(lhs), r)
       case _                         => (Nil, Type.UnitType)
     val (params, inner) = withParams(l.params.map(_.name).zip(paramTypes.map(ctype(_, l.span))), sc)
+    params.zip(paramTypes).foreach((p, t) => typed(p, t, l.span))
     closure(params, tail(l.body, inner), ctype(ret, l.span))(k)
 
   /** Fresh variables for parameters `named`, and `sc` with them bound. */
@@ -549,8 +557,38 @@ final class Lower(unit: CompilationUnit) extends Generated:
 
   /** Bind `rhs` to a fresh variable of `t`'s type and continue with it. */
   private def bind(rhs: Rhs, t: Tree, sc: Scope)(k: K): Expr =
-    val x = fresh("t", ctype(typeOf(t, sc), t.span))
+    val tt = typeOf(t, sc)
+    val x = typed(fresh("t", ctype(tt, t.span)), tt, t.span)
     Expr.Let(x, rhs, k(x))
+
+  /** Record `x`'s typer type and span; returns `x`. */
+  protected def typed(x: Var, t: Type, span: Span): Var =
+    types(x.name) = t
+    spans(x.name) = span
+    x
+
+  /** The type of slot `slot` of a value of type `t` (`Layout.slots` order), when every variant
+    * that has the slot agrees on it.
+    */
+  def slotType(t: Type, slot: Int): Option[Type] =
+    dataOf(t).flatMap { (data, args) =>
+      val candidates = symbols.variantsOf(data).toList.flatMap { v =>
+        val fs = fieldTypes(data, args, v.id)
+        val slots = Layout.slots(fs.map(Lower.scalar(_).getOrElse(CType.Boxed)))
+        slots.indexOf(slot) match
+          case -1 => None
+          case i  => Some(fs(i))
+      }.distinct
+      candidates match
+        case List(only) => Some(only)
+        case _          => None
+    }
+
+  /** The number of payload slots of variant `tag` of a value of type `t`. */
+  def cellSize(t: Type, tag: Int): Option[Int] =
+    dataOf(t).flatMap((data, args) =>
+      symbols.variantsOf(data).toList.lift(tag).map(v => fieldTypes(data, args, v.id).size)
+    )
 
   protected def fresh(base: String, t: CType): Var = Var(s"$base.${ids.next()}", t)
 

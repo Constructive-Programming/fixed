@@ -1,6 +1,6 @@
 # Phase 3.4 — Quantities, demands and lifetimes (M10)
 
-**Status:** 3.4.M1 done. Design settled (decisions §8); 3.4.M2 next.
+**Status:** 3.4.M1 and 3.4.M2 done; 3.4.M3 next. Design settled (decisions §8).
 **Parent:** `docs/plans/phase-3-typer.md` §1.3 (Part B, M10) and §5.7
 **Runs:** after M7 and the Phase 4.0 slice, **before M9**. The quantity walk runs after the typer;
 everything else runs on Core after lowering.
@@ -129,7 +129,7 @@ violations are `E110` with the reason chain.
 | # | Content | Done when |
 |---|---|---|
 | 3.4.M1 ✅ | Occurrence quantities on the typed tree; `E072`, `T021` | `QuantityPhaseSuite` (§10.1's `go` is `(ω, 1, ω)`); examples `01`–`06` raise no new diagnostics; walk costs 25.4% of typer time |
-| 3.4.M2 | Spans in Core; demand inference per part; ownership; aliasing; evaluation-order test; signature demands | `DemandSuite`: `bump`, `map`, `insert`, `pair_double`, `push`, aliasing cases; every Core function of examples `01`–`05` and the benchmarks has demands |
+| 3.4.M2 ✅ | Spans and types per Core variable; demand inference per part, with exclusivity lost to later uses, keeps and aliasing; reuse pairs; evaluation-order test | `DemandSuite` (6 tests) and `EmitSuite`'s order test; every Core function of examples `01`–`05` and the benchmarks has demands |
 | 3.4.M3 | Versions and copies; two-pointer closures | Suite: shared caller gets `#s`, last-use caller gets the exclusive version, cap triggers a copy; goldens unchanged |
 | 3.4.M4 | Escape sets, classes, cohesive groups, garbage-free carry, handler kinds, fork facts, reason chains | Suite per escape kind, class and handler kind; no binding without a class |
 | 3.4.M5 | `--explain-memory`, `--format json`; `fip` check | Golden report for `01`; accept and reject tests per Rule MM18.1 item |
@@ -137,6 +137,25 @@ violations are `E110` with the reason chain.
 
 Each milestone ends with the full gate. Core analyses are timed against lowering plus emission on
 the benchmarks and reported; there is no fixed budget until a first measurement exists.
+
+### 4.1 Notes from 3.4.M2
+
+- **Spans and types live in side tables of `Lower`** (`types`, `spans`, by variable and function
+  name), not in `Let` nodes. Variable names are unique, so this needs no change to Core's shape.
+  Generated members type their main parameter; other untyped variables get their type from
+  `slotType` through field reads, or fall into the part key `?`, which only merges demands
+  (conservative).
+- **Variant known for reuse:** inside a `Switch` case, or always for a single-variant type, so
+  `discount` in `records` reuses its `Order` without a `match`.
+- **Results on the benchmarks:** derived `fold` and the left folds only `read` their input (the
+  whole `bintrees` traversal borrows); each `map` is `exclusive` on its cells and recursive slot and
+  reuses the cell; `discount` and the `records` map lambda are `exclusive` on their `Order`.
+- **Open for 3.4.M3:** a function passing values to a closure it cannot see demands only `own` of
+  them (`map`'s elements), so the closure's exclusive entry point (A2) would never be chosen there.
+  Choosing versions by element ownership as well, under the cap, is the fix to evaluate on
+  `records`.
+- **Ownership per binding** for version selection is computed in 3.4.M3 with the same predicate
+  that demand inference uses (`Demands.exclusive`), so the two cannot disagree.
 
 ## 5. Tests
 

@@ -22,6 +22,9 @@ private[backend] trait Generated:
   protected def fieldTypes(data: SymbolId, args: List[Type], variant: SymbolId): List[Type]
   protected def dataOf(t: Type): Option[(SymbolId, List[Type])]
 
+  /** Record `x`'s typer type for `Demands`; returns `x`. */
+  protected def typed(x: Var, t: Type, span: Span): Var
+
   /** A closure over `body` taking `params` (see `Lower.closure`). */
   protected def closure(params: List[Var], body: Expr, ret: CType)(k: VarK): Expr
 
@@ -31,7 +34,7 @@ private[backend] trait Generated:
   protected def derivedFold(data: SymbolId, args: List[Type], r: Type, span: Span): String =
     val name = generatedName(data, args, "fold", symbols.render(r))
     instance(name) {
-      val x = fresh("x", CType.Boxed)
+      val x = typed(fresh("x", CType.Boxed), Type.TypeRef(data, args), span)
       val callbacks = symbols.variantsOf(data).toList.map(v => fresh(s"on_${v.name}", CType.Boxed))
       val rt = ctype(r, span)
       def through(t: Type, v: Atom)(k: K): Expr =
@@ -83,7 +86,7 @@ private[backend] trait Generated:
   protected def derivedMap(data: SymbolId, args: List[Type], newElem: Type, span: Span): String =
     val name = generatedName(data, args, "map", symbols.render(newElem))
     instance(name) {
-      val (x, f) = (fresh("x", CType.Boxed), fresh("f", CType.Boxed))
+      val (x, f) = (typed(fresh("x", CType.Boxed), Type.TypeRef(data, args), span), fresh("f", CType.Boxed))
       val elemParam = symbols.typeParamsOf(data).lastOption
       val variants = symbols.variantsOf(data).toList
       val branches = perVariant(data, args, x, span) { (tag, loaded) =>
@@ -108,7 +111,7 @@ private[backend] trait Generated:
     val name = generatedName(data, args, "foldLeft", symbols.render(accType))
     instance(name) {
       val rt = ctype(accType, span)
-      val (xs, init, f) = (fresh("xs", CType.Boxed), fresh("init", rt), fresh("f", CType.Boxed))
+      val (xs, init, f) = (listParam(data, args, span), fresh("init", rt), fresh("f", CType.Boxed))
       val branches = listBranches(data, args, xs, span, Expr.Ret(init)) { (elem, rest) =>
         val acc = fresh("acc", rt)
         Expr.Let(
@@ -124,7 +127,7 @@ private[backend] trait Generated:
     val name = generatedName(data, args, "length", symbols.render(resultType))
     instance(name) {
       val rt = ctype(resultType, span)
-      val xs = fresh("xs", CType.Boxed)
+      val xs = listParam(data, args, span)
       val branches = listBranches(data, args, xs, span, Expr.Ret(Atom.IntC(0, rt))) { (_, rest) =>
         val n = fresh("n", rt)
         Expr.Let(
@@ -142,7 +145,7 @@ private[backend] trait Generated:
   protected def find(data: SymbolId, args: List[Type], optional: SymbolId, resultType: Type, span: Span): String =
     val name = generatedName(data, args, "find", symbols.render(resultType))
     instance(name) {
-      val (xs, p) = (fresh("xs", CType.Boxed), fresh("p", CType.Boxed))
+      val (xs, p) = (listParam(data, args, span), fresh("p", CType.Boxed))
       val tag = (ctor: String) => capVariant(optional, ctor, resultType).getOrElse(0)
       val none = fresh("none", CType.Boxed)
       val branches = listBranches(data, args, xs, span, Expr.Let(none, Rhs.Con(tag("none"), Nil), Expr.Ret(none))) {
@@ -157,6 +160,9 @@ private[backend] trait Generated:
       }
       Fn(name, List(xs, p), CType.Boxed, switch(xs, branches, CType.Boxed))
     }
+
+  private def listParam(data: SymbolId, args: List[Type], span: Span): Var =
+    typed(fresh("xs", CType.Boxed), Type.TypeRef(data, args), span)
 
   /** Branches over a list-shaped value: `empty` for the variant without fields, `cell(elem, rest)` for the other. */
   private def listBranches(data: SymbolId, args: List[Type], xs: Var, span: Span, empty: Expr)(

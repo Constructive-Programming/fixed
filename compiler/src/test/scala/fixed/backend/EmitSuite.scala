@@ -172,3 +172,11 @@ class EmitSuite extends munit.FunSuite:
          |    Console.print_line(run([1, 5, 2]))
          |""".stripMargin
     check("abort", src, "3\ntoo big: 5\n")
+
+  test("arguments are evaluated left to right, before the call (spec/quantities.md Rule Q9.2)"):
+    val src = header +
+      "fn a() -> u64 with Console =\n    Console.print_line(\"a\")\n    1\n" +
+      "fn b() -> u64 with Console =\n    Console.print_line(\"b\")\n    2\n" +
+      "fn add(x: u64, y: u64) -> u64 with Console =\n    Console.print_line(\"call\")\n    x + y\n" +
+      "fn main() -> () with Console =\n    Console.print_line(add(a(), b()).show())\n"
+    check("order", src, "a\nb\ncall\n3\n")

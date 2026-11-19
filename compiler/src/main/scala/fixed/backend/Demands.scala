@@ -1,0 +1,241 @@
+package fixed.backend
+
+import scala.collection.mutable
+
+import fixed.backend.Expr.{Let, Ret}
+
+/** What a function does with a value it receives (`spec/quantities.md` Rule Q4.1), ordered
+  * `Zero < Read < Own < Excl`.
+  */
+enum Demand:
+  case Zero, Read, Own, Excl
+
+  infix def join(that: Demand): Demand = if ordinal >= that.ordinal then this else that
+
+  def show: String = this match
+    case Zero => "0"
+    case Read => "read"
+    case Own  => "own"
+    case Excl => "exclusive"
+
+/** A demand on a value and on its parts (Rule Q4.1.a). A part is a field slot of a type, keyed by
+  * the type's rendering, so every cell of a recursive type shares its slots' demands.
+  */
+final case class Need(root: Demand, parts: Map[Need.Part, Demand]):
+  infix def join(that: Need): Need =
+    Need(root join that.root, (parts.keySet ++ that.parts.keySet).map(k => k -> (part(k) join that.part(k))).toMap)
+
+  def part(k: Need.Part): Demand = parts.getOrElse(k, Demand.Zero)
+
+  /** This need where the caller cannot hand over exclusive ownership: the shared version's need. */
+  def shared: Need =
+    def cap(d: Demand) = if d == Demand.Excl then Demand.Own else d
+    Need(cap(root), parts.view.mapValues(cap).toMap)
+
+object Demands:
+
+  /** Demands of every function instance `lower` built. */
+  def of(lower: Lower, fns: List[Fn], render: fixed.core.Type => String): DemandTable =
+    val byKey = lower.types.values.map(t => render(t) -> t).toMap
+    val keyed = (k: String) => byKey.get(k)
+    Demands(
+      fns,
+      v => lower.types.get(v).map(render),
+      (k, slot) => keyed(k).flatMap(lower.slotType(_, slot)).map(render),
+      (k, tag) => keyed(k).flatMap(lower.cellSize(_, tag))
+    ).run()
+
+object Need:
+  type Part = (String, Int)
+  val zero: Need = Need(Demand.Zero, Map.empty)
+  val read: Need = Need(Demand.Read, Map.empty)
+  val own: Need = Need(Demand.Own, Map.empty)
+  val excl: Need = Need(Demand.Excl, Map.empty)
+
+/** Inferred demands per function instance, and the reuse pairs that make a parameter exclusive:
+  * for each function, constructor result variable to the variable whose cell it would reuse.
+  */
+final class DemandTable(val params: Map[String, List[Need]], val reuses: Map[String, Map[String, String]])
+
+/** Demand inference over Core (`docs/plans/phase-3.4-qtt.md` §3.2). One backward walk per
+  * function instance, repeated over the call graph until no parameter's demand changes; demands
+  * only grow, and each part has four levels, so this terminates.
+  *
+  * A use is exclusive (Rule Q4.1.c) only where the value still has no other reference: it is the
+  * value's last use on its path, no other argument of the same call overlaps it (Rule Q9.4), and
+  * no earlier use on the path kept an overlapping value. Values are tracked by access path from a
+  * root variable, so `xs.head` and `xs.tail` do not overlap each other, while both overlap `xs`.
+  *
+  * @param typeKey the type rendering of a variable lowering typed, if any
+  * @param slotKey the type rendering of slot `slot` of a value of the given type key
+  * @param cellSize the payload slot count of variant `tag` of a value of the given type key
+  */
+final class Demands(
+    fns: List[Fn],
+    typeKey: String => Option[String],
+    slotKey: (String, Int) => Option[String],
+    cellSize: (String, Int) => Option[Int]
+):
+  /** Where a variable's value lives: a root variable and the slot path below it. */
+  final private case class Path(root: String, slots: List[Int]):
+    def below(slot: Int): Path = Path(root, slots :+ slot)
+
+    /** `this` is `that` or an ancestor of it. */
+    def covers(that: Path): Boolean = root == that.root && that.slots.startsWith(slots)
+
+    def overlaps(that: Path): Boolean = covers(that) || that.covers(this)
+
+  /** Path facts flowing forward along one path of a function body. */
+  final private case class Ctx(
+      paths: Map[String, Path],
+      keys: Map[String, String],
+      kept: List[Path],
+      tags: Map[String, Int],
+      paired: Set[String],
+      after: Set[String]
+  ):
+    def path(v: String): Path = paths.getOrElse(v, Path(v, Nil))
+
+  private val byName = fns.map(f => f.name -> f).toMap
+  private val signatures = mutable.HashMap.empty[String, List[Need]]
+  private val reuses = mutable.HashMap.empty[String, mutable.Map[String, String]]
+
+  def run(): DemandTable =
+    fixpoint()
+    DemandTable(signatures.toMap, reuses.view.mapValues(_.toMap).toMap)
+
+  private def fixpoint(): Unit =
+    val before = signatures.toMap
+    fns.foreach(f =>
+      reuses(f.name) = mutable.HashMap.empty
+      val ctx = Ctx(
+        Map.empty,
+        f.params.flatMap(p => typeKey(p.name).map(p.name -> _)).toMap,
+        Nil,
+        Map.empty,
+        Set.empty,
+        Set.empty
+      )
+      val needs = walk(f.body, ctx, f.name)
+      signatures(f.name) = f.params.map(p => needs.getOrElse(p.name, Need.zero))
+    )
+    if signatures.toMap != before then fixpoint()
+
+  private def sig(f: String, i: Int): Need =
+    signatures.get(f).flatMap(_.lift(i)).getOrElse(if byName.contains(f) then Need.zero else Need.own)
+
+  private def names(e: Expr): Set[String] = Core.freeVars(e).map(_.name)
+
+  private def join(a: Map[String, Need], b: Map[String, Need]): Map[String, Need] = (a.keySet ++ b.keySet).map(k =>
+    k -> (a.getOrElse(k, Need.zero) join b.getOrElse(k, Need.zero))
+  ).toMap
+
+  private def walk(e: Expr, ctx: Ctx, fn: String): Map[String, Need] =
+    e match
+      case Ret(a)            => uses(List(a), Need.own)
+      case Let(x, rhs, body) =>
+        val live = (names(body) - x.name) ++ ctx.after
+        val reused = reuse(x, rhs, live, ctx, fn)
+        val inner = walk(body, forward(x, rhs, live, ctx).copy(paired = ctx.paired ++ reused), fn)
+        val xNeed = inner.getOrElse(x.name, Need.zero)
+        join(join(right(rhs, xNeed, live, ctx, fn), inner - x.name), reused.map(_ -> Need.excl).toMap)
+      case Expr.Dup(_, b)  => walk(b, ctx, fn)
+      case Expr.Drop(_, b) => walk(b, ctx, fn)
+
+  /** `ctx` after `let x = rhs`: `x`'s path and type, and the paths `rhs` keeps while they stay live. */
+  private def forward(x: Atom.Var, rhs: Rhs, live: Set[String], ctx: Ctx): Ctx =
+    val (path, key) = rhs match
+      case Rhs.Field(o: Atom.Var, slot) =>
+        (ctx.path(o.name).below(slot), ctx.keys.get(o.name).flatMap(slotKey(_, slot)))
+      case Rhs.Move(v: Atom.Var) => (ctx.path(v.name), ctx.keys.get(v.name))
+      case _                     => (Path(x.name, Nil), typeKey(x.name))
+    val keeps = owned(rhs).filter(v => live.exists(l => ctx.path(l).overlaps(ctx.path(v)))).map(ctx.path)
+    ctx.copy(
+      paths = ctx.paths.updated(x.name, path),
+      keys = key.fold(ctx.keys)(k => ctx.keys.updated(x.name, k)),
+      kept = keeps ++ ctx.kept
+    )
+
+  /** Boxed variables a right-hand side keeps (stores, or passes to a parameter that keeps it). */
+  private def owned(rhs: Rhs): List[String] =
+    def vars(as: List[Atom]) = as.flatMap(Core.boxedVar).map(_.name)
+    rhs match
+      case Rhs.Con(_, fs)         => vars(fs)
+      case Rhs.Closure(_, cs)     => vars(cs)
+      case Rhs.CallClosure(c, as) => vars(c :: as)
+      case Rhs.Call(f, as, _)     => keptBy(f, as)
+      case Rhs.Catch(f, as)       => keptBy(f, as)
+      case _                      => Nil
+
+  /** The boxed arguments of a call of `f` whose parameters keep them (`own` or `exclusive`). */
+  private def keptBy(f: String, as: List[Atom]): List[String] =
+    as.zipWithIndex.collect {
+      case (v: Atom.Var, i) if v.ctype.boxed && sig(f, i).root.ordinal >= Demand.Own.ordinal => v.name
+    }
+
+  /** Whether `v`, an argument among `args`, still has no other reference at this use. */
+  private def exclusive(v: String, args: List[String], live: Set[String], ctx: Ctx): Boolean =
+    val p = ctx.path(v)
+    !live.exists(l => ctx.path(l).overlaps(p)) &&
+    args.count(a => ctx.path(a).overlaps(p)) == 1 &&
+    !ctx.kept.exists(_.overlaps(p))
+
+  /** A constructor reuses the cell of a variable of matching size that died on this path (drop
+    * guided, Rule MM11.5): the variable is then demanded exclusive. Its children may stay live.
+    * The variant of a candidate is known inside a `Switch` case, or always for single-variant types.
+    */
+  private def reuse(x: Atom.Var, rhs: Rhs, live: Set[String], ctx: Ctx, fn: String): Option[String] =
+    rhs match
+      case Rhs.Con(_, fields) if fields.nonEmpty =>
+        val inFields = fields.flatMap(Core.boxedVar).map(_.name).toSet
+        val products = ctx.keys.collect { case (v, k) if cellSize(k, 1).isEmpty && cellSize(k, 0).isDefined => v -> 0 }
+        (products ++ ctx.tags).toList.sortBy(_._1).collectFirst {
+          case (v, tag)
+              if !ctx.paired(v) && !inFields(v) &&
+                ctx.keys.get(v).flatMap(cellSize(_, tag)).contains(fields.size) &&
+                !live.exists(l => ctx.path(l).covers(ctx.path(v))) &&
+                !ctx.kept.exists(_.covers(ctx.path(v))) =>
+            reuses(fn)(x.name) = v
+            v
+        }
+      case _ => None
+
+  /** What `rhs` demands of the variables it uses; `xNeed` is what the rest demands of its result. */
+  private def right(rhs: Rhs, xNeed: Need, live: Set[String], ctx: Ctx, fn: String): Map[String, Need] =
+    rhs match
+      case Rhs.Move(v: Atom.Var)        => Map(v.name -> xNeed)
+      case Rhs.Move(_)                  => Map.empty
+      case Rhs.Prim(_, as)              => uses(as, Need.read)
+      case Rhs.Call(f, as, false)       => call(f, as, live, ctx)
+      case Rhs.Catch(f, as)             => call(f, as, live, ctx)
+      case Rhs.Call(_, as, true)        => uses(as, Need.own)
+      case Rhs.Con(_, fs)               => uses(fs, Need.own)
+      case Rhs.Closure(_, cs)           => uses(cs, Need.own)
+      case Rhs.CallClosure(c, as)       => uses(c :: as, Need.own)
+      case Rhs.Field(o: Atom.Var, slot) =>
+        val key = ctx.keys.getOrElse(o.name, "?")
+        Map(o.name -> Need(Demand.Read, xNeed.parts.updated((key, slot), xNeed.root join xNeed.part((key, slot)))))
+      case Rhs.Field(_, _) => Map.empty
+      case Rhs.If(c, t, f) =>
+        val branch = ctx.copy(after = live)
+        join(uses(List(c), Need.read), join(walk(t, branch, fn), walk(f, branch, fn)))
+      case Rhs.Switch(s, cases) =>
+        val tagged = (tag: Int) =>
+          Core.boxedVar(s).fold(ctx.copy(after = live))(v =>
+            ctx.copy(after = live, tags = ctx.tags.updated(v.name, tag))
+          )
+        cases.foldLeft(uses(List(s), Need.read))((acc, c) => join(acc, walk(c._2, tagged(c._1), fn)))
+
+  /** A call of user function `f`: each argument meets its parameter's need, or the shared
+    * version's need where it is not exclusive at this call.
+    */
+  private def call(f: String, as: List[Atom], live: Set[String], ctx: Ctx): Map[String, Need] =
+    val args = as.flatMap(Core.boxedVar).map(_.name)
+    as.zipWithIndex.collect { case (v: Atom.Var, i) =>
+      val n = sig(f, i)
+      Map(v.name -> (if !v.ctype.boxed || exclusive(v.name, args, live, ctx) then n else n.shared))
+    }.foldLeft(Map.empty[String, Need])(join)
+
+  /** Every variable among `as`, scalars included (a used scalar is not erased), demanded `n`. */
+  private def uses(as: List[Atom], n: Need): Map[String, Need] =
+    as.collect { case v: Atom.Var => v.name -> n }.groupMapReduce(_._1)(_._2)(_ join _)
