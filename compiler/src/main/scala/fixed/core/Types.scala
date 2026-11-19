@@ -41,7 +41,7 @@ enum Type:
   /** The types this one is built from. */
   def children: List[Type] =
     this match
-      case ArrowType(l, r, _)   => List(l, r)
+      case ArrowType(l, r, fx)  => if fx.effects.isEmpty then List(l, r) else l :: r :: fx.args
       case TupleType(ts)        => ts
       case IsBound(bs)          => bs
       case CapType(r)           => r.toList
@@ -55,7 +55,7 @@ enum Type:
   /** This type with `f` applied to each of its children. */
   def mapChildren(f: Type => Type): Type =
     this match
-      case ArrowType(l, r, fx)  => ArrowType(f(l), f(r), fx)
+      case ArrowType(l, r, fx)  => ArrowType(f(l), f(r), if fx.effects.isEmpty then fx else fx.map(f))
       case TupleType(ts)        => TupleType(ts.map(f))
       case IsBound(bs)          => IsBound(bs.map(f))
       case CapType(r)           => CapType(r.map(f))
@@ -68,8 +68,20 @@ enum Type:
 
 final case class EffectBound(sym: SymbolId, args: List[Type])
 
-/** A `with` row. Effect inference (M7) adds an open-row variable. */
-final case class EffectRow(effects: List[EffectBound])
+/** A `with` row (`spec/effects.md` §4): a set of effects, each with its `of` arguments. */
+final case class EffectRow(effects: List[EffectBound]):
+  /** Every effect's arguments, in order. */
+  def args: List[Type] = effects.flatMap(_.args)
+
+  /** This row with `args`'s layout refilled from `flat`, as [[args]] produced it. */
+  def withArgs(flat: List[Type]): EffectRow =
+    val (_, out) = effects.foldLeft((flat, List.empty[EffectBound])) { case ((rest, acc), e) =>
+      val (mine, next) = rest.splitAt(e.args.size)
+      (next, EffectBound(e.sym, mine) :: acc)
+    }
+    EffectRow(out.reverse)
+
+  def map(f: Type => Type): EffectRow = EffectRow(effects.map(e => e.copy(args = e.args.map(f))))
 
 object EffectRow:
   val empty: EffectRow = EffectRow(Nil)

@@ -1,6 +1,6 @@
 # Phase 3.2 — Effect inference (M7)
 
-**Status:** Draft, for review
+**Status:** Accepted; implementing 3.2.M1
 **Parent:** `docs/plans/phase-3-typer.md` §1.3 (Part B, M7) and §5.4
 **Spec:** `spec/effects.md` §3.2–§3.3 (operations, abortive `!`), §4.1–§4.4 (rows), §5 (inference,
 `with` check, handler subtraction and coverage, `main`), §6.3–§6.6 (handlers)
@@ -70,7 +70,7 @@ Proposal:
 **Alternative:** the planned recheck walk. It is a second traversal that re-derives each callee's
 type from the typed tree. It costs a pass and gives the same answer.
 
-### 3.2 Function-typed parameters without `with`: ambient pass-through (to decide)
+### 3.2 Function-typed parameters without `with`: ambient pass-through (decided)
 
 The stdlib writes no row variables. Example: `fn fold(on_some: Part -> R, on_none: () -> R) -> R`.
 Read literally (§4.3), those callbacks are pure. Then `03`'s `inner` could not pass
@@ -167,13 +167,27 @@ calls have an empty row, so accumulation should be close to free.
 
 ## 6. Open questions
 
-1. **Ambient pass-through (§3.2).** Proposed: adopt it as Rule E5.5.a. The alternative is
-   explicit row variables now (§8). The proposal costs a spec addition; the alternative costs
-   stdlib annotations and a new kind of unification variable.
-2. **A clause for a parameterised effect when the subject performs several instances**
-   (`Fail of String` and `Fail of i64`). Proposed: the clause handles every instance, its
-   parameters unify with all of them, and a mismatch is `T002`. That makes such a handler
-   ill-typed unless the instances agree. The alternative is a `T011`-style ambiguity error. The
-   spec is silent; no example hits this case.
+1. ~~Ambient pass-through (§3.2).~~ **Decided:** adopt it as Rule E5.5.a; explicit row
+   variables wait for an example that needs them.
+2. ~~A clause for a parameterised effect when the subject performs several instances.~~
+   **Decided:** the clause handles every instance, and its parameters unify with all of them, so
+   instances that disagree are `T002`.
 3. **A clause naming an effect the subject does not perform.** Proposed: no diagnostic, because
    the clause is dead code but harmless. The alternative is a warning.
+
+## 7. Implementation notes
+
+- **3.2.M1–M3** (landed together; `handle` was needed before `01`–`06` could stay clean):
+  - `EffectRow` arguments are children of `ArrowType`, so instantiation, zonking and the occurs
+    check reach them.
+  - An effect operation's instantiated type carries `with E of (fresh args)`, so calling it
+    performs `E` through the same path as any other call. A handler clause reads the same
+    arguments to bind its parameters to the subject's instances.
+  - `TyperState.row` accumulates; `Effects.isolated` scopes fn bodies, method bodies, lambdas and
+    `handle` subjects.
+  - Rule E5.5.a lives in `Typer.check`: whenever a function value meets an expected type, its row
+    is either bounded by the expected row or passed to the enclosing body.
+  - Row checks run first in `TyperState.finish`, before literal defaults, so `Fail.fail(1)`
+    against `with Fail of u64` solves the literal to `u64`.
+  - `satisfies` and cap default bodies are checked against the member's row without the
+    unused-effect warning: a member's row bounds its implementations.

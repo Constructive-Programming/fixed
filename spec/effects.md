@@ -1,8 +1,10 @@
 # Fixed Effects
 
-**Status:** Draft v0.2.1
+**Status:** Draft v0.2.2
 **Specifies:** algebraic effect declarations, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.4 source.
-**Last revised:** 2026-05-01
+**Last revised:** 2026-11-19
+
+**Changes from v0.2.1.** Adds Rule E5.5.a (ambient pass-through): a callback whose expected function type declares no `with` clause passes its effects to the enclosing body.
 
 **Changes from v0.2.** Re-opens OQ-E5: §3.5 (linear effects) is now marked **Proposal**, contingent on the resolution of OQ-Q5 in `spec/quantities.md` (whether effect rows participate in QTT quantity). The proposed semantics in §3.5 are unchanged in shape but no longer normative until OQ-Q5 is closed. No other semantic changes from v0.2; bump tracks the v0.4.4 source grammar.
 
@@ -304,6 +306,20 @@ Other top-level entry points (test mains, library entry points) may declare diff
 A lambda's body has its own inferred effect row. The lambda's *type* is `(args) -> T with R_lambda`. When the lambda is *invoked*, its row is added to the invoking function's inferred row at that call site (per Rule E5.1).
 
 This means a lambda passed as a callback can carry effects, which the receiving function must declare in its own `with` clause (typically via effect polymorphism, §8).
+
+**Rule E5.5.a (Ambient pass-through).** A function-typed value with row `R_v` that meets an expected type behaves in one of two ways:
+
+- **The expected type is a function type with a `with` clause `R_e`.** The value's row must be a sub-row of it (`R_v ≤ R_e`, Rule E4.4). `R_v` does not join the enclosing body's row: whoever invokes the value through that type handles or declares `R_e`.
+- **Otherwise** (for example a parameter `f: A -> B`, or a type variable). `R_v` joins the enclosing body's row at that point, as if the value were invoked there.
+
+Invoking a value adds the row in its type. A parameter declared `f: A -> B` therefore contributes nothing inside the callee, and the callee's caller has already accounted for the callback's effects. This is how the stdlib's higher-order members, written without row variables, accept effectful callbacks:
+
+```
+fn inner(input: String) -> u64 with Fail of String =
+    parse_u64(input).fold((v) -> v, (e) -> Fail.fail(e))   // Fail joins inner's row here
+```
+
+The rule reads an unannotated function type in a parameter as sharing the enclosing body's effects. It gives the effect polymorphism of §8 without a written row variable. Its limit: a callback stored and invoked after the receiving function returns is charged where it was passed, not where it runs. Write the stored type's row explicitly (`List of (() -> () with Async)`), or use a row variable (§8), when that matters.
 
 ## 6. Handler semantics
 
