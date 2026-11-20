@@ -90,6 +90,9 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
   def copy(t: Type, parts: Set[(String, Int)]): Option[String] =
     dataOf(t).map((d, args) => copyOf(d, args, parts, symbols.render(_), Span.NoSpan))
 
+  /** Whether `t` mentions no type parameter: the part keys of its values are the same everywhere. */
+  def known(t: Type): Boolean = typeParamsIn(t).isEmpty
+
   /** Every function instance reachable from `main`, or the problems found. */
   def program: Either[List[Diagnostic], List[Fn]] =
     if !decls.contains("main") then Left(List(problem(DiagCode.B003, Span.NoSpan, "no `main` function")))

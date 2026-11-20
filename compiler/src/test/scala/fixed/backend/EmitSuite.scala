@@ -74,13 +74,13 @@ class EmitSuite extends munit.FunSuite:
     List("reuse_excl", "reuse_test_pass", "reuse_test_fail", "wops").map(counts(_))
 
   /** [[sites]] of each benchmark in the default mode and with `--no-specialise`: that a clone runs,
-    * not only that it is in the IR. `records` takes the exclusive path in 100 of its 2,000,000 reuses.
+    * not only that it is in the IR. `records` reuses its list cells without a test; its `Order` cells, results of a closure, after one.
     */
   private val reuseSites = Map(
     "bintrees" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 2097150L)),
     "nat_loop" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 2000600L)),
     "list_pipeline" -> (List(4000000L, 0L, 0L, 0L), List(0L, 4000000L, 0L, 10000600L)),
-    "records" -> (List(100L, 1999900L, 0L, 0L), List(0L, 2000000L, 0L, 4000300L)),
+    "records" -> (List(1000000L, 1000000L, 0L, 0L), List(0L, 2000000L, 0L, 4000300L)),
     "fail_chain" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 9995800L))
   )
 

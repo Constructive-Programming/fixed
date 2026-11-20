@@ -1,0 +1,29 @@
+// Exclusivity (Versions.construct): a tree in which one subtree has two parents, rebuilt in place
+// where exclusive; the shared subtree is printed after.
+use std.io.Console
+
+data T:
+    Leaf
+    N(l: T, v: u64, r: T)
+
+fn inc(t: T) -> T =
+    match t:
+        T.N(l, v, r) => T.N(inc(l), v + 1, inc(r))
+        T.Leaf => T.Leaf
+
+fn sum(t: T) -> u64 =
+    match t:
+        T.N(l, v, r) => sum(l) + v + sum(r)
+        T.Leaf => 0
+
+fn one(v: u64) -> T = T.N(T.Leaf, v, T.Leaf)
+
+fn main() -> () with Console =
+    let s = T.N(one(1), 2, one(3))
+    let c = T.N(T.N(s, 4, T.Leaf), 5, T.N(T.Leaf, 6, s))
+    Console.print_line(sum(inc(c)).show())
+    Console.print_line(sum(s).show())
+    Console.print_line(sum(inc(T.N(one(7), 8, one(9)))).show())
+    let s = T.N(one(1), 2, one(3))
+    Console.print_line(sum(inc(T.N(s, 4, one(5)))).show())
+    Console.print_line(sum(s).show())

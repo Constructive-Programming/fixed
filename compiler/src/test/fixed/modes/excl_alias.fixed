@@ -1,0 +1,70 @@
+// Exclusivity through aliases a path does not show (Demands.forward): a call's result that is a
+// part of an argument it only reads (`tl`), and an `if` result that is one of the values its
+// branches use, and an abort's payload, the value passed to the abort. None is exclusive.
+use std.io.Console
+
+data L:
+    E
+    C(h: u64, t: L)
+
+data P:
+    P(a: L, b: L)
+
+fn total(xs: L) -> u64 =
+    match xs:
+        L.C(h, t) => h + total(t)
+        L.E => 0
+
+fn incl(xs: L) -> L =
+    match xs:
+        L.C(h, t) => L.C(h + 1, incl(t))
+        L.E => L.E
+
+fn tl(xs: L) -> L =
+    match xs:
+        L.C(_, t) => t
+        L.E => L.E
+
+fn incb(p: P) -> P =
+    match p:
+        P.P(a, b) => P.P(a, incl(b))
+
+fn sum(p: P) -> u64 =
+    match p:
+        P.P(a, b) => total(a) * 1000 + total(b)
+
+fn build(n: u64) -> L = L.C(n, L.C(n + 1, L.C(n + 2, L.E)))
+
+fn g(a: L, b: L) -> u64 =
+    let n = total(incl(b))
+    n * 1000 + total(a)
+
+fn mk(n: u64) -> P =
+    let b = build(n)
+    let a = tl(b)
+    P.P(a, b)
+
+fn pick(n: u64) -> u64 =
+    let xs = build(1)
+    let y = if n > 0: tl(xs) else: L.E
+    total(incl(xs)) * 1000 + total(y)
+
+fn thrower(xs: L) -> u64 with Fail of L =
+    Fail.fail(xs)
+
+fn attempt(xs: L) -> u64 =
+    handle thrower(xs):
+        Fail.fail(p) => total(incl(p))
+        return(v) => v
+
+fn main() -> () with Console =
+    let b = build(1)
+    let a = tl(b)
+    Console.print_line(sum(incb(P.P(a, b))).show())
+    let c = build(1)
+    Console.print_line(g(tl(c), c).show())
+    Console.print_line(sum(incb(mk(1))).show())
+    Console.print_line(pick(1).show())
+    let d = build(1)
+    Console.print_line(attempt(d).show())
+    Console.print_line(total(d).show())

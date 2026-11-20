@@ -161,12 +161,16 @@ final class Demands(
         (ctx.path(o.name).below(slot), ctx.keys.get(o.name).flatMap(slotKey(_, slot)))
       case Rhs.Move(v: Atom.Var) => (ctx.path(v.name), ctx.keys.get(v.name))
       case _                     => (Path(x.name, Nil), typeKey(x.name))
-    val keeps = owned(rhs).filter(v => live.exists(l => ctx.path(l).overlaps(ctx.path(v)))).map(ctx.path)
+
+    /** A counted `If` or `Switch` result may be any value its branches use, or a part of one. */
+    val used = Core.branches(rhs).flatMap(names)
+    val aliased = if x.ctype.counted then used else Nil
+    val keeps = (owned(rhs) ++ aliased).filter(v => live.exists(l => ctx.path(l).overlaps(ctx.path(v)))).map(ctx.path)
 
     /** An `If` or `Switch` hands its branches what they use; what is dead after it dies inside them (`Rc`). */
     val inBranches =
       if Core.branches(rhs).isEmpty then Nil
-      else (Core.atoms(rhs).flatMap(Core.countedVar).map(_.name) ++ Core.branches(rhs).flatMap(names)).filterNot(live)
+      else (Core.atoms(rhs).flatMap(Core.countedVar).map(_.name) ++ used).filterNot(live)
     ctx.copy(
       paths = ctx.paths.updated(x.name, path),
       keys = key.fold(ctx.keys)(k => ctx.keys.updated(x.name, k)),
@@ -186,11 +190,16 @@ final class Demands(
       case Rhs.Catch(f, as)           => keptBy(f, as)
       case _                          => Nil
 
-  /** The counted arguments of a call of `f` whose parameters keep them (`own` or `exclusive`). */
+  /** The counted arguments of a call of `f` whose parameters keep them, or a part of them ([[keeps]]). */
   private def keptBy(f: String, as: List[Atom]): List[String] =
     as.zipWithIndex.collect {
-      case (v: Atom.Var, i) if v.ctype.counted && sig(f, i).root.ordinal >= Demand.Own.ordinal => v.name
+      case (v: Atom.Var, i) if v.ctype.counted && keeps(sig(f, i)) => v.name
     }
+
+  /** Whether a parameter of need `n` keeps (a part of) its argument: `tl(xs)` returns a part of `xs`
+    * and reads only its root, and its result's path does not show that it aliases `xs`.
+    */
+  private def keeps(n: Need): Boolean = (n.root :: n.parts.values.toList).exists(_.ordinal >= Demand.Own.ordinal)
 
   /** Whether `v`, an argument among `args`, still has no other reference at this use. */
   private[backend] def exclusive(v: String, args: List[String], live: Set[String], ctx: Ctx): Boolean =

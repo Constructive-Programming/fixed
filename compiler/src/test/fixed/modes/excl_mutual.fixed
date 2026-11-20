@@ -1,0 +1,39 @@
+// Exclusivity (Versions.construct): mutually recursive types sharing a part, rebuilt in place where
+// exclusive; the shared part is printed after.
+use std.io.Console
+
+data A:
+    End
+    A1(x: u64, b: B)
+
+data B:
+    B1(y: u64, a: A)
+
+fn inca(a: A) -> A =
+    match a:
+        A.A1(x, b) => A.A1(x + 1, incb(b))
+        A.End => A.End
+
+fn incb(b: B) -> B =
+    match b:
+        B.B1(y, a) => B.B1(y + 10, inca(a))
+
+fn suma(a: A) -> u64 =
+    match a:
+        A.A1(x, b) => x + sumb(b)
+        A.End => 0
+
+fn sumb(b: B) -> u64 =
+    match b:
+        B.B1(y, a) => y + suma(a)
+
+fn main() -> () with Console =
+    let shared = B.B1(2, A.A1(3, B.B1(4, A.End)))
+    let a = A.A1(1, B.B1(5, A.A1(6, shared)))
+    Console.print_line(suma(inca(a)).show())
+    Console.print_line(sumb(shared).show())
+    Console.print_line(suma(a).show())
+    Console.print_line(suma(inca(A.A1(1, B.B1(2, A.End)))).show())
+    let shared = B.B1(2, A.A1(3, B.B1(4, A.End)))
+    Console.print_line(suma(inca(A.A1(1, B.B1(5, A.A1(6, shared))))).show())
+    Console.print_line(sumb(shared).show())

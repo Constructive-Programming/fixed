@@ -1,0 +1,58 @@
+// Exclusivity (Versions.construct): a cell built from one fresh and one shared field of the same
+// type, from a value and a part of it, and from a value whose part stays live; each rebuilt in
+// place where exclusive, the shared part printed after.
+use std.io.Console
+
+data L:
+    E
+    C(h: u64, t: L)
+
+data P:
+    P(a: L, b: L)
+
+fn total(xs: L) -> u64 =
+    match xs:
+        L.C(h, t) => h + total(t)
+        L.E => 0
+
+fn incl(xs: L) -> L =
+    match xs:
+        L.C(h, t) => L.C(h + 1, incl(t))
+        L.E => L.E
+
+fn both(p: P) -> P =
+    match p:
+        P.P(a, b) => P.P(incl(a), incl(b))
+
+fn second(p: P) -> P =
+    match p:
+        P.P(a, b) =>
+            match a:
+                L.C(h, t) =>
+                    match t:
+                        L.C(h2, t2) => P.P(L.C(h, L.C(h2 + 100, t2)), b)
+                        L.E => P.P(L.E, b)
+                L.E => P.P(L.E, b)
+
+fn sum(p: P) -> u64 =
+    match p:
+        P.P(a, b) => total(a) * 1000 + total(b)
+
+fn build(n: u64) -> L = L.C(n, L.C(n + 1, L.C(n + 2, L.E)))
+
+fn main() -> () with Console =
+    let xs = build(1)
+    Console.print_line(sum(both(P.P(build(10), xs))).show())
+    Console.print_line(total(xs).show())
+    Console.print_line(sum(both(P.P(xs, xs))).show())
+    Console.print_line(total(xs).show())
+    let ys = build(1)
+    match ys:
+        L.C(_, t) => Console.print_line(sum(second(P.P(ys, t))).show())
+        L.E => Console.print_line("none")
+    let zs = build(1)
+    match zs:
+        L.C(_, t) =>
+            Console.print_line(sum(second(P.P(zs, L.E))).show())
+            Console.print_line(total(t).show())
+        L.E => Console.print_line("none")

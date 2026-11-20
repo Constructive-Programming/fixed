@@ -68,7 +68,8 @@ object Backend:
       val byKey = Demands.typesByKey(lower, render)
       val copy = (k: String, parts: Set[Need.Part]) => byKey.get(k).flatMap(lower.copy(_, parts))
       val typeClones = lower.typeClones.toMap
-      val versions = Versions(demands, table, fns, copy, lower.fips.contains, budget, typeClones, s.spent)
+      val known = (k: String) => byKey.get(k).exists(lower.known)
+      val versions = Versions(demands, table, fns, copy, lower.fips.contains, budget, typeClones, s.spent, known)
       val all = versions.run() ++ lower.functions.filter(_.name.contains(".copy["))
       val present = all.map(_.name).toSet
       val cloneNamed = typeClones.map((c, k) => k -> c)

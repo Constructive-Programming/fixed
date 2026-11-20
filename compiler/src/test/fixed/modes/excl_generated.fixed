@@ -1,0 +1,40 @@
+// Exclusivity of cells built by generated members (map, unfold): a list of lists whose elements
+// are one shared list, rebuilt in place where exclusive; the shared list printed after.
+use std.io.Console
+
+fn swap(xs: List of u64) -> List of u64 =
+    match xs:
+        List.Cons(h, t) =>
+            match t:
+                List.Cons(h2, t2) => List.Cons(h2, List.Cons(h, t2))
+                List.Nil => List.Cons(h, List.Nil)
+        List.Nil => List.Nil
+
+fn swaps(xss: List of List of u64) -> List of List of u64 =
+    match xss:
+        List.Cons(h, t) => List.Cons(swap(h), swaps(t))
+        List.Nil => List.Nil
+
+fn first(xs: List of u64) -> u64 =
+    match xs:
+        List.Cons(h, _) => h
+        List.Nil => 0
+
+fn firsts(xss: List of List of u64) -> u64 =
+    match xss:
+        List.Cons(h, t) => first(h) + 10 * firsts(t)
+        List.Nil => 0
+
+fn main() -> () with Console =
+    let s = [1, 2, 3]
+    let yss = [7, 8].map((x) -> s)
+    Console.print_line(firsts(swaps(yss)).show())
+    Console.print_line(first(s).show())
+    let zss = List.unfold(0, (i) ->
+        if i >= 2:
+            List.Nil
+        else:
+            List.Cons(s, i + 1)
+    )
+    Console.print_line(firsts(swaps(zss)).show())
+    Console.print_line(first(s).show())

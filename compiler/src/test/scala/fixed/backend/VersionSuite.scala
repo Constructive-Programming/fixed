@@ -101,7 +101,21 @@ class VersionSuite extends munit.FunSuite:
     assertEquals(a.candidates("tail").map(_.reason), List("removed = 0"))
     assert(!a.fns.exists(_.name.startsWith("tail#")), a.fns.map(_.name))
 
+  /** `grab`'s result is first taken as exclusive (no summary yet), so `user` asks for `bump`'s clone;
+    * once `grab` is built its result is a part of the shared `xs`, and no call reaches the clone.
+    */
   test("a clone chosen early that no call reaches in the end is dropped and holds no budget"):
+    val code = list + "fn grab(xs: L, n: u64) -> L =\n    if n == 0:\n        match xs:\n" +
+      "            L.C(_, t) => t\n            L.E => L.E\n    else:\n        grab(xs, n - 1)\n\n" +
+      "fn user(n: u64) -> u64 =\n    let xs = L.C(1, L.C(2, L.E))\n    first(bump(grab(xs, n))) + first(xs)\n\n"
+    val a = analyse(code, "user(1)")
+    assertEquals(a.candidates("bump").map(c => c.key -> c.reason), List("0:cell" -> "unused"))
+    assert(!a.fns.exists(_.name.startsWith("bump#")), a.fns.map(_.name))
+
+  /** Each `Cons(order, tail)` that `unfold` builds keeps its tail part exclusive though `order`, a
+    * closure's result, is shared (`Versions.construct`), so `map`'s clone for it is reached.
+    */
+  test("records: the clone of map for an exclusive tail part is chosen and reached"):
     val src = java.nio.file.Files.readString(java.nio.file.Path.of("bench", "runtime", "records.fixed"))
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString("records.fixed", src)))
     val map = "List of A.map[R]"
@@ -111,7 +125,7 @@ class VersionSuite extends munit.FunSuite:
     val a = Backend.analyse(unit, 2 * size).fold(ds => fail(s"$ds"), identity)
     assertEquals(
       a.candidates(map).map(c => c.key -> c.reason),
-      List("Order,Order" -> "", "Order,Order 0:List of Order#1,cell" -> "unused", "Order,Order 0:cell" -> "")
+      List("Order,Order" -> "", "Order,Order 0:List of Order#1,cell" -> "")
     )
     val names = a.fns.map(_.name).toSet
     assert(a.fns.forall(f => Core.callees(f.body).forall(g => names(g) || !g.contains("#"))), names)

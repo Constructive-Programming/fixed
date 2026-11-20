@@ -101,7 +101,7 @@ private[backend] trait Generated:
         Option.when(t == self)(bound(Rhs.Call(name, ws ++ List(v, step), runtime = false), CType.Boxed))
           .flatten
       val branches = perVariant(data, args, layer, span, Some(seedType)) {
-        (tag, loaded) => construction(tag, loaded, recurse)
+        (tag, loaded) => construction(tag, loaded, recurse, Type.TypeRef(data, args))
       }
       Fn(
         name,
@@ -128,7 +128,7 @@ private[backend] trait Generated:
             case d if d == declaredSelf(data) =>
               bound(Rhs.Call(name, ws ++ List(v, f), runtime = false), CType.Boxed)
             case _ => None
-        construction(tag, loaded, mapField)
+        construction(tag, loaded, mapField, Type.TypeRef(data, args.dropRight(1) :+ newElem))
       }
       Fn(name, ws ++ List(x, f), CType.Boxed, switch(x, branches, CType.Boxed))
     }
@@ -279,7 +279,7 @@ private[backend] trait Generated:
           dataOf(ft).filter(_ => parts((key(t), slots(loaded.indexWhere(_._2 == v))))).flatMap((d, a) =>
             bound(Rhs.Call(copyOf(d, a, parts, key, span), List(v), runtime = false), CType.Boxed)
           )
-        construction(tag, loaded, copyField)
+        construction(tag, loaded, copyField, t)
       }
       Fn(name, List(x), CType.Boxed, switch(x, branches, CType.Boxed))
     }
@@ -313,9 +313,14 @@ private[backend] trait Generated:
         val next = (a: Atom) => rebuild(rest, transform)(as => finish(a :: as))
         transform(t, v).fold(next(v))(_(next))
 
-  /** Variant `tag` rebuilt from `loaded`, its fields transformed. */
-  private def construction(tag: Int, loaded: List[(Type, Var)], transform: Transform): Expr =
-    rebuild(loaded, transform)(as => result(Rhs.Con(tag, as), CType.Boxed))
+  /** Variant `tag` of type `t` rebuilt from `loaded`, its fields transformed; the cell is typed, so
+    * that its ownership is keyed by its type (`Versions.construct`).
+    */
+  private def construction(tag: Int, loaded: List[(Type, Var)], transform: Transform, t: Type): Expr =
+    rebuild(loaded, transform) { as =>
+      val res = typed(fresh("r", CType.Boxed), t, Span.NoSpan)
+      Expr.Let(res, Rhs.Con(tag, as), Expr.Ret(res))
+    }
 
   /** A field transform for [[rebuild]]: bind `rhs` and continue with the result. */
   private def bound(rhs: Rhs, t: CType): Option[K => Expr] =

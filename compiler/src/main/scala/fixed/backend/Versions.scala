@@ -75,6 +75,7 @@ final case class Candidate(key: String, removed: Int, weight: Long, reason: Stri
   * @param budget the clone budget `B` of each function, in Core `let`s
   * @param typeClones each clone of the type axis, with the function it is a clone of and its key
   * @param spent per function, what its clones of the type axis are charged
+  * @param known whether a type key names a type without type parameters ([[construct]])
   */
 final class Versions(
     d: Demands,
@@ -84,7 +85,8 @@ final class Versions(
     fip: String => Boolean,
     budget: Int,
     typeClones: Map[String, (String, String)] = Map.empty,
-    spent: Map[String, Int] = Map.empty
+    spent: Map[String, Int] = Map.empty,
+    known: String => Boolean = _ => false
 ):
   private type Mask = List[Set[Option[Need.Part]]]
   private type Key = (String, Mask)
@@ -312,13 +314,14 @@ final class Versions(
         val (b2, r) = walk(b, ctx, owns)
         (Expr.Drop(x, b2), r)
 
-  /** `rhs` rewritten to call versions, and its result's ownership. */
+  /** `rhs` rewritten to call versions, and its result's ownership (an abort's payload: shared). */
   private def right(x: Atom.Var, rhs: Rhs, at: At): (Rhs, Own) =
     val At(live, ctx, owns) = at
     rhs match
       case Rhs.Move(a)                                  => (rhs, at.own(a))
       case Rhs.Call(f, as, false) if byName.contains(f) => call(f, as, at)(Rhs.Call(_, _, runtime = false))
       case Rhs.Catch(f, as) if byName.contains(f)       => call(f, as, at)(Rhs.Catch(_, _))
+      case Rhs.Call("fx_abort_payload", _, true)        => (rhs, Own.shared)
       case Rhs.Call(_, _, true) | _: Rhs.Prim           => (rhs, Own.all)
       case Rhs.Con(tag, fs)                             =>
         val made = construct(x, fs, at)
@@ -367,22 +370,30 @@ final class Versions(
       case _                              => true
     }
 
-  /** A constructor result: its cell is fresh; a part is exclusive iff every field is exclusive in
-    * it, and the field stored at that part is itself exclusive.
+  /** A constructor result: a fresh cell. A counted field `v` at part `(key, slot)` that is exclusive
+    * and that no live value or other field overlaps (the test [[call]] makes before it trusts an
+    * argument's parts) meets the result with its parts; any other field shares only its own slot,
+    * or every part if the cell's key is unknown or names a type parameter (`List of A` in a
+    * baseline version, which its callers read as `List of u64`). Sound: [[right]] reads claims only from the
+    * root down through exclusive slots, so they cover the cell and the first kind's regions, where
+    * each cell has one reference as long as `Demands` sees every alias between live values (paths
+    * and keeps). Entering another field's region from there would give a cell a second reference,
+    * so its parts never matter, whatever the types: a (type, slot) key it shares with the result is
+    * only removed or met, never set.
     */
   private def construct(x: Atom.Var, fs: List[Atom], at: At): Own =
-    val key = d.typeKey(x.name).getOrElse("?")
-    val others = (v: String) => fs.flatMap(Core.countedVar).map(_.name).filter(_ != v).toSet
+    val key = d.typeKey(x.name).filter(known)
+    val fields = fs.flatMap(Core.countedVar).map(_.name)
     fs.zip(Layout.slots(fs.map(_.tpe))).foldLeft(Own.all) {
       case (acc, (v: Atom.Var, slot)) if v.ctype.counted =>
-        val o = at.copy(live = at.live ++ others(v.name)).own(v)
-        val met = acc meet o.copy(root = true)
-        if o.root then met else met.without((key, slot))
+        val o = at.own(v)
+        if o.root && at.exclusive(v.name, fields) then acc meet o
+        else key.fold(acc meet Own(root = true, Set.empty, rest = false))(k => acc.without((k, slot)))
       case (acc, _) => acc
     }
 
   /** A call of user function `f`: it requests the version matching what the caller owns, and calls
-    * the one that request resolves to.
+    * the one it resolves to. Across it, a key naming a type parameter is trusted only if all is.
     */
   private def call(f: String, as: List[Atom], at: At)(make: (String, List[Atom]) => Rhs): (Rhs, Own) =
     val want = full(f)
@@ -393,12 +404,13 @@ final class Versions(
         case v: Atom.Var if v.ctype.counted && w.nonEmpty =>
           val o = at.own(v)
           if !o.root || !at.exclusive(v.name, args) then Set.empty[Option[Need.Part]]
-          else w.filter(_.forall(o.part))
+          else w.filter(_.forall(k => o.part(k) && (known(k._1) || o.rest && o.listed.isEmpty)))
         case _ => w
     }
     log.value.sites += s"call ${text(mask)}"
     log.value.requests += ((f, mask))
-    (make(target(f, mask), as), results.getOrElse(if fip(f) then f else target(f, mask), Own.all))
+    val r = results.getOrElse(if fip(f) then f else target(f, mask), Own.all)
+    (make(target(f, mask), as), if r.listed.forall(k => known(k._1)) then r else Own(r.root, Set.empty, rest = false))
 
 object Versions:
 

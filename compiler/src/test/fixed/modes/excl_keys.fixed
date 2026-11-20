@@ -1,0 +1,90 @@
+// Exclusivity where a part key is not the one its readers use (Versions.construct, call): list
+// literals (no key), a generic baseline version (`List of A` against `List of u64`) in both
+// directions of a call, a generic data type, and a phantom parameter. Each cell holds one shared
+// field; it is rebuilt in place where exclusive and the shared field printed after.
+use std.io.Console
+
+data L:
+    E
+    C(h: u64, t: L)
+
+data Box of A:
+    Bx(v: A, l: List of A)
+
+data Tagged of (P, A):
+    T(l: List of A)
+
+cap Red
+
+fn total(xs: L) -> u64 =
+    match xs:
+        L.C(h, t) => h + total(t)
+        L.E => 0
+
+fn incl(xs: L) -> L =
+    match xs:
+        L.C(h, t) => L.C(h + 1, incl(t))
+        L.E => L.E
+
+fn incs(xss: List of L) -> List of L =
+    match xss:
+        List.Cons(h, t) => List.Cons(incl(h), incs(t))
+        List.Nil => List.Nil
+
+fn totals(xss: List of L) -> u64 =
+    match xss:
+        List.Cons(h, t) => total(h) * 100 + totals(t)
+        List.Nil => 0
+
+fn build(n: u64) -> L = L.C(n, L.C(n + 1, L.E))
+
+fn inc(xs: List of u64) -> List of u64 =
+    match xs:
+        List.Cons(h, t) => List.Cons(h + 1, inc(t))
+        List.Nil => List.Nil
+
+fn sum(xs: List of u64) -> u64 =
+    match xs:
+        List.Cons(h, t) => h + sum(t)
+        List.Nil => 0
+
+fn cons1(x: A, y: List of A) -> List of A = List.Cons(x, y)
+
+fn mk(v: A, l: List of A) -> Box of A = Box.Bx(v, l)
+
+fn tag(l: List of A) -> Tagged of (P, A) = Tagged.T(l)
+
+fn untag(t: Tagged of (Red, u64)) -> u64 =
+    match t:
+        Tagged.T(l) => sum(inc(l))
+
+fn swapT(xs: List of List of A) -> List of List of A =
+    match xs:
+        List.Cons(h, t) =>
+            match t:
+                List.Cons(h2, t2) => List.Cons(h2, List.Cons(h, t2))
+                List.Nil => List.Cons(h, List.Nil)
+        List.Nil => List.Nil
+
+fn sums(xs: List of List of u64) -> u64 =
+    match xs:
+        List.Cons(h, t) => sum(h) + 10 * sums(t)
+        List.Nil => 0
+
+fn main() -> () with Console =
+    let xs = build(1)
+    Console.print_line(totals(incs([build(10), xs])).show())
+    Console.print_line(total(xs).show())
+    let ys = build(1)
+    Console.print_line(totals(incs([ys, ys])).show())
+    let s = [1, 2, 3]
+    Console.print_line(sum(inc(cons1(0, s))).show())
+    Console.print_line(sum(s).show())
+    match mk(0, s):
+        Box.Bx(_, l) => Console.print_line(sum(inc(l)).show())
+    Console.print_line(sum(s).show())
+    Console.print_line(untag(tag(s)).show())
+    Console.print_line(sum(s).show())
+    let ss = [[1], [2], [3]]
+    Console.print_line(sums(swapT(List.Cons([0], ss))).show())
+    Console.print_line(sums(ss).show())
