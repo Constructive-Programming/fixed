@@ -13,13 +13,54 @@ import fixed.util.{DiagCode, Diagnostic, Severity}
   */
 final class QuantityTable(
     binders: java.util.IdentityHashMap[Tree, Quantity],
-    signatures: java.util.IdentityHashMap[Trees.FnDecl, List[Quantity]]
+    signatures: java.util.IdentityHashMap[Trees.FnDecl, List[Quantity]],
+    handlers: java.util.IdentityHashMap[Tree, HandlerKind]
 ):
+  /** The kind of a `handle` install site (`spec/memory_management.md` Rule MM14.1). */
+  def handler(h: Trees.HandleExpr): Option[HandlerKind] = Option(handlers.get(h))
+
   /** The quantity of a binder: a parameter, a pattern binder or a lambda parameter. */
   def of(binder: Tree): Option[Quantity] = Option(binders.get(binder))
 
   /** Per-parameter quantities of a function, top-level or nested. */
   def params(fn: Trees.FnDecl): Option[List[Quantity]] = Option(signatures.get(fn))
+
+/** How a `handle` install treats its continuation (`spec/memory_management.md` Rule MM14.1). */
+enum HandlerKind:
+  case TailResumptive, Abortive, CapturingLocal, CapturingEscaping
+
+object HandlerKind:
+  private enum Shape:
+    case NoResume, Tail, Other
+
+  /** The kind of a handler whose resuming clauses have `bodies`; abortive clauses never resume.
+    * `count` counts the `resume`s on one path, not those inside lambdas.
+    */
+  def of(bodies: List[Tree], count: Tree => Quantity): HandlerKind =
+    def shape(t: Tree): Shape =
+      t match
+        case Trees.Resume(v, _)    => if v.exists(count(_) != Quantity.Zero) then Shape.Other else Shape.Tail
+        case Trees.Block(stmts, _) =>
+          if stmts.dropRight(1).exists(count(_) != Quantity.Zero) then Shape.Other
+          else stmts.lastOption.fold(Shape.NoResume)(shape)
+        case Trees.IfExpr(c, a, b, _)  => if count(c) != Quantity.Zero then Shape.Other else combine(shape(a), shape(b))
+        case Trees.MatchExpr(s, cs, _) =>
+          if count(s) != Quantity.Zero || cs.exists(_.guard.exists(count(_) != Quantity.Zero)) then Shape.Other
+          else cs.map(c => shape(c.body)).foldLeft(Shape.NoResume)(combine)
+        case other => if count(other) == Quantity.Zero then Shape.NoResume else Shape.Other
+    def combine(a: Shape, b: Shape): Shape =
+      if a == Shape.Other || b == Shape.Other then Shape.Other
+      else if a == Shape.Tail || b == Shape.Tail then Shape.Tail
+      else Shape.NoResume
+    def captured(t: Tree): Boolean = Trees.subtrees(t).exists {
+      case l: Trees.LambdaExpr => Trees.subtrees(l.body).exists { case _: Trees.Resume => true; case _ => false }
+      case _                   => false
+    }
+    val shapes = bodies.map(shape)
+    if bodies.exists(captured) then CapturingEscaping
+    else if shapes.contains(Shape.Other) then CapturingLocal
+    else if shapes.contains(Shape.Tail) then TailResumptive
+    else Abortive
 
 /** Runs after the typer, on the trees the backend lowers: the unit's functions and the prelude
   * function bodies it does not shadow.
@@ -61,7 +102,9 @@ final private class Quantities(unit: CompilationUnit):
 
   private val tops: Map[String, Trees.FnDecl] = Stdlib.functions(unit.tree)
 
-  def table: QuantityTable = QuantityTable(binders, signatures)
+  def table: QuantityTable = QuantityTable(binders, signatures, handlers)
+
+  private val handlers = java.util.IdentityHashMap[Tree, HandlerKind]()
 
   /** Walk every function, callees first. A recursive call reads the signature as it stands; if
     * that read turns out wrong, walk again (the reads then see the previous round's result).
@@ -200,6 +243,7 @@ final private class Quantities(unit: CompilationUnit):
     */
   private def handle(h: Trees.HandleExpr, env: Env): Usage =
     val (abortive, resuming) = h.operationClauses.partition(abortiveOp)
+    val _ = handlers.put(h, HandlerKind.of(resuming.map(_.body), resumes))
     val ret = h.returnClause.toList.map(r => clause(List(r.param), r.body, env))
     expr(h.subject, env) +
       Usage.joinAll(resuming.map(c => clause(c.params, c.body, env))).scale(Many) +
@@ -291,13 +335,4 @@ final private class Quantities(unit: CompilationUnit):
       case _                                       => Nil
 
   /** Direct subtrees, for the forms whose usage is the sum of their parts. */
-  private def children(t: Tree): List[Tree] =
-    t match
-      case p: Product =>
-        p.productIterator.toList.flatMap {
-          case c: Tree            => List(c)
-          case Some(c: Tree)      => List(c)
-          case s: Trees.Selection => s.args.toList.flatten
-          case cs: List[?]        => cs.collect { case c: Tree => c; case (_, c: Tree) => c }
-          case _                  => Nil
-        }
+  private def children(t: Tree): List[Tree] = Trees.children(t)

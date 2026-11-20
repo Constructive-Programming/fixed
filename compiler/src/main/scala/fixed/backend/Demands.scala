@@ -130,9 +130,8 @@ final class Demands(
 
   private[backend] def names(e: Expr): Set[String] = Core.freeVars(e).map(_.name)
 
-  private def join(a: Map[String, Need], b: Map[String, Need]): Map[String, Need] = (a.keySet ++ b.keySet).map(k =>
-    k -> (a.getOrElse(k, Need.zero) join b.getOrElse(k, Need.zero))
-  ).toMap
+  private def join(a: Map[String, Need], b: Map[String, Need]): Map[String, Need] =
+    Core.merge(a, b, Need.zero)(_ join _)
 
   private def walk(e: Expr, ctx: Ctx, fn: String): Map[String, Need] =
     e match

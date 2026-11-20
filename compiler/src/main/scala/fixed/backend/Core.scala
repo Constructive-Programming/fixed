@@ -91,6 +91,10 @@ final case class Fn(name: String, params: List[Atom.Var], ret: CType, body: Expr
 
 object Core:
 
+  /** `a` and `b` merged by key, `zero` standing for an absent entry. */
+  def merge[V](a: Map[String, V], b: Map[String, V], zero: V)(f: (V, V) => V): Map[String, V] =
+    (a.keySet ++ b.keySet).map(k => k -> f(a.getOrElse(k, zero), b.getOrElse(k, zero))).toMap
+
   /** The boxed variable `a` is, if any: the only atoms reference counting tracks. */
   def boxedVar(a: Atom): Option[Atom.Var] =
     a match

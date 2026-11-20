@@ -20,6 +20,25 @@ sealed trait Tree:
 
 object Trees:
 
+  /** The direct subtrees of `t`: tree fields, optional trees and tree lists, call arguments, and
+    * a function's parameters and body.
+    */
+  def children(t: Tree): List[Tree] =
+    t match
+      case p: Product =>
+        p.productIterator.toList.flatMap {
+          case c: Tree           => List(c)
+          case Some(c: Tree)     => List(c)
+          case Some(cs: List[?]) => cs.collect { case c: Tree => c }
+          case s: Selection      => s.args.toList.flatten
+          case s: FnSig          => s.params ++ s.body.toList
+          case cs: List[?]       => cs.collect { case c: Tree => c; case (_, c: Tree) => c }
+          case _                 => Nil
+        }
+
+  /** `t` and every tree below it, `t` first. */
+  def subtrees(t: Tree): List[Tree] = t :: children(t).flatMap(subtrees)
+
   /** A production that began but could not complete. `recovered` holds
     * whatever subtrees were built before the parser bailed; often empty.
     * The matching diagnostic carries the human-readable explanation.

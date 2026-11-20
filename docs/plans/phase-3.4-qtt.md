@@ -1,6 +1,6 @@
 # Phase 3.4 — Quantities, demands and lifetimes (M10)
 
-**Status:** 3.4.M1–M3 done; 3.4.M4 next. Design settled (decisions §8).
+**Status:** 3.4.M1–M4 done; 3.4.M5 next. Design settled (decisions §8).
 **Parent:** `docs/plans/phase-3-typer.md` §1.3 (Part B, M10) and §5.7
 **Runs:** after M7 and the Phase 4.0 slice, **before M9**. The quantity walk runs after the typer;
 everything else runs on Core after lowering.
@@ -131,7 +131,7 @@ violations are `E110` with the reason chain.
 | 3.4.M1 ✅ | Occurrence quantities on the typed tree; `E072`, `T021` | `QuantityPhaseSuite` (§10.1's `go` is `(ω, 1, ω)`); examples `01`–`06` raise no new diagnostics; walk costs 25.4% of typer time |
 | 3.4.M2 ✅ | Spans and types per Core variable; demand inference per part, with exclusivity lost to later uses, keeps and aliasing; reuse pairs; evaluation-order test | `DemandSuite` (6 tests) and `EmitSuite`'s order test; every Core function of examples `01`–`05` and the benchmarks has demands |
 | 3.4.M3 ✅ | Versions and copies; two-pointer closures | `VersionSuite` (4 tests); `EmitSuite` runs a shared list through a reusing function and a program past the cap, both leak-free; goldens unchanged |
-| 3.4.M4 | Escape sets, classes, cohesive groups, garbage-free carry, handler kinds, fork facts, reason chains | Suite per escape kind, class and handler kind; no binding without a class |
+| 3.4.M4 ✅ | Escape sets, classes, cohesive groups, garbage-free carry, handler kinds, fork facts, reason chains | `MemorySuite` (7 tests); every allocation of the run examples and benchmarks has a class |
 | 3.4.M5 | `--explain-memory`, `--format json`; `fip` check | Golden report for `01`; accept and reject tests per Rule MM18.1 item |
 | 3.4.M6 | Backend consumption (§3.6); new baseline | Goldens and leak checks pass; an aliasing program and a shared-list program prove the unsound cases stay correct; `docs/baselines/runtime-<date>.md` with the four numbers and the change against 4.0 |
 
@@ -175,6 +175,27 @@ the benchmarks and reported; there is no fixed budget until a first measurement 
   exclusive in every benchmark pipeline.
 - Versions change no behaviour yet: every version has the same body until 3.4.M6 consumes
   ownership.
+
+### 4.3 Notes from 3.4.M4
+
+- **`Memory`** (`backend/Memory.scala`) runs on versioned Core. Escapes per variable come from one
+  backward walk per function, iterated over the call graph for parameter escapes (`None`,
+  `IntoResult`, `Unbounded`). A stored value inherits its container's escapes. Classes follow
+  Rule MM5.3; a lambda's body is its own scope, so fold-step temporaries are `Frame` of the step.
+- **Carried values** escape as the step's parameter does when the step is a closure built at the
+  call; garbage-free means the step reuses the carried value (`exclusive`) or keeps it in its
+  result. An unknown step makes the value long-lived.
+- **Cohesive groups** are searched within one function (OQ-MM4): a root stored in nothing and the
+  allocations stored only into the group, at least two. A list literal handed to an unknown
+  closure is one `Region`.
+- **Handler kinds** are classified on the typed tree (`HandlerKind`, in `QuantityPhase`), where
+  clause shapes are visible; Core has only abortive handlers until capturing ones lower.
+- **Fork facts** per user call of a derived `fold` / `unfold` or left fold: tree-shaped (some branch
+  recurses twice) with steps that are closures built at the call and transitively effect-free.
+  Left folds wait for M9's proved associativity. Effects in Core are the runtime's I/O and abort
+  calls; any closure call inside a step counts as impure.
+- **On the benchmarks:** every allocation is `Dest(result)` or `Frame`; nothing is `Heap`.
+  `bintrees`' `fold` and `unfold` are fork sites.
 
 ## 5. Tests
 

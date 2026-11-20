@@ -11,6 +11,9 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
 /** The backend slice's entry points (`docs/plans/phase-4.0-backend-slice.md`): a checked unit to
   * LLVM IR, and LLVM IR plus the C runtime to a native executable through `clang`.
   */
+/** Versioned Core and what M10 inferred about it. */
+final case class Analysed(fns: List[Fn], demands: DemandTable, memory: MemoryTable)
+
 object Backend:
 
   /** LLVM IR for `unit`, which must have passed the typer without errors. */
@@ -18,14 +21,18 @@ object Backend:
     core(unit).map(fns => EmitLLVM().program(Aborts(fns).map(Rc(_))))
 
   /** Core for `unit`: lowered, then split into the versions demand inference calls for (3.4.M3). */
-  def core(unit: CompilationUnit): Either[List[Diagnostic], List[Fn]] =
+  def core(unit: CompilationUnit): Either[List[Diagnostic], List[Fn]] = analyse(unit).map(_.fns)
+
+  /** Versioned Core with its demands and memory facts (3.4.M2–M4). */
+  def analyse(unit: CompilationUnit): Either[List[Diagnostic], Analysed] =
     val lower = Lower(unit)
     lower.program.map { fns =>
       val render = (t: fixed.core.Type) => unit.symbols.render(t)
       val (demands, table) = Demands.analyse(lower, fns, render)
       val byKey = Demands.typesByKey(lower, render)
       val versions = Versions(demands, table, fns, (k, parts) => byKey.get(k).flatMap(lower.copy(_, parts))).run()
-      versions ++ lower.functions.filter(_.name.contains(".copy["))
+      val all = versions ++ lower.functions.filter(_.name.contains(".copy["))
+      Analysed(all, table, Memory(all, table, v => lower.spans.getOrElse(v, Span.NoSpan)).run())
     }
 
   /** Write `ir` next to `out`, then link it with the runtime into the executable `out`. */
