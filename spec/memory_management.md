@@ -783,7 +783,8 @@ Fixed has no backend yet. Every performance statement in this document is a hypo
 - Relocation-on-growth waste versus a larger N (§6.3).
 - Retention by counted regions and blobs, and the copy-out volume (§6.4, §16.2).
 - Deferred dups in lanes (§17.3).
-- Baseline overhead: run time and reference-count traffic with `--no-specialise` against the default build, per benchmark (`spec/compilation_model.md` Rule CM5.7).
+- Baseline overhead: run time and reference-count traffic with `--no-specialise` against the default build, per benchmark (`spec/compilation_model.md` Rule CM5.7). First measurement, `docs/baselines/runtime-2026-11-20-phase-4.1.md`: up to 23% on the five runtime benchmarks, all of it witness calls; allocations, reuses and counted `dup` / `drop` are identical in both modes.
+- Whether unconditional reuse beats the runtime `rc == 1` test. First measurement: no measurable difference on the five benchmarks, so on the ownership axis a clone buys nothing there yet.
 - How much of that overhead the score recovers under the reference budget `B = 512` and weight base `W = 8`, how many clones a function gets, how often a function exceeds `B`, and the code-size cost (OQ-CM3).
 - The cost of calls through capability tables, which cannot borrow (Rule CM4.6, OQ-CM8).
 - How often the dynamic `rc == 1` path (§11.1) reuses a cell that static exclusivity missed. If it is rare, the shared version could drop the test.

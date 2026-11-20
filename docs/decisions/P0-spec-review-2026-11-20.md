@@ -84,7 +84,25 @@ Fixed in this change because they sit in text that was being edited:
 - No data type in the prelude satisfies `Ordering`, so `Ord.compare -> is Ordering` returns a value with no representation. Ordering comparisons on a value of parameter type have nothing to dispatch to; Phase 4.1 uses compiler-provided comparison entries until the library settles this.
 - Several prelude satisfactions lack bodies for some members (`List satisfies Filtering`, `Json satisfies Show`), and the typer does not check that a satisfaction defines every member.
 
-## 4. Corrections to statements made during the debate
+## 4. Found while implementing Phase 4.1
+
+Compiler faults that exist on `main` and were not fixed:
+
+- A generic function that rebuilds a `data Pair of (A, B)` cell (a `swap`) fails the exclusive-reuse check in a test build; with `--no-specialise` it corrupts the heap.
+- A parameter with an anonymous bound that is passed on to another function leaks.
+- Two parameters with the same anonymous bound, called at two different data types, both get the last argument's type in the instance path.
+- `fx_drop` is recursive; a long list can exhaust the native stack (Rule PR7.3 requires a loop).
+
+Limits and gaps of the first implementation, against the spec:
+
+- A cell can hold references only in its first 32 payload slots (30 captures for a closure); beyond that the compiler reports `B005`.
+- One reference witness serves every reference type, so the witness operation `copy` cannot be implemented (the header holds neither size nor field types). It needs the per-type witness the spec describes.
+- A wrong integer extension when a narrow scalar enters a slot is invisible at run time while every reader narrows again; only tests on the emitted IR catch it.
+- The typer has no phantom inference; the backend decides phantom-ness from the lowered code.
+- A result is treated as caller-chosen only where every returned value already has the result's slot form; functions polymorphic only in their result are compiled as instances.
+- See `spec/compilation_model.md` OQ-CM10 to OQ-CM12.
+
+## 5. Corrections to statements made during the debate
 
 - "Amortised bounds are sound at quantity 1" should have been "where the value is exclusively owned" (Rule Q4.1.d).
 - "The README says the target is C" was wrong: `README.md` :28 says LLVM IR. The C references are in `phase-3-typer.md`.

@@ -1,8 +1,10 @@
 # Fixed Compilation Model
 
-**Status:** Draft v0.1
+**Status:** Draft v0.2
 **Specifies:** how Fixed v0.4.4 source becomes code: the baseline version of every function, the uniform slot, witnesses, specialisation (clones, budget, score, mandatory cases), build modes, packages and the package ABI, the interface and body tiers, and coherence per link unit.
 **Last revised:** 2026-11-20
+
+**Changes from v0.1.** Amended from the first implementation (`docs/plans/phase-4.1-baseline-specialiser.md`, `docs/baselines/runtime-2026-11-20-phase-4.1.md`): the clones a `fip fn` body requests are mandatory (Rule CM5.5); a clone that nothing reaches at the end is dropped and reported as `unused` (Rules CM5.4, CM5.8); the specialiser may repeat its pass until ownership facts are stable (Rule CM5.4); new OQ-CM10 to OQ-CM12 record what the measurements showed about the weight, the order of the axes and tables per instance.
 
 **Why this document exists.** Until v0.3 of `spec/memory_management.md` the compilation model was implicit: lowering monomorphised every function from `main`, and code that could not be monomorphised (higher-order code, separate compilation) was a special case handled by class witnesses. This document reverses the default. Every function has one **baseline** version that is polymorphic and passes witnesses, in the style of Neut. Specialised versions are an optimisation added where the compiler can identify the types, ownership and classes that matter. The decisions behind it are recorded in `docs/decisions/P1`–`P5`.
 
@@ -260,6 +262,8 @@ Candidates are built in descending score order while the budget allows. Ties are
 
 Budgets only shrink and clones are never removed, so this terminates, and the result depends only on the program.
 
+Two refinements are permitted, because an implementation needs them. Ownership facts of results (`spec/quantities.md` Rule Q4.1.b) depend on which clones exist, so the specialiser may repeat the whole pass until those facts are stable; a clone chosen in an earlier pass stays chosen. A clone that no call reaches when the pass ends is not emitted and gives its charge back; the report lists it as `unused` (Rule CM5.8).
+
 With profile data, `weight` is the measured number of calls that requested the key. The formula and the budget do not change.
 
 ### 5.5 Mandatory specialisations (Rule CM5.5)
@@ -267,6 +271,7 @@ With profile data, `weight` is the measured number of calls that requested the k
 These are built whenever their conditions hold. They are not charged to the budget and are built in every build mode (§5.7):
 
 1. **Fusion and step inlining.** `spec/type_system.md` Rules 7.4.b.1 and 7.4.b.2: an `unfold` consumed by one `fold`, and a `fold` / `unfold` whose step is a lambda or a statically known function, when the data type is statically known at the call site. In a baseline version whose data type is a type parameter, the conditions do not hold and nothing is required; in a clone for a known type they hold again.
+3. **What a `fip fn` body calls.** A clone that a call site inside a `fip fn` body requests is built whatever the budget, and is not charged. Without it the body would call a baseline version, whose witness operations and count tests are reference-count operations (Rule CM4.7), and the function would fail its contract in `--no-specialise` mode or once a callee's budget is spent. This is bounded: a clone forced in this way requests further clones of its own function as an ordinary candidate, not as a forced one.
 2. **`fip fn`.** A `fip fn` has one body: the version in which every part it reuses is exclusively owned (`spec/memory_management.md` Rule MM18.3). That version takes the place of the baseline version of Rule CM3.1, and its entry is the function's **exclusive entry**. Its **shared entry** is an adapter that copies the demanded part of each shared argument (`spec/quantities.md` Rule Q9.3) and then calls the body. Wherever these rules say a caller "calls the baseline version" because no clone fits, a caller of a `fip fn` calls the shared entry. The adapter is not `fip`; a caller that reaches a `fip fn` through its shared entry is not `fip` either, and the copy is reported (`spec/memory_management.md` §19) and warned in hot code (W110, Rule MM5.5).
 
 ### 5.6 Beyond the budget (Rule CM5.6)
@@ -287,7 +292,7 @@ Copying the demanded part of a shared value remains only inside the shared entry
 
 ### 5.8 Reporting (Rule CM5.8)
 
-`fixed compile --explain-memory` (`spec/memory_management.md` §19) lists, per function: the size of its baseline version; every clone built, with its key, `removed`, `weight`, score and charge; and every candidate not built, with the reason (budget exhausted, function larger than `B`, `removed = 0`). `--format json` gives the same data.
+`fixed compile --explain-memory` (`spec/memory_management.md` §19) lists, per function: the size of its baseline version; every clone built, with its key, `removed`, `weight`, score and charge; and every candidate not built, with the reason (budget exhausted, function larger than `B`, `removed = 0`, or `unused`: chosen, then reached by no call when the pass ended). `--format json` gives the same data.
 
 ## 6. Packages
 
@@ -412,6 +417,9 @@ The typed tree is not part of either tier. Within one compilation the typed tree
 - **OQ-CM6 — Clones across packages and the budget.** Two importers each charge their own budget for the same clone, and the linker merges the result (Rule CM6.5). Whether a link-time view should deduplicate the charge is open.
 - **OQ-CM7 — Wider immediates.** Whether a pair of 64-bit values (for example `u128`, or a small tuple) should travel in two slots in baseline code instead of behind a pointer.
 - **OQ-CM8 — Borrowing and exclusivity through a table.** Rule CM4.6 passes every argument under `own`, and offers the exclusive pointer only to a caller that exclusively owns every argument in every part. Both are coarse. A requirement that could state `read` for its receiver would let table calls borrow; an exclusive pointer per parameter would let a polymorphic caller update a container in place while it shares the elements. Demands are otherwise never written (`spec/quantities.md` OQ-Q2), so this needs a measured cost before it gets syntax (`spec/memory_management.md` §21).
+- **OQ-CM10 — The weight is lexical.** Rule CM5.4 counts the `fold` / `unfold` steps that enclose a call site in its own function. A function that is called from inside a step but contains none requests its callees with weight 1. In the `records` benchmark the request that runs a million times ties with one that runs a hundred times and wins only by key order. Carrying the depth of a function's own call sites into the requests it makes would fix it; profile data makes the question moot.
+- **OQ-CM11 — Order of the axes.** Rule CM5.4 ranks all of a function's candidates together. The first implementation chooses type clones first and gives ownership clones what is left of the budget, because type clones are produced by lowering again while ownership clones need demand inference on the result. No benchmark shows a difference yet.
+- **OQ-CM12 — Tables per instance.** Rule CM4.2 gives a parameterised type one table and builds witness records for its instances. The first implementation emits one table per instance used and builds no record at run time; a call that would need one is compiled as an instance. Witness records are needed before a package can export a polymorphic function over a parameterised type.
 - **OQ-CM9 — Evidence across packages.** Rule CM4.3 fixes the order of an evidence vector by the canonical order of the effect row. Row variables, and the library entry points of `spec/effects.md` Rule E5.4, need the same treatment.
 
 ## 9. Cross-references
