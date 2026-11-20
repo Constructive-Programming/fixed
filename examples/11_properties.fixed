@@ -63,19 +63,18 @@ data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
 // Part 3: Partial satisfaction with `impossible`
 // =========================================================================
 
-// u64 is always present — it can never be "none"
-u64 satisfies Optional of Self:
-    Self as some
-    impossible as none
-// Now `u64 is Optional` means: u64 is always the "some" case.
-// Any code path that would call Optional.none on a u64 is a compile error.
-
 // A non-empty list can never be empty
 data NonEmptyList of A (head: A, tail: List of A)
 
-NonEmptyList satisfies Sequencing:
-    NonEmptyList as cons
+cap Pushed:
+    Self.fn push_on(top: Part, rest: List of Part) -> Self
+    Self.fn empty -> Self
+    fn top -> Part
+
+NonEmptyList satisfies Pushed:
+    NonEmptyList as push_on
     impossible as empty
+    fn top = self.head
 
 // =========================================================================
 // Part 4: Sorted-collection invariants live on the *result type*

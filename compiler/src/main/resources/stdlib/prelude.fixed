@@ -131,14 +131,36 @@ String satisfies Ord
 List satisfies Sequencing:
     Cons as cons
     Nil as empty
-List satisfies Folding
+    fn length = self.fold(0, (n, x) -> n + 1)
+    fn head = match self:
+        List.Cons(h, _) => Optional.some(h)
+        List.Nil => Optional.none
+    fn tail = match self:
+        List.Cons(_, t) => t
+        List.Nil => List.Nil
+List satisfies Folding:
+    fn fold(init: R, f: (R, Part) -> R) = self.fold((h, rest: R -> R) -> (acc) -> rest(f(acc, h)), () -> (acc) -> acc)(init)
+    fn fold_right(init: R, f: (Part, R) -> R) = self.fold((h, acc) -> f(h, acc), () -> init)
+    fn find(pred: Part -> bool) = self.fold((x, found) -> if pred(x): Optional.some(x) else: found, () -> Optional.none)
 List satisfies Functor
-List satisfies Filtering
+List satisfies Filtering:
+    fn filter(pred: Part -> bool) = self.fold((x, kept) -> if pred(x): List.Cons(x, kept) else: kept, () -> List.Nil)
 Maybe satisfies Optional:
     Just as some
     Nothing as none
-Json satisfies Show
-Json satisfies Eq
+    fn fold_right(init: R, f: (Part, R) -> R) = match self:
+        Maybe.Just(v) => f(v, init)
+        Maybe.Nothing => init
+    fn find(pred: Part -> bool) = match self:
+        Maybe.Just(v) => if pred(v): self else: Maybe.Nothing
+        Maybe.Nothing => self
+// Json has no Show, Eq or Clone: its `is Sequencing of Json` and `is Map of (String, Json)`
+// fields promise none of them, so no satisfaction could define its members (P6 D17).
+String satisfies Clone
+List satisfies Clone
+Maybe satisfies Clone
+Nat satisfies Clone
+Tuple satisfies Clone
 Tuple satisfies Pair:
     Tuple as pair
 bool satisfies Boolean:

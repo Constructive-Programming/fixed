@@ -326,9 +326,12 @@ object Typer:
                   case Type.TypeVar(id) if s1.unifier.boundsOf(id).isEmpty =>
                     (s1.unsupported(t.span, s"`.${t.method}` on a receiver of unknown type"), Type.NeverType)
                   case _ =>
-                    (if Members.abstractType(s1, resolved) then Members.autoDerivedCap(s1, t.method) else None) match
-                      case Some(cap) => (requireBound(s1, needs(cap)), Type.NeverType)
-                      case None      =>
+                    Members.autoDerivedCap(s1, t.method) match
+                      case Some(cap) if Members.abstractType(s1, resolved) =>
+                        (requireBound(s1, needs(cap)), Type.NeverType)
+                      case Some(cap) if Satisfaction.onRequest(s1, cap) =>
+                        (notCloned(s1, resolved, t.span), Type.NeverType)
+                      case _ =>
                         (
                           s1.error(DiagCode.T001, t.span, s"not found: member ${t.method} of ${show(s1, resolved)}"),
                           Type.NeverType
@@ -345,10 +348,21 @@ object Typer:
                     rest.iterator.map(c => (c, attempt(c))).find(_._2._1.errors == errors)
                       .getOrElse((first, firstAttempt))
                 val s3 = winner.origin match
+                  case Resolution.CapMember(cap, _)
+                      if Satisfaction.onRequest(s2, cap) && !Members.abstractType(s2, resolved) =>
+                    if Satisfaction.holds(s2, resolved, cap, Nil).isDefined then s2 else notCloned(s2, resolved, t.span)
                   case Resolution.CapMember(cap, _) if Members.autoDerivedCap(s2, t.method).contains(cap) =>
                     requireBound(s2, needs(cap))
                   case _ => s2
                 (s3.copy(types = s3.types.resolved(t, winner.origin)), result)
+
+  /** `T010`: `clone` on a concrete type that is not `Clone`; a data type has it only on request. */
+  private def notCloned(s: TyperState, t: Type, span: Span): TyperState =
+    val data = t match
+      case Type.TypeRef(id, _) => s.symbols.dataNamed(s.symbols(id).name).filter(_ == id)
+      case _                   => None
+    val hint = data.map(id => s"declare it: `${s.symbols(id).name} satisfies Clone`")
+    s.error(DiagCode.T010, span, s"${show(s, t)} does not satisfy Clone", hint)
 
   /** P6 D10: `c.op` needs `c.cap` when `c.value` is abstract ([[Members.abstractType]]). A value of a
     * still unsolved variable may turn out abstract: it is checked again when the unit finishes.

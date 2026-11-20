@@ -364,6 +364,166 @@ class TyperSuite extends munit.FunSuite:
     )
     assertEquals(typedUnit(optionalCap + "Maybe satisfies Opt:\n    Just as some\n    impossible as none\n").diags, Nil)
 
+  test("P6 D17: a satisfaction must define every member without a default (T010 names them)"):
+    val cap = "cap Shape:\n    fn area -> u64\n    fn sides -> u64\n    fn big -> bool = self.area > 9\n"
+    val data = "data Sq:\n    Sq(w: u64)\n    Dot\n"
+    val none = typedUnit(cap + data + "Sq satisfies Shape\n")
+    assertEquals(codes(none), List(DiagCode.T010))
+    assertEquals(none.diags.head.message, "Sq does not satisfy Shape: missing area, sides")
+    val one = typedUnit(cap + data + "Sq satisfies Shape:\n    fn area = 4\n")
+    assertEquals(one.diags.map(_.message), List("Sq does not satisfy Shape: missing sides"))
+    assertEquals(typedUnit(cap + data + "Sq satisfies Shape:\n    fn area = 4\n    fn sides = 4\n").diags, Nil)
+
+  test("P6 D17: members inherited through extends are required too, unless another satisfaction covers them"):
+    val caps =
+      "cap Base:\n    fn base -> u64\ncap Top extends Base:\n    fn top -> u64\ndata D:\n    D(n: u64)\n    E\n"
+    assertEquals(
+      typedUnit(caps + "D satisfies Top:\n    fn top = 1\n").diags.map(_.message),
+      List("D does not satisfy Top: missing base")
+    )
+    assertEquals(typedUnit(caps + "D satisfies Top:\n    fn top = 1\n    fn base = 2\n").diags, Nil)
+    assertEquals(
+      typedUnit(caps + "D satisfies Base:\n    fn base = 2\nD satisfies Top:\n    fn top = 1\n").diags,
+      Nil
+    )
+
+  test("P6 D17: derivation defines members: fold, accessors, Functor.map, field-wise Show"):
+    val folds =
+      "cap Sum2:\n    Self.fn a -> Self\n    Self.fn b -> Self\n    fn fold(on_a: () -> R, on_b: () -> R) -> R\n" +
+        "data AB:\n    A\n    B\nAB satisfies Sum2:\n    A as a\n    B as b\n"
+    assertEquals(typedUnit(folds).diags, Nil)
+    val acc = "cap Named:\n    fn name -> String\ndata P(name: String, n: u64)\nP satisfies Named\n"
+    assertEquals(typedUnit(acc).diags, Nil)
+    assertEquals(typedUnit("data Box of A:\n    Box(v: A)\nBox satisfies Functor\n").diags, Nil)
+    assertEquals(typedUnit("data Pt:\n    Pt(x: u64)\nPt satisfies Show\n").diags, Nil)
+    assertEquals(
+      typedUnit("data Holder:\n    Holder(f: u64 -> u64)\nHolder satisfies Show\n").diags.map(_.message),
+      List("Holder does not satisfy Show: missing show")
+    )
+
+  test("P6 D17: a covering satisfaction must name the capability; reaching it is not enough"):
+    val caps =
+      "cap Base:\n    fn base -> u64\ncap T1 extends Base:\n    fn t1 -> u64\ncap T2 extends Base:\n    fn t2 -> u64\n" +
+        "data D:\n    D(n: u64)\n    E\n"
+    val diags = typedUnit(caps + "D satisfies T1:\n    fn t1 = 1\nD satisfies T2:\n    fn t2 = 1\n").diags
+    assertEquals(
+      diags.map(_.message),
+      List("D does not satisfy T1: missing base", "D does not satisfy T2: missing base")
+    )
+    val bt = "cap Base:\n    fn base -> u64\ncap Top extends Base:\n    fn top -> u64\ndata D:\n    D(n: u64)\n    E\n"
+    assertEquals(
+      typedUnit(bt + "D satisfies Base\nD satisfies Top:\n    fn top = 1\n").diags.map(_.message),
+      List("D does not satisfy Base: missing base")
+    )
+
+  test("P6 D17: defaults and statics: a default needs no definition, an inherited constructor needs a body"):
+    val d = "data D:\n    D(n: u64)\n    E\n"
+    val dflt = "cap Base:\n    fn base -> u64 = 3\ncap Top extends Base:\n    fn top -> u64\n"
+    assertEquals(typedUnit(dflt + d + "D satisfies Top:\n    fn top = 1\n").diags, Nil)
+    val st = "cap Base:\n    Self.fn mk -> Self\ncap Top extends Base:\n    fn top -> u64\n" + d
+    assertEquals(
+      typedUnit(st + "D satisfies Top:\n    fn top = 1\n").diags.map(_.message),
+      List("D does not satisfy Top: missing mk")
+    )
+    assertEquals(typedUnit(st + "D satisfies Top:\n    fn top = 1\n    Self.fn mk -> Self = D.E\n").diags, Nil)
+    val own = "cap Z:\n    Self.fn zero -> Self\n    Self.fn one -> Self = Z.zero\n    fn m -> u64\n" + d
+    assertEquals(typedUnit(own + "D satisfies Z:\n    E as zero\n    fn m = 1\n").diags, Nil)
+    assertEquals(typedUnit(own + "D satisfies Z\n").diags.map(_.message), List("D does not satisfy Z: missing zero, m"))
+    assertEquals(typedUnit(own + "D satisfies Z:\n    Self.fn zero -> Self = D.E\n    fn m = 1\n").diags, Nil)
+
+  test("P6 D17: what derivation does not define"):
+    val ab = "data AB:\n    A\n    B\n"
+    assertEquals(
+      typedUnit(ab + "AB satisfies Folding\n").diags.map(_.message),
+      List("AB does not satisfy Folding: missing find, fold, fold_right")
+    )
+    assertEquals(
+      typedUnit(ab + "cap K:\n    fn fold(x: u64) -> bool\nAB satisfies K\n").diags.map(_.message),
+      List("AB does not satisfy K: missing fold")
+    )
+    val named = "cap Named:\n    fn name -> String\n"
+    List(
+      named + "data P(name: u64)\nP satisfies Named\n",
+      named + "data P:\n    P(name: String)\n    Q(name: String)\nP satisfies Named\n"
+    ).foreach(code =>
+      assertEquals(typedUnit(code).diags.map(_.message), List("P does not satisfy Named: missing name"))
+    )
+    assertEquals(
+      typedUnit("data F of A:\n    F(f: A -> u64)\nF satisfies Functor\n").diags.map(_.message),
+      List("F does not satisfy Functor: missing map")
+    )
+    val h = "data H:\n    H(f: u64 -> u64)\n"
+    assertEquals(typedUnit(h + "H satisfies Eq\n").diags.map(_.message), List("H does not satisfy Eq: missing eq"))
+    assertEquals(
+      typedUnit(h + "H satisfies Clone\n").diags.map(_.message),
+      List("H does not satisfy Clone: missing clone")
+    )
+    assertEquals(
+      typedUnit(h + "H satisfies Ord\n").diags.map(_.message),
+      List("H does not satisfy Ord: missing compare, eq")
+    )
+    assertEquals(typedUnit(h + "H satisfies Show:\n    fn show = \"h\"\n").diags, Nil)
+    assertEquals(
+      typedUnit("data Pt:\n    Pt(x: u64)\nPt satisfies Eq\nPt satisfies Ord\nPt satisfies Clone\n").diags,
+      Nil
+    )
+
+  test("Clone is derived on request: only a data type that declares `satisfies Clone` has it"):
+    val p = "data P:\n    P(a: u64)\n"
+    val bare = typedUnit(p + "fn f(x: P) -> P = x.clone()\n").diags
+    assertEquals(bare.map(_.code), List(DiagCode.T010))
+    assertEquals(bare.head.suggestion, Some("declare it: `P satisfies Clone`"))
+    assertEquals(typedUnit(p + "P satisfies Clone\nfn f(x: P) -> P = x.clone()\n").diags, Nil)
+    val need = "fn need(x: is Clone) -> () = ()\n"
+    assertEquals(codes(typedUnit(p + need + "fn f(x: P) -> () = need(x)\n")), List(DiagCode.T010))
+    assertEquals(typedUnit(p + need + "P satisfies Clone\nfn f(x: P) -> () = need(x)\n").diags, Nil)
+    val box = typedUnit("data Box of A:\n    Box(v: A)\nfn f(x: Box of u64) -> Box of u64 = x.clone()\n").diags
+    assertEquals(
+      box.map(d => (d.message, d.suggestion)),
+      List(("Box of u64 does not satisfy Clone", Some("declare it: `Box satisfies Clone`")))
+    )
+    List(
+      p + "fn f(x: List of P) -> List of P = x.clone()\n",
+      p + "fn f(x: (P, u64)) -> (P, u64) = x.clone()\n",
+      p + "data Box of A:\n    Box(v: A)\nBox satisfies Clone\nfn f(x: Box of P) -> Box of P = x.clone()\n",
+      "fn f(g: u64 -> u64) -> u64 -> u64 = g.clone()\n"
+    ).foreach(code => assertEquals(codes(typedUnit(code)), List(DiagCode.T010), code))
+    assertEquals(
+      typedUnit(p + "data Q:\n    Q(p: P)\nQ satisfies Clone\n").diags.map(_.message),
+      List("Q does not satisfy Clone: missing clone")
+    )
+    assertEquals(typedUnit(p + "P satisfies Clone\ndata Q:\n    Q(p: P)\nQ satisfies Clone\n").diags, Nil)
+    assertEquals(
+      typedUnit(p +
+        "fn f(x: P) -> String = x.show()\nfn need(x: is Eq) -> () = ()\nfn g(x: P) -> () = need(x)\n").diags,
+      Nil
+    )
+    List(
+      "fn f(xs: List of u64) -> List of u64 = xs.clone()\n",
+      "fn f(x: u64) -> u64 = x.clone()\n",
+      "fn f(x: (u64, String)) -> (u64, String) = x.clone()\n"
+    ).foreach(code => assertEquals(typedUnit(code).diags, Nil, code))
+
+  test("P6 D17: compiler-provided capabilities of primitive types need no definitions; others do"):
+    assertEquals(
+      typedUnit("cap Tw:\n    fn twice -> u64\nu64 satisfies Tw\n").diags.map(_.message),
+      List("u64 does not satisfy Tw: missing twice")
+    )
+    assertEquals(typedUnit("cap Tw:\n    fn twice -> u64\nu64 satisfies Tw:\n    fn twice = self * 2\n").diags, Nil)
+    assertEquals(typedUnit("u64 satisfies Show\nString satisfies Show\nString satisfies Ord\n").diags, Nil)
+    assertEquals(
+      typedUnit("cap Cc:\n    fn concat(other: Self) -> Self\nu64 satisfies Concat\n").diags.map(_.message),
+      List("u64 does not satisfy Concat: missing concat")
+    )
+    assertEquals(
+      typedUnit("char satisfies Boolean:\n    Self as yes\n    Self as no\n").diags.map(_.message),
+      List("char does not satisfy Boolean: missing fold")
+    )
+    assertEquals(
+      typedUnit("cap Tw:\n    fn twice -> u64\nString satisfies Tw\n").diags.map(_.message),
+      List("String does not satisfy Tw: missing twice")
+    )
+
   test("3.1.M3: a mapped variant's fields must fit the requirement's parameters"):
     assertEquals(
       codes(typedUnit(optionalCap + "Maybe satisfies Opt:\n    Nothing as some\n    Just as none\n")),
@@ -392,8 +552,10 @@ class TyperSuite extends munit.FunSuite:
     assertEquals(ok.diags, Nil)
     val bad = typedUnit(base + "Maybe satisfies Opt:\n    Just as some\n    Nothing as none\n    fn present = 42\n")
     assertEquals(codes(bad), List(DiagCode.T002))
-    val unknown =
-      typedUnit(base + "Maybe satisfies Opt:\n    Just as some\n    Nothing as none\n    fn absent = true\n")
+    val unknown = typedUnit(
+      base +
+        "Maybe satisfies Opt:\n    Just as some\n    Nothing as none\n    fn present = true\n    fn absent = true\n"
+    )
     assertEquals(codes(unknown), List(DiagCode.T014))
 
   test("3.1.M4: cap default bodies see only what the capability promises"):
@@ -426,26 +588,37 @@ class TyperSuite extends munit.FunSuite:
 
   test("Rule 8.1.a: trailing fields with defaults may be absent from the requirement"):
     val cap = "cap Queue:\n    Self.fn empty -> Self\n    fn size -> u64\n"
-    val withDefault = cap + "data Simple(tasks: List of u64 = List.Nil)\nSimple satisfies Queue:\n    Simple as empty\n"
+    val withDefault =
+      cap +
+        "data Simple(tasks: List of u64 = List.Nil)\nSimple satisfies Queue:\n    Simple as empty\n    fn size = 0\n"
     assertEquals(typedUnit(withDefault).diags, Nil)
     val resolved = typedUnit(withDefault + "fn make() -> Simple = Queue.empty\n")
     assertEquals(resolved.diags, Nil)
     assertEquals(resolved.constructors.map((_, _, v) => v), List("Simple"))
-    val noDefault = cap + "data Simple(tasks: List of u64)\nSimple satisfies Queue:\n    Simple as empty\n"
+    val noDefault = cap +
+      "data Simple(tasks: List of u64)\nSimple satisfies Queue:\n    Simple as empty\n    fn size = 0\n"
     assertEquals(codes(typedUnit(noDefault)), List(DiagCode.T010))
+
+  /** `Sequencing`'s members that a `head`/`tail` product does not derive (its fields have other types). */
+  private val seqBodies = "    fn length = 1\n    fn head = Optional.some(self.head)\n    fn tail = self\n"
 
   test("Rule 8.1.a: a field may refine an is-bound parameter; it must satisfy the bound"):
     val nel = "data Nel of A (head: A, tail: List of A)\n"
-    assertEquals(typedUnit(nel + "Nel satisfies Sequencing:\n    Nel as cons\n    impossible as empty\n").diags, Nil)
+    assertEquals(
+      typedUnit(nel + "Nel satisfies Sequencing:\n    Nel as cons\n    impossible as empty\n" + seqBodies).diags,
+      Nil
+    )
     val bad = "data Bad of A (head: A, tail: u64)\n"
     assertEquals(
-      codes(typedUnit(bad + "Bad satisfies Sequencing:\n    Bad as cons\n    impossible as empty\n")),
+      codes(typedUnit(bad +
+        "Bad satisfies Sequencing:\n    Bad as cons\n    impossible as empty\n" + seqBodies)),
       List(DiagCode.T010)
     )
 
   test("Rule 8.1.a: a resolved requirement call is typed against the variant's fields"):
     val nel =
-      "data Nel of A (head: A, tail: List of A)\nNel satisfies Sequencing:\n    Nel as cons\n    impossible as empty\n"
+      "data Nel of A (head: A, tail: List of A)\nNel satisfies Sequencing:\n    Nel as cons\n    impossible as empty\n" +
+        seqBodies
     assertEquals(
       typedUnit(nel + "fn grow(x: u64, xs: List of u64) -> Nel of u64 = Sequencing.cons(x, xs)\n").diags,
       Nil

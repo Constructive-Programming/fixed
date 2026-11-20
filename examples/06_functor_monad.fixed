@@ -7,7 +7,7 @@
 //   - `satisfies` connecting MyMaybe data type to Optional cap
 //   - `do` notation as sugar for flat_map chains
 //   - Generic functions that work over any Monad
-//   - Auto-derived fold, map, flat_map, pure from data structure
+//   - Auto-derived fold and map; flat_map and pure written in the satisfaction
 //   - match for data types (List), fold for capabilities (Optional)
 
 use std.io.Console
@@ -29,8 +29,8 @@ cap Monad extends Functor:
 // --- Optional is a Monad ---
 //
 // Optional declares some/none/fold as constructor requirements.
-// The compiler auto-derives Functor (map via fold + some/none)
-// and Monad (flat_map via fold) from the structure.
+// The compiler auto-derives Functor (map) from the structure; Monad's
+// pure and flat_map are written in the satisfaction below.
 
 cap Optional extends Monad:
     Self.fn some(value: Part) -> Self
@@ -45,7 +45,11 @@ data MyMaybe of A:
 MyMaybe satisfies Optional:
     Just as some
     Nothing as none
-// fold, map, flat_map, pure are auto-derived from MyMaybe's structure
+    Self.fn pure(value: Part) -> Self = MyMaybe.Just(value)
+    fn flat_map(f: Part -> Self of B) = match self:
+        MyMaybe.Just(a) => f(a)
+        MyMaybe.Nothing => MyMaybe.Nothing
+// fold and map are auto-derived from MyMaybe's structure
 
 // --- Generic monadic functions ---
 

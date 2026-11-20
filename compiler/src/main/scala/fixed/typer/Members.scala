@@ -180,8 +180,14 @@ object Members:
       case Type.TypeVar(id)       => capMember(s, s.unifier.boundsOf(id), resolved, name)
       case Type.AppliedVar(id, _) => capMember(s, s.unifier.boundsOf(id), resolved, name)
       case _                      => Nil
+    val data = resolved match
+      case Type.TypeRef(id, _) => s.symbols(id).kind == SymKind.Data
+      case _: Type.TupleType   => true
+      case _                   => false
+    val fallback =
+      autoDerived.flatMap(s.symbols.scope.get).filterNot(c => data && Satisfaction.onRequest(s, c))
     if own.nonEmpty || abstractType(s, resolved) then own
-    else capMember(s, autoDerived.flatMap(s.symbols.scope.get).map(Type.CapRef(_, Nil)), resolved, name)
+    else capMember(s, fallback.map(Type.CapRef(_, Nil)), resolved, name)
 
   /** A field of a single-variant data type, as a zero-argument member. */
   private def field(s: TyperState, data: SymbolId, args: List[Type], name: String): Option[Candidate] =
@@ -358,10 +364,13 @@ object Members:
     * single `()` parameter and no parameters stay distinct.
     */
   /** A signature's parameter count (0 for a non-function). */
-  def arity(t: Type): Int =
+  def arity(t: Type): Int = paramTypes(t).size
+
+  /** A signature's parameter types (none for a non-function). */
+  def paramTypes(t: Type): List[Type] =
     t match
-      case Type.ArrowType(lhs, _, _) => params(lhs).size
-      case _                         => 0
+      case Type.ArrowType(lhs, _, _) => params(lhs)
+      case _                         => Nil
 
   def params(lhs: Type): List[Type] =
     lhs match

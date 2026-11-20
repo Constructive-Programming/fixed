@@ -70,6 +70,10 @@ data VarMap(bindings: List of (is Pair of (String, f64)) = List.Nil)
 
 VarMap satisfies Env:
     VarMap as empty
+    fn bind(name: String, value: f64) = VarMap.VarMap(List.Cons(Pair.pair(name, value), self.bindings))
+    fn lookup(name: String) = self.bindings.fold_right(Optional.none, (entry, found) ->
+        if entry.first == name: Optional.some(entry.second) else: found
+    )
 
 // --- Built-in function registry ---
 

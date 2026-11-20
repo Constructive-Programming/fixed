@@ -201,11 +201,16 @@ object Namer:
     val (c3, supers) = mapAccum(c2, cap.extendsList)(capBound)
     val c4 = cap.body.foldLeft(c3) { (ci, item) =>
       item match
-        case m: Trees.InstanceMethod => member(ci, m, SymKind.Method)._1
-        case m: Trees.StaticMethod   => member(ci, m, SymKind.StaticMethod)._1
+        case m: Trees.InstanceMethod => withDefault(member(ci, m, SymKind.Method), m)
+        case m: Trees.StaticMethod   => withDefault(member(ci, m, SymKind.StaticMethod), m)
         case _                       => ci
     }
     (c4, Type.IsBound(supers.flatten))
+
+  /** A capability member with a body is a default: a satisfaction need not define it (Rule 6.1). */
+  private def withDefault(entered: (Ctx, SymbolId), m: Trees.FnLike): Ctx =
+    val (c, id) = entered
+    if m.body.isDefined then c.copy(table = c.table.markDefaulted(id)) else c
 
   /** A data type's info is `TypeRef(self, typeParams)`; each variant is a constructor. */
   private def dataSignature(c: Ctx, data: Trees.DataDecl, id: SymbolId): (Ctx, Type) =

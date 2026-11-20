@@ -47,14 +47,47 @@ object Declarations:
           case _ => si
         (si1, seen + name)
     }
-    val missing = requirements.keySet -- mapped.map(_.capCtor)
+    val written = d.mappings.collect { case fn: Trees.StaticMethod if fn.body.isDefined => fn.name }
+    val unmapped = requirements.values.filterNot(m =>
+      mapped.exists(_.capCtor == m.name) || written.contains(m.name) || s.symbols.hasDefault(m.id)
+    )
+    val missing = unmapped.map(_.name).toList.sorted ++ undefined(s1, d, cap)
     if missing.isEmpty then s1
     else
       s1.error(
         DiagCode.T010,
         d.span,
-        s"${d.typeName} does not satisfy $capName: missing ${missing.toList.sorted.mkString(", ")}"
+        s"${d.typeName} does not satisfy $capName: missing ${missing.mkString(", ")}"
       )
+
+  /** Whether the compiler provides capability `cap` for the primitive type or `String` named `t`
+    * (`spec/stdlib.md` §4): `Show`, `Eq`, `Ord` and `Clone` for all of them, `Numeric` for the
+    * numeric types, `Concat` for `String`, `Boolean` for `bool`.
+    */
+  private def provided(t: String, cap: String): Boolean =
+    cap match
+      case "Show" | "Eq" | "Ord" | "Clone" => true
+      case "Numeric"                       => !Set("String", "bool", "char")(t)
+      case "Concat"                        => t == "String"
+      case "Boolean"                       => t == "bool"
+      case _                               => false
+
+  /** Members of `cap` and of what it `extends`, but not its own constructor requirements (mapped
+    * instead), that `d` leaves without a body, a default or a derivation (P6 D17). A member a
+    * nearer capability redeclares (`Optional.fold` over `Folding.fold`) is that one. A capability
+    * the type satisfies in a declaration of its own is checked there.
+    */
+  private def undefined(s: TyperState, d: Trees.SatisfiesDecl, cap: SymbolId): List[String] =
+    val data = s.symbols.dataNamed(d.typeName)
+    val bodies = d.mappings.collect { case fn: Trees.FnLike if fn.body.isDefined => fn.name }.toSet
+    val own = s.symbols.satisfies.getOrElse(d.typeName, Nil).collect { case Type.CapRef(c, _) => c }.toSet
+    val builtin = data.isEmpty || d.typeName == "String"
+    def needed(k: SymbolId) = (k == cap || !own(k)) && !(builtin && provided(d.typeName, s.symbols(k).name))
+    def defined(m: Denotation) = bodies(m.name) || s.symbols.hasDefault(m.id) ||
+      data.exists(Satisfaction.derives(s, _, m))
+    MemberTables.table(s.symbols, cap).values.flatMap(_.values.map(_.head)).toList
+      .filter(e => needed(e.cap) && (e.member.kind == SymKind.Method || e.cap != cap))
+      .map(_.member).filterNot(defined).map(_.name).distinct.sorted
 
   /** `Variant as req`: the variant's fields unify with the requirement's parameters, `Self` being
     * the satisfying data type and `Part` its element type.
@@ -81,9 +114,7 @@ object Declarations:
                 )
               )
             val (s3, fields) = Members.fieldTypes(s2, data, args, v.id)
-            val params = sig match
-              case Type.ArrowType(lhs, _, _) => Members.params(lhs)
-              case _                         => Nil
+            val params = Members.paramTypes(sig)
 
             /** Rule 8.1.a: trailing fields with a default may be absent from the requirement. */
             val omitted = s3.symbols.fieldsOf(v.id).drop(params.size).toList
@@ -121,8 +152,7 @@ object Declarations:
       si.symbols.membersOf(cap).find(m => m.kind == kind && m.name == fn.name).fold(si) { m =>
         val sub = Members.Subst(Members.Subst.of(Nil, Nil), Set.empty, Some(self), None)
         val (si1, sig) = Members.instantiate(si, m.info, sub)
-        val scoped = (params ++ si1.symbols.typeParamsOf(m.id)).map(p => si1.symbols(p).name -> p)
-        method(si1, fn, sig, cap, scoped, Option.when(kind == SymKind.Method)(self))
+        method(si1, fn, sig, cap, params ++ si1.symbols.typeParamsOf(m.id), Option.when(kind == SymKind.Method)(self))
       }
     }
 
@@ -147,7 +177,7 @@ object Declarations:
           case Some(e) =>
             val sub = Members.Subst(Members.Subst.of(Nil, Nil), Set(e.cap), Some(self), part)
             val (si1, sig) = Members.instantiate(si, e.member.info, sub)
-            method(si1, fn, sig, cap, Nil, Option.when(kind == SymKind.Method)(self))
+            method(si1, fn, sig, cap, si1.symbols.typeParamsOf(e.member.id), Option.when(kind == SymKind.Method)(self))
       }
     }
 
@@ -166,7 +196,7 @@ object Declarations:
       fn: Trees.FnLike,
       sig: Type,
       owner: SymbolId,
-      scoped: List[(String, SymbolId)],
+      scoped: List[SymbolId],
       self: Option[Type]
   ): TyperState =
     sig match
@@ -180,7 +210,16 @@ object Declarations:
           )
         else
           val locals = fn.params.map(_.name).zip(params) ++ self.map("self" -> _)
-          fn.body.fold(s)(Typer.typedMethodBody(s, _, owner, locals, scoped, ret, fx, fn.name))
+          fn.body.fold(s)(Typer.typedMethodBody(
+            s,
+            _,
+            owner,
+            locals,
+            scoped.map(p => s.symbols(p).name -> p),
+            ret,
+            fx,
+            fn.name
+          ))
       case _ => s
 
   /** Rule 6.2: a member name a capability inherits from two parents, without declaring it itself,

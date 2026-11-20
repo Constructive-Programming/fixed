@@ -172,6 +172,14 @@ data SimpleQueue(tasks: List of (() -> () with Async) = List.Nil)
 
 SimpleQueue satisfies TaskQueue:
     SimpleQueue as empty
+    fn push(task: () -> () with Async) =
+        SimpleQueue.SimpleQueue(self.tasks.fold_right(List.Cons(task, List.Nil), (t, rest) -> List.Cons(t, rest)))
+    fn pop = match self.tasks:
+        List.Cons(task, rest) => Optional.some(Pair.pair(task, SimpleQueue.SimpleQueue(rest)))
+        List.Nil => Optional.none
+    fn is_empty = match self.tasks:
+        List.Cons(_, _) => false
+        List.Nil => true
 
 // run_scheduler: total schedulers also need an iteration bound (max_steps).
 // Each fold step pops one task from the queue, runs one effect, and updates

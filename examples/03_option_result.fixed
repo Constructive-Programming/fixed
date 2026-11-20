@@ -45,6 +45,12 @@ MyMaybe satisfies Optional:
     fn orElse(other: MyMaybe of Part) = match self:
         MyMaybe.Nothing => other
         _ => self
+    fn fold_right(init: R, f: (Part, R) -> R) = match self:
+        MyMaybe.Just(a) => f(a, init)
+        MyMaybe.Nothing => init
+    fn find(pred: Part -> bool) = match self:
+        MyMaybe.Just(a) => if pred(a): Maybe.Just(a) else: Maybe.Nothing
+        MyMaybe.Nothing => Maybe.Nothing
 
 data Outcome of (E, A):
     Success(value: A)

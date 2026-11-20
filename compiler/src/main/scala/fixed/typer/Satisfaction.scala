@@ -18,6 +18,9 @@ object Satisfaction:
   /** Capabilities `Rule 7.4` derives from a data type's fields. */
   private val fieldDerived = Set("Show", "Eq", "Clone", "Ord")
 
+  /** `Clone` is derived only on request: a data type has it only through `T satisfies Clone`. */
+  def onRequest(s: TyperState, cap: SymbolId): Boolean = s.symbols(cap).name == "Clone"
+
   /** Some capability in `bounds` reaches `cap` through its `extends` closure. */
   def boundsReach(s: TyperState, bounds: List[Type], cap: SymbolId): Boolean =
     Members.expandAliases(s.symbols, bounds).exists {
@@ -36,12 +39,16 @@ object Satisfaction:
         d.kind match
           case SymKind.TypeParam => Option.when(boundsReach(s, Members.boundsOf(s, id), cap))(s)
           case SymKind.Data      =>
-            if declared(s, d.name, cap) || derived(s, id, cap) then withArgs(s, recvArgs, args) else None
+            /** A requested `Clone` holds at an instance whose arguments are `Clone` too. */
+            val elements = !onRequest(s, cap) || recvArgs.forall(a => holds(s, a, cap, Nil).isDefined)
+            if declared(s, d.name, cap) && elements || (!onRequest(s, cap) && derived(s, id, cap)) then
+              withArgs(s, recvArgs, args)
+            else None
           case _ => Some(s)
       case Type.PrimType(n) =>
         val numeric = Members.isNumeric(s, Type.PrimType(n)) &&
           s.symbols.scope.get("Numeric").exists(nu => s.members.closure(nu).contains(cap.toInt))
-        val clone = primitives(n) && s.symbols(cap).name == "Clone"
+        val clone = primitives(n) && onRequest(s, cap)
         Option.when(numeric || clone || declared(s, n, cap))(s)
       case Type.IsBound(bs)       => Option.when(boundsReach(s, bs, cap))(s)
       case c @ Type.CapRef(_, _)  => Option.when(boundsReach(s, List(c), cap))(s)
@@ -132,6 +139,29 @@ object Satisfaction:
   /** An in-scope `name satisfies C'` with `cap` in `closure(C')`. */
   private def declared(s: TyperState, name: String, cap: SymbolId): Boolean =
     boundsReach(s, s.symbols.satisfies.getOrElse(name, Nil), cap)
+
+  /** Data type `data` provides capability member `m` without a body: the derived `fold` (Rule
+    * 7.4.a), for a `fold` that takes one function per variant; the accessor of a single-variant
+    * data type's field (Rule 7.4.d), for a parameterless member whose result type the field has; a
+    * member of `Functor`, `Show`, `Eq`, `Clone` or `Ord` when Rule 7.4 derives that capability.
+    */
+  def derives(s: TyperState, data: SymbolId, m: fixed.core.Denotation): Boolean =
+    val variants = s.symbols.variantsOf(data).toList
+    val own = s.symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil))
+    val sub =
+      Members.Subst(Members.Subst.of(Nil, Nil), Set(m.id, m.owner), Some(Type.TypeRef(data, own)), own.lastOption)
+    val (s1, sig) = Members.instantiate(s, m.info, sub)
+    val result = sig match
+      case Type.ArrowType(_, r, _) => r
+      case value                   => value
+    val params = Members.paramTypes(sig)
+    val fold = m.name == "fold" && params.size == variants.size && params.forall {
+      case _: Type.ArrowType => true
+      case _                 => false
+    }
+    val accessor = params.isEmpty && variants.sizeIs == 1 &&
+      s.symbols.fieldsOf(variants.head.id).exists(f => f.name == m.name && s1.tryUnify(result, f.info).isDefined)
+    fold || accessor || (s.symbols(m.owner).name != "Folding" && derived(s, data, m.owner))
 
   /** Rule 7.4: `Folding` for any data with variants, `Functor` over the rightmost type parameter
     * (covariant, never contravariant), and `Show` / `Eq` / `Clone` / `Ord` when every field type
