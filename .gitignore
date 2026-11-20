@@ -2,6 +2,8 @@
 target/
 *.o
 *.out
+# Golden outputs of the examples are test inputs, not build artifacts.
+!examples/golden/*.out
 
 # Scala / sbt
 .bloop/
