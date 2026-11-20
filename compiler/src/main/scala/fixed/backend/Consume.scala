@@ -14,9 +14,7 @@ object Consume:
 
   /** The rewritten functions and each function's borrowed parameter indices (after erasure). */
   def apply(a: Analysed): (List[Fn], Map[String, Set[Int]]) =
-    val indirect = a.fns.flatMap(f => Core.lets(f.body)).collect { case (_, Rhs.Closure(code, _, exclusive)) =>
-      List(code, exclusive)
-    }.flatten.toSet + "main"
+    val indirect = Core.closureEntries(a.fns) + "main"
     val needs = (f: Fn) => if indirect(f.name) then Nil else a.demands.params.getOrElse(f.instance, Nil)
     val erased =
       a.fns.map(f => f.name -> needs(f).zipWithIndex.collect { case (n, i) if n.root == Demand.Zero => i }.toSet).toMap

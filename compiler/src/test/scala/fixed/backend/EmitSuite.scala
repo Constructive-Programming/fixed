@@ -295,6 +295,59 @@ class EmitSuite extends munit.FunSuite:
     assert("%wd\\.\\d+ = sext i8 ".r.findFirstIn(ir).isDefined, s"the i8 field is not sign-extended:\n$ir")
     assert("= trunc i64 %\\S+\\.s to i8".r.findFirstIn(ir).isDefined, s"the i8 field is not narrowed:\n$ir")
 
+  /** Closures of every narrow scalar kind, built in `make`, stored in a cell and called from
+    * `call_all`, which did not create them; `twice` captures one closure in another. In `scaled` a
+    * closure returning an `f32` aborts, so its code widens the zero the abort path returns.
+    */
+  private val closures = header +
+    "data Fns:\n    Fns(neg: i8 -> i8, big: u8 -> u8, half: f32 -> f32, flip: bool -> bool, " +
+    "same: char -> char, unit: () -> (), wide: f64 -> f64, mix: (i8, u8, f32, bool, char, ()) -> String)\n\n" +
+    "fn make(k: i8) -> Fns =\n    let c = 'q'\n" +
+    "    Fns.Fns((x) -> x - k, (x) -> x + 100, (x) -> x * 0.5, (b) -> !b, (x) -> c, () -> (), (x) -> x * 2.0,\n" +
+    "        (a, b, f, t, ch, u) -> a.show().concat(\" \").concat(b.show()).concat(\" \").concat(f.show())\n" +
+    "            .concat(\" \").concat(t.show()).concat(\" \").concat(ch.show()))\n\n" +
+    "fn call_all(fs: Fns) -> String =\n    match fs:\n        Fns.Fns(neg, big, half, flip, same, unit, wide, mix) =>\n" +
+    "            let twice = (x: i8) -> neg(neg(x))\n            unit()\n" +
+    "            mix(twice(-100), big(100), half(-3.0), flip(false), same('a'), ()).concat(\" \").concat(wide(1.25).show())\n\n" +
+    "fn check(n: u64) -> f32 with Fail of String =\n    if n > 2:\n        Fail.fail(\"big\")\n    else:\n        1.5\n\n" +
+    "fn scaled(xs: List of u64) -> String =\n    handle xs.fold(0.25, (acc, x) -> acc + check(x)):\n" +
+    "        Fail.fail(e) => e\n        return(v) => v.show()\n\n" +
+    "fn main() -> () with Console =\n    Console.print_line(call_all(make(5)))\n" +
+    "    Console.print_line(scaled([1, 2]))\n    Console.print_line(scaled([1, 5]))\n"
+
+  test("closures take and return narrow scalars in slots, across functions and through an abort (4.1.M3)"):
+    check("closure_slots", closures, "-110 200 -1.5 true q 2.5\n3.25\nbig\n")
+
+  /** Widening and narrowing cancel out in a round trip, so the convention itself is checked here.
+    * A closure call names the instructions that widen its argument `i` as `%wd.<call>.<i>`.
+    */
+  test("a closure's code takes and returns 64-bit slots; the caller widens, the callee narrows (Rule CM3.3(3))"):
+    val ir = lowered("closure_slots", closures).fold(ds => fail(s"$ds"), identity)
+    val types = (args: String) => args.split(", ").map(_.takeWhile(_ != ' ')).toSet
+    val calls = "call (\\S+) %code\\.\\d+\\(([^)]*)\\)".r.findAllMatchIn(ir).toList
+    val defs = "define (\\S+) @\"fx_u_lambda[^\"]*\"\\(([^)]*)\\)".r.findAllMatchIn(ir).toList
+    assert(calls.nonEmpty && defs.nonEmpty, ir)
+    (calls ++ defs).foreach { m =>
+      assert((types(m.group(2)) + m.group(1)).subsetOf(Set("i64", "ptr")), s"not a slot convention: ${m.matched}")
+    }
+    val (caller, callee) = ("%(\\S+)\\.s = call i64 %code\\.\\d+\\([^)]*\\)\n", "i64 %(\\S+)\\.s\\) \\{\nentry:\n")
+    List(
+      "%wd\\.\\d+\\.\\d+ = sext i8 " -> "no i8 argument is sign-extended",
+      "%wd\\.\\d+\\.\\d+ = zext i8 " -> "no u8 argument is zero-extended",
+      "%wd\\.\\d+\\.\\d+ = zext i32 (?!%wb)" -> "no char argument is zero-extended",
+      "%wd\\.\\d+\\.\\d+ = zext i1 " -> "no bool argument is widened to 0 or 1",
+      "%wb\\.(\\d+\\.\\d+) = bitcast float \\S+ to i32\n  %wd\\.\\1 = zext i32 " ->
+        "no f32 argument crosses as its bits",
+      "%wd\\.\\d+\\.\\d+ = bitcast double " -> "no f64 argument crosses as its bits",
+      "%wd\\.ret = sext i8 " -> "no i8 result is sign-extended",
+      caller + "  %\\1 = trunc i64 %\\1\\.s to i8\n" -> "no caller narrows an i8 result",
+      callee + "  %\\1 = trunc i64 %\\1\\.s to i8\n" -> "no closure narrows an i8 parameter",
+      caller + "  %\\1\\.b = trunc i64 %\\1\\.s to i32\n  %\\1 = bitcast i32 " ->
+        "no caller narrows an f32 from its bits",
+      callee + "  %\\1\\.b = trunc i64 %\\1\\.s to i32\n  %\\1 = bitcast i32 " ->
+        "no closure narrows an f32 from its bits"
+    ).foreach((re, what) => assert(re.r.findFirstIn(ir).isDefined, s"$what:\n$ir"))
+
   /** A data type `W` of `refs` String fields and then a `u64`, built and dropped. */
   private def wide(refs: Int) =
     val fields = (0 until refs).map(i => s"f$i: String") :+ "n: u64"

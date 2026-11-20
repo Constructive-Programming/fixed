@@ -127,6 +127,12 @@ object Core:
       case v: Atom.Var if v.ctype.boxed => Some(v)
       case _                            => None
 
+  /** The code functions of the closures that `fns` build; only `CallClosure` calls them (Rule CM3.3). */
+  def closureEntries(fns: List[Fn]): Set[String] =
+    fns.flatMap(f => lets(f.body)).collect { case (_, Rhs.Closure(code, _, exclusive)) =>
+      Set(code, exclusive)
+    }.flatten.toSet - ""
+
   /** The user functions `e` calls. */
   def callees(e: Expr): Set[String] =
     e match

@@ -15,20 +15,31 @@ final class EmitLLVM:
   private val strings = mutable.LinkedHashMap.empty[String, String]
   private val declared = mutable.LinkedHashMap.empty[String, String]
   private val statics = mutable.LinkedHashMap.empty[String, String]
+  private val entries = mutable.Set.empty[String]
 
   def program(fns: List[Fn]): String =
-    val bodies = fns.map(function).mkString("\n")
+    entries ++= Core.closureEntries(fns)
+    val bodies = fns.map(f => function(f, slots = entries(f.name))).mkString("\n")
     val globals = strings.map((s, name) => stringGlobal(name, s)).mkString + statics.values.mkString
     val decls = (EmitLLVM.always ++ declared.values).mkString("\n")
     s"$globals\n$decls\n\n$bodies"
 
-  private def function(fn: Fn): String =
+  /** Emit `fn`. When `slots` is set, `fn` is a closure's code: every parameter after the closure,
+    * and the result, is a 64-bit slot (Rule CM3.3(3)), so it narrows its parameters on entry and
+    * widens its result.
+    */
+  private def function(fn: Fn, slots: Boolean): String =
     out.clear()
-    val params = fn.params.map(p => s"${EmitLLVM.llType(p.ctype)} %${p.name}").mkString(", ")
     line("entry:")
+    val inSlot = (t: CType) => slots && !fillsSlot(t)
+    val params =
+      fn.params.map(p => if inSlot(p.ctype) then s"i64 %${p.name}.s" else s"${EmitLLVM.llType(p.ctype)} %${p.name}")
+    fn.params.filter(p => inSlot(p.ctype)).foreach(p => narrow(p, s"%${p.name}.s"))
     val (result, _) = value(fn.body, "entry")
-    line(s"  ret ${EmitLLVM.llType(fn.ret)} ${zeroIfUnit(result, fn.ret)}")
-    s"define ${EmitLLVM.llType(fn.ret)} ${EmitLLVM.user(fn.name)}($params) {\n$out}\n"
+    val ret = zeroIfUnit(result, fn.ret)
+    val retType = if inSlot(fn.ret) then "i64" else EmitLLVM.llType(fn.ret)
+    line(s"  ret ${if slots then widen(ret, fn.ret, "ret") else s"$retType $ret"}")
+    s"define $retType ${EmitLLVM.user(fn.name)}(${params.mkString(", ")}) {\n$out}\n"
 
   /** Emit `e`, starting in block `label`; its result operand and the block it ends in. */
   private def value(e: Expr, label: String): (String, String) =
@@ -104,8 +115,12 @@ final class EmitLLVM:
         val n = ids.next()
         line(s"  %code.$n.p = getelementptr inbounds i8, ptr ${operand(c)}, i64 ${if exclusive then 16 else 24}")
         line(s"  %code.$n = load ptr, ptr %code.$n.p")
-        val argList = typed(c :: args)
-        line(s"  %${x.name} = call ${EmitLLVM.llType(x.ctype)} %code.$n($argList)")
+        val argList = (s"ptr ${operand(c)}" :: args.zipWithIndex.map((a, i) => widen(operand(a), a.tpe, s"$n.$i")))
+          .mkString(", ")
+        if fillsSlot(x.ctype) then line(s"  %${x.name} = call ${EmitLLVM.llType(x.ctype)} %code.$n($argList)")
+        else
+          line(s"  %${x.name}.s = call i64 %code.$n($argList)")
+          narrow(x, s"%${x.name}.s")
         label
 
   /** A closure's exclusive entry: `code` itself where no exclusive version was built. */
@@ -131,47 +146,60 @@ final class EmitLLVM:
     fields.foreach { (a, slot) =>
       val n = ids.next()
       line(s"  %st.$n = getelementptr inbounds i8, ptr %${x.name}, i64 ${16 + 8 * slot}")
-      line(s"  store ${widen(a, n)}, ptr %st.$n")
+      line(s"  store ${widen(operand(a), a.tpe, n.toString)}, ptr %st.$n")
     }
 
-  /** `a` in its canonical slot form (Rule CM3.3), as a typed operand: a narrower integer sign- or
-    * zero-extended, `bool` 0 or 1, `f32` its bits zero-extended, `()` 0.
+  /** The value `v` of type `t` in its canonical slot form (Rule CM3.3), as a typed operand: a
+    * narrower integer sign- or zero-extended, `bool` 0 or 1, a float its bits (`f32` zero-extended),
+    * `()` 0. `n` makes the names of the instructions it emits unique.
     */
-  private def widen(a: Atom, n: Int): String =
-    val ty = EmitLLVM.llType(a.tpe)
-    a.tpe match
-      case t if fillsSlot(t) => s"$ty ${operand(a)}"
+  private def widen(v: String, t: CType, n: String): String =
+    val ty = EmitLLVM.llType(t)
+    t match
+      case t if fillsSlot(t) => s"$ty $v"
       case CType.Unit        => "i64 0"
-      case CType.Float(_)    =>
-        line(s"  %wb.$n = bitcast float ${operand(a)} to i32")
+      case CType.Float(64)   =>
+        line(s"  %wd.$n = bitcast double $v to i64")
+        s"i64 %wd.$n"
+      case CType.Float(_) =>
+        line(s"  %wb.$n = bitcast float $v to i32")
         line(s"  %wd.$n = zext i32 %wb.$n to i64")
         s"i64 %wd.$n"
       case t =>
         val ext = t match
           case CType.Int(_, true) => "sext"
           case _                  => "zext"
-        line(s"  %wd.$n = $ext $ty ${operand(a)} to i64")
+        line(s"  %wd.$n = $ext $ty $v to i64")
         s"i64 %wd.$n"
 
-  /** Load `x` from the slot at `%x.p`, narrowing a canonical slot (Rule CM3.3) to `x`'s type. */
+  /** Load `x` from the slot at `%x.p`, narrowing it unless its type fills the slot (Rule CM3.3). */
   private def load(x: Var): Unit =
     val (ty, v) = (EmitLLVM.llType(x.ctype), s"%${x.name}")
     if fillsSlot(x.ctype) then line(s"  $v = load $ty, ptr $v.p")
     else
       line(s"  $v.s = load i64, ptr $v.p")
-      x.ctype match
-        case CType.Float(_) =>
-          line(s"  $v.b = trunc i64 $v.s to i32")
-          line(s"  $v = bitcast i32 $v.b to float")
-        case _ => line(s"  $v = trunc i64 $v.s to $ty")
+      narrow(x, s"$v.s")
 
-  /** Whether a value of type `t` is already 64 bits wide in its slot form (Rule CM3.3). */
+  /** Define `x` from `slot`, an `i64` in canonical slot form (Rule CM3.3), narrowed to `x`'s type,
+    * which must not fill the slot.
+    */
+  private def narrow(x: Var, slot: String): Unit =
+    val v = s"%${x.name}"
+    x.ctype match
+      case CType.Float(64) => line(s"  $v = bitcast i64 $slot to double")
+      case CType.Float(_)  =>
+        line(s"  $v.b = trunc i64 $slot to i32")
+        line(s"  $v = bitcast i32 $v.b to float")
+      case t => line(s"  $v = trunc i64 $slot to ${EmitLLVM.llType(t)}")
+
+  /** Whether a value of type `t` is its own slot form: a reference, or a 64-bit integer. */
   private def fillsSlot(t: CType): Boolean =
     t match
-      case CType.Boxed | CType.Int(64, _) | CType.Float(64) => true
-      case _                                                => false
+      case CType.Boxed | CType.Int(64, _) => true
+      case _                              => false
 
   private def call(x: Var, f: String, args: List[Atom], runtime: Boolean): Unit =
+    require(runtime || !entries(f), s"closure code $f takes slots and must be called through its closure")
     val argList = typed(args)
     if !runtime then line(s"  %${x.name} = call ${EmitLLVM.llType(x.ctype)} ${EmitLLVM.user(f)}($argList)")
     else
