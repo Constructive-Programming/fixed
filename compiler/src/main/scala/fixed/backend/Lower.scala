@@ -212,7 +212,7 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
   private def application(fn: Tree, args: List[Tree], result: Tree, sc: Scope)(k: K): Expr =
     fn match
       case f @ Trees.Ident(name, span) if !sc.env.contains(name) && isFn(name) =>
-        if decls.contains(name) then call(name, typeOf(f, sc), args, result, sc)(k)
+        if decls.contains(name) then call(name, unit.typeOf(f).getOrElse(Type.NeverType), args, result, sc)(k)
         else unsupported(span, s"call of `$name`, which has no body", k)
       case _ => expr(fn, sc)(c => all(args, sc)(as => bind(Rhs.CallClosure(c, as), result, sc)(k)))
 
@@ -343,12 +343,14 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
       else bind(Rhs.Prim(op, List(a)), u, sc)(k)
     )
 
-  /** A call of top-level function `name`, instantiated at the concrete type of its reference. */
+  /** A call of top-level function `name`: type parameters solved against the typer type `fnType`
+    * of its reference, before `sc`'s bound substitution, then made concrete.
+    */
   private def call(name: String, fnType: Type, args: List[Tree], t: Tree, sc: Scope)(k: K): Expr =
     val id = symbols.scope(name)
     val params = symbols.typeParamsOf(id)
     val solved = TypeOps.solve(params.toSet, symbols(id).info, fnType, Map.empty, Members.boundsOf(symbols, _))
-    val sigma = params.map(p => p -> solved.getOrElse(p, Type.UnitType)).toMap
+    val sigma = params.map(p => p -> concrete(solved.getOrElse(p, Type.UnitType), sc.sigma, sc.bounds)).toMap
     val (declared, ret) = TypeOps.signature(symbols(id).info)
     val argTypes = args.map(typeOf(_, sc))
     val bounds = declared.zip(argTypes).collect {

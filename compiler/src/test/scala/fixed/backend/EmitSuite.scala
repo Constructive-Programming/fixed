@@ -329,6 +329,16 @@ class EmitSuite extends munit.FunSuite:
     assert(plain.contains("@\"fx_t_List of u8:Folding\""), plain)
     assert(plain.contains("@\"fx_t_List of String:Folding\""), plain)
 
+  /** Without the element type, `shows` would show each element as `()` and drop none. */
+  test("a parameter with an anonymous bound passed on to another function: the element type reaches it"):
+    val src = header +
+      "fn shows(xs: is Folding of (A is Show)) -> String = xs.fold(\"\", (a, x) -> a.concat(x.show()))\n\n" +
+      "fn byte(x: u8) -> u8 = x\n\nfn g8(xs: is Folding of u8) -> String = shows(xs)\n\n" +
+      "fn gs(xs: is Folding of String) -> String = shows(xs)\n\n" +
+      "fn main() -> () with Console =\n    Console.print_line(g8([byte(200), byte(7)]))\n" +
+      "    Console.print_line(gs([\"a\".concat(\"b\"), \"c\"]))\n"
+    check("anonymous_passed_on", src, "2007\nabc\n")
+
   test("a recursive generic function passes its own witness and table to itself (4.1.M7d)"):
     val src = header + "fn rep(x: A, n: u64) -> A =\n    if n == 0:\n        x\n    else:\n        rep(x, n - 1)\n\n" +
       "fn spin(d: is Door of Locked, n: u64) -> is Door of Locked =\n    if n == 0:\n        Door.new(d.name)\n" +
