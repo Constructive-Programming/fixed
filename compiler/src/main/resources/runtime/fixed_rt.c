@@ -5,9 +5,12 @@
  * counters behind the baseline. Calling convention: every function consumes the boxed values
  * passed to it.
  *
- * Heap object layout (spec/memory_management.md Rule PR3.1): a 16-byte header, then the payload.
- * `nptr` boxed fields come first in the payload, so one generic routine can drop any object.
- * A negative count marks a static object (string constants), which is never counted or freed.
+ * Heap object layout (spec/memory_management.md Rule PR3.1): a 16-byte header, then the payload,
+ * one 64-bit slot per field in declaration order. The header's reference map `refs` has bit i set
+ * when payload slot i holds a counted reference, so one generic routine can drop any object
+ * whatever type instance built it. Only slots 0 to 31 can hold references; the compiler rejects a
+ * cell with a reference beyond them. A negative count marks a static object (string constants),
+ * which is never counted or freed.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <inttypes.h>
@@ -23,7 +26,7 @@
 typedef struct fx_header {
     int64_t rc;
     uint32_t tag;
-    uint32_t nptr;
+    uint32_t refs;
 } fx_header;
 
 typedef struct fx_string {
@@ -41,26 +44,31 @@ static void fx_die(const char *msg, int code) {
     exit(code);
 }
 
-void *fx_alloc(uint32_t tag, uint32_t nptr, size_t payload) {
+void *fx_alloc(uint32_t tag, uint32_t refs, size_t payload) {
     fx_header *h = malloc(sizeof(fx_header) + payload);
     if (!h) fx_die("out of memory", 102);
     h->rc = 1;
     h->tag = tag;
-    h->nptr = nptr;
+    h->refs = refs;
     n_alloc++;
     return h;
 }
 
 void fx_drop(fx_header *h);
 
+/* Drop every counted reference in `h`'s payload, as its reference map lists them. */
+static void drop_children(fx_header *h) {
+    fx_header **slots = (fx_header **)(h + 1);
+    for (uint32_t refs = h->refs; refs; refs &= refs - 1) fx_drop(slots[__builtin_ctz(refs)]);
+}
+
 /* Reuse (spec/memory_management.md §11), drop guided: the token is taken where the cell would
    have been dropped. The cell's children are dropped (lowering duplicated the ones it read, so
-   those return to the count they had), and the empty cell (nptr 0) is the token: a constructor
+   those return to the count they had), and the empty cell (refs 0) is the token: a constructor
    fills it, or, if none does, it is dropped like any value. */
 static fx_header *reclaim(fx_header *h) {
-    fx_header **fields = (fx_header **)(h + 1);
-    for (uint32_t i = 0; i < h->nptr; i++) fx_drop(fields[i]);
-    h->nptr = 0;
+    drop_children(h);
+    h->refs = 0;
     n_reuse++;
     return h;
 }
@@ -81,12 +89,12 @@ void *fx_reuse(fx_header *h) {
 }
 
 /* A cell for a constructor: the reuse token if there is one, else a fresh allocation. */
-void *fx_alloc_at(void *token, uint32_t tag, uint32_t nptr, size_t payload) {
-    if (!token) return fx_alloc(tag, nptr, payload);
+void *fx_alloc_at(void *token, uint32_t tag, uint32_t refs, size_t payload) {
+    if (!token) return fx_alloc(tag, refs, payload);
     fx_header *h = token;
     h->rc = 1;
     h->tag = tag;
-    h->nptr = nptr;
+    h->refs = refs;
     return h;
 }
 
@@ -102,10 +110,7 @@ void fx_drop(fx_header *h) {
     n_drop++;
     if (h->rc < 0) return;
     if (--h->rc == 0) {
-        /* A closure (tag 0xFFFFFFFF) keeps two code pointers in slots 0 and 1 (exclusive and
-           shared entry); its boxed captures follow. */
-        fx_header **fields = (fx_header **)(h + 1) + 2 * (h->tag == UINT32_MAX);
-        for (uint32_t i = 0; i < h->nptr; i++) fx_drop(fields[i]);
+        drop_children(h);
         free(h);
         n_free++;
     }

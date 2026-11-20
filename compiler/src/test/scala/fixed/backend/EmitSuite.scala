@@ -5,7 +5,7 @@ import java.nio.file.Path
 
 import scala.sys.process.{Process, ProcessLogger}
 
-import fixed.util.SourceFile
+import fixed.util.{DiagCode, SourceFile}
 import fixed.{CompilationUnit, Compiler}
 
 /** Programs (examples, benchmarks and small inline ones) through the whole slice pipeline: check, lower, emit, `clang`, run. Each run
@@ -16,11 +16,15 @@ class EmitSuite extends munit.FunSuite:
 
   private val dir = Path.of("target", "emit-tests")
 
-  /** LLVM IR for `source` in build mode `mode`. */
-  private def ir(name: String, source: String, mode: Mode): String =
+  /** The LLVM IR of `source` in build mode `mode`, or the backend's diagnostics. */
+  private def lowered(name: String, source: String, mode: Mode = Mode.Default) =
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString(s"$name.fixed", source)))
     assert(!unit.hasErrors, unit.diagnostics)
-    Backend.compile(unit, mode).fold(ds => fail(s"lowering failed: $ds"), identity)
+    Backend.compile(unit, mode)
+
+  /** LLVM IR for `source` in build mode `mode`. */
+  private def ir(name: String, source: String, mode: Mode): String =
+    lowered(name, source, mode).fold(ds => fail(s"lowering failed: $ds"), identity)
 
   /** Exit code, standard output, standard error. */
   private def run(name: String, source: String, stdin: String, mode: Mode): (Int, String, String) =
@@ -262,3 +266,63 @@ class EmitSuite extends munit.FunSuite:
     val counts = check("map_reuse", src, "12\n")
     assert(counts(Mode.Default).getOrElse("reuses", 0L) >= 4, counts)
     assertEquals(counts(Mode.Default)("reuses"), counts(Mode.NoSpecialise)("reuses"))
+
+  /** `P of u8` has a scalar in slot 0 and a reference in slot 1; `P of String` has references in
+    * both, and its cell reuses the `P of u8` one. A wrong reference map leaks or frees a scalar.
+    * `N` puts every narrow scalar kind in a slot.
+    */
+  private val slotted = header + "data P of A:\n    P(a: A, s: String)\n\n" +
+    "data N:\n    N(a: i8, f: f32, b: bool, c: char, u: u16, s: String, d: i32)\n\n" +
+    "fn small(p: P of u8) -> String =\n    match p:\n        P.P(a, s) => a.show().concat(s)\n\n" +
+    "fn text(p: P of String) -> String =\n    match p:\n        P.P(a, s) => a.concat(s)\n\n" +
+    "fn narrow(n: N) -> String =\n    match n:\n        N.N(a, f, b, c, u, s, d) =>\n" +
+    "            a.show().concat(\" \").concat(f.show()).concat(\" \").concat(b.show()).concat(\" \")\n" +
+    "                .concat(c.show()).concat(\" \").concat(u.show()).concat(s).concat(d.show())\n\n" +
+    "fn main() -> () with Console =\n" +
+    "    Console.print_line(small(P.P(255, \"!\".concat(\"?\"))))\n" +
+    "    Console.print_line(text(P.P(\"x\".concat(\"y\"), \"s\".concat(\"t\"))))\n" +
+    "    Console.print_line(narrow(N.N(-3, 1.5, true, 'z', 65535, \" \".concat(\"s\"), -70000)))\n"
+
+  test("one reference map per instance: P of u8 and P of String, narrow scalars beside references (4.1.M2)"):
+    check("slots", slotted, "255!?\nxyst\n-3 1.5 true z 65535 s-70000\n")
+
+  /** A round trip through a slot cannot see how the slot was widened, so these check the IR. */
+  test("fields in declaration order; every payload store writes a canonical slot (Rules CM3.3, CM3.4)"):
+    assertEquals(Layout.slots(List(CType.Int(8, true), CType.Boxed)), List(0, 1))
+    val ir = this.ir("slots", slotted, Mode.Default)
+    val stored = "store (\\S+) [^,]+, ptr %st\\.".r.findAllMatchIn(ir).map(_.group(1)).toSet
+    assertEquals(stored, Set("i64", "ptr"), ir)
+    assert("%wd\\.\\d+ = sext i8 ".r.findFirstIn(ir).isDefined, s"the i8 field is not sign-extended:\n$ir")
+    assert("= trunc i64 %\\S+\\.s to i8".r.findFirstIn(ir).isDefined, s"the i8 field is not narrowed:\n$ir")
+
+  /** A data type `W` of `refs` String fields and then a `u64`, built and dropped. */
+  private def wide(refs: Int) =
+    val fields = (0 until refs).map(i => s"f$i: String") :+ "n: u64"
+    val args = (0 until refs).map(i => s"\"a\".concat(\"$i\")") :+ "7"
+    val pats = "a" +: List.fill(refs - 2)("_") :+ "z" :+ "n"
+    header + s"data W:\n    W(${fields.mkString(", ")})\n\n" +
+      s"fn ends(w: W) -> String =\n    match w:\n        W.W(${pats.mkString(", ")}) => a.concat(z).concat(n.show())\n\n" +
+      s"fn main() -> () with Console =\n    Console.print_line(ends(W.W(${args.mkString(", ")})))\n"
+
+  /** A closure capturing `refs` Strings, after its two code slots. */
+  private def captures(refs: Int) =
+    val lets = (0 until refs).map(i => s"    let s$i = \"a\".concat(\"$i\")\n").mkString
+    header + "fn call(f: () -> String) -> String = f()\n\n" + "fn main() -> () with Console =\n" + lets +
+      s"    Console.print_line(call(() -> ${(0 until refs).map(i => s"s$i").mkString(".concat(")}${")" * (refs - 1)}))\n"
+
+  private val bits = Layout.refMapBits
+
+  test("a cell or closure with references in every slot of its reference map is freed whole (4.1.M2)"):
+    check("wide", wide(bits), s"a0a${bits - 1}7\n")
+    check(
+      "captures",
+      captures(bits - Layout.closureCode),
+      (0 until bits - Layout.closureCode).map(i => s"a$i").mkString + "\n"
+    )
+
+  test("a reference beyond the reference map is B005, not a leak (4.1.M2)"):
+    List(wide(bits + 1) -> "wide_over", captures(bits - Layout.closureCode + 1) -> "captures_over").foreach {
+      (src, name) =>
+        val ds = lowered(name, src).fold(identity, _ => fail(s"$name lowered"))
+        assert(ds.exists(d => d.code == DiagCode.B005 && d.message.contains(s"payload slot $bits")), ds)
+    }

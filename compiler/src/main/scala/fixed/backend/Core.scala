@@ -170,22 +170,32 @@ object Core:
       case Expr.Dup(x, b)       => freeVars(b) + x
       case Expr.Drop(x, b)      => freeVars(b) + x
 
-/** Payload layout of a heap object (`spec/memory_management.md` Rule PR3.1, slice §4.3): every field
-  * takes an 8-byte slot; boxed fields come first, so the header's `nptr` covers them and one
-  * generic drop frees any object. A closure's slot 0 holds its code pointer.
+/** Payload layout of a heap object (`spec/memory_management.md` Rule PR3.1, `spec/compilation_model.md`
+  * Rules CM3.3 and CM3.4): every field takes one 64-bit slot, in declaration order, whatever the
+  * type instance. The header's reference map has bit i set when slot i holds a counted reference.
+  * A closure's slots 0 and 1 hold its code pointers; its captures follow.
   */
 object Layout:
 
-  /** The tag that marks a closure (its slots 0 and 1 are code, not boxed fields). */
+  /** The tag that marks a closure. */
   val closureTag: Int = -1
 
   /** Payload slots a closure spends on code pointers: the exclusive entry, then the shared one. */
   val closureCode: Int = 2
 
-  /** The slot of each field, in declaration order. */
-  def slots(fields: List[CType], first: Int = 0): List[Int] =
-    val boxed = fields.zipWithIndex.filter(_._1.boxed).map(_._2)
-    val order = boxed ++ fields.indices.filterNot(boxed.contains)
-    fields.indices.map(i => first + order.indexOf(i)).toList
+  /** The width of the header's reference map: only slots below it can hold a reference. */
+  val refMapBits: Int = 32
 
-  def boxedCount(fields: List[CType]): Int = fields.count(_.boxed)
+  /** The slot of each field: declaration order, after `first` reserved slots. */
+  def slots(fields: List[CType], first: Int = 0): List[Int] = fields.indices.map(first + _).toList
+
+  /** The slots among `slots(fields, first)` that hold counted references. */
+  def refSlotsOf(fields: List[CType], first: Int = 0): List[Int] =
+    slots(fields, first).zip(fields).collect { case (s, t) if t.boxed => s }
+
+  /** The header's reference map, negative when slot 31 holds a reference; `Lower` reports overflow as `B005`. */
+  def refs(fields: List[CType], first: Int = 0): Int =
+    refSlotsOf(fields, first).foldLeft(0) { (m, s) =>
+      require(s < refMapBits, s"a reference in payload slot $s is beyond the reference map")
+      m | 1 << s
+    }

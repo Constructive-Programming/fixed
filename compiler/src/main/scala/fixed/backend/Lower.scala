@@ -13,7 +13,8 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
   * and hands its atom to `k`, which builds the rest of the function. Starts at `main` and lowers
   * each function instance it reaches, monomorphised: `sc.sigma` maps the instance's type
   * parameters to concrete types. Derived members (`fold`, `unfold`, `Folding.fold`) are generated
-  * as Core functions. Constructs beyond the current milestone are `B005`.
+  * as Core functions. Constructs beyond the current milestone are `B005`, and so is a cell with a
+  * reference beyond its header's reference map (`refMapLimit`).
   */
 final class Lower(unit: CompilationUnit) extends Generated:
   private type Env = Map[String, Var]
@@ -53,7 +54,26 @@ final class Lower(unit: CompilationUnit) extends Generated:
     if !decls.contains("main") then Left(List(problem(DiagCode.B003, Span.NoSpan, "no `main` function")))
     else
       val _ = instance("main")(function(decls("main"), Map.empty, Map.empty, "main"))
+      fns.values.foreach(refMapLimit)
       if problems.isEmpty then Right(fns.values.toList) else Left(problems.toList)
+
+  /** A cell of `f` with a reference in a slot its header's reference map cannot mark is `B005`. */
+  private def refMapLimit(f: Fn): Unit =
+    Core.lets(f.body).map(_._2).foreach { r =>
+      val refs = r match
+        case Rhs.Con(_, fs)        => Layout.refSlotsOf(fs.map(_.tpe))
+        case Rhs.Closure(_, cs, _) => Layout.refSlotsOf(cs.map(_.tpe), first = Layout.closureCode)
+        case _                     => Nil
+      refs.find(_ >= Layout.refMapBits).foreach { s =>
+        problems += problem(
+          DiagCode.B005,
+          spans.getOrElse(f.name, Span.NoSpan),
+          s"`${f.name}` builds a cell with a reference in payload slot $s; a cell can hold references " +
+            s"only in its first ${Layout.refMapBits} slots (a closure: in its first " +
+            s"${Layout.refMapBits - Layout.closureCode} captures)"
+        )
+      }
+    }
 
   /** Build function `name` once. A recursive request meets the placeholder entered first. */
   protected def instance(name: String)(build: => Fn): String =
@@ -578,18 +598,12 @@ final class Lower(unit: CompilationUnit) extends Generated:
     spans(x.name) = span
     x
 
-  /** The type of slot `slot` of a value of type `t` (`Layout.slots` order), when every variant
-    * that has the slot agrees on it.
+  /** The type of slot `slot` of a value of type `t` (fields in declaration order, `Layout.slots`),
+    * when every variant that has the slot agrees on it.
     */
   def slotType(t: Type, slot: Int): Option[Type] =
     dataOf(t).flatMap { (data, args) =>
-      val candidates = symbols.variantsOf(data).toList.flatMap { v =>
-        val fs = fieldTypes(data, args, v.id)
-        val slots = Layout.slots(fs.map(Lower.scalar(_).getOrElse(CType.Boxed)))
-        slots.indexOf(slot) match
-          case -1 => None
-          case i  => Some(fs(i))
-      }.distinct
+      val candidates = symbols.variantsOf(data).toList.flatMap(v => fieldTypes(data, args, v.id).lift(slot)).distinct
       candidates match
         case List(only) => Some(only)
         case _          => None

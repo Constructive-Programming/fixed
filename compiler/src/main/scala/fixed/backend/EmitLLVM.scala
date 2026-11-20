@@ -65,20 +65,20 @@ final class EmitLLVM:
         label
       case Rhs.Con(tag, fields) =>
         val types = fields.map(_.tpe)
-        allocate(x, tag, Layout.boxedCount(types), fields.size)
+        allocate(x, tag, Layout.refs(types), fields.size)
         store(x, fields.zip(Layout.slots(types)))
         label
       case Rhs.Reuse(token, tag, fields, _) =>
         val types = fields.map(_.tpe)
         val size = 8 * fields.size
         line(
-          s"  %${x.name} = call ptr @fx_alloc_at(ptr ${operand(token)}, i32 $tag, i32 ${Layout.boxedCount(types)}, i64 $size)"
+          s"  %${x.name} = call ptr @fx_alloc_at(ptr ${operand(token)}, i32 $tag, i32 ${Layout.refs(types)}, i64 $size)"
         )
         store(x, fields.zip(Layout.slots(types)))
         label
       case Rhs.Field(obj, slot) =>
         line(s"  %${x.name}.p = getelementptr inbounds i8, ptr ${operand(obj)}, i64 ${16 + 8 * slot}")
-        line(s"  %${x.name} = load ${EmitLLVM.llType(x.ctype)}, ptr %${x.name}.p")
+        load(x)
         label
       case Rhs.Closure(code, Nil, exclusive) =>
         val name = s"closure.$code"
@@ -89,7 +89,12 @@ final class EmitLLVM:
         label
       case Rhs.Closure(code, captures, exclusive) =>
         val types = captures.map(_.tpe)
-        allocate(x, Layout.closureTag, Layout.boxedCount(types), captures.size + Layout.closureCode)
+        allocate(
+          x,
+          Layout.closureTag,
+          Layout.refs(types, first = Layout.closureCode),
+          captures.size + Layout.closureCode
+        )
         line(s"  store ptr ${EmitLLVM.user(orCode(exclusive, code))}, ptr %${x.name}.0")
         line(s"  %${x.name}.code1 = getelementptr inbounds i8, ptr %${x.name}, i64 24")
         line(s"  store ptr ${EmitLLVM.user(code)}, ptr %${x.name}.code1")
@@ -118,16 +123,53 @@ final class EmitLLVM:
     line(s"  %${x.name} = phi ${EmitLLVM.llType(x.ctype)} ${results.mkString(", ")}")
     s"join.$n"
 
-  private def allocate(x: Var, tag: Int, nptr: Int, slots: Int): Unit =
-    line(s"  %${x.name} = call ptr @fx_alloc(i32 $tag, i32 $nptr, i64 ${8 * slots})")
+  private def allocate(x: Var, tag: Int, refs: Int, slots: Int): Unit =
+    line(s"  %${x.name} = call ptr @fx_alloc(i32 $tag, i32 $refs, i64 ${8 * slots})")
     line(s"  %${x.name}.0 = getelementptr inbounds i8, ptr %${x.name}, i64 16")
 
   private def store(x: Var, fields: List[(Atom, Int)]): Unit =
     fields.foreach { (a, slot) =>
       val n = ids.next()
       line(s"  %st.$n = getelementptr inbounds i8, ptr %${x.name}, i64 ${16 + 8 * slot}")
-      line(s"  store ${EmitLLVM.llType(a.tpe)} ${operand(a)}, ptr %st.$n")
+      line(s"  store ${widen(a, n)}, ptr %st.$n")
     }
+
+  /** `a` in its canonical slot form (Rule CM3.3), as a typed operand: a narrower integer sign- or
+    * zero-extended, `bool` 0 or 1, `f32` its bits zero-extended, `()` 0.
+    */
+  private def widen(a: Atom, n: Int): String =
+    val ty = EmitLLVM.llType(a.tpe)
+    a.tpe match
+      case t if fillsSlot(t) => s"$ty ${operand(a)}"
+      case CType.Unit        => "i64 0"
+      case CType.Float(_)    =>
+        line(s"  %wb.$n = bitcast float ${operand(a)} to i32")
+        line(s"  %wd.$n = zext i32 %wb.$n to i64")
+        s"i64 %wd.$n"
+      case t =>
+        val ext = t match
+          case CType.Int(_, true) => "sext"
+          case _                  => "zext"
+        line(s"  %wd.$n = $ext $ty ${operand(a)} to i64")
+        s"i64 %wd.$n"
+
+  /** Load `x` from the slot at `%x.p`, narrowing a canonical slot (Rule CM3.3) to `x`'s type. */
+  private def load(x: Var): Unit =
+    val (ty, v) = (EmitLLVM.llType(x.ctype), s"%${x.name}")
+    if fillsSlot(x.ctype) then line(s"  $v = load $ty, ptr $v.p")
+    else
+      line(s"  $v.s = load i64, ptr $v.p")
+      x.ctype match
+        case CType.Float(_) =>
+          line(s"  $v.b = trunc i64 $v.s to i32")
+          line(s"  $v = bitcast i32 $v.b to float")
+        case _ => line(s"  $v = trunc i64 $v.s to $ty")
+
+  /** Whether a value of type `t` is already 64 bits wide in its slot form (Rule CM3.3). */
+  private def fillsSlot(t: CType): Boolean =
+    t match
+      case CType.Boxed | CType.Int(64, _) | CType.Float(64) => true
+      case _                                                => false
 
   private def call(x: Var, f: String, args: List[Atom], runtime: Boolean): Unit =
     val argList = typed(args)

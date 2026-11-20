@@ -28,7 +28,7 @@ class DemandSuite extends munit.FunSuite:
   test("a rebuilt cell is exclusive, the tail it keeps is own, a field read is read"):
     val t = demands(list, "first(bump(L.C(1, L.E)))")
     assertEquals(roots(t, "bump"), List("exclusive"))
-    assertEquals(t.params("bump").head.parts, Map(("L", 0) -> Demand.Own, ("L", 1) -> Demand.Read))
+    assertEquals(t.params("bump").head.parts, Map(("L", 0) -> Demand.Read, ("L", 1) -> Demand.Own))
     assertEquals(roots(t, "first"), List("read"))
     assert(t.reuses("bump").values.toList.forall(_.startsWith("xs.")), t.reuses("bump"))
     assertEquals(t.reuses("bump").size, 1)
@@ -63,7 +63,7 @@ class DemandSuite extends munit.FunSuite:
     val t = demands(code, "upto(3).map((x) -> x + 1).fold(0, (a, x) -> a + x)")
     val map = t.params.find(_._1.contains(".map[")).map(_._2.head).getOrElse(fail(s"${t.params.keys}"))
     assertEquals(map.root, Demand.Excl)
-    assertEquals(map.parts, Map(("List of u64", 0) -> Demand.Excl, ("List of u64", 1) -> Demand.Own))
+    assertEquals(map.parts, Map(("List of u64", 0) -> Demand.Own, ("List of u64", 1) -> Demand.Excl))
 
   test("a single-variant value rebuilt after its fields are read is reused without a match"):
     val code = "use std.io.Console\n\ndata P:\n    P(a: u64, b: String)\n\n" +
