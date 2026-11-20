@@ -86,6 +86,12 @@ cap Ord extends Eq:
 
 cap Numeric extends Eq + Ord:
     Self.fn from_i64(n: i64) -> Self
+    fn add(other: Self) -> Self
+    fn sub(other: Self) -> Self
+    fn mul(other: Self) -> Self
+    fn div(other: Self) -> Self
+    fn rem(other: Self) -> Self
+    fn negate -> Self
 
 cap Show:
     fn show -> String

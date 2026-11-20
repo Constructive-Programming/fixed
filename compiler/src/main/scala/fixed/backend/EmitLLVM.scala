@@ -277,10 +277,13 @@ final class EmitLLVM:
         val name = if op == PrimOp.Div then "div" else "rem"
         line(s"  %${x.name} = ${if signed then "s" else "u"}$name $ty $ops")
         s"div.$n"
-      case (PrimOp.Neg, CType.Float(_))    => emit(s"fneg $ty $ops")
-      case (PrimOp.Neg, _)                 => emit(s"sub $ty 0, $ops")
-      case (PrimOp.Not, _)                 => emit(s"xor i1 $ops, true")
-      case (PrimOp.Widen, CType.Float(_))  => emit(s"fpext $ty $ops to ${EmitLLVM.llType(x.ctype)}")
+      case (PrimOp.Neg, CType.Float(_))   => emit(s"fneg $ty $ops")
+      case (PrimOp.Neg, _)                => emit(s"sub $ty 0, $ops")
+      case (PrimOp.Not, _)                => emit(s"xor i1 $ops, true")
+      case (PrimOp.Widen, CType.Float(_)) => emit(s"fpext $ty $ops to ${EmitLLVM.llType(x.ctype)}")
+      case (PrimOp.Convert, _)            =>
+        val to = EmitLLVM.llType(x.ctype)
+        emit(x.ctype match { case CType.Int(_, _) => s"trunc i64 $ops to $to"; case _ => s"sitofp i64 $ops to $to" })
       case (PrimOp.Widen, CType.Int(_, s)) =>
         emit(s"${if s then "sext" else "zext"} $ty $ops to ${EmitLLVM.llType(x.ctype)}")
       case (PrimOp.Eq | PrimOp.Ne, CType.Unit) => emit(s"icmp ${if op == PrimOp.Eq then "eq" else "ne"} i8 0, 0")
@@ -313,8 +316,8 @@ final class EmitLLVM:
         s"@fx_w_$name"
       case Atom.StaticTable(key, es) =>
         val name = s"@\"fx_t_$key\""
-        val ptrs =
-          es.map((sh, ex) => s"{ ptr, ptr } { ptr ${EmitLLVM.user(orCode(ex, sh))}, ptr ${EmitLLVM.user(sh)} }")
+        val code = (f: String) => if f.isEmpty then "null" else EmitLLVM.user(f)
+        val ptrs = es.map((sh, ex) => s"{ ptr, ptr } { ptr ${code(orCode(ex, sh))}, ptr ${code(sh)} }")
         statics(name) = s"$name = private unnamed_addr constant [${es.size} x { ptr, ptr }] [${ptrs.mkString(", ")}]\n"
         name
 

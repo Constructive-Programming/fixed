@@ -12,11 +12,12 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
 /** Typed tree to Core (slice §4.1–§4.4), in continuation-passing style: `expr(t, sc)(k)` lowers `t`
   * and hands its atom to `k`, which builds the rest of the function. Starts at `main` and lowers
   * each function instance it reaches, monomorphised: `sc.sigma` maps the instance's type
-  * parameters to concrete types. Derived members (`fold`, `unfold`, `Folding.fold`) are generated
+  * parameters to concrete types. A type parameter that is left (in a generated member built for
+  * a capability table, [[Tables]]) is a slot named by its witness parameter. Derived members (`fold`, `unfold`, `Folding.fold`) are generated
   * as Core functions. Constructs beyond the current milestone are `B005`, and so is a cell with a
   * reference beyond its header's reference map (`refMapLimit`).
   */
-final class Lower(unit: CompilationUnit) extends Generated:
+final class Lower(unit: CompilationUnit) extends Tables:
   private type Env = Map[String, Var]
   private type Sigma = Map[SymbolId, Type]
 
@@ -42,8 +43,10 @@ final class Lower(unit: CompilationUnit) extends Generated:
   /** Top-level functions with bodies: the prelude's, then the unit's (which shadow them). */
   private val decls: Map[String, Trees.FnDecl] = fixed.typer.Stdlib.functions(unit.tree)
 
-  /** Every function instance built so far, including copies requested after [[program]]. */
+  /** Every function instance built so far, including copies and table entries requested after [[program]]. */
   def functions: List[Fn] = fns.values.toList
+
+  protected def functionNamed(name: String): Fn = fns(name)
 
   /** A function copying a value of type `t`: cells at part keys `parts` copied, the rest shared. */
   def copy(t: Type, parts: Set[(String, Int)]): Option[String] =
@@ -338,7 +341,7 @@ final class Lower(unit: CompilationUnit) extends Generated:
     * constructor requirements; the data's derived fold takes them in variant order. For each
     * variant, the index of the argument that handles it.
     */
-  private def mappedFold(cap: SymbolId, recvType: Type, arity: Int): Option[List[Int]] =
+  protected def mappedFold(cap: SymbolId, recvType: Type, arity: Int): Option[List[Int]] =
     dataOf(recvType).flatMap { (data, _) =>
       val ctors = symbols.membersOf(cap).filter(_.kind == SymKind.StaticMethod).map(_.name).toList
       val variants = symbols.variantsOf(data).map(_.name).toList
@@ -418,15 +421,11 @@ final class Lower(unit: CompilationUnit) extends Generated:
       else
         val w = fresh("w", to)
         Expr.Let(w, Rhs.Prim(PrimOp.Widen, List(r)), runtime(name, List(w), m, sc)(k))
-    r.tpe match
-      case _ if receiver == Type.PrimType("char")      => runtime("fx_show_char", List(r), m, sc)(k)
-      case CType.Int(_, true)                          => widened("fx_show_i64", CType.Int(64, signed = true))
-      case CType.Int(_, false)                         => widened("fx_show_u64", CType.Int(64, signed = false))
-      case CType.Float(_)                              => widened("fx_show_f64", CType.Float(64))
-      case CType.Bool                                  => runtime("fx_show_bool", List(r), m, sc)(k)
-      case CType.Unit                                  => k(Atom.StrC("()"))
-      case CType.Boxed                                 => k(r)
-      case _: CType.Slot | CType.Witness | CType.Table => unsupported(m.span, "`show` on a value of parameter type", k)
+    (r.tpe, Lower.formatter(r.tpe, receiver == Type.PrimType("char"))) match
+      case (_, Some((f, to))) => widened(f, to)
+      case (CType.Unit, _)    => k(Atom.StrC("()"))
+      case (CType.Boxed, _)   => k(r)
+      case _                  => unsupported(m.span, "`show` on a value of parameter type", k)
 
   /** Data constructors, derived `unfold`, capability constructors resolved by the typer, and the
     * runtime effects. ponytail: `Console` is matched by name; effect resolution arrives with
@@ -626,7 +625,7 @@ final class Lower(unit: CompilationUnit) extends Generated:
 
   private def isFn(name: String): Boolean = symbols.scope.get(name).exists(symbols(_).kind == SymKind.Fn)
 
-  private def isStringType(t: Type): Boolean =
+  protected def isStringType(t: Type): Boolean =
     t match
       case Type.TypeRef(id, Nil)   => symbols(id).name == "String" && symbols(id).owner == SymbolId.Prelude
       case Type.PrimType("String") => true
@@ -634,10 +633,11 @@ final class Lower(unit: CompilationUnit) extends Generated:
 
   protected def ctype(t: Type, span: Span): CType =
     Lower.scalar(t).getOrElse(t match
-      case _ if isStringType(t) || dataOf(t).isDefined             => CType.Boxed
-      case _: Type.ArrowType                                       => CType.Boxed
-      case Type.CapRef(c, _) if represent.constructor(c).isDefined => CType.Boxed
-      case _                                                       =>
+      case _ if isStringType(t) || dataOf(t).isDefined                  => CType.Boxed
+      case Type.TypeRef(p, Nil) if symbols(p).kind == SymKind.TypeParam => CType.Slot(witnessOf(p).name)
+      case _: Type.ArrowType                                            => CType.Boxed
+      case Type.CapRef(c, _) if represent.constructor(c).isDefined      => CType.Boxed
+      case _                                                            =>
         problems += problem(DiagCode.B005, span, s"values of type ${symbols.render(t)} are not supported yet")
         CType.Unit)
 
@@ -654,6 +654,16 @@ object Lower:
 
   private val ints =
     Map("i8" -> 8, "i16" -> 16, "i32" -> 32, "i64" -> 64, "u8" -> 8, "u16" -> 16, "u32" -> 32, "u64" -> 64)
+
+  /** The runtime function that shows a scalar of Core type `t` (a `char` if `char`), and the type it takes. */
+  def formatter(t: CType, char: Boolean): Option[(String, CType)] =
+    t match
+      case _ if char          => Some(("fx_show_char", t))
+      case CType.Int(_, true) => Some(("fx_show_i64", CType.Int(64, signed = true)))
+      case CType.Int(_, _)    => Some(("fx_show_u64", CType.Int(64, signed = false)))
+      case CType.Float(_)     => Some(("fx_show_f64", CType.Float(64)))
+      case CType.Bool         => Some(("fx_show_bool", CType.Bool))
+      case _                  => None
 
   /** The Core type of a scalar typer type. */
   def scalar(t: Type): Option[CType] =

@@ -5,8 +5,9 @@ import fixed.core.{SymbolId, SymbolTable, Type, render}
 import fixed.util.Span
 
 /** Members the compiler derives or generates as Core functions, one instance per data type and
-  * concrete arguments: Rule 7.4.a `fold` (through functors per Rule 7.4.a.1), Rule 7.4.b `unfold`,
-  * Rule 7.4.c `map`, and for list-shaped data `Folding.fold`, `length` and `find`.
+  * arguments: Rule 7.4.a `fold` (through functors per Rule 7.4.a.1), Rule 7.4.b `unfold`, Rule
+  * 7.4.c `map`, and for list-shaped data `Folding.fold`, `length` and `find`. Arguments that are
+  * type parameters make a polymorphic instance with hidden witness parameters ([[hidden]]).
   */
 private[backend] trait Generated:
   protected type K = Atom => Expr
@@ -19,6 +20,7 @@ private[backend] trait Generated:
   protected def instance(name: String)(build: => Fn): String
   protected def fresh(base: String, t: CType): Var
   protected def ctype(t: Type, span: Span): CType
+  protected def isStringType(t: Type): Boolean
   protected def fieldTypes(data: SymbolId, args: List[Type], variant: SymbolId): List[Type]
   protected def dataOf(t: Type): Option[(SymbolId, List[Type])]
 
@@ -33,6 +35,7 @@ private[backend] trait Generated:
     */
   protected def derivedFold(data: SymbolId, args: List[Type], r: Type, span: Span): String =
     val name = generatedName(data, args, "fold", symbols.render(r))
+    val ws = hidden(args :+ r)
     instance(name) {
       val x = typed(fresh("x", CType.Boxed), Type.TypeRef(data, args), span)
       val callbacks = symbols.variantsOf(data).toList.map(v => fresh(s"on_${v.name}", CType.Boxed))
@@ -41,14 +44,16 @@ private[backend] trait Generated:
         t match
           case _ if Lower.isSelf(t, data) =>
             val rec = fresh("rec", rt)
-            Expr.Let(rec, Rhs.Call(name, v :: callbacks, runtime = false), k(rec))
+            Expr.Let(rec, Rhs.Call(name, ws ++ (v :: callbacks), runtime = false), k(rec))
           case Type.TypeRef(f, fargs) if fargs.lastOption.exists(Lower.mentions(_, data)) && dataOf(t).isDefined =>
             val elem = fargs.last
             val param = fresh("e", ctype(elem, span))
             val folded = Lower.replace(elem, data, r)
             closure(List(param), through(elem, param)(Expr.Ret(_)), ctype(folded, span)) { c =>
               val mapped = fresh("mapped", CType.Boxed)
-              Expr.Let(mapped, Rhs.Call(derivedMap(f, fargs, folded, span), List(v, c), runtime = false), k(mapped))
+              val call =
+                Rhs.Call(derivedMap(f, fargs, folded, span), hidden(fargs :+ folded) ++ List(v, c), runtime = false)
+              Expr.Let(mapped, call, k(mapped))
             }
           case _ => k(v)
       val branches = perVariant(data, args, x, span) { (tag, loaded) =>
@@ -56,7 +61,7 @@ private[backend] trait Generated:
           result(Rhs.CallClosure(callbacks(tag), as), rt)
         )
       }
-      Fn(name, x :: callbacks, rt, switch(x, branches, rt))
+      Fn(name, ws ++ (x :: callbacks), rt, switch(x, branches, rt))
     }
 
   /** Rule 7.4.b: `D.unfold(seed, step)`. The step returns one layer whose recursive fields hold
@@ -85,6 +90,7 @@ private[backend] trait Generated:
   /** Rule 7.4.c: `x.map(f)` over the rightmost type parameter; recursive fields are mapped too. */
   protected def derivedMap(data: SymbolId, args: List[Type], newElem: Type, span: Span): String =
     val name = generatedName(data, args, "map", symbols.render(newElem))
+    val ws = hidden(args :+ newElem)
     instance(name) {
       val (x, f) = (typed(fresh("x", CType.Boxed), Type.TypeRef(data, args), span), fresh("f", CType.Boxed))
       val elemParam = symbols.typeParamsOf(data).lastOption
@@ -96,11 +102,11 @@ private[backend] trait Generated:
             case Type.TypeRef(p, Nil) if elemParam.contains(p) =>
               bound(Rhs.CallClosure(f, List(v)), ctype(newElem, span))
             case d if Lower.isSelf(d, data) =>
-              bound(Rhs.Call(name, List(v, f), runtime = false), CType.Boxed)
+              bound(Rhs.Call(name, ws ++ List(v, f), runtime = false), CType.Boxed)
             case _ => None
         construction(tag, loaded, mapField)
       }
-      Fn(name, List(x, f), CType.Boxed, switch(x, branches, CType.Boxed))
+      Fn(name, ws ++ List(x, f), CType.Boxed, switch(x, branches, CType.Boxed))
     }
 
   /** `Folding.fold(init, f)` on a list-shaped data type: a left fold. ponytail: generated here until
@@ -109,6 +115,7 @@ private[backend] trait Generated:
     */
   protected def foldLeft(data: SymbolId, args: List[Type], accType: Type, span: Span): String =
     val name = generatedName(data, args, "foldLeft", symbols.render(accType))
+    val ws = hidden(args :+ accType)
     instance(name) {
       val rt = ctype(accType, span)
       val (xs, init, f) = (listParam(data, args, span), fresh("init", rt), fresh("f", CType.Boxed))
@@ -117,14 +124,15 @@ private[backend] trait Generated:
         Expr.Let(
           acc,
           Rhs.CallClosure(f, List(init, elem)),
-          result(Rhs.Call(name, List(rest, acc, f), runtime = false), rt)
+          result(Rhs.Call(name, ws ++ List(rest, acc, f), runtime = false), rt)
         )
       }
-      Fn(name, List(xs, init, f), rt, switch(xs, branches, rt))
+      Fn(name, ws ++ List(xs, init, f), rt, switch(xs, branches, rt))
     }
 
   protected def length(data: SymbolId, args: List[Type], resultType: Type, span: Span): String =
     val name = generatedName(data, args, "length", symbols.render(resultType))
+    val ws = hidden(args)
     instance(name) {
       val rt = ctype(resultType, span)
       val xs = listParam(data, args, span)
@@ -132,11 +140,11 @@ private[backend] trait Generated:
         val n = fresh("n", rt)
         Expr.Let(
           n,
-          Rhs.Call(name, List(rest), runtime = false),
+          Rhs.Call(name, ws :+ rest, runtime = false),
           result(Rhs.Prim(PrimOp.Add, List(n, Atom.IntC(1, rt))), rt)
         )
       }
-      Fn(name, List(xs), rt, switch(xs, branches, rt))
+      Fn(name, ws :+ xs, rt, switch(xs, branches, rt))
     }
 
   /** `find(p)`: the first element satisfying `p`, built with the constructors that `optional`'s
@@ -144,6 +152,7 @@ private[backend] trait Generated:
     */
   protected def find(data: SymbolId, args: List[Type], optional: SymbolId, resultType: Type, span: Span): String =
     val name = generatedName(data, args, "find", symbols.render(resultType))
+    val ws = hidden(args)
     instance(name) {
       val (xs, p) = (listParam(data, args, span), fresh("p", CType.Boxed))
       val tag = (ctor: String) => capVariant(optional, ctor, resultType).getOrElse(0)
@@ -155,11 +164,28 @@ private[backend] trait Generated:
           Expr.Let(
             ok,
             Rhs.CallClosure(p, List(elem)),
-            result(Rhs.If(ok, found, result(Rhs.Call(name, List(rest, p), runtime = false), CType.Boxed)), CType.Boxed)
+            result(
+              Rhs.If(ok, found, result(Rhs.Call(name, ws ++ List(rest, p), runtime = false), CType.Boxed)),
+              CType.Boxed
+            )
           )
       }
-      Fn(name, List(xs, p), CType.Boxed, switch(xs, branches, CType.Boxed))
+      Fn(name, ws ++ List(xs, p), CType.Boxed, switch(xs, branches, CType.Boxed))
     }
+
+  /** The witness parameter of type parameter `p` (`spec/compilation_model.md` Rule CM4.3). */
+  protected def witnessOf(p: SymbolId): Var = Var(s"w.${symbols(p).name}.${p.toInt}", CType.Witness)
+
+  /** The hidden witness parameters of a generated member at `types`: one per type parameter they
+    * mention, in order of first occurrence. Empty for a member at concrete types.
+    */
+  protected def hidden(types: List[Type]): List[Var] = types.flatMap(typeParamsIn).distinct.map(witnessOf)
+
+  /** The type parameters `t` mentions, in order of first occurrence. */
+  protected def typeParamsIn(t: Type): List[SymbolId] =
+    t match
+      case Type.TypeRef(p, Nil) if symbols(p).kind == fixed.core.SymKind.TypeParam => List(p)
+      case _                                                                       => t.children.flatMap(typeParamsIn)
 
   private def listParam(data: SymbolId, args: List[Type], span: Span): Var =
     typed(fresh("xs", CType.Boxed), Type.TypeRef(data, args), span)

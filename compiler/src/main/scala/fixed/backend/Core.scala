@@ -60,9 +60,11 @@ extension (rhs: Rhs)
       case Rhs.Switch(s, cases) => Rhs.Switch(s, cases.map((tag, c) => (tag, f(c))))
       case other                => other
 
-/** Scalar operations. `Widen` converts to the result variable's wider type of the same kind. */
+/** Scalar operations. `Widen` converts to the result variable's wider type of the same kind;
+  * `Convert` converts an `i64` to the result's narrower integer or float type (`Numeric.from_i64`).
+  */
 enum PrimOp:
-  case Add, Sub, Mul, Div, Rem, Eq, Ne, Lt, Le, Gt, Ge, Neg, Not, Widen
+  case Add, Sub, Mul, Div, Rem, Eq, Ne, Lt, Le, Gt, Ge, Neg, Not, Widen, Convert
 
 /** The right-hand side of a `Let`. Calls consume their counted arguments. */
 enum Rhs:
