@@ -8,7 +8,7 @@ import scala.sys.process.{Process, ProcessLogger}
 import fixed.util.SourceFile
 import fixed.{CompilationUnit, Compiler}
 
-/** Small programs through the whole slice pipeline: check, lower, emit, `clang`, run. Each run
+/** Programs (examples, benchmarks and small inline ones) through the whole slice pipeline: check, lower, emit, `clang`, run. Each run
   * compares standard output and checks the runtime's counters: every allocation is freed
   * (slice §4.8). These tests need `clang` and fail, not skip, without it.
   */
@@ -36,6 +36,7 @@ class EmitSuite extends munit.FunSuite:
     assertEquals(code, 0, err)
     assertEquals(out, expected)
     val counts = "\"(\\w+)\":(\\d+)".r.findAllMatchIn(err).map(m => m.group(1) -> m.group(2).toLong).toMap
+    assert(counts.contains("allocs") && counts.contains("frees"), s"no runtime counters: $err")
     assertEquals(counts.get("allocs"), counts.get("frees"), s"leak: $err")
     counts
 
@@ -48,6 +49,18 @@ class EmitSuite extends munit.FunSuite:
     test(s"example $name matches its golden output"):
       val golden = (ext: String) => java.nio.file.Files.readString(Path.of("examples", "golden", s"$name.$ext"))
       check(name, java.nio.file.Files.readString(Path.of("examples", s"$name.fixed")), golden("out"), golden("in"))
+  }
+
+  /** Every runtime benchmark in `bench/runtime`, each against its committed result line. */
+  private val benches =
+    java.nio.file.Files.list(Path.of("bench", "runtime")).toArray.toList.map(_.toString).collect {
+      case p if p.endsWith(".fixed") => Path.of(p).getFileName.toString.stripSuffix(".fixed")
+    }.sorted
+
+  benches.foreach { name =>
+    test(s"benchmark $name prints its expected result"):
+      val read = (ext: String) => java.nio.file.Files.readString(Path.of("bench", "runtime", s"$name.$ext"))
+      check(name, read("fixed"), read("expected"))
   }
 
   test("hello world"):
