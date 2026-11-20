@@ -80,19 +80,19 @@ final class EmitLLVM:
         line(s"  %${x.name}.p = getelementptr inbounds i8, ptr ${operand(obj)}, i64 ${16 + 8 * slot}")
         line(s"  %${x.name} = load ${EmitLLVM.llType(x.ctype)}, ptr %${x.name}.p")
         label
-      case Rhs.Closure(code, Nil, shared) =>
+      case Rhs.Closure(code, Nil, exclusive) =>
         val name = s"closure.$code"
         statics(name) = s"@\"$name\" = private unnamed_addr constant <{ i64, i32, i32, ptr, ptr }> " +
-          s"<{ i64 -1, i32 ${Layout.closureTag}, i32 0, ptr ${EmitLLVM.user(code)}, " +
-          s"ptr ${EmitLLVM.user(if shared.isEmpty then code else shared)} }>, align 8\n"
+          s"<{ i64 -1, i32 ${Layout.closureTag}, i32 0, ptr ${EmitLLVM.user(orCode(exclusive, code))}, " +
+          s"ptr ${EmitLLVM.user(code)} }>, align 8\n"
         aliases(x.name) = s"@\"$name\""
         label
-      case Rhs.Closure(code, captures, shared) =>
+      case Rhs.Closure(code, captures, exclusive) =>
         val types = captures.map(_.tpe)
         allocate(x, Layout.closureTag, Layout.boxedCount(types), captures.size + Layout.closureCode)
-        line(s"  store ptr ${EmitLLVM.user(code)}, ptr %${x.name}.0")
+        line(s"  store ptr ${EmitLLVM.user(orCode(exclusive, code))}, ptr %${x.name}.0")
         line(s"  %${x.name}.code1 = getelementptr inbounds i8, ptr %${x.name}, i64 24")
-        line(s"  store ptr ${EmitLLVM.user(if shared.isEmpty then code else shared)}, ptr %${x.name}.code1")
+        line(s"  store ptr ${EmitLLVM.user(code)}, ptr %${x.name}.code1")
         store(x, captures.zip(Layout.slots(types, first = Layout.closureCode)))
         label
       case Rhs.CallClosure(c, args, exclusive) =>
@@ -102,6 +102,9 @@ final class EmitLLVM:
         val argList = typed(c :: args)
         line(s"  %${x.name} = call ${EmitLLVM.llType(x.ctype)} %code.$n($argList)")
         label
+
+  /** A closure's exclusive entry: `code` itself where no exclusive version was built. */
+  private def orCode(exclusive: String, code: String): String = if exclusive.isEmpty then code else exclusive
 
   /** Emit each branch in its own block and join their results with a phi; the join block. */
   private def join(x: Var, n: Int, branches: List[(String, Expr)]): String =

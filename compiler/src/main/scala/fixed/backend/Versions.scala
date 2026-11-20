@@ -29,69 +29,248 @@ object Own:
   val all: Own = Own(root = true, Set.empty, rest = true)
   val shared: Own = Own(root = false, Set.empty, rest = false)
 
-/** Shared versions and copies (`spec/quantities.md` Rule Q9.3; `docs/plans/phase-3.4-qtt.md`
-  * 3.4.M3). Starting at `main`, each function instance is built once per ownership of its
-  * exclusive parameters actually called: the version where every demanded part is exclusive keeps
-  * the instance's name, the others get `#n`. A call passes an argument as exclusive only where
+/** A clone candidate (`spec/compilation_model.md` Rule CM5.4): its canonical key, `removed` and
+  * `weight`. `reason` is empty for a clone that was built, else why it was not (Rule CM5.8, plus
+  * `unused` for a clone dropped because no call reached it, see [[Versions.run]]). A
+  * clone a `fip` body needs is built whatever the budget and is not `charged`.
+  */
+final case class Candidate(key: String, removed: Int, weight: Long, reason: String, charged: Boolean)
+
+/** Shared versions and exclusive clones on the ownership axis (`spec/quantities.md` Rule Q9.3,
+  * `spec/compilation_model.md` §5). Every function instance reached from `main` has its shared
+  * version, which keeps the instance's name. A call passes an argument as exclusive only where
   * [[Demands.exclusive]] holds and the caller owns every demanded part, the same test demand
-  * inference used. Beyond `cap` versions of one function, the caller copies the demanded part
-  * (Neut's strategy, applied only here) and calls the exclusive version; a `fip fn` has no shared
-  * version, so its callers always copy (Rule MM18.3). Every closure gets an
-  * exclusive and a shared entry (Rule PR5.6), and a closure call picks one statically.
+  * inference used; that call requests the clone of its callee for that ownership mask.
+  *
+  * Clones are chosen by Rule CM5.4 in rounds: the requests of the versions built so far are
+  * ranked per function, in the order of the function's name, by `removed × weight` (ties by key
+  * text), and built while the function's charges stay within `budget` (Rule CM5.3); each clone is
+  * charged the function's size in Core `let`s. `removed` counts the sites where the clone's walk
+  * decides differently from the shared version's: a reuse without a test, a call that requests a
+  * clone, a closure call through the exclusive entry. `weight` sums `8^d` over the requesting call
+  * sites, `d` being the number of loop steps enclosing the site ([[depths]]). A call whose clone
+  * was not built calls the shared version; nothing is copied (Rule CM5.6).
+  *
+  * A `fip fn` has one body, its exclusive version, under its own name, and a shared entry
+  * `f#shared` that copies the demanded part of each argument and calls the body (Rule CM5.5);
+  * neither is charged, nor are the clones the body requests: without them it would call versions
+  * that test counts, which a `fip fn` may not. Every closure's primary entry is the shared version of its code; its
+  * exclusive entry is a clone, requested by the closure's construction (Rule PR5.6). A closure
+  * call picks one statically.
   *
   * A constructor paired with a dead cell by demand inference becomes a `Reuse`: unconditional where
   * this version owns the cell exclusively, else after a runtime `rc == 1` test (hybrid reuse, Rule
   * PR6.3).
   *
   * Result ownership per version is a summary: optimistic at first (fresh results are exclusive),
-  * then recomputed until no summary changes. A value only becomes exclusive by construction, so
-  * each round can only take exclusivity away.
+  * then recomputed until no summary changes ([[run]]).
   *
   * @param copy the copy function of a type key for a set of parts, if the type is data
+  * @param budget the clone budget `B` of each function, in Core `let`s
   */
 final class Versions(
     d: Demands,
     table: DemandTable,
     fns: List[Fn],
     copy: (String, Set[Need.Part]) => Option[String],
-    fip: String => Boolean
+    fip: String => Boolean,
+    budget: Int
 ):
   private type Mask = List[Set[Option[Need.Part]]]
+  private type Key = (String, Mask)
 
-  private val cap = 4
   private val byName = fns.map(f => f.name -> f).toMap
-  private val names = mutable.LinkedHashMap.empty[(String, Mask), String]
   private val results = mutable.HashMap.empty[String, Own]
   private val built = mutable.LinkedHashMap.empty[String, Fn]
-  private val queue = mutable.Queue.empty[(String, Mask, String)]
+  private val queue = mutable.Queue.empty[(String, Boolean)]
   private val queued = mutable.HashSet.empty[String]
 
-  /** The version being built: its reuse pairs come from demand inference (by instance name). */
+  /** The clones built, those among them a `fip` body needs (not charged), and those dropped. */
+  private val clones = mutable.LinkedHashSet.empty[Key]
+  private val forced = mutable.HashSet.empty[Key]
+  private val unused = mutable.HashSet.empty[Key]
+
+  /** Per candidate: its weight so far, its `removed`, and why it was not built; per function, the
+    * decisions of its shared version's sites.
+    */
+  private val weights = mutable.LinkedHashMap.empty[Key, Long]
+  private val removals = mutable.HashMap.empty[Key, Int]
+  private val reasons = mutable.HashMap.empty[Key, String]
+  private val sharedSites = mutable.HashMap.empty[String, List[String]]
+
+  /** The version being walked (its instance's reuse pairs come from demand inference) and what
+    * the walk decides at each site and requests of its callees.
+    */
   private val current = scala.util.DynamicVariable("")
+  private val log = scala.util.DynamicVariable(Log())
   private val copies = Iterator.from(1)
 
-  /** The functions of every version reachable from `main`. */
+  final private case class Log(
+      sites: mutable.ListBuffer[String] = mutable.ListBuffer.empty,
+      requests: mutable.ListBuffer[Key] = mutable.ListBuffer.empty
+  )
+
+  /** The functions of every version reachable from `main`. Each pass builds the shared versions
+    * and the clones chosen so far, then runs the rounds; passes repeat until neither the clones
+    * nor any result summary changes. Within this, clones are never removed and summaries only
+    * lose exclusivity (each is met with its previous value), so it terminates, and in the last
+    * pass every call site saw the final clones and summaries. A clone that no shared version or
+    * `fip` body then reaches was chosen from a summary that later lost exclusivity: it is
+    * dropped, never chosen again (reason `unused`) and the whole repeats, so that it holds no
+    * budget. That set only grows, so this terminates too.
+    */
   def run(): List[Fn] =
-    val before = results.toMap
-    built.clear()
-    queued.clear()
-    val _ = request("main", Nil)
+    val before = (results.toMap, clones.toSet)
+    List(built, queued, forced, weights, removals, sharedSites, reasons).foreach(_.clear())
+    ensure("main", Nil)
     drain()
-    if results.toMap != before then run() else built.values.toList
+    clones.toList.foreach(build)
+    drain()
+    rounds()
+    if (results.toMap, clones.toSet) != before then run()
+    else
+      val live = Core.reach(built.values.filter(f => f.name == f.instance).map(_.name).toSet, built)
+      val dead = clones.filterNot(k => live(cloneName(k)))
+      if dead.isEmpty then built.values.toList
+      else
+        unused ++= dead
+        clones --= dead
+        run()
+
+  /** Per function instance with candidates, each candidate in key order. */
+  def candidates: Map[String, List[Candidate]] = (weights.keySet ++ clones ++ unused).toList.groupMap(_._1) { k =>
+    val why = if clones(k) then "" else reasons.getOrElse(k, "unused")
+    Candidate(text(k._2), removed(k), weights.getOrElse(k, 0L), why, charged = !forced(k))
+  }.view.mapValues(_.sortBy(_.key)).toMap
+
+  /** Rule CM5.4's rounds: rank and choose per function, then build what was chosen. */
+  private def rounds(): Unit =
+    val chosen = weights.keys.map(_._1).toList.distinct.sorted.flatMap(choose)
+    chosen.foreach(k => if !clones(k) then build(k))
+    drain()
+    if chosen.nonEmpty then rounds()
+
+  private def choose(f: String): List[Key] =
+    val size = Core.lets(byName(f).body).size
+    val ranked =
+      weights.keys.filter(k => k._1 == f && !clones(k) && !unused(k)).toList.sortBy(k =>
+        (-removed(k) * weights(k), text(k._2))
+      )
+    ranked.foldLeft(List.empty[Key]) { (chosen, k) =>
+      val charged = (clones.count(c => c._1 == f && !forced(c)) + chosen.size) * size
+      val why =
+        if removed(k) == 0 then "removed = 0"
+        else if size > budget then "larger than B"
+        else if charged + size > budget then "budget exhausted"
+        else ""
+      if why.isEmpty then chosen :+ k
+      else
+        reasons(k) = why
+        chosen
+    }
+
+  /** Sites whose decision differs between the clone for `k` and the shared version. */
+  private def removed(k: Key): Int =
+    val (f, mask) = k
+    removals.getOrElseUpdate(k, sites(f, mask).zip(sharedSites.getOrElseUpdate(f, sites(f, shared(f)))).count(_ != _))
+
+  private def sites(f: String, mask: Mask): List[String] =
+    log.withValue(Log())(walkAt(f, mask)._3.sites.toList)
+
+  private def shared(f: String): Mask = full(f).map(_ => Set.empty)
+
+  /** The canonical text of an ownership mask: per parameter with exclusive parts, its index and
+    * the parts (`cell` for its own cell).
+    */
+  private def text(mask: Mask): String =
+    mask.zipWithIndex.collect {
+      case (parts, i) if parts.nonEmpty =>
+        s"$i:" + parts.toList.map(_.fold("cell")((k, slot) => s"$k#$slot")).sorted.mkString(",")
+    }.mkString(";")
+
+  /** What a call of `f` at `mask` resolves to (Rules CM5.5, CM5.6). */
+  private def target(f: String, mask: Mask): String =
+    if fip(f) then if mask == full(f) then f else entryName(f)
+    else if clones((f, mask)) then cloneName((f, mask))
+    else f
+
+  /** A clone's symbol name: its function's name and its canonical key (Rule CM5.1). */
+  private def cloneName(k: Key): String = s"${k._1}#x[${text(k._2)}]"
+
+  private def entryName(f: String): String = s"$f#shared"
+
+  /** Queue the version of `f` a call at `mask` needs whatever the budget: the shared version, or
+    * for a `fip fn` its body or its shared entry.
+    */
+  private def ensure(f: String, mask: Mask): Unit =
+    val adapter = fip(f) && mask != full(f)
+    if queued.add(if adapter then entryName(f) else f) then queue.enqueue((f, adapter))
 
   private def drain(): Unit =
     if queue.nonEmpty then
-      val (f, mask, name) = queue.dequeue()
-      build(f, mask, name)
+      val (f, adapter) = queue.dequeue()
+      if adapter then entry(f) else build(f, if fip(f) then full(f) else shared(f), f)
       drain()
 
-  /** The version name for `f` at `mask`, queued to be built if it is not yet. */
-  private def request(f: String, mask: Mask): String =
-    val name = if mask == full(f) then f else names.getOrElseUpdate((f, mask), s"$f#${versions(f)}")
-    if queued.add(name) then queue.enqueue((f, mask, name))
-    name
+  private def build(k: Key): Unit =
+    clones += k
+    build(k._1, k._2, cloneName(k))
 
-  private def versions(f: String): Int = 1 + names.keys.count(_._1 == f)
+  /** Build `f` for `mask` as `name`. Its requests queue the versions they need and weigh their
+    * candidates; a `fip` body, or a clone it forced, forces the clones it requests instead, so
+    * that it never calls a version that tests counts (Rule CM5.5).
+    */
+  private def build(f: String, mask: Mask, name: String): Unit =
+    val (body, result, made) = log.withValue(Log())(walkAt(f, mask))
+    built(name) = byName(f).copy(name = name, body = body, version = Some(Version(f, mask != full(f))))
+    results(name) = results.get(name).fold(result)(_ meet result)
+    val weight = 1L << (3 * math.min(depths.getOrElse(f, 0), 20))
+    made.requests.foreach { (g, m) =>
+      ensure(g, if fip(g) then m else shared(g))
+      val k = (g, m)
+      if fip(g) || !m.exists(_.nonEmpty) then ()
+      else if fip(f) || forced((f, mask)) then
+        forced += k
+        if !clones(k) then build(k)
+      else weights(k) = weights.getOrElse(k, 0L) + weight
+    }
+
+  /** The shared entry of `fip fn f`: copy the demanded part of each argument, then call the body. */
+  private def entry(f: String): Unit =
+    val fn = byName(f)
+    val keys = d.entry(fn).keys
+    val copied = fn.params.zip(full(f)).map { (p, want) =>
+      keys.get(p.name).filter(_ => want.nonEmpty).flatMap(copy(_, want.flatten)).map { cf =>
+        val c: Atom.Var = Atom.Var(s"copy.${copies.next()}", CType.Boxed)
+        (c, Rhs.Call(cf, List(p), runtime = false))
+      }
+    }
+    val r: Atom.Var = Atom.Var(s"copy.${copies.next()}", fn.ret)
+    val args = fn.params.zip(copied).map((p, c) => c.fold(p: Atom)(_._1))
+    val body = copied.flatten.foldRight(Let(r, Rhs.Call(f, args, runtime = false), Ret(r)): Expr)((c, acc) =>
+      Let(c._1, c._2, acc)
+    )
+    built(entryName(f)) = fn.copy(name = entryName(f), body = body, version = Some(Version(f, conditional = false)))
+    ensure(f, full(f))
+
+  /** Per function, the number of loop steps that lexically enclose its body (Rule CM5.4's `d`): a
+    * closure passed to a derived loop is one step deeper than the function that builds it, any
+    * other closure is as deep. Functions that are not closures are at depth 0.
+    */
+  private lazy val depths: Map[String, Int] =
+    val loops = Seq(".fold[", ".unfold[", ".foldLeft[", ".map[")
+    val all = fns.flatMap(f => Core.lets(f.body).map(f.name -> _))
+    def from(f: String, k: Int, seen: Set[String]): Map[String, Int] =
+      val lets = all.collect { case (`f`, l) => l }
+      val steps = lets.collect {
+        case (_, Rhs.Call(g, as, false)) if loops.exists(g.contains) => as.flatMap(Core.boxedVar).map(_.name)
+      }.flatten.toSet
+      lets.collect {
+        case (x, Rhs.Closure(code, _, _)) if !seen(code) =>
+          from(code, k + (if steps(x.name) then 1 else 0), seen + code)
+      }.foldLeft(Map(f -> k))(_ ++ _)
+    val closures = all.collect { case (_, (_, Rhs.Closure(code, _, _))) => code }.toSet
+    fns.map(_.name).filterNot(closures).foldLeft(Map.empty[String, Int])((m, f) => m ++ from(f, 0, Set(f)))
 
   /** Per parameter, the parts its demand marks exclusive (`None` is the value's own cell). */
   private def full(f: String): Mask =
@@ -99,15 +278,15 @@ final class Versions(
       (if n.root == Demand.Excl then Set(None) else Set.empty) ++ n.parts.collect { case (k, Demand.Excl) => Some(k) }
     )
 
-  private def build(f: String, mask: Mask, name: String): Unit =
+  /** `f`'s body walked for ownership `mask`: the version's body, its result's ownership and the log. */
+  private def walkAt(f: String, mask: Mask): (Expr, Own, Log) =
     val fn = byName(f)
     val owns = fn.params.zipWithIndex.map { (p, i) =>
       val m = mask.lift(i).getOrElse(Set.empty)
       p.name -> Own(m(None), m.flatten, rest = false)
     }.toMap
-    val (body, result) = current.withValue(name)(walk(fn.body, d.entry(fn), owns))
-    built(name) = fn.copy(name = name, body = body)
-    results(name) = result
+    val (body, result) = current.withValue(f)(walk(fn.body, d.entry(fn), owns))
+    (body, result, log.value)
 
   /** A program point: the variables live after it, the path facts and the ownership so far. */
   final private case class At(live: Set[String], ctx: d.Ctx, owns: Map[String, Own]):
@@ -130,9 +309,9 @@ final class Versions(
       case Ret(a)            => (e, At(ctx.after, ctx, owns).own(a))
       case Let(x, rhs, body) =>
         val live = (d.names(body) - x.name) ++ ctx.after
-        val (pre, rhs2, ox) = right(x, rhs, At(live, ctx, owns))
+        val (rhs2, ox) = right(x, rhs, At(live, ctx, owns))
         val (body2, r) = walk(body, d.forward(x, rhs, live, ctx), owns.updated(x.name, ox))
-        (pre.foldRight(Let(x, rhs2, body2): Expr)((p, acc) => Let(p._1, p._2, acc)), r)
+        (Let(x, rhs2, body2), r)
       case Expr.Dup(x, b) =>
         val (b2, r) = walk(b, ctx, owns)
         (Expr.Dup(x, b2), r)
@@ -140,55 +319,50 @@ final class Versions(
         val (b2, r) = walk(b, ctx, owns)
         (Expr.Drop(x, b2), r)
 
-  /** `rhs` rewritten to call versions, the copies to bind before it, and its result's ownership. */
-  private def right(x: Atom.Var, rhs: Rhs, at: At): (List[(Atom.Var, Rhs)], Rhs, Own) =
+  /** `rhs` rewritten to call versions, and its result's ownership. */
+  private def right(x: Atom.Var, rhs: Rhs, at: At): (Rhs, Own) =
     val At(live, ctx, owns) = at
-    def plain(o: Own) = (Nil, rhs, o)
     rhs match
-      case Rhs.Move(a)                                  => plain(at.own(a))
+      case Rhs.Move(a)                                  => (rhs, at.own(a))
       case Rhs.Call(f, as, false) if byName.contains(f) => call(f, as, at)(Rhs.Call(_, _, runtime = false))
       case Rhs.Catch(f, as) if byName.contains(f)       => call(f, as, at)(Rhs.Catch(_, _))
-      case Rhs.Call(_, _, true) | _: Rhs.Prim           => plain(Own.all)
+      case Rhs.Call(_, _, true) | _: Rhs.Prim           => (rhs, Own.all)
       case Rhs.Con(tag, fs)                             =>
         val made = construct(x, fs, at)
-        table.reuses.getOrElse(Memory.base(current.value), Map.empty).get(x.name) match
+        table.reuses.getOrElse(current.value, Map.empty).get(x.name) match
           case Some(v) =>
             val cell = Atom.Var(v, CType.Boxed)
-            (Nil, Rhs.Reuse(cell, tag, fs, unconditional = at.own(cell).root), made)
-          case None => plain(made)
+            val unconditional = at.own(cell).root
+            log.value.sites += s"reuse $unconditional"
+            (Rhs.Reuse(cell, tag, fs, unconditional), made)
+          case None => (rhs, made)
       case Rhs.Field(o, slot) =>
         val parent = at.own(o)
         val key = (Core.boxedVar(o).flatMap(v => ctx.keys.get(v.name)).getOrElse("?"), slot)
-        plain(if parent.root then parent.copy(root = parent.part(key)) else Own.shared)
+        (rhs, if parent.root then parent.copy(root = parent.part(key)) else Own.shared)
       case Rhs.Closure(code, cs, _) =>
-        val exclusive = request(code, full(code))
-        (
-          Nil,
-          Rhs.Closure(exclusive, cs, request(code, full(code).map(_ => Set.empty))),
-          Own(root = true, Set.empty, rest = false)
-        )
+        val exclusive = target(code, full(code))
+        log.value.requests += ((code, full(code)))
+        (Rhs.Closure(code, cs, if exclusive == code then "" else exclusive), Own(root = true, Set.empty, rest = false))
       case Rhs.CallClosure(c, as, _) =>
         val args = as.flatMap(Core.boxedVar).map(_.name)
         val ex = args.nonEmpty && as.forall {
           case v: Atom.Var if v.ctype.boxed => at.exclusive(v.name, args) && at.own(v).whole
           case _                            => true
         }
-        (Nil, Rhs.CallClosure(c, as, ex), Own.shared)
+        log.value.sites += s"closure $ex"
+        (Rhs.CallClosure(c, as, ex), Own.shared)
       case Rhs.If(c, t, f) =>
         val branch = ctx.copy(after = live)
         val ((t2, o1), (f2, o2)) = (walk(t, branch, owns), walk(f, branch, owns))
-        (Nil, Rhs.If(c, t2, f2), o1 meet o2)
+        (Rhs.If(c, t2, f2), o1 meet o2)
       case Rhs.Switch(s, cases) =>
         val walked = cases.map { (tag, c) =>
           val tags = Core.boxedVar(s).fold(ctx.tags)(v => ctx.tags.updated(v.name, tag))
           (tag, walk(c, ctx.copy(after = live, tags = tags), owns))
         }
-        (
-          Nil,
-          Rhs.Switch(s, walked.map((t, w) => (t, w._1))),
-          walked.map(_._2._2).reduceOption(_ meet _).getOrElse(Own.all)
-        )
-      case _ => plain(Own.shared)
+        (Rhs.Switch(s, walked.map((t, w) => (t, w._1))), walked.map(_._2._2).reduceOption(_ meet _).getOrElse(Own.all))
+      case _ => (rhs, Own.shared)
 
   /** A constructor result: its cell is fresh; a part is exclusive iff every field is exclusive in
     * it, and the field stored at that part is itself exclusive.
@@ -204,12 +378,10 @@ final class Versions(
       case (acc, _) => acc
     }
 
-  /** A call of user function `f`: the version matching what the caller owns, or a copy first. */
-  private def call(
-      f: String,
-      as: List[Atom],
-      at: At
-  )(make: (String, List[Atom]) => Rhs): (List[(Atom.Var, Rhs)], Rhs, Own) =
+  /** A call of user function `f`: it requests the version matching what the caller owns, and calls
+    * the one that request resolves to.
+    */
+  private def call(f: String, as: List[Atom], at: At)(make: (String, List[Atom]) => Rhs): (Rhs, Own) =
     val want = full(f)
     val args = as.flatMap(Core.boxedVar).map(_.name)
     val mask = as.zipWithIndex.map { (a, i) =>
@@ -221,19 +393,11 @@ final class Versions(
           else w.filter(_.forall(o.part))
         case _ => w
     }
-    if mask == want || (!fip(f) && (names.contains((f, mask)) || versions(f) < cap)) then
-      val name = request(f, mask)
-      (Nil, make(name, as), results.getOrElse(name, Own.all))
-    else
-      val copied = as.zipWithIndex.map { (a, i) =>
-        (a, Core.boxedVar(a).filter(_ => mask(i) != want(i))) match
-          case (_, Some(v)) =>
-            at.ctx.keys.get(v.name).flatMap(copy(_, want(i).flatten)).map { cf =>
-              val c: Atom.Var = Atom.Var(s"copy.${copies.next()}", CType.Boxed)
-              (Some((c, Rhs.Call(cf, List(v), runtime = false): Rhs)), c: Atom)
-            }.getOrElse((Option.empty[(Atom.Var, Rhs)], a))
-          case _ => (Option.empty[(Atom.Var, Rhs)], a)
-      }
-      val pre = copied.flatMap(_._1)
-      val name = request(f, if pre.size == as.indices.count(i => mask(i) != want(i)) then want else mask)
-      (pre, make(name, copied.map(_._2)), results.getOrElse(name, Own.all))
+    log.value.sites += s"call ${text(mask)}"
+    log.value.requests += ((f, mask))
+    (make(target(f, mask), as), results.getOrElse(if fip(f) then f else target(f, mask), Own.all))
+
+object Versions:
+
+  /** The reference clone budget of Rule CM5.3, in Core `let`s. */
+  val budget: Int = 512

@@ -196,7 +196,7 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
     calls.find((g, as) => g == loop && as.exists(Core.boxedVar(_).exists(_.name == x))).exists { (_, as) =>
       as.flatMap(Core.boxedVar).flatMap(v => closureMap(fn).get(v.name)).exists { code =>
         val i = 1
-        demands.params.get(Memory.base(code)).flatMap(_.lift(i)).exists(_.root == Demand.Excl) ||
+        demands.params.get(code).flatMap(_.lift(i)).exists(_.root == Demand.Excl) ||
         signatures.get(code).flatMap(_.lift(i)).contains(ParamEscape.IntoResult)
       }
     }
@@ -262,8 +262,3 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
         case _                          => true
       }
     }
-
-object Memory:
-
-  /** A version's instance name: `f#2` is a version of `f`. */
-  def base(name: String): String = name.replaceFirst("#\\d+$", "")

@@ -11,9 +11,12 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
 /** The backend slice's entry points (`docs/plans/phase-4.0-backend-slice.md`): a checked unit to
   * LLVM IR, and LLVM IR plus the C runtime to a native executable through `clang`.
   */
-/** Versioned Core and what M10 inferred about it; `fips` are the `fip fn` instances. */
+/** Versioned Core and what M10 inferred about it; `fips` are the `fip fn` instances, `candidates`
+  * the clone candidates of each function instance.
+  */
 final case class Analysed(
     fns: List[Fn],
+    candidates: Map[String, List[Candidate]],
     demands: DemandTable,
     memory: MemoryTable,
     fips: Map[String, fixed.ast.Trees.Fip],
@@ -35,18 +38,20 @@ object Backend:
   /** Core for `unit`: lowered, then split into the versions demand inference calls for (3.4.M3). */
   def core(unit: CompilationUnit): Either[List[Diagnostic], List[Fn]] = analyse(unit).map(_.fns)
 
-  /** Versioned Core with its demands and memory facts (3.4.M2–M4). */
-  def analyse(unit: CompilationUnit): Either[List[Diagnostic], Analysed] =
+  /** Versioned Core with its demands and memory facts (3.4.M2–M4); `budget` is each function's
+    * clone budget (`spec/compilation_model.md` Rule CM5.3).
+    */
+  def analyse(unit: CompilationUnit, budget: Int = Versions.budget): Either[List[Diagnostic], Analysed] =
     val lower = Lower(unit)
     lower.program.map { fns =>
       val render = (t: fixed.core.Type) => unit.symbols.render(t)
       val (demands, table) = Demands.analyse(lower, fns, render)
       val byKey = Demands.typesByKey(lower, render)
       val copy = (k: String, parts: Set[Need.Part]) => byKey.get(k).flatMap(lower.copy(_, parts))
-      val versions = Versions(demands, table, fns, copy, lower.fips.contains).run()
-      val all = versions ++ lower.functions.filter(_.name.contains(".copy["))
-      val spans = (v: String) => lower.spans.getOrElse(Memory.base(v), Span.NoSpan)
-      Analysed(all, table, Memory(all, table, spans).run(), lower.fips.toMap, spans)
+      val versions = Versions(demands, table, fns, copy, lower.fips.contains, budget)
+      val all = versions.run() ++ lower.functions.filter(_.name.contains(".copy["))
+      val spans = (v: String) => lower.spans.getOrElse(v, Span.NoSpan)
+      Analysed(all, versions.candidates, table, Memory(all, table, spans).run(), lower.fips.toMap, spans)
     }
 
   /** Write `ir` next to `out`, then link it with the runtime into the executable `out`. With

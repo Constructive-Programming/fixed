@@ -203,7 +203,7 @@ class EmitSuite extends munit.FunSuite:
       "    Console.print_line(first(a).show())\n    Console.print_line(first(b).show())\n"
     check("shared_bump", src, "1\n2\n")
 
-  test("beyond the version cap the caller copies, and the copy is freed (3.4.M3)"):
+  test("past the clone budget the caller calls the shared version (Rule CM5.6)"):
     val src = header + "data L:\n    E\n    C(h: u64, t: L)\n\n" +
       "fn bump(xs: L) -> L =\n    match xs:\n        L.C(h, t) => L.C(h + 1, t)\n        L.E => L.E\n\n" +
       "fn first(xs: L) -> u64 =\n    match xs:\n        L.C(h, _) => h\n        L.E => 0\n\n" +
@@ -214,7 +214,7 @@ class EmitSuite extends munit.FunSuite:
       "fn main() -> () with Console =\n    Console.print_line(drive(L.C(1, L.E), L.C(2, L.E), L.C(3, L.E)).show())\n"
     check("cap_copy", src, "33\n")
 
-  test("a shared value copied into a fip function runs correctly and frees the copy (3.4.M5)"):
+  test("a shared value passed to a fip function is copied by its shared entry, and the copy freed (Rule CM5.5)"):
     val src = header + "data L:\n    E\n    C(h: u64, t: L)\n\n" +
       "fip fn bump(xs: L) -> L =\n    match xs:\n        L.C(h, t) => L.C(h + 1, t)\n        L.E => L.E\n\n" +
       "fn first(xs: L) -> u64 =\n    match xs:\n        L.C(h, _) => h\n        L.E => 0\n\n" +

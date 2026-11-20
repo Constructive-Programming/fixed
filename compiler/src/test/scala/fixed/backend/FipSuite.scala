@@ -50,12 +50,15 @@ class FipSuite extends munit.FunSuite:
     val code = list + "fip(strict) fn mk(x: u64) -> P = P.P(x, x)\n\nfn get(p: P) -> u64 = p.a\n\n"
     assertEquals(violations(code, "get(mk(1))"), List("Rule MM18.2(1)"))
 
-  test("a caller holding a shared value copies into a fip function; a fip caller may not"):
+  test("a caller holding a shared value calls the fip function's copying shared entry; a fip caller may not"):
     val twice = "fn twice(xs: L) -> u64 = first(bump(xs)) + first(xs)\n\n"
     val fns = Backend.core(unit(list + "fip " + bump + twice + "fn main() -> () with Console =\n" +
       "    Console.print_line(twice(L.C(1, L.E)).show())\n")).fold(ds => fail(s"$ds"), identity)
-    assert(fns.find(_.name == "twice").exists(f => Core.callees(f.body).exists(_.contains(".copy["))))
-    assert(!fns.exists(_.name.startsWith("bump#")), fns.map(_.name))
+    val callees = (f: String) => fns.find(_.name == f).fold(Set.empty[String])(g => Core.callees(g.body))
+    assertEquals(callees("twice").filter(_.startsWith("bump")), Set("bump#shared"))
+    assert(callees("bump#shared").exists(_.contains(".copy[")), callees("bump#shared"))
+    assert(callees("bump#shared").contains("bump"), callees("bump#shared"))
+    assertEquals(fns.map(_.name).filter(_.startsWith("bump")).sorted, List("bump", "bump#shared"))
     assertEquals(violations(list + "fip " + bump + "fip " + twice, "twice(L.C(1, L.E))"), List("Rule MM18.1(3)"))
 
   test("example 01's memory report matches its golden file (regenerate with FIXED_REGEN=1)"):

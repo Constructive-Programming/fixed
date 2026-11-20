@@ -68,10 +68,10 @@ enum Rhs:
   case Switch(scrutinee: Atom, cases: List[(Int, Expr)])
 
   /** A closure of code function `code`, whose first parameter is the closure itself. A closure
-    * with no captures is a static object. Consumes the captures. `shared` is the entry compiled
-    * for shared arguments (`spec/memory_management.md` Rule PR5.6); empty means `code` itself.
+    * with no captures is a static object. Consumes the captures. `code` is the shared entry, the
+    * primary one; `exclusive`, if not empty, the exclusive one (`spec/memory_management.md` Rule PR5.6).
     */
-  case Closure(code: String, captures: List[Atom], shared: String = "")
+  case Closure(code: String, captures: List[Atom], exclusive: String = "")
 
   /** Call a closure through its exclusive entry or its shared one (Rule PR5.6). Consumes the
     * closure and the arguments.
@@ -93,7 +93,14 @@ enum Expr:
   case Dup(x: Atom.Var, body: Expr)
   case Drop(x: Atom.Var, body: Expr)
 
-final case class Fn(name: String, params: List[Atom.Var], ret: CType, body: Expr)
+/** A function; `version` is set on what [[Versions]] builds, and `instance` is what it is a version of. */
+final case class Fn(name: String, params: List[Atom.Var], ret: CType, body: Expr, version: Option[Version] = None):
+  def instance: String = version.fold(name)(_.of)
+
+/** A version of `of`, `conditional` if built for less than every part `of` demands exclusive (it
+  * then reuses only after an `rc == 1` test; a `fip` shared entry copies instead and is not).
+  */
+final case class Version(of: String, conditional: Boolean)
 
 object Core:
 
@@ -135,6 +142,11 @@ object Core:
       case Expr.Dup(_, b)  => callees(b)
       case Expr.Drop(_, b) => callees(b)
       case Expr.Ret(_)     => Set.empty
+
+  /** Every function reachable from `from`, closures' code included. */
+  def reach(from: Set[String], byName: collection.Map[String, Fn]): Set[String] =
+    val next = from ++ from.flatMap(f => byName.get(f).toList.flatMap(g => callees(g.body)))
+    if next == from then from else reach(next, byName)
 
   /** Every variable `e` uses but does not bind, of any type: a lambda's captures. */
   def freeVars(e: Expr): Set[Atom.Var] =
