@@ -14,6 +14,7 @@ private[parsing] object DeclParsers:
   private[parsing] def parseTopItem(s: ParserState)(using reporter: Reporter): Parsed[Tree] = s.current.kind match
     case TokenKind.KwUse      => parseUseDecl(s)
     case TokenKind.KwFn       => parseFnLike(s, FnKind.Free)
+    case TokenKind.KwFip      => parseFipFn(s)
     case TokenKind.KwCap      => s.afterKeyword(TokenKind.KwCap, "`cap`")(parseCapDeclRest)
     case TokenKind.KwData     => parseDataDecl(s)
     case TokenKind.KwEffect   => parseEffectDecl(s)
@@ -103,7 +104,7 @@ private[parsing] object DeclParsers:
       val nameWhat: String,
       val build: (Trees.FnSig, Span) => Trees.FnLike
   ):
-    case Free extends FnKind("function name", Trees.FnDecl.apply)
+    case Free extends FnKind("function name", (sig, at) => Trees.FnDecl(sig, at))
     case Instance extends FnKind("method name", Trees.InstanceMethod.apply)
     case Static extends FnKind("static method name", Trees.StaticMethod.apply)
 
@@ -134,6 +135,20 @@ private[parsing] object DeclParsers:
         span(startTok.span, s5.current.span)
       )
     )
+
+  /** `fip fn ...` or `fip(strict) fn ...` (grammar v0.4.9 `FipModifier`); `strict` is contextual. */
+  private[parsing] def parseFipFn(s0: ParserState)(using Reporter): Parsed[Trees.FnLike] =
+    val (s1, _) = expect(s0, TokenKind.KwFip, "`fip`")
+    val (s2, strict) =
+      if s1.current.kind == TokenKind.LParen && s1.peek(1).lexeme == "strict" then
+        val (s3, _) = expect(s1.advance, TokenKind.LowerIdent, "`strict`")
+        val (s4, _) = expect(s3, TokenKind.RParen, "`)`")
+        (s4, true)
+      else (s1, false)
+    val (s5, fn) = parseFnLike(s2, FnKind.Free)
+    fn match
+      case d: Trees.FnDecl => (s5, d.copy(fip = Some(if strict then Trees.Fip.Strict else Trees.Fip.Plain)))
+      case other           => (s5, other)
 
   private[parsing] def parseFnParamList(s0: ParserState)(using Reporter): Parsed[List[Trees.FnParam]] =
     val (s1, (params, _)) = bracketedTyped(s0, Bracket.Paren)(parseFnParam)
@@ -241,8 +256,9 @@ private[parsing] object DeclParsers:
     *   - `prop name: body` — invariant (used in `fn -> cap` bodies).
     */
   private[parsing] def parseStatement(s: ParserState)(using Reporter): Parsed[Tree] = s.current.kind match
-    case TokenKind.KwFn   => parseFnLike(s, FnKind.Free)
     case TokenKind.KwProp => parsePropDecl(s)
+    case TokenKind.KwFip  => parseFipFn(s)
+    case TokenKind.KwFn   => parseFnLike(s, FnKind.Free)
     case _                => parseExpr(s)
 
   /** DataDecl ::= "data" UPPER_IDENT OfClause? (DataBody | CtorSugar)?

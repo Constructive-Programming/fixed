@@ -12,7 +12,7 @@ import fixed.util.Span
   */
 enum TokenKind:
   case KwAs, KwCap, KwData, KwDo, KwEffect, KwElse, KwExtends, KwFalse,
-    KwFn, KwForall, KwHandle, KwIf, KwImplies, KwImpossible, KwIn, KwIs,
+    KwFip, KwFn, KwForall, KwHandle, KwIf, KwImplies, KwImpossible, KwIn, KwIs,
     KwLet, KwLinear, KwMatch, KwMod, KwOf, KwPart, KwProp, KwPub,
     KwResume, KwReturn, KwSatisfies, KwSelf, KwSelfLower, KwSuchThat,
     KwTrue, KwType, KwUnreachable, KwUse, KwWith
@@ -123,6 +123,7 @@ enum Token(val span: Span, val kind: TokenKind, val lexeme: String):
   case KwIs(at: Span) extends Token(at, TokenKind.KwIs, "")
   case KwLet(at: Span) extends Token(at, TokenKind.KwLet, "")
   case KwLinear(at: Span) extends Token(at, TokenKind.KwLinear, "")
+  case KwFip(at: Span) extends Token(at, TokenKind.KwFip, "")
   case KwMatch(at: Span) extends Token(at, TokenKind.KwMatch, "")
   case KwMod(at: Span) extends Token(at, TokenKind.KwMod, "")
   case KwOf(at: Span) extends Token(at, TokenKind.KwOf, "")
@@ -205,6 +206,7 @@ object Token:
     case TokenKind.KwIs          => KwIs(span)
     case TokenKind.KwLet         => KwLet(span)
     case TokenKind.KwLinear      => KwLinear(span)
+    case TokenKind.KwFip         => KwFip(span)
     case TokenKind.KwMatch       => KwMatch(span)
     case TokenKind.KwMod         => KwMod(span)
     case TokenKind.KwOf          => KwOf(span)
@@ -299,6 +301,7 @@ object Tokens:
     "is" -> (Token.KwIs(_)),
     "let" -> (Token.KwLet(_)),
     "linear" -> (Token.KwLinear(_)),
+    "fip" -> (Token.KwFip(_)),
     "match" -> (Token.KwMatch(_)),
     "mod" -> (Token.KwMod(_)),
     "of" -> (Token.KwOf(_)),

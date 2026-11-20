@@ -35,6 +35,9 @@ final class Lower(unit: CompilationUnit) extends Generated:
   val types: mutable.Map[String, Type] = mutable.HashMap.empty
   val spans: mutable.Map[String, Span] = mutable.HashMap.empty
 
+  /** The function instances declared `fip fn`, with their contract (3.4.M5). */
+  val fips: mutable.Map[String, Trees.Fip] = mutable.HashMap.empty
+
   /** Top-level functions with bodies: the prelude's, then the unit's (which shadow them). */
   private val decls: Map[String, Trees.FnDecl] = fixed.typer.Stdlib.functions(unit.tree)
 
@@ -69,6 +72,7 @@ final class Lower(unit: CompilationUnit) extends Generated:
       case other => (Nil, other)
     val params = decl.params.zip(paramTypes).map((p, t) => typed(fresh(p.name, ctype(t, p.span)), t, p.span))
     spans(name) = decl.span
+    decl.fip.foreach(fips(name) = _)
     val sc = Scope(decl.params.map(_.name).zip(params).toMap, sigma, bounds)
     Fn(name, params, ctype(ret, decl.span), decl.body.fold(Expr.Ret(Atom.UnitC))(tail(_, sc)))
 

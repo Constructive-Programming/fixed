@@ -35,7 +35,8 @@ object Own:
   * the instance's name, the others get `#n`. A call passes an argument as exclusive only where
   * [[Demands.exclusive]] holds and the caller owns every demanded part, the same test demand
   * inference used. Beyond `cap` versions of one function, the caller copies the demanded part
-  * (Neut's strategy, applied only here) and calls the exclusive version. Every closure gets an
+  * (Neut's strategy, applied only here) and calls the exclusive version; a `fip fn` has no shared
+  * version, so its callers always copy (Rule MM18.3). Every closure gets an
   * exclusive and a shared entry (Rule PR5.6), and a closure call picks one statically.
   *
   * Result ownership per version is a summary: optimistic at first (fresh results are exclusive),
@@ -44,7 +45,13 @@ object Own:
   *
   * @param copy the copy function of a type key for a set of parts, if the type is data
   */
-final class Versions(d: Demands, table: DemandTable, fns: List[Fn], copy: (String, Set[Need.Part]) => Option[String]):
+final class Versions(
+    d: Demands,
+    table: DemandTable,
+    fns: List[Fn],
+    copy: (String, Set[Need.Part]) => Option[String],
+    fip: String => Boolean
+):
   private type Mask = List[Set[Option[Need.Part]]]
 
   private val cap = 4
@@ -198,7 +205,7 @@ final class Versions(d: Demands, table: DemandTable, fns: List[Fn], copy: (Strin
           else w.filter(_.forall(o.part))
         case _ => w
     }
-    if mask == want || names.contains((f, mask)) || versions(f) < cap then
+    if mask == want || (!fip(f) && (names.contains((f, mask)) || versions(f) < cap)) then
       val name = request(f, mask)
       (Nil, make(name, as), results.getOrElse(name, Own.all))
     else

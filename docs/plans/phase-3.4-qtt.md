@@ -1,6 +1,6 @@
 # Phase 3.4 — Quantities, demands and lifetimes (M10)
 
-**Status:** 3.4.M1–M4 done; 3.4.M5 next. Design settled (decisions §8).
+**Status:** 3.4.M1–M5 done; 3.4.M6 next. Design settled (decisions §8).
 **Parent:** `docs/plans/phase-3-typer.md` §1.3 (Part B, M10) and §5.7
 **Runs:** after M7 and the Phase 4.0 slice, **before M9**. The quantity walk runs after the typer;
 everything else runs on Core after lowering.
@@ -132,7 +132,7 @@ violations are `E110` with the reason chain.
 | 3.4.M2 ✅ | Spans and types per Core variable; demand inference per part, with exclusivity lost to later uses, keeps and aliasing; reuse pairs; evaluation-order test | `DemandSuite` (6 tests) and `EmitSuite`'s order test; every Core function of examples `01`–`05` and the benchmarks has demands |
 | 3.4.M3 ✅ | Versions and copies; two-pointer closures | `VersionSuite` (4 tests); `EmitSuite` runs a shared list through a reusing function and a program past the cap, both leak-free; goldens unchanged |
 | 3.4.M4 ✅ | Escape sets, classes, cohesive groups, garbage-free carry, handler kinds, fork facts, reason chains | `MemorySuite` (7 tests); every allocation of the run examples and benchmarks has a class |
-| 3.4.M5 | `--explain-memory`, `--format json`; `fip` check | Golden report for `01`; accept and reject tests per Rule MM18.1 item |
+| 3.4.M5 ✅ | `--explain-memory`, `--format json`; `fip` check | `FipSuite` (6 tests) with a golden JSON report for `01` (`examples/golden/01_basics.memory.json`, regenerate with `FIXED_REGEN=1`); `EmitSuite` runs a shared value copied into a `fip fn` |
 | 3.4.M6 | Backend consumption (§3.6); new baseline | Goldens and leak checks pass; an aliasing program and a shared-list program prove the unsound cases stay correct; `docs/baselines/runtime-<date>.md` with the four numbers and the change against 4.0 |
 
 Each milestone ends with the full gate. Core analyses are timed against lowering plus emission on
@@ -196,6 +196,26 @@ the benchmarks and reported; there is no fixed budget until a first measurement 
   calls; any closure call inside a step counts as impure.
 - **On the benchmarks:** every allocation is `Dest(result)` or `Frame`; nothing is `Heap`.
   `bintrees`' `fold` and `unfold` are fork sites.
+
+### 4.4 Notes from 3.4.M5
+
+- **Front end:** `fip` is a keyword; `fip fn` and `fip(strict) fn` parse at top level and in
+  blocks (grammar v0.4.9) into `FnDecl.fip`. Lowering records `fip` instances.
+- **`FipCheck`** reports `E110` per violated item, at the offending site, naming the `fip fn`:
+  heap or region allocation, reference-count operation (a call of a shared version, or of a
+  closure the compiler cannot see), evacuation (a copy), and scratch allocated by a recursive
+  function that is not a derived loop. `fip(strict)` adds allocations that reuse no cell, and tree
+  folds. Item 4 (drop lists) has nothing to check before Phase 4 region lowering.
+- **No shared version for a `fip fn`:** `Versions` makes its callers copy (Rule MM18.3), so the copy
+  is the caller's evacuation and breaks the caller's contract only if the caller is `fip` itself.
+- **`E071` cannot arise from inference:** a parameter is reused only where demand inference made it
+  `exclusive`. The code stays defined in the spec for a future declared-demand form. **`W110`**
+  (evacuation in hot code) is not emitted yet: it needs the hot-code notion of Phase 6 or a fold-step
+  marker on Core functions.
+- **Report:** `fixed compile <file> --explain-memory [--format json]` prints, per function, the
+  `fip` contract, parameter demands per part and escapes, allocations with class, escapes and
+  reasons, fork facts and copy sites, then handler kinds, with `line:column` positions. Closures
+  built by lowering carry no span yet (`-`).
 
 ## 5. Tests
 

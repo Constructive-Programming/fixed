@@ -99,8 +99,12 @@ object Trees:
     def unapply(t: T): (String, List[String], List[FnParam], Option[Tree], Option[Tree], Option[Tree], Span) =
       (t.name, t.typeParamsHint, t.params, t.returnType, t.withClause, t.body, t.span)
 
-  /** Top-level or block-local `fn`. */
-  final case class FnDecl(sig: FnSig, span: Span) extends FnLike
+  /** The `fip` contract on a function (`spec/memory_management.md` §18): `fip` or `fip(strict)`. */
+  enum Fip:
+    case Plain, Strict
+
+  /** Top-level or block-local `fn`, with its `fip` contract if declared. */
+  final case class FnDecl(sig: FnSig, span: Span, fip: Option[Fip] = None) extends FnLike
   object FnDecl extends FnLikeCompanion[FnDecl]
 
   /** A `cap` declaration. `valueParams` is the optional `(min: N, max: N)`

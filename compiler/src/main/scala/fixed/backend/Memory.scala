@@ -35,7 +35,7 @@ enum ParamEscape:
   case None, IntoResult, Unbounded
 
 /** Whether a `fold` / `unfold` call may fork (Rule Q5.13.a, d), and why not if it may not. */
-final case class ForkFact(call: String, loop: String, admissible: Boolean, reason: String, span: Span)
+final case class ForkFact(call: String, loop: String, tree: Boolean, admissible: Boolean, reason: String, span: Span)
 
 final class MemoryTable(
     val allocations: Map[String, List[Allocation]],
@@ -146,7 +146,7 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
     closureMaps.getOrElseUpdate(
       fn,
       byName.get(fn).fold(Map.empty)(f =>
-        lets(f.body).collect { case (x, Rhs.Closure(code, _, _)) => x.name -> code }.toMap
+        Core.lets(f.body).collect { case (x, Rhs.Closure(code, _, _)) => x.name -> code }.toMap
       )
     )
 
@@ -154,20 +154,8 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
   private def carried(f: String, i: Int): Boolean =
     (f.contains(".unfold[") && i == 0) || (f.contains(".foldLeft[") && i == 1)
 
-  private def lets(e: Expr): List[(Atom.Var, Rhs)] =
-    e match
-      case Let(x, rhs, body) =>
-        val inner = rhs match
-          case Rhs.If(_, t, f)      => lets(t) ++ lets(f)
-          case Rhs.Switch(_, cases) => cases.flatMap(c => lets(c._2))
-          case _                    => Nil
-        (x, rhs) :: inner ++ lets(body)
-      case Expr.Dup(_, b)  => lets(b)
-      case Expr.Drop(_, b) => lets(b)
-      case Ret(_)          => Nil
-
   private def classes(f: Fn): List[Allocation] =
-    val all = lets(f.body)
+    val all = Core.lets(f.body)
     val esc = escapeOf.getOrElse(f.name, Map.empty)
     val sites = all.collect {
       case (x, Rhs.Con(_, fs)) if fs.nonEmpty        => x.name
@@ -200,7 +188,9 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
     * it reuses it (`exclusive`) or keeps it in its result; an unknown step is not.
     */
   private def garbageFree(loop: String, x: String, fn: String): Boolean =
-    val calls = byName.get(fn).toList.flatMap(f => lets(f.body)).collect { case (_, Rhs.Call(g, as, false)) => (g, as) }
+    val calls = byName.get(fn).toList.flatMap(f => Core.lets(f.body)).collect { case (_, Rhs.Call(g, as, false)) =>
+      (g, as)
+    }
     calls.find((g, as) => g == loop && as.exists(Core.boxedVar(_).exists(_.name == x))).exists { (_, as) =>
       as.flatMap(Core.boxedVar).flatMap(v => closureMap(fn).get(v.name)).exists { code =>
         val i = 1
@@ -231,19 +221,20 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
     */
   private def forks(f: Fn): List[ForkFact] =
     val closures = closureMap(f.name)
-    lets(f.body).collect {
+    Core.lets(f.body).collect {
       case (x, Rhs.Call(g, as, false))
           if g != f.name && (g.contains(".fold[") || g.contains(".unfold[") || g.contains(".foldLeft[")) =>
         val steps = as.drop(1).flatMap(Core.boxedVar)
+        val isTree = !g.contains(".foldLeft[") && tree(g)
         val (ok, why) =
           if g.contains(".foldLeft[") then
             (false, "a sequence fold: needs a proved associative operation (Rule Q5.13.a.3, M9)")
-          else if !tree(g) then (false, "one recursive position: not a tree")
+          else if !isTree then (false, "one recursive position: not a tree")
           else
             steps.find(v => !closures.get(v.name).exists(pure(_, Set.empty))) match
               case Some(v) => (false, s"`${v.name}` may perform an effect or is not known")
               case None    => (true, "tree with pure steps")
-        ForkFact(x.name, g, ok, why, spans(x.name))
+        ForkFact(x.name, g, isTree, ok, why, spans(x.name))
     }
 
   /** Some branch of the loop recurses at least twice. */
@@ -253,15 +244,15 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
     )
 
   private def branches(e: Expr): List[Expr] =
-    lets(e).collect { case (_, Rhs.Switch(_, cases)) => cases.map(_._2) }.flatten
+    Core.lets(e).collect { case (_, Rhs.Switch(_, cases)) => cases.map(_._2) }.flatten
 
   private def selfCalls(e: Expr, loop: String): Int =
-    lets(e).count { case (_, Rhs.Call(g, _, false)) => g == loop; case _ => false }
+    Core.lets(e).count { case (_, Rhs.Call(g, _, false)) => g == loop; case _ => false }
 
   /** A function that performs no effect, calls no closure it cannot see, and calls only pure functions. */
   private def pure(fn: String, seen: Set[String]): Boolean =
     seen(fn) || byName.get(fn).exists { f =>
-      lets(f.body).forall {
+      Core.lets(f.body).forall {
         case (_, Rhs.Call(g, _, true))  => !effects(g)
         case (_, Rhs.Call(g, _, false)) => pure(g, seen + fn)
         case (_, Rhs.Catch(g, _))       => pure(g, seen + fn)

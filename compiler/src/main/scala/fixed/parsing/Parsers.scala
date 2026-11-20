@@ -314,6 +314,7 @@ object Parser:
     val topLevel: KindSet = KindSet(
       TokenKind.KwUse,
       TokenKind.KwFn,
+      TokenKind.KwFip,
       TokenKind.KwCap,
       TokenKind.KwData,
       TokenKind.KwEffect,

@@ -11,14 +11,24 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
 /** The backend slice's entry points (`docs/plans/phase-4.0-backend-slice.md`): a checked unit to
   * LLVM IR, and LLVM IR plus the C runtime to a native executable through `clang`.
   */
-/** Versioned Core and what M10 inferred about it. */
-final case class Analysed(fns: List[Fn], demands: DemandTable, memory: MemoryTable)
+/** Versioned Core and what M10 inferred about it; `fips` are the `fip fn` instances. */
+final case class Analysed(
+    fns: List[Fn],
+    demands: DemandTable,
+    memory: MemoryTable,
+    fips: Map[String, fixed.ast.Trees.Fip],
+    spans: String => Span
+)
 
 object Backend:
 
   /** LLVM IR for `unit`, which must have passed the typer without errors. */
   def compile(unit: CompilationUnit): Either[List[Diagnostic], String] =
-    core(unit).map(fns => EmitLLVM().program(Aborts(fns).map(Rc(_))))
+    analyse(unit).flatMap { a =>
+      FipCheck(a) match
+        case Nil      => Right(EmitLLVM().program(Aborts(a.fns).map(Rc(_))))
+        case problems => Left(problems)
+    }
 
   /** Core for `unit`: lowered, then split into the versions demand inference calls for (3.4.M3). */
   def core(unit: CompilationUnit): Either[List[Diagnostic], List[Fn]] = analyse(unit).map(_.fns)
@@ -30,9 +40,11 @@ object Backend:
       val render = (t: fixed.core.Type) => unit.symbols.render(t)
       val (demands, table) = Demands.analyse(lower, fns, render)
       val byKey = Demands.typesByKey(lower, render)
-      val versions = Versions(demands, table, fns, (k, parts) => byKey.get(k).flatMap(lower.copy(_, parts))).run()
+      val copy = (k: String, parts: Set[Need.Part]) => byKey.get(k).flatMap(lower.copy(_, parts))
+      val versions = Versions(demands, table, fns, copy, lower.fips.contains).run()
       val all = versions ++ lower.functions.filter(_.name.contains(".copy["))
-      Analysed(all, table, Memory(all, table, v => lower.spans.getOrElse(v, Span.NoSpan)).run())
+      val spans = (v: String) => lower.spans.getOrElse(Memory.base(v), Span.NoSpan)
+      Analysed(all, table, Memory(all, table, spans).run(), lower.fips.toMap, spans)
     }
 
   /** Write `ir` next to `out`, then link it with the runtime into the executable `out`. */
