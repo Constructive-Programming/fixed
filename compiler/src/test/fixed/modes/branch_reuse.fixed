@@ -1,0 +1,47 @@
+// Reuse tokens around branches. A dead cell that a constructor inside a `match` or `if` branch
+// reuses is not reused again after it (Demands.walk: the token would be filled twice), and a
+// branch that reuses no cell releases the token another branch takes (Rc.release).
+use std.io.Console
+
+data L:
+    E
+    C(h: u64, t: L)
+
+data P:
+    P(a: L, b: L)
+
+data Q:
+    Q(a: u64, b: u64)
+
+fn total(xs: L) -> u64 =
+    match xs:
+        L.C(h, t) => h + total(t)
+        L.E => 0
+
+fn sum(p: P) -> u64 =
+    match p:
+        P.P(a, b) => total(a) * 1000 + total(b)
+
+fn build(n: u64) -> L = L.C(n, L.C(n + 1, L.C(n + 2, L.E)))
+
+fn sq(q: Q) -> u64 =
+    match q:
+        Q.Q(a, b) => a * 100 + b
+
+fn mk(a: u64) -> Q = Q.Q(a, a)
+
+fn g(q: Q, k: u64) -> Q =
+    match q:
+        Q.Q(a, b) => if k > 0: Q.Q(a + 1, b) else: mk(a)
+
+fn main() -> () with Console =
+    let m = sum(P.P(build(1), build(2)))
+    match build(m):
+        L.C(_, _) => Console.print_line(sum(P.P(build(5), L.E)).show())
+        L.E => Console.print_line("none")
+    Console.print_line(sum(P.P(build(3), build(4))).show())
+    let n = sum(P.P(build(1), build(2)))
+    if n > 5: Console.print_line(sum(P.P(build(5), L.E)).show()) else: Console.print_line("none")
+    Console.print_line(sum(P.P(build(3), build(4))).show())
+    Console.print_line(sq(g(Q.Q(1, 2), 0)).show())
+    Console.print_line(sq(g(Q.Q(1, 2), 1)).show())

@@ -28,7 +28,8 @@ object Rc:
   /** Drop-guided reuse (Rule MM11.5): where a cell that a later `Reuse` names is dropped, take a
     * token from it instead (`fx_reuse_excl` if every such `Reuse` is unconditional, else Koka's
     * `fx_reuse`), and let the `Reuse` consume the token. Taking the token releases the cell's
-    * children, so a field moved on to an exclusive call is exclusive there.
+    * children, so a field moved on to an exclusive call is exclusive there. A path on which no
+    * `Reuse` consumes the token drops it ([[release]]).
     */
   private def tokens(e: Expr, ids: Iterator[Int]): Expr =
     e match
@@ -38,7 +39,7 @@ object Rc:
           case flags =>
             val tok: Var = Var(s"${v.name}.tok${ids.next()}", CType.Boxed)
             val take = if flags.forall(identity) then "fx_reuse_excl" else "fx_reuse"
-            Let(tok, Rhs.Call(take, List(v), runtime = true), tokens(rename(rest, v, tok), ids))
+            Let(tok, Rhs.Call(take, List(v), runtime = true), tokens(release(rename(rest, v, tok), tok), ids))
       case Dup(v, rest)      => Dup(v, tokens(rest, ids))
       case Let(x, rhs, body) => Let(x, rhs.mapBranches(tokens(_, ids)), tokens(body, ids))
       case Ret(_)            => e
@@ -46,6 +47,18 @@ object Rc:
   /** The `unconditional` flags of the `Reuse`s of cell `v` in `e`. */
   private def reuses(e: Expr, v: Var): List[Boolean] =
     Core.lets(e).collect { case (_, Rhs.Reuse(c, _, _, u)) if c == v => u }
+
+  /** `e` with token `tok` dropped as soon as no `Reuse` ahead on the path consumes it: in a branch
+    * of an `If` or `Switch` that does not reuse it, where another branch does.
+    */
+  private def release(e: Expr, tok: Var): Expr =
+    e match
+      case _ if reuses(e, tok).isEmpty                     => Drop(tok, e)
+      case Let(x, rhs, body) if reuses(body, tok).nonEmpty => Let(x, rhs, release(body, tok))
+      case Let(x, rhs, body)                               => Let(x, rhs.mapBranches(release(_, tok)), body)
+      case Dup(y, b)                                       => Dup(y, release(b, tok))
+      case Drop(y, b)                                      => Drop(y, release(b, tok))
+      case Ret(_)                                          => e
 
   private def rename(e: Expr, v: Var, tok: Var): Expr =
     e match

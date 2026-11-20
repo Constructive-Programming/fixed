@@ -140,9 +140,17 @@ final class Demands(
       case Let(x, rhs, body) =>
         val live = (names(body) - x.name) ++ ctx.after
         val reused = reuse(x, rhs, live, ctx, fn)
-        val inner = walk(body, forward(x, rhs, live, ctx).copy(paired = ctx.paired ++ reused), fn)
+
+        /** Branches first (they do not depend on what the rest demands of `x`): a cell a branch's
+          * constructor reuses is not reused again after the `If` or `Switch`.
+          */
+        val before = reuses(fn).keySet.toSet
+        val branches = Option.when(Core.branches(rhs).nonEmpty)(right(rhs, Need.zero, live, ctx, fn))
+        val inBranches = reuses(fn).collect { case (y, v) if !before(y) => v }
+        val inner = walk(body, forward(x, rhs, live, ctx).copy(paired = ctx.paired ++ reused ++ inBranches), fn)
         val xNeed = inner.getOrElse(x.name, Need.zero)
-        join(join(right(rhs, xNeed, live, ctx, fn), inner - x.name), reused.map(_ -> Need.excl).toMap)
+        val here = branches.getOrElse(right(rhs, xNeed, live, ctx, fn))
+        join(join(here, inner - x.name), reused.map(_ -> Need.excl).toMap)
       case Expr.Dup(_, b)  => walk(b, ctx, fn)
       case Expr.Drop(_, b) => walk(b, ctx, fn)
 
