@@ -401,9 +401,10 @@ Copying the demanded part of a shared value remains only inside the shared entry
 |---|---|---|
 | default (`fixed compile`, `fixed ship`) | mandatory (Rule CM5.5), then by score within the budget (Rules CM5.3, CM5.4) | development build: symbols bound only (Rule CM8.2); release build: clones for the chosen types (Rule CM8.7) |
 | `--no-specialise` | mandatory only | symbols bound only |
+| `--no-ownership-clones` | as default, without ownership clones other than those a `fip fn` body requests | as default |
 | with measured data (Rule CM8.6) | as default, with measured weights and the hot-function multiplier | as default, with measured weights |
 
-`--no-specialise` builds faster and gives the reference behaviour that Rule CM5.2 compares clones against. Every mode produces a correct program.
+`--no-specialise` builds faster and gives the reference behaviour that Rule CM5.2 compares clones against. `--no-ownership-clones` exists for measurement: it separates what the type axis buys from what the ownership axis buys (Rule CM5.1); the clone report (Rule CM5.8) gives "no ownership clones" as the reason for each request it refused. Every mode produces a correct program.
 
 ### 5.8 Reporting (Rule CM5.8)
 

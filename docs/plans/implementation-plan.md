@@ -974,6 +974,9 @@ Added by the owner's decisions after the consistency review (P6, third round), i
 | 14 | **No witness with an anonymous result; one choice point per requirement.** The backend today returns nothing of the kind, but treats a result as caller-chosen by inference from the body; the rule is now read from the signature | Rule CM4.5 | 7 for the binding; the signature rule itself needs only the typer |
 | 15 | **Captured-evidence bit on closures**, tested by a fork site | Rules E7.8, Q5.13.a | 9, and parallel lanes, which are not built |
 
+| 16 | **Bounded native stack for derived `unfold` and `map`.** Each builds its cell after the recursive call returns. Destination passing needs a constructor with an unfilled slot and a later store into it, understood by demand inference, ownership versions, reference counting, abort handling and the emitter; data with several recursive fields needs a heap work list of (seed, slot) pairs in addition | `spec/memory_management.md` §7.1, Rule PR7.3 | nothing; it is a change to how constructors flow through every backend pass |
+| 17 | **Satisfactions keyed by symbol**, and the bodies of `satisfies` blocks lowered by the backend | `spec/type_system.md` Rule 8.4 | 4 |
+
 Also open from P6 and not listed as work: the suspected compiler fault behind the ownership-clone measurement (OQ-CM16), the unexplained 4% on `list_pipeline` and `records` and `fx_drop`'s recursion on children other than the last (OQ-CM17), and the 8-byte header hypothesis (OQ-CM15).
 
 ---

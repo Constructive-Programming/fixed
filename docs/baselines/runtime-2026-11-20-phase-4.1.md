@@ -103,7 +103,7 @@ Relative to `main` (best wall time):
 
    An experiment replaced the recursive `fx_drop` by one that loops on a cell's last reference: `records` gained about 5% and `list_pipeline` about 2%, `fail_chain` nothing. So the walk over the map is part of the cost but not all of it; the rest has not been located. Neither `perf` nor `valgrind` is installed on this machine, so there are no instruction counts.
 
-5. **On the ownership axis a clone buys nothing measurable.** At `M4` the default mode (exclusive versions reuse without a test) and `--no-specialise` (shared versions reuse after `rc == 1`) ran in the same time on all five programs, and their counts are identical because the runtime counts both kinds of reuse alike. The static proof of exclusivity is worth having for `fip`, where it is a guarantee; as an optimisation it has not shown a gain here.
+5. **On the ownership axis a clone buys nothing measurable.** *(Corrected in the second addendum: on `records` the exclusive clone ran for 100 of 2,000,000 reuses, so this compared the shared path with itself.)* At `M4` the default mode (exclusive versions reuse without a test) and `--no-specialise` (shared versions reuse after `rc == 1`) ran in the same time on all five programs, and their counts are identical because the runtime counts both kinds of reuse alike. The static proof of exclusivity is worth having for `fip`, where it is a guarantee; as an optimisation it has not shown a gain here.
 
 6. **A table call costs more than a witness call, but no benchmark makes one.** None of the five has a parameter bounded by a capability. `examples/01_basics` does (`fib_iter(n: N is Numeric)`): with `--no-specialise` its arithmetic goes through `Numeric`'s table and its three closures become heap cells because they capture the table (60 more allocations in that run). The benchmarks therefore understate the cost of the baseline for code written against capabilities, which is the code Fixed asks people to write. A benchmark with bounded parameters is the first thing to add.
 
@@ -136,3 +136,38 @@ Best of 15 interleaved runs, on a loaded machine (load average about 7), so only
 | `fail_chain` | 85.7 | 87.7 | 84.8 |
 
 Counts of allocations, frees, `dup`s and `drop`s are unchanged. Not explained: the remaining 4% on `list_pipeline` and `records`.
+
+## Second addendum: the ownership axis, measured again
+
+Point 5 above was wrong for `records`. The runtime now counts what each reuse site does (exclusive reuse without a test, test passed, test failed), and the suite pins the counts for every benchmark. At the commit measured above, `records` took the exclusive path for 100 of its 2,000,000 reuses: `Versions.construct` removed exclusivity from every part of a new cell as soon as one of its fields was not exclusively owned, so the recursive call of the clone fell back to the shared `map`. The clone was in the IR and almost never ran. On `list_pipeline` the comparison was real.
+
+`Versions.construct` now marks only the slot of a shared field as shared, for part keys that name a concrete type. The change was attacked by reviewers in four rounds; the programs that broke it, and several that already overwrote live memory before the change, are fixed and kept as tests (`compiler/src/test/fixed/modes/excl_*.fixed`, `branch_reuse.fixed`). Its soundness rests on two invariants that are argued, not proved: demand inference sees every alias between live values, and a part key means the same type wherever it is read.
+
+A new flag, `--no-ownership-clones`, keeps the type clones and drops the ownership clones, so the two axes can be told apart. User-space instructions, median of three runs (spread at most 168 instructions); reuses are exclusive / test passed / test failed:
+
+| Program | default | ownership clones off | `--no-specialise` | Reuses, default | Reuses, ownership off |
+|---|---:|---:|---:|---|---|
+| `bintrees` | 833.79 M | +0.00% | +4.28% | 0 / 0 / 0 | 0 / 0 / 0 |
+| `nat_loop` | 1,230.87 M | +0.00% | +2.28% | 0 / 0 / 0 | 0 / 0 / 0 |
+| `list_pipeline` | 1,676.55 M | +0.95% | +7.87% | 4M / 0 / 0 | 0 / 4M / 0 |
+| `records` | 1,315.49 M | +0.30% | +1.52% | 1M / 1M / 0 | 0 / 2M / 0 |
+| `fail_chain` | 1,414.37 M | −0.00% | +6.22% | 0 / 0 / 0 | 0 / 0 / 0 |
+| `shared_map` | 1,044.38 M | +0.00% | +3.86% | 0 / 0 / 2M | 0 / 0 / 2M |
+| `fresh_map` | 1,450.59 M | +0.55% | +6.64% | 2M / 0 / 0 | 0 / 2M / 0 |
+| `acc_loop` | 1,306.31 M | −0.00% | +4.59% | 0 / 2M / 0 | 0 / 2M / 0 |
+
+`shared_map`, `fresh_map` and `acc_loop` are three programs written to separate the strategies (a list mapped while a second reference keeps it alive; the same on a fresh list; an accumulator threaded through a `fold`). They are not in the repository yet.
+
+What the table shows: an ownership clone saves 4.0 instructions for each reuse it performs without a test, and nothing else. The rest of the distance to `--no-specialise` is the type axis (witness calls). What it does not show: cycles and mispredictions; what an exclusive path would save if it also skipped the `dup` of each field and the matching `drop` in the reuse, and were inlined; and code size. `records` still tests half its reuses because the result of a closure call is always treated as shared, and `acc_loop` tests all of them because an accumulator threaded through `fold` is never proved exclusive.
+
+Wall time against `main`, best of 21 interleaved runs on a loaded machine (load average about 7), at the commit that merges the typer and backend fixes (`c7b3164`):
+
+| Program | main (ms) | before the fixes (`f5e59ec`) | now |
+|---|---:|---:|---:|
+| `bintrees` | 55.5 | 54.3 | 53.9 |
+| `nat_loop` | 64.1 | 65.1 | 64.7 |
+| `list_pipeline` | 98.5 | 105.0 | 102.2 |
+| `records` | 64.5 | 67.0 | 65.7 |
+| `fail_chain` | 80.1 | 86.3 | 82.9 |
+
+The default mode is within 4% of `main` on every program; differences under about 5% are within the noise of this machine.

@@ -96,6 +96,23 @@ Compiler faults that exist on `main` and were not fixed:
   - **Fixed**: in the backend for the parameters and every use of them by name (`Lower.call`, `function`, `typeOf`), and in the typer, which now gives each anonymous bound its own type variable (`spec/type_system.md` §5.1).
 - `fx_drop` is recursive; a long list can exhaust the native stack (Rule PR7.3 requires a loop). **Fixed in part** in `fixed_rt.c` (`aff3d3c`, P6 D16): an out-of-line `free_cell` continues on the highest marked child instead of recursing, so a list is freed without recursion; it still recurses on the other children (OQ-CM17). The same change located the 6–8% that the first measurement charged to the reference-map header: it was this child walk sitting in a helper that `clang -O2` did not inline, not the map (`docs/baselines/runtime-2026-11-20-phase-4.1.md`, addendum).
 
+Found and fixed while the faults above were being fixed (none was specific to Phase 4.1):
+
+- A generated member of a data type nested in itself (`List of List of String`, `Tree of Tree of u64`) took the element for the rest of the structure in a clone, and returned its initial value. The default build printed a wrong result where the baseline build was right. A field is now recursive only when its declared type is the data type at its own parameters (`Generated`, and the typer's derived `fold`). The suite now runs a set of generic programs in both build modes against pinned results (`compiler/src/test/fixed/modes/`).
+- A reuse token could be filled twice: the code after an `if` or `match` was analysed before its branches, so a cell a branch had reused was reused again after it. A branch that did not use the token leaked it.
+- Several cases in which the default build wrote into a cell that was still referenced: a result of an `if` or `match` that is one of the values its branches use; the payload of an abortive effect operation taken as fresh; a part held by a live variable while the cell around it was taken as exclusive.
+- Only 100 of the 2,000,000 reuses in `records` took the exclusive path (`Versions.construct`); see the second addendum of `docs/baselines/runtime-2026-11-20-phase-4.1.md`.
+
+Found and not fixed:
+
+- The derived `unfold` and `map` are not tail-recursive: one native frame per element, so `upto(2000000)` overflows an 8 MiB stack. Filling a destination needs a cell with an unfilled slot in every backend pass, and a heap work list for trees (`docs/plans/implementation-plan.md`, Phase 4.2).
+- Derived `unfold` through a functor field (a rose tree with `List of Rose`) crashes, and derived `map` does not map through such a field, in both build modes.
+- The typer and the backend disagree on a derived `fold` through a type argument that is not the last (`Pair of (Self, u64)`), and on `Functor` for non-regular data.
+- A polymorphically recursive type such as `N of List of A` makes the compiler overflow its own stack in the default mode; a type that refers to itself at other arguments gets only baseline versions of its generated members.
+- Satisfactions are looked up by the name of the type, not by its symbol: a program that declares its own `data Order` picks up the prelude's `Order satisfies Ordering` and crashes the backend.
+- A named bound `T is C` is not checked where the function is called.
+- The backend does not lower the bodies of `satisfies` blocks; they are type-checked only.
+
 Limits and gaps of the first implementation, against the spec:
 
 - A cell can hold references only in its first 32 payload slots (30 captures for a closure); beyond that the compiler reports `B005`. Kept as the rule by P6 D16 (`memory_management.md` Rule PR3.1).
