@@ -69,11 +69,33 @@ class EmitSuite extends munit.FunSuite:
         }.sorted
     }
 
+  /** Reuses without a test, `rc == 1` tests passed, tests failed, and witness calls. */
+  private def sites(counts: Map[String, Long]): List[Long] =
+    List("reuse_excl", "reuse_test_pass", "reuse_test_fail", "wops").map(counts(_))
+
+  /** [[sites]] of each benchmark in the default mode and with `--no-specialise`: that a clone runs,
+    * not only that it is in the IR. `records` takes the exclusive path in 100 of its 2,000,000 reuses.
+    */
+  private val reuseSites = Map(
+    "bintrees" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 2097150L)),
+    "nat_loop" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 2000600L)),
+    "list_pipeline" -> (List(4000000L, 0L, 0L, 0L), List(0L, 4000000L, 0L, 10000600L)),
+    "records" -> (List(100L, 1999900L, 0L, 0L), List(0L, 2000000L, 0L, 4000300L)),
+    "fail_chain" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 9995800L))
+  )
+
   programs.foreach { (dir, name) =>
     test(s"$dir/$name prints its expected result"):
       val read = (ext: String) => java.nio.file.Files.readString(dir.resolve(s"$name.$ext"))
-      check(name, read("fixed"), read("expected"))
+      val counts = check(name, read("fixed"), read("expected"))
+      reuseSites.get(name).foreach { (default, plain) =>
+        assertEquals(sites(counts(Mode.Default)), default, "default")
+        assertEquals(sites(counts(Mode.NoSpecialise)), plain, "--no-specialise")
+      }
   }
+
+  test("every benchmark has its reuse sites pinned"):
+    assertEquals(programs.collect { case (d, n) if d.endsWith("runtime") => n }.toSet, reuseSites.keySet)
 
   test("hello world"):
     check(
@@ -215,7 +237,8 @@ class EmitSuite extends munit.FunSuite:
       "fn first(xs: L) -> u64 =\n    match xs:\n        L.C(h, _) => h\n        L.E => 0\n\n" +
       "fn main() -> () with Console =\n    let a = L.C(1, L.C(2, L.E))\n    let b = bump(a)\n" +
       "    Console.print_line(first(a).show())\n    Console.print_line(first(b).show())\n"
-    check("shared_bump", src, "1\n2\n")
+    val counts = check("shared_bump", src, "1\n2\n")
+    modes.foreach(m => assertEquals(sites(counts(m)).init, List(0L, 0L, 1L), m))
 
   test("past the clone budget the caller calls the shared version (Rule CM5.6)"):
     val src = header + "data L:\n    E\n    C(h: u64, t: L)\n\n" +
@@ -258,7 +281,9 @@ class EmitSuite extends munit.FunSuite:
       "        match r:\n            Pair.P(s, n) => Console.print_line(s)\n    else:\n        Console.print_line(\"no\")\n" +
       "    let t = Pair.P(\"e\".concat(\"f\"), 9)\n    match t:\n        Pair.P(s, n) => Console.print_line(s)\n"
     val counts = check("reuse_after_branch", src, "ab7\ncd\nef\n")
-    modes.foreach(m => assert(counts(m).getOrElse("reuses", 0L) >= 1, s"$m: swap reuses no cell: ${counts(m)}"))
+    modes.foreach(m =>
+      assert(counts(m)("reuse_excl") + counts(m)("reuse_test_pass") >= 1, s"$m: swap reuses no cell: ${counts(m)}")
+    )
 
   test("an exclusive value captured by a closure called twice is not overwritten (3.4.M6)"):
     val src = cells + "fn twice(f: () -> u64) -> u64 = f() + f()\n\n" +
@@ -276,10 +301,10 @@ class EmitSuite extends munit.FunSuite:
     assert(!plain.contains("#x[") && !plain.contains("call ptr @fx_reuse_excl("), plain)
     assert(plain.contains("call ptr @fx_reuse("), plain)
 
-    /** A reuse after a passing `rc == 1` test counts as a reuse too, so the counters agree. */
+    /** The default mode reuses each cell without a test; the baseline after a passing one. */
     val counts = check("map_reuse", src, "12\n")
-    assert(counts(Mode.Default).getOrElse("reuses", 0L) >= 4, counts)
-    assertEquals(counts(Mode.Default)("reuses"), counts(Mode.NoSpecialise)("reuses"))
+    assertEquals(sites(counts(Mode.Default)).init, List(4L, 0L, 0L))
+    assertEquals(sites(counts(Mode.NoSpecialise)).init, List(0L, 4L, 0L))
 
   test("one baseline version of a generic function runs at String and at i8, freeing every String (Rule CM3.1)"):
     val src = BaselineSuite.generic

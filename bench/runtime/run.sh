@@ -40,8 +40,9 @@ report=docs/baselines/runtime-$(date +%F)-$mode.md
   echo "- Toolchain: $(clang --version | head -1), \`clang -O2\`"
   echo "- Wall time: best of $runs runs, measured by the runtime from \`main\` start to end (no process start-up)."
   echo "- Counts are deterministic: every run gives the same allocations, reuses, \`dup\`s and \`drop\`s."
+  echo "- Reuses: without a test (exclusive) / \`rc == 1\` test passed / test failed (the cell is dropped, a fresh one allocated)."
   echo
-  echo "| Program | Size | Result | Wall (ms) | Peak RSS (KiB) | Allocations | Reuses | Frees | dups | drops | Witness calls |"
+  echo "| Program | Size | Result | Wall (ms) | Peak RSS (KiB) | Allocations | Reuses (excl / pass / fail) | Frees | dups | drops | Witness calls |"
   echo "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"
   for p in "${progs[@]}"; do
     best=""; result=""; bin="$out/$p-$mode"
@@ -54,7 +55,9 @@ report=docs/baselines/runtime-$(date +%F)-$mode.md
     size=$(sed -n 's|^// Size: ||p' "bench/runtime/$p.fixed")
     printf '| `%s` | %s | %s | %.1f | %s | %s | %s | %s | %s | %s | %s |\n' "$p" "$size" "$(cat "$bin.out")" \
       "$(echo "scale=3; $(echo "$best" | field wall_ns) / 1000000" | bc)" "$(echo "$best" | field peak_rss_kb)" \
-      "$(echo "$best" | field allocs)" "$(echo "$best" | field reuses)" "$(echo "$best" | field frees)" \
+      "$(echo "$best" | field allocs)" \
+      "$(echo "$best" | field reuse_excl) / $(echo "$best" | field reuse_test_pass) / $(echo "$best" | field reuse_test_fail)" \
+      "$(echo "$best" | field frees)" \
       "$(echo "$best" | field dups)" "$(echo "$best" | field drops)" "$(echo "$best" | field wops)"
   done
 } > "$report"

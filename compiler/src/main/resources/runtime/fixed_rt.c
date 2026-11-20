@@ -35,7 +35,9 @@ typedef struct fx_string {
     char bytes[];
 } fx_string;
 
-static uint64_t n_alloc, n_free, n_dup, n_drop, n_reuse, n_wop; /* n_wop: dup and drop calls through a value witness */
+static uint64_t n_alloc, n_free, n_dup, n_drop, n_wop; /* n_wop: dup and drop calls through a value witness */
+/* Reuse sites: taken without a test (exclusive), and `rc == 1` tests passed (reused) or failed (dropped). */
+static uint64_t n_reuse_excl, n_test_pass, n_test_fail;
 static struct timespec t_start;
 
 static void fx_die(const char *msg, int code) {
@@ -69,7 +71,6 @@ static void drop_children(fx_header *h) {
 static fx_header *reclaim(fx_header *h) {
     drop_children(h);
     h->refs = 0;
-    n_reuse++;
     return h;
 }
 
@@ -78,12 +79,17 @@ void *fx_reuse_excl(fx_header *h) {
 #ifdef FX_CHECK_EXCL
     if (h->rc != 1) fx_die("internal error: reused a cell that is not exclusively owned", 103);
 #endif
+    n_reuse_excl++;
     return reclaim(h);
 }
 
 /* Shared: Koka's path. Reuse when the count says no one else holds it; else release our share. */
 void *fx_reuse(fx_header *h) {
-    if (h->rc == 1) return reclaim(h);
+    if (h->rc == 1) {
+        n_test_pass++;
+        return reclaim(h);
+    }
+    n_test_fail++;
     fx_drop(h);
     return NULL;
 }
@@ -329,8 +335,9 @@ int main(void) {
         int64_t wall_ns = (t_end.tv_sec - t_start.tv_sec) * 1000000000LL + (t_end.tv_nsec - t_start.tv_nsec);
         fprintf(stderr,
                 "{\"allocs\":%" PRIu64 ",\"frees\":%" PRIu64 ",\"dups\":%" PRIu64 ",\"drops\":%" PRIu64
-                ",\"reuses\":%" PRIu64 ",\"wops\":%" PRIu64 ",\"peak_rss_kb\":%ld,\"wall_ns\":%" PRId64 "}\n",
-                n_alloc, n_free, n_dup, n_drop, n_reuse, n_wop, ru.ru_maxrss, wall_ns);
+                ",\"reuse_excl\":%" PRIu64 ",\"reuse_test_pass\":%" PRIu64 ",\"reuse_test_fail\":%" PRIu64
+                ",\"wops\":%" PRIu64 ",\"peak_rss_kb\":%ld,\"wall_ns\":%" PRId64 "}\n",
+                n_alloc, n_free, n_dup, n_drop, n_reuse_excl, n_test_pass, n_test_fail, n_wop, ru.ru_maxrss, wall_ns);
     }
     return 0;
 }
