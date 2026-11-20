@@ -93,6 +93,7 @@ Compiler faults that exist on `main` and were not fixed:
 - A parameter with an anonymous bound that is passed on to another function leaks.
   - **Fixed** (`Lower.call`): the callee's type parameters were solved after the caller's bound had replaced the anonymous type that holds them, so they fell back to `()`.
 - Two parameters with the same anonymous bound, called at two different data types, both get the last argument's type in the instance path.
+  - **Fixed**: in the backend for the parameters and every use of them by name (`Lower.call`, `function`, `typeOf`), and in the typer, which now gives each anonymous bound its own type variable (`spec/type_system.md` §5.1).
 - `fx_drop` is recursive; a long list can exhaust the native stack (Rule PR7.3 requires a loop). **Fixed in part** in `fixed_rt.c` (`aff3d3c`, P6 D16): an out-of-line `free_cell` continues on the highest marked child instead of recursing, so a list is freed without recursion; it still recurses on the other children (OQ-CM17). The same change located the 6–8% that the first measurement charged to the reference-map header: it was this child walk sitting in a helper that `clang -O2` did not inline, not the map (`docs/baselines/runtime-2026-11-20-phase-4.1.md`, addendum).
 
 Limits and gaps of the first implementation, against the spec:

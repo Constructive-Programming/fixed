@@ -339,6 +339,32 @@ class EmitSuite extends munit.FunSuite:
       "    Console.print_line(gs([\"a\".concat(\"b\"), \"c\"]))\n"
     check("anonymous_passed_on", src, "2007\nabc\n")
 
+  /** `Stack` and `List` order their variants differently: read with the other type's tags, a cell
+    * of one looks empty to the fold of the other.
+    */
+  private val stacks = header + "data Stack of A:\n    Bottom\n    Push(top: A, rest: Stack of A)\n\n" +
+    "fn byte(x: u8) -> u8 = x\n\nfn id(x: A) -> A = x\n\n" +
+    "fn fwd(a: is Folding of (A is Show), b: is Folding of (A is Show)) -> String = two(b, a)\n\n"
+  private val stack12 = "Stack.Push(byte(1), Stack.Push(byte(2), Stack.Bottom))"
+
+  test("two parameters with one anonymous bound at two data types keep their own types in the instance"):
+    val src = stacks + "fn two(a: is Folding of (A is Show), b: is Folding of (A is Show)) -> String =\n" +
+      "    a.fold(\"\", (s, x) -> s.concat(x.show())).concat(\"|\").concat(b.fold(\"\", (s, x) -> s.concat(x.show())))\n\n" +
+      s"fn main() -> () with Console =\n    Console.print_line(fwd($stack12, [byte(3), byte(4)]))\n" +
+      "    Console.print_line(two([byte(5)], Stack.Push(byte(6), Stack.Bottom)))\n"
+    check("anonymous_two", src, "34|12\n5|6\n")
+
+  /** Pending (`.fail`: expected to fail) on a question for the typer. It gives both occurrences of
+    * `is Folding of (A is Show)` one type, so the backend cannot tell which one `id(a)` has (it
+    * takes `b`'s, `List of u8`) and prints `|34`. Should the typer give each anonymous bound its
+    * own type variable (`spec/type_system.md` §5.1), which would also reject `if c: a else: b`?
+    */
+  test("an expression typed by one of two parameters with one anonymous bound keeps that parameter's type".fail):
+    val src = stacks + "fn two(a: is Folding of (A is Show), b: is Folding of (A is Show)) -> String =\n" +
+      "    id(a).fold(\"\", (s, x) -> s.concat(x.show())).concat(\"|\").concat(id(b).fold(\"\", (s, x) -> s.concat(x.show())))\n\n" +
+      s"fn main() -> () with Console =\n    Console.print_line(two($stack12, [byte(3), byte(4)]))\n"
+    check("anonymous_id", src, "12|34\n")
+
   test("a recursive generic function passes its own witness and table to itself (4.1.M7d)"):
     val src = header + "fn rep(x: A, n: u64) -> A =\n    if n == 0:\n        x\n    else:\n        rep(x, n - 1)\n\n" +
       "fn spin(d: is Door of Locked, n: u64) -> is Door of Locked =\n    if n == 0:\n        Door.new(d.name)\n" +
