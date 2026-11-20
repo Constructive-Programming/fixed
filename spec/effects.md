@@ -1,8 +1,10 @@
 # Fixed Effects
 
-**Status:** Draft v0.2.3
+**Status:** Draft v0.3
 **Specifies:** algebraic effect declarations, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.4 source.
 **Last revised:** 2026-11-20
+
+**Changes from v0.2.3.** Applies decision P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`, D11, D14). A closure captures the evidence of the effects that its type does not mention, at the point where it is given that type; it captures the handler's marker, not a stack address (new Rule E7.8). A closure that captured evidence must not outlive the handler (new Rule E5.5.b, `E085`); the prose caveat of Rule E5.5.a about callbacks stored and invoked later is replaced by these two rules. `inspect` and `trace` are not effects and never appear in a row (new §4.6). Mechanical repairs from the review of 2026-11-20 (`docs/decisions/P0-spec-review-2026-11-20.md` §3): Rule E4.5.b no longer shows an alias application that does not parse; §4.2 says package instead of a `module` construct that does not exist; the unused declared effect is `warning[E081]`, listed as a warning; the cross-references no longer say prop bodies are "checked at quantity 0". §5.5 and §8.3 no longer say that a receiving function must declare its callback's effects. New OQ-E9 (parameterised effect aliases) and OQ-E10 (a handler clause cannot name an effect's `of` argument).
 
 **Changes from v0.2.2.** §7 aligned with `spec/compilation_model.md`: operation arguments and results are 64-bit slots (§7.1); evidence is passed in every baseline version, and a known handler is one component of a clone key, not a consequence of monomorphisation (§7.6); new Rule E7.7 fixes what an operation call hands over and how an evidence vector is ordered.
 
@@ -34,7 +36,10 @@ It does **not** specify:
 
 - `spec/syntax_grammar.ebnf` v0.4.4 — `EffectDecl`, `EffectMember`, `WithClause`, `EffectRow`, `EffectBound`, `HandleExpr`, `HandlerClause`, `resume` keyword.
 - `spec/type_system.md` v0.4.x — Rule 4.1 (typevar introduction), §5.6 (`!` type), §9 (brief reference forwarding to this doc).
-- `spec/quantities.md` v0.2 — Rule Q5.11 (resume single-shot), OQ-Q5 (open: effect-row × quantity interaction).
+- `spec/quantities.md` v0.6 — Rule Q5.11 (resume single-shot), OQ-Q5 (open: effect-row × quantity interaction).
+- `spec/compilation_model.md` — evidence as a hidden parameter (Rule CM4.3), clone keys (Rule CM5.1).
+- `spec/memory_management.md` v0.5 — Rule MM4.1 (regions), §14 (handler memory), §20.1 (escape sets).
+- `spec/diagnostics.md` — `inspect` and `trace` (§4.6).
 - Plotkin & Pretnar, *"Handlers of Algebraic Effects"*, ESOP 2009. The model.
 - Leijen, *"Type Directed Compilation of Row-Typed Algebraic Effects"*, POPL 2017. The evidence-passing compilation strategy Fixed adopts.
 - Xie & Leijen, *"Generalized Evidence Passing for Effect Handlers"*, ICFP 2021. Refinements used in Koka, the closest production reference.
@@ -173,7 +178,7 @@ Two effect bounds `E of (X1, ..., Xn)` and `E of (Y1, ..., Yn)` are the **same e
 1. They share the same effect-name symbol (resolved per `use` imports).
 2. Their `of` arguments are equal as types (per type_system.md's type equality, which is structural for primitives and nominal for declared `effect`/`cap`/`data`).
 
-`Fail of String` and `Fail of i64` are distinct. `Fail of String` from `module a` and `Fail of String` from `module b` (declared separately) are also distinct — effect identity is nominal, not structural.
+`Fail of String` and `Fail of i64` are distinct. A `Fail` declared in package `a` and a `Fail` declared separately in package `b` give two distinct `Fail of String` effects — effect identity is nominal, not structural.
 
 ### 4.3 The empty row
 
@@ -210,14 +215,16 @@ fn run() -> () with IO = ...
 // fn run() -> () with Console + FileSystem + Clock = ...
 ```
 
-**Rule E4.5.b (Parameterised effect aliases).** Effect aliases may take value parameters using the existing parameterised-alias syntax:
+**Rule E4.5.b (No parameterised effect aliases).** An effect alias takes no type parameter. The grammar's `TypeAliasParams` are value parameters: `type AppEffect(E) = …` parses, but `E` is a value, not a type. An `EffectBound` in a row takes arguments only through `of`, so the use `with AppEffect(String)` does not parse. A row with a parameterised effect is written out:
 
 ```
-type AppEffect(E) = Console + Fail of E + Log
+type AppEffect = Console + Log
 
-fn run() -> () with AppEffect(String) = ...
-// expands to: with Console + Fail of String + Log
+fn run() -> () with AppEffect + Fail of String = ...
+// expands to: with Console + Log + Fail of String
 ```
+
+Whether effect aliases should take type parameters (for example `type AppEffect of E = Console + Fail of E + Log`, used as `with AppEffect of String`) is open (OQ-E9).
 
 **Rule E4.5.c (Aliases in handlers).** When a `handle` block subtracts effects from a row containing an alias, the alias is first expanded and then individual effects are subtracted per Rule E5.3:
 
@@ -257,6 +264,10 @@ type X = Y + E1 + E2           // ✅ correct — Y is expanded, then E1 + E2 ad
 
 The corresponding question for `effect` declarations (whether `effect MyConsole extends Console: ...` is allowed) remains deferred per OQ-E3.
 
+### 4.6 Diagnostic sinks are not effects (Rule E4.6)
+
+`inspect(x)` and `trace("…")` write to the diagnostic channel (`spec/diagnostics.md`). They are not effects: they do not appear in any row, a pure function may call them, and no `handle` can intercept them. The text they produce never becomes a value the program holds, so a program's result cannot depend on them; that is what lets them stay out of rows without breaking parametricity or the independence of results from selection. A release build strips them unless a flag keeps them.
+
 ## 5. Effect inference
 
 ### 5.1 Inference algorithm (Rule E5.1)
@@ -275,10 +286,13 @@ For each function definition `fn f(args) -> T with R = body`, the typer computes
 
 The typer verifies `R_inferred ≤ R` (per Rule E4.4). Concretely, every effect performed in the body must be declared in the function's `with` clause.
 
-Errors:
+Error:
 
 - `error[E080]: undeclared effect <E>`: an effect appears in `R_inferred` but not in `R`.
-- `error[E081]: unused declared effect <E>`: an effect is declared in `R` but does not appear in `R_inferred`. (Warning rather than error — unused declarations may be intentional for forward compatibility.)
+
+Warning:
+
+- `warning[E081]: unused declared effect <E>`: an effect is declared in `R` but does not appear in `R_inferred`. It is a warning because an unused declaration may be intentional, for forward compatibility.
 
 ### 5.3 Handler clause coverage and subtraction (Rule E5.3)
 
@@ -307,7 +321,7 @@ Other top-level entry points (test mains, library entry points) may declare diff
 
 A lambda's body has its own inferred effect row. The lambda's *type* is `(args) -> T with R_lambda`. When the lambda is *invoked*, its row is added to the invoking function's inferred row at that call site (per Rule E5.1).
 
-This means a lambda passed as a callback can carry effects, which the receiving function must declare in its own `with` clause (typically via effect polymorphism, §8).
+This means a lambda passed as a callback can carry effects. Either the receiving function's parameter type names them, with a concrete row or a row variable (§8), and the receiving function declares them; or the parameter type names none, and the passing body accounts for them (Rule E5.5.a).
 
 **Rule E5.5.a (Ambient pass-through).** A function-typed value with row `R_v` that meets an expected type behaves in one of two ways:
 
@@ -321,7 +335,67 @@ fn inner(input: String) -> u64 with Fail of String =
     parse_u64(input).fold((v) -> v, (e) -> Fail.fail(e))   // Fail joins inner's row here
 ```
 
-The rule reads an unannotated function type in a parameter as sharing the enclosing body's effects. It gives the effect polymorphism of §8 without a written row variable. Its limit: a callback stored and invoked after the receiving function returns is charged where it was passed, not where it runs. Write the stored type's row explicitly (`List of (() -> () with Async)`), or use a row variable (§8), when that matters.
+The rule reads an unannotated function type in a parameter as sharing the enclosing body's effects. It gives the effect polymorphism of §8 without a written row variable.
+
+At run time the effects of `R_v` that the expected type does not mention are performed with evidence that the value captured at the point where it met the expected type (Rule E7.8), not with evidence passed by whoever invokes it. The effects are charged where they are handled. A value that went through an unannotated function type must therefore not outlive the handlers whose evidence it captured: that is Rule E5.5.b. A callback that is meant to be stored and invoked later, under a handler of the invoker's choosing, is written with the row in its type (`List of (() -> () with Async)`) or with a row variable (§8); then the first case above applies, it captures nothing, and the invoker supplies the evidence.
+
+**Rule E5.5.b (Confinement).** A closure that captured the evidence of a handler (Rule E7.8) must not outlive that handler's installation. A use that could let it do so is `error[E085]: closure outlives the handler of <E>`, with a help line that suggests writing the row in the type where the closure is stored.
+
+- **The check is an escape check.** The dynamic extent of a handler installation is treated as a region (`spec/memory_management.md` Rule MM4.1, §14.1), and the closure as a value allocated in it. The existing escape analysis (`spec/memory_management.md` §20.1) decides whether the closure, or a value that contains it, flows out of the `handle` expression: through the `handle`'s result, into a continuation that escapes it, or into the argument of an operation whose handler is installed outside it. Any of these is `E085`.
+- **Across a package edge it needs no body.** Every callee whose parameter has an unannotated function type is pure for that parameter's effects, and every Fixed function is total. Such a parameter can outlive the call only through the callee's result or through the argument of an effect operation the callee performs. The callee's signature shows both: whether a value of the parameter's type can be part of the result type, and which operations the callee's row allows. A call to a function of another package, or through a capability table, is checked from its signature alone; the escape set recorded in the interface (`spec/memory_management.md` Rule MM20.2) may only make the check more precise.
+- **The reason.** Evidence refers to a handler installation. If a closure could outlive it, invoking the closure would perform an operation with no handler, which the type system promised could not happen.
+
+Examples. `Log` is handled inside each function shown.
+
+```
+effect Log:
+    fn write(msg: String) -> ()
+
+fn log_len(s: String) -> u64 with Log =
+    Log.write(s)
+    s.length()
+
+fn log_id(s: String) -> String with Log =
+    Log.write(s)
+    s
+```
+
+```
+// Safe by type. `List of B` cannot contain a value of type `A -> B`,
+// so `f` dies with the call.
+fn map(xs: List of A, f: A -> B) -> List of B
+
+fn ok(xs: List of String) -> List of u64 with Console =
+    handle map(xs, (s) -> log_len(s)):
+        Log.write(m) => resume(Console.print_line(m))
+```
+
+```
+// The result may contain `f` and `g`. The closure `compose` returns is
+// placed in the same handler region as its arguments, and the caller's
+// escape analysis continues on it.
+fn compose(f: A -> B, g: B -> C) -> (A -> C) = (x) -> g(f(x))
+
+fn also_ok(xs: List of String) -> List of u64 with Console =
+    handle (do:
+        let h = compose((s) -> log_id(s), (s) -> s.length())
+        map(xs, h)):                     // `h` is used inside the handler only
+        Log.write(m) => resume(Console.print_line(m))
+```
+
+```
+// Rejected: the closure leaves the handler inside the returned list.
+fn later(f: () -> ()) -> List of (() -> ()) = List.Cons(f, List.Nil)
+
+fn bad() -> List of (() -> ()) with Console =
+    handle later(() -> Log.write("late")):
+        Log.write(m) => resume(Console.print_line(m))
+// error[E085]: closure outlives the handler of `Log`
+//   = help: write the row in the stored type: `List of (() -> () with Log)`,
+//           and give `later` the parameter type `() -> () with Log`
+```
+
+With the help applied, the closure captures nothing, the list's type says that invoking its elements performs `Log`, and whoever invokes them handles or declares `Log`.
 
 ## 6. Handler semantics
 
@@ -409,14 +483,14 @@ Fixed compiles handlers via the **evidence-passing** strategy of Leijen 2017 / X
 Each operation of each effect is compiled to an indirect call through a per-handler **evidence vector**. The evidence vector contains, for each operation:
 
 - A function pointer to the clause body.
-- A handler-frame reference (the captured continuation root).
+- A handler-frame reference (the captured continuation root), and the handler installation's marker, through which captured evidence finds the frame (Rule E7.8).
 - Nothing about the types of arguments and results: they are passed as 64-bit slots, an immediate in the slot and anything wider behind a pointer (`spec/compilation_model.md` Rule CM3.3), so an entry needs no boxing information.
 
 ### 7.2 Operation dispatch (Rule E7.2)
 
 A call `E.op(args)` compiles to:
 
-1. Look up the current evidence for `E` from the caller's evidence-vector argument.
+1. Look up the current evidence for `E` from the caller's evidence-vector argument or, inside a closure body for an effect its type does not mention, from the evidence the closure captured (Rule E7.8).
 2. Indirectly call the operation's pointer with `args` and the handler-frame reference.
 3. Receive a result value (for non-abortive ops) or transfer control (for abortive ops).
 
@@ -451,7 +525,7 @@ This is the common case in I/O handlers and is the primary performance optimizat
 
 ### 7.6 Evidence threading
 
-Every function whose row is not empty receives its evidence as a hidden parameter (`spec/compilation_model.md` Rule CM4.3), and a function parametric over an effect row (§8) receives the evidence for the row variable the same way. This is the function's baseline version: it performs an operation by a lookup and an indirect call.
+Every function whose row is not empty receives its evidence as a hidden parameter (`spec/compilation_model.md` Rule CM4.3), and a function parametric over an effect row (§8) receives the evidence for the row variable the same way. This is the function's baseline version: it performs an operation by a lookup and an indirect call. A parameter with an unannotated function type adds no evidence parameter; a callback passed to it carries its own (Rule E7.8).
 
 Where a call site knows the handler, the specialiser may build a clone of the callee for that handler, in which the lookup and the indirect call become a direct call or inline code. A known handler is one component of a clone key, charged to the same budget and chosen by the same score as any other (`spec/compilation_model.md` Rules CM5.1, CM5.3, CM5.4). With `--no-specialise` no such clone is built.
 
@@ -461,6 +535,26 @@ Where a call site knows the handler, the specialiser may build a clone of the ca
 - **Evidence is not a witness.** Both are hidden parameters that hold code pointers. Evidence is dynamically scoped: each `handle` installs an entry and may shadow an outer one (Rule E6.5), and an entry refers to a handler frame. A witness is static and the same throughout a link unit.
 - **Order.** The entries of an evidence vector for a signature follow the canonical order of its effect row, so that a caller and a callee in different packages agree. How row variables and the library entry points of Rule E5.4 are laid out is open (`spec/compilation_model.md` OQ-CM9).
 - **Cost.** The cost of performing an operation is that of the clause, which the performer cannot see; in a cost bound it is a symbolic term until a `handle` supplies the clause (`spec/cost.md` Rule CT5.3).
+- **Captured evidence** is ordered the same way, by the canonical order of the captured effects, and travels in the closure's environment, not as a hidden parameter (Rule E7.8).
+
+### 7.8 Evidence captured by closures (Rule E7.8)
+
+A function-typed value receives, at each invocation, the evidence for the row written in the type through which it is invoked (§7.6). The effects of its body that this type does not mention are those that Rule E5.5.a let join the enclosing body's row. For them:
+
+1. **Capture.** The closure captures the evidence of those effects at the point where it is given the type that does not mention them. For a lambda written in place, as an argument or in a field, that point is where it is created. A value that already exists and reaches an unannotated function type later is wrapped there in a new closure that captures the evidence and calls the value with it; the wrapper is created at that point.
+2. **Pure higher-order functions take no evidence.** A function whose parameter is `f: A -> B` is compiled as if `f` were pure: it receives no hidden evidence for `f`, and invoking `f` passes none. It cannot intercept an effect its type does not mention, because it has no handle on the evidence `f` carries.
+3. **Markers, not addresses.** Captured evidence names the handler installation by its **marker**, an identity assigned when the `handle` is installed, and not by a stack address. The closure finds the handler frame through the marker when it performs an operation. A continuation captured by an outer handler may be resumed on other fiber stacks (`spec/memory_management.md` §14.3), with the inner handler's frame at a new address; the marker still reaches the right one.
+4. **Confinement.** The handler named by the marker is installed whenever the closure can run, because the closure does not outlive it (Rule E5.5.b).
+
+The reason for capture over passing: a pure higher-order function in a library does not have to change, gain a hidden parameter or gain a row variable for its callers to pass effectful callbacks, and the code it was compiled to stays correct.
+
+**Relation to dispatch and clones.** Rule E7.2 dispatches through the captured entry exactly as through a passed one; the entry has the same layout. Where the function that creates the closure knows the handler (it is itself a clone keyed on that handler, Rule E7.6), the closure's code may be compiled for that handler and call the clause directly; the captured marker is then still needed for continuation capture and for `resume`. A closure that captured evidence and is passed through a capability table is subject to the same confinement check as any other argument: the requirement's signature is all the check needs (Rule E5.5.b).
+
+**Relation to Rule E7.7.** An operation called from a closure body passes its arguments under `own`, as from any other performer. Captured evidence is not a witness: it is chosen at run time, by the handler installed where the closure was given its type, and a witness never is.
+
+**Lanes.** A callback with captured evidence has a non-empty row, so a `fold` that receives it is not a fork site (`spec/quantities.md` Rule Q5.13.a). Captured evidence never crosses into a parallel lane.
+
+**Alternative considered.** Koka binds effects dynamically: every higher-order function and every closure call is row-polymorphic and passes the current evidence vector as a hidden argument, so a closure performs its effects with the handlers in force where it runs. Closures stay fully first-class: one can be stored and invoked later under any handler. The price is a hidden argument on every higher-order function and closure call and a row variable in every such signature, with `mask` to keep a callee from intercepting what its type does not mention. Fixed keeps higher-order functions written without rows (Rule E5.5.a) and pays with Rule E5.5.b instead: a closure that relies on ambient effects is confined to its handler, and one that must outlive it says so with a row in its type (P6 D14).
 
 ## 8. Effect polymorphism
 
@@ -490,7 +584,7 @@ Calls to this function must supply a callback whose row contains at least `Conso
 
 ### 8.3 Higher-order effect composition
 
-This is what makes effect polymorphism essential. Without row variables, generic combinators like `map`, `filter`, `fold` would be unable to accept effectful callbacks without committing to a specific effect set.
+Generic combinators like `map`, `filter` and `fold` accept effectful callbacks without row variables, through Rule E5.5.a and captured evidence (Rule E7.8), as long as the callback does not outlive its handler (Rule E5.5.b). A row variable is needed where the combinator's own type must say that it performs the callback's effects, for example because it stores the callback or because its caller must handle the effects.
 
 ```
 fn each<E>(list: is List of A, f: A -> () with E) -> () with E =
@@ -511,6 +605,8 @@ fn each<E>(list: is List of A, f: A -> () with E) -> () with E =
 - **OQ-E1 — Multi-shot handlers (deferred to v0.5+).** Linked to `spec/quantities.md` OQ-Q1. v0.4.4 keeps `resume` at quantity 1 per Rule Q5.11 and Rule E6.4. Multi-shot would require continuation copying or persistent continuation representation, both with significant memory overhead.
 - **OQ-E3 — Effect inheritance (deferred).** No `extends` for effects in v0.4.4. Adding `effect MyConsole extends Console: ...` is straightforward if stdlib needs it.
 - **OQ-E8 — Row-polymorphic data (deferred).** A data type cannot take a row variable, so a structure that stores callbacks (a task queue) fixes their row: `List of (() -> () with Async)`. A callback with an extra rigid row variable cannot be stored in it. `examples/08_effects_handlers.fixed`'s `run_scheduler` hits this case and keeps one `T015` until it is resolved.
+- **OQ-E9 — Parameterised effect aliases.** Rule E4.5.b: the grammar gives aliases value parameters only. An alias over an effect's `of` argument needs a type parameter on `TypeAlias` and a use form (`with AppEffect of String` would parse as an `EffectBound`).
+- **OQ-E10 — Handler clauses for one effect at two `of` arguments.** `Fail of String` and `Fail of i64` are distinct effects (§3.4, Rule E4.2), but `HandlerClause` names only `E.op(…)` and cannot name the `of` argument. A `handle` whose subject performs both cannot say which one a clause handles. Needs a decision: a clause form with `of` (`Fail of String.fail(e) => …`), inference from the pattern's type, or a rule that one `handle` handles at most one instance of an effect.
 - **OQ-E4 — Higher-rank effect polymorphism (deferred).** A function whose argument is itself effect-polymorphic (`fn higher(g: forall E. (A -> B with E) -> ...)`) is not in v0.4.4. Defer until benchmark code reveals the need.
 
 **Closed (decided not to add):**
@@ -538,7 +634,7 @@ fn compute(input: String) -> is Result of (String, u64) =
 Inference walk:
 
 - `parse_u64`'s callback `(e) -> Fail.fail(e)` — the lambda's body calls abortive op `Fail.fail`, so its row is `Fail of String`.
-- `inner`'s body calls these lambdas via `fold`, which itself takes the row of its second argument. So `inner`'s `R_inferred = Fail of String`. Its declared `with Fail of String` matches.
+- `inner`'s body passes these lambdas to `fold`, whose parameters have unannotated function types. By Rule E5.5.a the lambdas' row joins `inner`'s row where they are passed, and by Rule E7.8 each lambda captures `inner`'s evidence for `Fail` there; `fold` itself stays pure. So `inner`'s `R_inferred = Fail of String`. The lambdas do not outlive the call of `fold` (its result type cannot hold them), so Rule E5.5.b holds. Its declared `with Fail of String` matches.
 - `compute`'s body wraps `inner(input)` in a `handle` whose clauses cover `Fail` (abortive — `Result.err(e)`) and `return` (transforms to `Result.ok(v)`). After subtraction, the row outside is empty. `compute` declares no `with` clause, which matches. ✓
 - The `handle` block's result type joins:
   - `return` clause's body: `Result.ok(v): is Result of (String, u64)`.
@@ -570,10 +666,11 @@ fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A) =
 |---|---|
 | `spec/syntax_grammar.ebnf` | All effect-related syntax |
 | `spec/type_system.md` | Effect declarations as type-level constructs (§9 forwards here); `!` typing (§5.6) |
-| `spec/compilation_model.md` | Evidence as a hidden parameter (Rule CM4.3); a known handler as a clone key component (Rule CM5.1); the convention of Rule E7.7 |
-| `spec/quantities.md` | Rule Q5.11 (`resume` quantity 1); OQ-Q1 ↔ OQ-E1; Rule Q9.2 fixes the order in which argument effects are performed (left to right) |
-| `spec/memory_management.md` | §14: handler kinds, abort resets, fiber stacks for capturing handlers, continuation memory |
-| `spec/properties.md` (TBD) | Effects in `prop` bodies are forbidden — props are checked at quantity 0 (Rule Q5.5), and `prop` bodies are compile-time only |
-| `spec/pattern_matching.md` (TBD) | Handler clauses reuse pattern syntax; not effect-specific |
+| `spec/compilation_model.md` | Evidence as a hidden parameter (Rule CM4.3), including evidence captured by closures (Rule E7.8); a known handler as a clone key component (Rule CM5.1); the convention of Rule E7.7 |
+| `spec/quantities.md` | Rule Q5.11 (`resume` quantity 1); OQ-Q1 ↔ OQ-E1; Rule Q9.2 fixes the order in which argument effects are performed (left to right); fork sites need empty rows (Rule Q5.13.a) |
+| `spec/memory_management.md` | §14: handler kinds, abort resets, fiber stacks for capturing handlers, continuation memory; Rule MM4.1 and §20.1 for the confinement check of Rule E5.5.b |
+| `spec/diagnostics.md` | `inspect` and `trace`, which are not effects (Rule E4.6) |
+| `spec/properties.md` | Effects in `prop` bodies are forbidden. Prop bodies are excluded from the compiled artifact (`spec/quantities.md` Rule Q5.5) and run only in the test build |
+| `spec/pattern_matching.md` | Handler clauses reuse pattern syntax; coverage is Rule M6.4 |
 | `docs/references/scala3-compiler-reference.md` | Recheck pattern; effect inference is a Recheck pass like quantity inference |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `effects/EffectChecker.scala` (effect inference); Phase 4: `effects/EvidencePasser.scala` (evidence-passing compilation) |

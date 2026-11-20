@@ -1,8 +1,10 @@
 # Fixed Type System
 
-**Status:** Draft v0.4.3
-**Specifies:** typing of Fixed v0.4.4 source.
+**Status:** Draft v0.5.0
+**Specifies:** typing of Fixed source as defined by `spec/syntax_grammar.ebnf` v0.4.11.
 **Last revised:** 2026-11-20
+
+**Changes from v0.4.3.** Applies decision record P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`). New Rule 5.1.1: an abstract type is bound per use, per link unit (a *choice point*) or per package. Rule 4.1: a type variable local to a `data` variant field, and an anonymous bound in a field, is a choice point (closes OQ-T2). New Rule 5.1.2: the signature decides who picks the representation of a result (`-> is C` against `-> R is C`). The inferred caller-chosen / callee-chosen split is withdrawn. New Rule 5.1.3: `show`, `==` and `clone` on an unbounded type parameter are type errors. New §8.6: visibility (`pub`). §6.5: selection is staged between package compile and application link. The score of Rule 6.5.4 is usage × cost, with the bound-class table and static weights as fallback. **Rule 6.5.5 is replaced**: a tie never halts. Five disambiguation rules decide, and the only error is zero viable candidates. §6.5.6–§6.5.8 give the commit at link and the lock file. §8.4 is rewritten as Rules 8.4, 8.4.a and 8.4.b. Coherence per link unit is withdrawn: a link unit may hold several satisfactions of one pair, which a `using` or the scope resolves, and a satisfaction on a type's own parameter becomes part of the type. §8.5 no longer contradicts Rule 8.1.a. Rule 8.2 refers to the table of a satisfaction, not of a type.
 
 **Changes from v0.4.2.** Aligned with `spec/compilation_model.md` (baseline versions, witnesses, clones, packages) and `spec/cost.md` (cost contracts). §6.5: a representation is chosen where a value originates and travels by witness; the bound set is closed over the package and the signatures it imports; cost contracts are an input, a viability criterion (§6.5.3) and the source of two scoring dimensions (§6.5.4); the cache key includes the lifetime class. Rule 6.1.1 Phase 2 no longer re-checks a default body per satisfying type. Rules 7.4.b.1 and 7.4.b.2 are restated without "after monomorphisation": they are the mandatory specialisations of Rule CM5.5. Rule 7.3.b covers baseline code. Rule 8.2: the panic of an `impossible` constructor lives in the capability table. §8.4: satisfactions are coherent per link unit. §8.5 points to Rule CM4.5 for results typed by a capability bound. New OQ-T2 (type variables of variant fields).
 
@@ -27,13 +29,15 @@ It does **not** define:
 - `prop` static verification and PBT fallback — see `spec/properties.md`.
 - `match → fold` desugaring and exhaustiveness checking — see `spec/pattern_matching.md`.
 - Memory management (lifetime classes, regions, Perceus reference counting) — see `spec/memory_management.md`.
-- Capability-set narrowing into concrete representations (the algorithm) — touched in §6.5; full treatment lives with the compiler implementation, with PGO-driven decisions documented separately.
+- How choice points are bound at link, summaries, the lock file and the profile file — see `spec/compilation_model.md` §8. §6.5 gives the selection rules.
 - How code is compiled for a value whose representation is not known where it is used (baseline versions, witnesses, clones), and the package ABI — see `spec/compilation_model.md`.
 - Cost contracts on capability members — see `spec/cost.md`.
 
 ## 2. Dependencies
 
-- `spec/syntax_grammar.ebnf` v0.2.3 — every syntactic form referenced here is defined there.
+- `spec/syntax_grammar.ebnf` v0.4.11 — every syntactic form referenced here is defined there.
+- `spec/compilation_model.md` — choice points and their binding at link (§8), witnesses (§4), packages (§6).
+- `spec/diagnostics.md` — `inspect`, `trace` and interpolation in diagnostic sinks.
 - `examples/01_basics.fixed` … `examples/11_properties.fixed` — every rule in this document is anchored to at least one example.
 
 ## 3. Two worlds: types and capabilities
@@ -47,7 +51,7 @@ Fixed makes a hard distinction between what the **programmer writes** and what t
 | `data` declarations: closed sets of variants | Tagged unions / structs |
 | `of` application | Type application |
 
-A user never names "the type" in the conventional sense. The compiler computes a concrete representation from the union of capability bounds collected across a value's lifetime (see §6.5), as far as the package and the signatures it imports show that lifetime (§6.5.1). Code that handles the value without knowing the representation receives a witness for it (`spec/compilation_model.md` §4). For the rest of this document, "type" refers to the compiler's internal view; "capability" is the user-facing thing.
+A user never names "the type" in the conventional sense. Where the user of a declaration supplies the type, it is a type parameter (Rule 5.1.1). Where nobody does, the compiler chooses a concrete representation for the bound, once per program (a *choice point*, §6.5). Code that handles the value without knowing the representation receives a witness for it (`spec/compilation_model.md` §4). For the rest of this document, "type" refers to the compiler's internal view; "capability" is the user-facing thing.
 
 ## 4. Identifier scoping
 
@@ -66,6 +70,21 @@ Subsequent occurrences of the same `UPPER_IDENT` within the same signature **ref
 - For `fn`: the entire signature (parameters + return type + `with`-clause).
 - For `cap` / `data` / `effect`: the entire body (including `extends` clauses).
 - For nested `fn`: each inner function has its own scope; type variables introduced in the outer signature are still visible.
+
+**Type variables of variant fields (Rule 4.1.a, closes OQ-T2).** A type variable introduced in a field of a `data` variant, and not declared in the data type's `of` clause, is local to the data declaration. The same holds for an anonymous bound written as a field's type. Such a variable is not a parameter of the data type. It is a **choice point** (Rule 5.1.1, item 2): one representation for every value of the data type, chosen once per link unit. No cell stores a witness for it.
+
+```
+data Color:
+    Red
+    RGB(red: N is Numeric, green: N, blue: N)   // N: one choice for all Colors
+
+data Color2 of N is Numeric:                   // N: chosen by each user of Color2
+    RGB2(red: N, green: N, blue: N)
+```
+
+A user who wants to choose writes the variable in `of`. Rules 5.9, 7.4.c and 7.4.d speak of `of` parameters, and a field-local variable is not one. It is never phantom, because it occurs in a field. It is never the target of an auto-derived `Functor`. An accessor of its field returns a value of the choice point's type.
+
+Reason: a per-value variable would need a witness in every cell. A per-use variable is an `of` parameter, which the user can already write.
 
 **Examples.**
 
@@ -110,7 +129,7 @@ Two forms:
 
 | Form | Meaning |
 |---|---|
-| `is Cap` | Anonymous bound: each occurrence in a signature is a *fresh* type variable. |
+| `is Cap` | Anonymous bound: each occurrence in a signature is a *fresh* abstract type. In a parameter position it is a type parameter; in a result or field position it is a choice point (Rule 5.1.1). |
 | `IDENT is Cap` | Named alias: every occurrence of `IDENT` in the signature refers to the *same* type variable, all of which must satisfy `Cap`. |
 
 **Composition (§10 grammar `CapBoundChain`):** `is C1 + C2` means "satisfies both `C1` and `C2`." `+` is associative and commutative; `is C1 + C2` ≡ `is C2 + C1`.
@@ -121,6 +140,50 @@ fn fib_iter(n: N is Numeric) -> N                       // named: input and outp
 fn even_doubled(numbers: C is Filtering of (N is Numeric) + Functor of N) -> C
 //              ^reused C    ^reused N as element type
 ```
+
+#### 5.1.1 Binding times (Rule 5.1.1)
+
+An abstract type is bound at one of three times.
+
+1. **Per use: a type parameter.** A named bound (`x: T is C`, `-> R is C`), an `of` parameter (`data D of T`), and an anonymous bound in a parameter position (`c: is Folding`). The user of the declaration picks the type: the caller of a function, or the writer of `D of u8`. The witness is a hidden parameter (`spec/compilation_model.md` Rule CM4.3).
+2. **Per link unit: a choice point** (Rule CM8.1). An anonymous bound in a result position (`-> is C`) or in a field (`xs: is Sequencing of Json`). A type variable local to a `data` variant field (Rule 4.1.a). An abstract constructor call whose type is not a type parameter of the enclosing function (`let y: is Optional of u64 = Optional.some(42)`, §8.5). There is one choice for the whole program. It is made at application link from summaries (Rule CM8.4) and bound by the linker (Rule CM8.2).
+3. **Per package: a choice point whose values never leave the package.** This is decided when the package is compiled (§6.5). It is an optimisation of item 2 and is not visible in the language: the program means the same thing either way.
+
+Nothing is bound per value: no cell stores a witness.
+
+Reason: whoever supplies a value of a type parameter knows its type. A choice point has no such user. The package that declares it cannot see how the rest of the program uses it, so the choice waits for the link step, which sees the summaries of every package.
+
+#### 5.1.2 Result types (Rule 5.1.2)
+
+The signature decides who picks the representation of a result. The body cannot change the calling convention.
+
+- **`-> is C` (anonymous).** The result is a choice point owned by the function. The caller treats the value as opaque: it may use only the members of `C`. It receives the value's witness with it (`spec/compilation_model.md` Rule CM4.5). All values the body returns have one type. If the body constructs data directly, that data type is the choice point's only candidate. An abstract constructor call for the result is the choice point (§8.5).
+- **`-> R is C` (named, `R` in no parameter type).** `R` is an ordinary type parameter: the caller picks it and passes its witness. A body that returns a concrete data type where `R` is expected is a type error: `Maybe.Just(x)` is a `Maybe`, not an `R`. An abstract constructor call for `R` stays abstract. It resolves at the caller, through the capability table in `R`'s witness.
+- **A requirement whose result is `-> is C`** (`fn compare(other: Self) -> is Ordering`) follows the first case. The result is a choice point of each satisfying method.
+
+```
+fn parse(s: String) -> is Optional of u64 = ...     // the function's choice point
+fn empty_of() -> R is Optional of u64 = Optional.none // the caller picks R
+fn wrong() -> R is Optional of u64 = Maybe.Nothing    // ERROR: Maybe is not R
+```
+
+Reason: if the convention followed from the body, a change to a body could change the ABI (`spec/compilation_model.md` Rule CM6.7).
+
+#### 5.1.3 Operations on a type parameter (Rule 5.1.3)
+
+A value whose type is a type parameter or a choice point has the members of its bounds and nothing else. `show`, `==`, `!=` and `clone` are members of `Show`, `Eq` and `Clone` (`spec/stdlib.md` §4). On a value of an unbounded type parameter, each of them is a type error. Write `T is Show`, `T is Eq` or `T is Clone`.
+
+A value of an unbounded type parameter can only be moved: bound to a name, passed, returned, stored in a field or captured. Nothing else may be done with it.
+
+```
+fn keep(x: T) -> T = x                          // allowed: moves x
+fn label(x: T) -> String = x.show               // ERROR: T has no bound Show
+fn label(x: T is Show) -> String = x.show       // allowed
+```
+
+Diagnostics have their own mechanism. `inspect(x)` and `trace("…{x}…")` accept a value of any type, with no bound. They write to the diagnostic channel, and their text never becomes a value the program holds (`spec/diagnostics.md`, Rules DG3.1–DG3.6). `Show` stays a lawful capability and is not the diagnostic mechanism.
+
+Reason: a function of type `T -> T` has one implementation only if it cannot inspect `T`. Baseline code has no table to call for an unbounded `T` (`spec/compilation_model.md` Rule CM4.3).
 
 ### 5.2 `of` application
 
@@ -337,7 +400,7 @@ cap Optional:
 
     // Default implementations — types satisfying Optional may override.
     fn isDefined -> bool = self.fold((_) -> true, () -> false)
-    fn or_else(default: Part) -> Part = self.fold((v) -> v, () -> default)
+    fn orElse(other: Self) -> Self = self.fold((_) -> self, () -> other)
 ```
 
 **Rule 6.1 (Default method bodies / extension methods).** A cap method's optional body acts as both a *default implementation* — used when the satisfying type does not provide its own — and an *extension method*: every type satisfying the cap automatically gets the method as a callable, even without writing one in `satisfies`. Bodies may use `self` (the receiver value, lowercase — see Rule 5.4.c), `Self` (the receiver's type), `Part`, and other in-scope cap members (including the cap's `Self.fn` constructor *requirements* and abstract method *requirements*, which are guaranteed to be provided by the satisfying type).
@@ -356,6 +419,7 @@ A body that fails Phase 1 is a compile error against the cap declaration, not ag
 
 **Phase 2 — The satisfaction meets the requirements (cap-closure phase).** When a `Type satisfies Cap` declaration is processed, the satisfying type's members are checked against the cap's **requirements**, not against the cap's default bodies:
 
+- Coverage: every member of the cap that has no default body must be defined in the `satisfies` block, mapped to a variant (Rule 8.1.b), auto-derived (§7.4) or built in. A satisfaction that leaves one out is rejected (P6 D17).
 - Types: the satisfying type's signatures must be assignable to the cap's declared signatures (cap-closure rejects the satisfaction otherwise).
 - Effects: a satisfying method's effect row must be contained in the row its requirement declares. A default body calls the requirement through the capability table (`spec/compilation_model.md` Rule CM4.2), so an effect the requirement does not declare would be performed behind the default body's back.
 - Contracts: a satisfying method must meet the cost props and the `fip` modifier of its requirement (`spec/cost.md` Rule CT6.3).
@@ -546,118 +610,155 @@ A cap may belong to multiple of these categories transitively via `extends` (e.g
 
 ### 6.5 Representation selection
 
-The representation-selection pass determines the concrete representation the compiler will use to lay out a value at runtime. It runs as a **Recheck-style phase** (see `docs/references/scala3-compiler-reference.md` §5.4 for the pattern) after capability closure and quantity inference, and before code generation.
+The representation-selection pass decides each **choice point** (Rule 5.1.1, item 2; `spec/compilation_model.md` Rule CM8.1): which concrete representation a bound with no user gets.
 
-**Where a representation is chosen (Rule 6.5.0).** A representation is chosen at the site where a value **originates**: an abstract constructor-requirement call that §8.5 left unresolved, a literal of bounded type, or a built-in candidate's constructor. Selection uses the facts of baseline versions (demands, lifetime classes) and is made once per origination site. From there the value carries its representation with it: code that knows the origin uses the layout directly, and code that does not (a baseline version, `spec/compilation_model.md` Rule CM3.1; another package) uses the value through its witness. Selection never changes because a function was cloned, and cloning never changes a layout (Rule CM3.4).
+Selection is **staged**. A choice point whose values never leave the package is decided when the package is compiled (Rule 5.1.1, item 3). Every other choice point is decided when the application is linked, from the summaries of every package (`spec/compilation_model.md` Rules CM8.3, CM8.4). The linker then binds the choice (Rule CM8.2). A package is compiled once, to code that works for every choice, and nothing is recompiled when a choice changes. The procedure below is the same at both stages; where they differ, the text says so.
 
-A function whose result is typed by a capability bound either leaves the choice to its caller or makes it itself; which one is a fact of its signature (Rule CM4.5).
+**Where a representation is chosen (Rule 6.5.0).** Each choice point is decided once, for every value it covers: all results of one function with an anonymous result type, all values of one data type for a field-local variable, all values built by one abstract constructor call with an anonymous type. Code that knows the choice uses the layout directly. All other code (a baseline version, `spec/compilation_model.md` Rule CM3.1; another package) uses the value through its witness, or through per-type accessors when the layout of a data type depends on the choice (Rule CM3.7). Selection never changes because a function was cloned, and cloning never changes a layout (Rule CM3.4). A type parameter is never selected: its user supplies it (Rule 5.1.1, item 1).
 
 #### 6.5.1 Inputs
 
-For each value, the pass collects:
+For each choice point, the pass collects:
 
-- **Bound set** — the union of all `is`-bounds the value must satisfy across its lifetime: declaration site, assignment LHS, parameter positions, return positions. Closed under `extends` (§6.2) and alias distribution (§5.8). The lifetime is followed through the functions of the package, and through the **signatures** of imported functions; what another package does with the value beyond its signature is not visible and does not contribute.
-- **Cost contracts** — the cost props of the capabilities in the bound set, and the claims each candidate makes for its members (`spec/cost.md` §4.4).
-- **Quantity context** — the QTT quantity assigned to the value (§7.3.b, `spec/quantities.md`).
-- **Lifetime class and escape set** — computed by M10 (`spec/memory_management.md` §5, §20). The class, not the quantity, decides placement: only `Heap` and `Region` values need representations compatible with reference counting. The pass may demote any class to `Inline`, never promote it.
-- **PGO data** — when available, profile observations from prior runs of the program or its predecessors, attributed to the origination site.
+- **Bound set.** The bounds declared at the choice point, closed under `extends` (§6.2) and alias distribution (§5.8). Its values are opaque to their users (Rule 5.1.2), so no use can add a bound.
+- **Usage vector.** Which members of the bound set are called on its values, with what weight. At link, the usage vectors in the summaries are added along the edges "passed on to `g`, parameter `i`" (`spec/compilation_model.md` Rule CM8.3), so usage is whole-program, and no body is read. The weight is the first available of: a production profile, the usage measured in test runs (`spec/properties.md` Rule P7.9), and the static weights of the summary.
+- **Cost contracts.** The cost props of the capabilities in the bound set, and the claims each candidate makes for its members (`spec/cost.md` §4.4).
+- **Measured costs.** Where they exist, the cost of each member per (satisfaction, size class, target), from the profile file of the target or the reference cost table a package ships in its interface (`spec/compilation_model.md` Rule CM8.6). These are measurements, so they enter only decisions among correct alternatives (`spec/properties.md` Rule P7.8).
+- **Quantity context and lifetime class**, as the package compile records them (§7.3.b, `spec/quantities.md`; `spec/memory_management.md` §5, §20). The class, not the quantity, decides placement: only `Heap` and `Region` values need representations compatible with reference counting. The pass may demote any class to `Inline`, never promote it.
 
 #### 6.5.2 Candidate pool
 
-The pool aggregates two sources:
+The candidates are **satisfactions**, from two sources:
 
-- **User-defined data types.** For every `T satisfies C` declaration in scope, `T` is a candidate when C ∈ bound set. (Or transitively, when C is inherited by some C' ∈ bound set.)
-- **Built-in candidates** — the §6.6 pool: linked list, contiguous array, hash map, auto-tagged-union, auto-flat-struct. Each carries a precondition expressing which bound sets it can satisfy.
+- **Declared satisfactions.** A `T satisfies C` for some C in the bound set, or inherited by one. At package compile, the pool is the satisfactions the package can see. At link, it is the satisfactions of the link unit that count at the choice point (Rule 8.6).
+- **Built-in candidates**: the §6.6 pool. Each carries a precondition expressing which bound sets it can satisfy.
 
-Per Rule 6.6, built-in and user-`satisfies` candidates are at **equal priority** at this stage; the choice is made by the scoring function in §6.5.4.
+**Two satisfactions of the same pair are never ranked.** When the link unit holds several satisfactions of one (type, capability), Rule 8.4 picks the one that serves the choice point, by the resolution order at the site that created it. Only that satisfaction enters the pool for that type. Two satisfactions of one pair differ in results, not in speed, so the score must not choose between them. The pool therefore holds at most one candidate per data type and capability.
+
+Per Rule 6.6, built-in and declared candidates have **equal priority**; the score of Rule 6.5.4 and the disambiguation of Rule 6.5.5 choose.
 
 #### 6.5.3 Viability filter
 
 A candidate is **viable** for the bound set iff every C ∈ bound set is satisfied by:
 
-- (a) An in-scope `satisfies` declaration on the candidate (data types), or
-- (b) The candidate's inherent structural properties (built-ins), or
-- (c) An auto-derivation rule of §7.4 (`Folding`, `Functor`, accessors, …, for data types), or
-- (d) A default body declared on the cap method itself (Rule 6.1 — extension methods).
+- (a) a satisfaction of the candidate that Rule 8.4 resolves at the choice point (data types), or
+- (b) the candidate's inherent structural properties (built-ins), or
+- (c) an auto-derivation rule of §7.4 (`Folding`, `Functor`, accessors, …, for data types), or
+- (d) a default body declared on the cap method itself (Rule 6.1 — extension methods).
 
-Refinement caps (Marker class, §6.4) are viable iff their `prop` obligations verify under the candidate's representation. Verification follows `spec/properties.md`'s static-then-PBT pipeline; a failed prop disqualifies the candidate.
+Refinement caps (Marker class, §6.4) are viable iff their `prop` obligations verify under the candidate's representation. Only `proved` and `assumed` props count. A `tested` prop does not make a candidate viable (`spec/properties.md` Rule P7.8).
 
-**Cost contracts.** A candidate is not viable if one of its members fails a cost prop of a capability in the bound set (`spec/cost.md` Rule CT8.1). This is the decisive use of contracts: a capability that promises a constant-time `get` is never satisfied by a candidate whose `get` is linear.
+**Cost contracts.** A candidate is not viable if one of its members fails a cost prop of a capability in the bound set (`spec/cost.md`). This is the decisive use of contracts: a capability that promises a constant-time `get` is never satisfied by a candidate whose `get` is linear.
 
-If zero candidates are viable, emit `error[E060]: no representation satisfies <bound set>`, listing each cap and the candidate(s) that came closest.
+**Refined fields.** A candidate whose variant refines a constructor-requirement parameter (Rule 8.1.a) is viable only if every abstract constructor call of the choice point passes arguments of the refined field types. The package records those argument types in the summary of the choice point, so that the link step can check them without bodies.
 
-#### 6.5.4 Scoring
+If zero candidates are viable, the choice point has no representation: `error[E060]: no representation satisfies <bound set>`, listing each cap and the candidates that came closest. At package compile this is a compile error. At link it is a link error (`spec/compilation_model.md` Rule CM8.4). **This is the only error selection can report.**
 
-For each viable candidate, compute a **performance score** as a weighted linear combination over these dimensions:
+#### 6.5.4 Scoring (Rule 6.5.4)
 
-- **Allocation cost** — the lower of two scores (`spec/cost.md` Rule CT8.2): the placement score of the value's lifetime class (`spec/memory_management.md` §3.1: `Inline` > `Static` > `Frame` / stack `Dest` > `Region` > `Heap`, with packed candidates charged for expected copy-out of escaping subtrees, §16.2), and the score derived from the candidate's bounds on `constructs − releases` for the capabilities of the bound set.
-- **Access fit** — derived from the candidate's bounds on `steps` for the capabilities of the bound set (`spec/cost.md` Rule CT8.2). It measures how far the candidate beats the contracts; a candidate that breaks one is already gone (§6.5.3).
-- **Memory footprint** — total bytes including headers, padding, and discriminator tags, per typical instance.
-- **Locality** — a property of the candidate's layout: contiguous layouts score higher; pointer-chased layouts lose cache lines and amortise across allocator slabs.
-- **PGO hit rate** — when profile data is present, weight the operations the profile shows dominate.
+Each viable candidate gets a **score** in `[0, 10]`; higher is better.
 
-**Provisional weights and tie threshold (Rule 6.5.4 — resolves C4).** The scoring *mechanism* is normative: a weighted sum over the dimensions above, a tie threshold ε, and a Lipschitz bound `K < ε`. The *numeric values* below are **provisional**. They were chosen before any backend or benchmark existed, and adding candidates to the pool (§6.6) is expected to change them. They become normative only once they are calibrated against measured workloads. Until then they are the defaults every implementation uses, for cross-implementation determinism:
+**Measured score.** The expected cost of candidate `r` at choice point `p` is
+
+```
+expected(p, r) = Σ over members m of the bound set:  usage(p, m) × cost(m, r)
+```
+
+with `usage` from §6.5.1 and `cost` the measured cost of `m` under `r`, in the size class and target of the build (steps, cells built net of cells released, cycles and cache misses, aggregated as `spec/cost.md` §8 states). The score is `10 × min over r' of expected(p, r') / expected(p, r)`: the cheapest candidate scores 10.
+
+**Fallback score.** If some viable candidate has no measured cost for a member with nonzero usage, every candidate at that choice point gets the fallback score instead. Measured and fallback figures are never mixed within one choice point. The fallback is a weighted linear combination over these dimensions:
+
+- **Allocation cost**: the lower of two scores (`spec/cost.md` §8). One is the placement score of the value's lifetime class (`spec/memory_management.md` §3.1: `Inline` > `Static` > `Frame` / stack `Dest` > `Region` > `Heap`, with packed candidates charged for expected copy-out of escaping subtrees, §16.2). The other is derived from the candidate's bounds on `constructs − releases` for the members of the bound set, each weighted by its usage.
+- **Access fit**: derived from the candidate's bounds on `steps` for the members of the bound set, each weighted by its usage (the bound-class table, `spec/cost.md` §8). It measures how far the candidate beats the contracts. A candidate that breaks one is already gone (§6.5.3).
+- **Memory footprint**: total bytes including headers, padding, and discriminator tags, per typical instance.
+- **Locality**: a property of the candidate's layout. Contiguous layouts score higher. Pointer-chased layouts lose cache lines and amortise across allocator slabs.
+
+**Provisional weights and tie threshold (resolves C4).** The scoring *mechanism* is normative: a measured score where data exists, a fallback weighted sum otherwise, a tie threshold ε, and a Lipschitz bound `K < ε` on the fallback score. The *numeric values* below are **provisional**. They were chosen before any backend or benchmark existed and become normative only once calibrated against measured workloads. Until then every implementation uses them, so that two implementations choose alike:
 
 | Dimension | Weight | Range of raw score |
 |---|---|---|
-| Allocation cost | 0.30 | 0–10 (derived: `spec/cost.md` Rule CT8.2; lower allocation cost ⇒ higher raw score) |
-| Access fit | 0.30 | 0–10 (derived: `spec/cost.md` Rule CT8.2) |
+| Allocation cost | 0.30 | 0–10 (derived: `spec/cost.md` §8; lower allocation cost ⇒ higher raw score) |
+| Access fit | 0.30 | 0–10 (derived: `spec/cost.md` §8) |
 | Memory footprint | 0.15 | 0–10 (smaller is higher) |
 | Locality | 0.15 | 0–10 (cache-friendly ⇒ higher) |
-| PGO hit rate | 0.10 | 0–10 (more profile coverage ⇒ higher; 0 if no PGO data) |
 
-Each candidate's raw scores per dimension are normalised to `[0, 10]` and combined as a weighted sum. The maximum possible total is `10.0`.
+Each candidate's raw scores per dimension are normalised to `[0, 10]` and combined as a weighted sum. The PGO dimension of earlier drafts, weight 0.10, is gone: measured data now replaces the fallback score instead of adding to it. The other weights are unchanged, so the maximum fallback total is `9.0`.
 
-The **tie threshold ε** is fixed at `ε = 0.5` (5% of the maximum total). Two candidates whose scores differ by less than ε are treated as tied; ties trigger the ambiguity error described in §6.5.5.
+**The derived dimensions keep `K < ε`.** `spec/cost.md` §8 computes allocation cost and access fit so that one added bound, with everything it inherits, moves each by at most 0.6 raw points, 0.36 in the weighted total. Memory footprint and locality depend on the candidate only.
 
-The **Lipschitz bound** on the scoring function is `K ≤ 0.4` per single-bound addition: extending a candidate's bound set by one additional capability bound shifts its score by at most 0.4 points. Because `K < ε`, a single-bound extension cannot turn a clear winner into a clear loser: two candidates each move by at most `K`, so a margin of at least ε cannot become a margin of at least ε the other way. It can turn a clear winner into a tie, which halts with the ambiguity error of §6.5.5 and so is visible. This is what makes representation selection stable under small program changes: it never silently picks a different representation. (Earlier drafts claimed a clear winner could not even become a tie; that does not follow from `K < ε`.)
+The **tie threshold ε** is `ε = 0.5`. It is the band within which Rule 6.5.5 keeps the choice recorded in the lock file.
 
-PGO data may override the choice per origination site but never globally; the global default weights and ε remain fixed regardless of profile data. Profile data also decides which clones of a function are built (`spec/compilation_model.md` Rule CM5.4); that never changes a representation.
+**Stability.** A choice is recorded in the lock file (`spec/compilation_model.md` Rule CM8.5) and kept while its score stays within ε of the best (Rule 6.5.5, rule 2). A change to the program never halts the build, and it does not flip a choice that stays within ε of the best. A choice that does change shows as a diff of the lock file.
 
-**The derived dimensions keep `K < ε`.** Allocation cost and access fit are computed by `spec/cost.md` Rule CT8.2 so that one added bound, with everything it inherits, moves each by at most 0.6 raw points, 0.36 in the weighted total. Memory footprint and locality depend on the candidate only.
+For the fallback score this is also bounded. The **Lipschitz bound** is `K ≤ 0.4` per single-bound addition: extending the bound set by one capability bound, with everything it inherits, shifts a candidate's fallback score by at most 0.4 (`spec/cost.md` §8 bounds each derived dimension so). Suppose the recorded choice won with a margin of at least ε. After one added bound it trails the best by at most `2K − ε < ε`, so rule 2 keeps it. A measured score has no such bound: new measurements can move it arbitrarily, and only the hysteresis of rule 2 covers them.
 
-Implementations are conformant if they (a) use these defaults for unprofiled code and (b) document any per-origination-site PGO override that can deviate from them. Because the values are provisional, a spec revision may change which candidate wins for a given bound set; programs that depend on a specific representation choice should pin it via explicit type annotation rather than relying on scoring. A revision must keep `K < ε`, so the stability property above survives recalibration.
+A revision of the numeric values must keep `K < ε`. A program that depends on a specific representation pins it in the lock file (Rule 6.5.5, rule 1), or constructs the data type directly (§8.5).
 
-#### 6.5.5 Pick or halt
+#### 6.5.5 Disambiguation (Rule 6.5.5)
 
-- If exactly one candidate has the maximum score with margin ≥ ε (the threshold fixed in Rule 6.5.4 above), select it.
-- If two or more candidates tie within ε, halt compilation with an ambiguity error per `docs/plans/implementation-plan.md` §"Ambiguity resolution via compiler suggestions": list every tied candidate with its score and a copy-pasteable disambiguation suggestion. The user resolves via explicit type annotation (per §8.5 — type annotation forces a specific candidate).
+Selection never halts on a tie. Among the viable candidates, the first rule that decides is applied:
+
+1. a **pin** written by the user in the lock file, if the pinned candidate is viable;
+2. the **choice recorded** in the lock file, while its score is within ε of the best score;
+3. the **highest score**;
+4. the satisfaction declared in the **capability's own package**;
+5. **declaration order**, for candidates declared in one package; otherwise the qualified name.
+
+"Canonical satisfaction" means rule 4 and nothing more. Built-in candidates (§6.6) count as declared in the standard library package, in the order of the §6.6 table.
+
+These rules rank candidates of *different* data types. Two satisfactions of the same (type, capability) never reach them (§6.5.2, Rule 8.4).
+
+Rules 1 and 2 apply at link, where the lock file is. A choice point decided at package compile has no lock file, and rules 3–5 decide it. Such a choice is invisible to the program (Rule 5.1.1, item 3).
+
+The only error is zero viable candidates (§6.5.3).
+
+Reason: a tie between correct candidates is a question of speed, not of meaning, so stopping the build for it gives the user work without protecting anything. The lock file makes the outcome reproducible and visible instead.
 
 #### 6.5.6 Commit
 
-The selected representation is recorded at the origination site as a phase-indexed view (`docs/references/scala3-compiler-reference.md` §4.4), together with its witness: the value witness and the capability tables that code without knowledge of the representation will use (`spec/compilation_model.md` §4). Subsequent passes — match-to-fold desugaring, Perceus insertion, code generation — see the concrete representation wherever the origin is known to them, and the witness elsewhere.
+An **early choice** (package compile) is compiled into the package's code: code that knows it uses the layout directly.
 
-Committing a representation re-checks every abstract constructor-requirement call bound to it (a `Cap.ctor(args)` left unresolved by §8.5) against the chosen variant's fields: a field may refine its requirement parameter (Rule 8.1.a), so an argument accepted by the requirement can be rejected by the representation. Such a rejection is a type error at the call site.
+A **late choice** (application link) is committed by the link step. The object code of each package refers to the witness operations, table entries and accessors of the choice point as undefined symbols. The linker binds them to the chosen satisfaction (`spec/compilation_model.md` Rules CM8.2, CM3.7), with no hidden parameter, no indirect call and no recompilation. The link step records the choice in the lock file (Rule CM8.5). In a release build the specialiser then builds clones for the chosen types (Rule CM8.7).
+
+Either way, the choice is recorded with its witness: the value witness and the capability tables that code without knowledge of the representation uses (`spec/compilation_model.md` §4). Later passes see the concrete representation where the choice is known to them, and the witness elsewhere.
+
+The arguments of every abstract constructor call bound to the choice point fit the chosen variant's fields. Viability guarantees this (§6.5.3, refined fields), so a commit never reports a type error.
 
 #### 6.5.7 Phase placement
 
+At **package compile**, selection of the choice points that do not escape runs after:
+
 | Runs after | Provides input to selection |
 |---|---|
-| Namer (§10.1) | Symbol table |
-| Base typer | Bound sets per value |
-| Capability closure (§6.2) | `extends`-flattened bound sets |
-| Alias distribution (§5.8) | Alias-expanded bound sets |
+| Namer (§10.1), typer | Symbol table, choice points and their bound sets |
+| Capability closure (§6.2), alias distribution (§5.8) | Closed bound sets |
+| Static prover (`spec/properties.md`) | Refinement-cap viability |
 | QTT quantity inference (§7.3.b) | Quantity context |
-| Property verification | Refinement-cap viability |
+| Lowering to polymorphic Core; demand and memory inference | Lifetime classes, escape facts |
+| Cost checker (`spec/cost.md`) | Cost contracts met by each satisfaction |
 
-| Runs before | Consumes selection output |
+It writes the summaries of the remaining choice points into the interface tier.
+
+At **application link**, selection of the remaining choice points runs on summaries, before the generation of accessors (`spec/compilation_model.md` Rule CM3.7) and of clones (Rule CM8.7).
+
+| Consumes selection output | How |
 |---|---|
-| Specialisation (`spec/compilation_model.md` §5) | Clones are keyed by the witnesses of the representations chosen here; selection is not repeated for a clone |
-| Match-to-fold desugaring | Emits auto-derived `fold` per chosen rep |
-| Perceus insertion | Knows heap-vs-stack from chosen rep |
-| Code generation | Emits LLVM IR per chosen rep |
+| Specialisation (`spec/compilation_model.md` §5, Rule CM8.7) | Clones are keyed by the witnesses of the chosen representations; selection is not repeated for a clone |
+| Match-to-fold desugaring, Perceus insertion, code generation | Use the representation where the choice is early; use the witness and the symbols bound at link where it is late |
 
-#### 6.5.8 Caching and SCC unification
+#### 6.5.8 Caching, the lock file and SCC unification
 
-Bound sets are **canonicalised** (sorted, deduplicated, alias-expanded, `extends`-flattened) and hashed. Two values of one package with the same canonical bound set, quantity context and lifetime class share their selection result — selection is computed once per canonical key. The canonical order of a bound set is also the order of capability tables among a function's hidden parameters (`spec/compilation_model.md` Rule CM4.3).
+Bound sets are **canonicalised**: sorted, deduplicated, alias-expanded and `extends`-flattened. Selection depends on the choice point's canonical bound set, usage vector, quantity context, lifetime class and pool, and on the measured costs. Two choice points that agree on all of these get the same result. A choice point is never re-scored when none of them changed. The canonical order of a bound set is also the order of capability tables among a function's hidden parameters (`spec/compilation_model.md` Rule CM4.3).
 
-Mutually recursive `data` types (§7.5) form a strongly-connected component on the data-dependency graph. Selection runs **once per SCC**, not once per member; all members of a recursive group adopt a unified representation strategy (a co-recursive group with one shared header layout when its values are `Heap`). A future relaxation may allow per-member rep within an SCC when the inter-member references are tail-position only.
+The lock file records, per choice point of the application, the chosen satisfaction and its score. It also holds any pin the user wrote (`spec/compilation_model.md` Rule CM8.5). Continuous integration builds from the lock file and does not re-measure.
+
+Mutually recursive `data` types (§7.5) form a strongly-connected component on the data-dependency graph. Their field-local choice points are selected **once per SCC**, not once per member. All members of a recursive group adopt one representation strategy: a co-recursive group with one shared header layout when its values are `Heap`. A future relaxation may allow per-member representations within an SCC when the inter-member references are in tail position only.
 
 #### 6.5.9 Open questions
 
-- ~~**Cross-function rep flow.**~~ Resolved in v0.4.3. A generic function has no representation of its own: its baseline version handles every representation through witnesses, and a clone is compiled for the representations of its key (`spec/compilation_model.md` §3, §5). Which clones exist is not observable (Rule CM5.2).
-- **Ties created by a dependency.** A package that adds a satisfaction can create a tie (§6.5.5) in an importer the next time the importer is compiled. This is a source-level change for the importer, not an ABI change (`spec/compilation_model.md` Rule CM6.7).
-- ~~**Heuristic stability.**~~ Resolved in v0.4.5 — the Lipschitz bound `K ≤ 0.4 < ε = 0.5` is now part of Rule 6.5.4 (the requirement `K < ε` is normative; the numeric values are provisional). Single-bound extensions cannot flip a clear winner.
+- ~~**Cross-function rep flow.**~~ Resolved in v0.4.3. A generic function has no representation of its own (`spec/compilation_model.md` §3, §5).
+- ~~**Ties created by a dependency.**~~ Resolved in v0.5.0. A tie no longer halts (Rule 6.5.5). A satisfaction that a dependency adds changes a choice only if it wins by more than ε, and the change shows in the lock file.
+- ~~**Heuristic stability.**~~ Resolved: the lock file's hysteresis (Rule 6.5.5, rule 2), and `K < ε` for the fallback score (Rule 6.5.4).
 - **Stack-allocated recursive data** (deferred). Recursive `data` declarations whose `of` value-params are concrete and bound the recursion depth could be added as a sixth built-in candidate (stack-flat struct), competing alongside the heap-allocated co-recursive group. Targeted for v0.5+ once the pass is implemented and the win is measured against a representative workload.
 
 ### 6.6 Built-in representation candidates (resolves OQ4)
@@ -674,7 +775,7 @@ The illustrative set for v0.2:
 | Auto-tagged-union for a sum cap | The sum cap's full method set (auto-implemented from the cap's `Self.fn` constructor requirements) |
 | Auto-flat-struct for a product cap | The product cap's full method set |
 
-**Rule 6.6 (priority).** During representation selection, built-in candidates have **equal priority** to user-`satisfies`-mapped data types. If a user-defined data type can satisfy the same bound set, it competes alongside the built-in candidates; the compiler picks among them by **allocation and performance heuristics**, with PGO refinement when profile data is available.
+**Rule 6.6 (priority).** During representation selection, built-in candidates have **equal priority** to user-`satisfies`-mapped data types. If a user-defined data type can satisfy the same bound set, it competes alongside the built-in candidates. The score of Rule 6.5.4 and the disambiguation of Rule 6.5.5 choose among them. For rule 4 of Rule 6.5.5, a built-in candidate counts as declared in the standard library package.
 
 The full list of built-ins is implementation-defined and may grow with the compiler's capability-recognition library; the table above is normative only for the categories listed.
 
@@ -958,11 +1059,11 @@ Maybe satisfies Optional:
     Nothing as none
 ```
 
-(`Optional` here is the canonical sum cap from `examples/06_functor_monad.fixed`, declaring `Self.fn some(value: Part) -> Self` and `Self.fn none -> Self` as constructor requirements. The simplified `Optional` in `examples/02_collections.fixed` has no `Self.fn` requirements and is satisfied by auto-derivation alone — see §7.4.)
+(`Optional` here is the full sum cap from `examples/06_functor_monad.fixed`, declaring `Self.fn some(value: Part) -> Self` and `Self.fn none -> Self` as constructor requirements. The simplified `Optional` in `examples/02_collections.fixed` has no `Self.fn` requirements and is satisfied by auto-derivation alone — see §7.4.)
 
 **Rule 8.1.a (Variant-to-requirement).** Each `Variant as name` line provides a data variant as the implementation of one of the cap's `Self.fn` constructor requirements. The variant's field types must match (or be a refinement of) the corresponding requirement's parameter types, position by position. Trailing fields that declare a default value may be absent from the requirement: calling the requirement constructs the variant with those defaults.
 
-A field may *refine* its parameter: `cons(h: Part, t: is Sequencing of Part)` may map to a variant whose `tail` is `List of A`, because `List` satisfies `Sequencing`. This stays sound because a call is typed against the variant it resolves to (§8.5): `Sequencing.cons(x, t)` resolving to `List.Cons` checks `t` against `List of A`, at the call site. A requirement call that resolves to no constructor stays abstract until representation selection, which must re-check its arguments against the chosen variant's fields (§6.5).
+A field may *refine* its parameter: `cons(h: Part, t: is Sequencing of Part)` may map to a variant whose `tail` is `List of A`, because `List` satisfies `Sequencing`. This stays sound because a call is typed against the variant it resolves to (§8.5): `Sequencing.cons(x, t)` resolving to `List.Cons` checks `t` against `List of A`, at the call site. A requirement call for a type parameter stays abstract and resolves at the caller. A requirement call that is a choice point admits only candidates whose fields its arguments fit (§6.5.3).
 
 ```
 cap TaskQueue:
@@ -1011,7 +1112,7 @@ AlwaysRight satisfies Either of (L, R):
 
 Calling `Either.right(v)` at a position whose expected type resolves to `AlwaysRight` selects the `right` mapping and constructs an `AlwaysRight(v)`. Calling `Either.left(err)` at the same position has no implementation in `AlwaysRight` — the compiler emits a **runtime panic** at that call site.
 
-**Rule 8.2 (Impossible — runtime panic semantics).** Mapping `impossible as name` records that the satisfying type provides no implementation of the constructor requirement `name`. The compiler does **not** statically verify that the requirement is unreachable on this satisfying type. The satisfying type's capability table holds, for `name`, an entry that panics with `panic: impossible constructor 'name' invoked on <SatisfyingType>` (`spec/compilation_model.md` Rule CM4.2). A call to `Cap.name(...)` that reaches this satisfying type, directly or through a witness, therefore panics.
+**Rule 8.2 (Impossible — runtime panic semantics).** Mapping `impossible as name` records that this satisfaction provides no implementation of the constructor requirement `name`. The compiler does **not** statically verify that the requirement is unreachable. The capability table of the satisfaction holds, for `name`, an entry that panics with `panic: impossible constructor 'name' invoked on <SatisfyingType>`, followed by the satisfaction's name if it has one (`spec/compilation_model.md` Rule CM4.2). A call to `Cap.name(...)` that reaches this satisfaction, directly or through a witness, therefore panics. Another satisfaction of the same pair may implement `name` (Rule 8.4).
 
 Static guarantees that the panic is unreachable are the user's responsibility, expressible as `prop` declarations on the surrounding code per `spec/properties.md`. For instance:
 
@@ -1021,7 +1122,7 @@ fn unwrap_right(x: AlwaysRight of (L, R)) -> R =
     x.fold((_) -> unreachable, (r) -> r)
 ```
 
-Why runtime panic rather than static rejection? Static reachability analysis across `satisfies` declarations is non-trivial. Satisfactions are a closed world only per link unit (§8.4), so a static check would have to run when packages are linked, over calls made through witnesses. Runtime panic gives the same operational guarantee (the impossible constructor never returns a real value) without forcing the typer into expensive reachability reasoning. Users who want a static guarantee can add a `prop` (`spec/properties.md`); a verified prop discharges the panic per Rule P9.2.
+Why runtime panic rather than static rejection? Static reachability analysis across `satisfies` declarations is non-trivial. The satisfactions are a closed set only once the link unit is known, so a static check would have to run when packages are linked, over calls made through witnesses. Runtime panic gives the same operational guarantee (the impossible constructor never returns a real value) without forcing the typer into expensive reachability reasoning. Users who want a static guarantee can add a `prop` (`spec/properties.md`); a verified prop discharges the panic per Rule P9.2.
 
 ### 8.3 Method-body form
 
@@ -1037,36 +1138,105 @@ Maybe satisfies Optional:
 
 This is required when the auto-derivation rules (§7.4) cannot uniquely produce the cap's required methods (e.g., when multiple right-bias choices are available; see `docs/plans/implementation-plan.md` §"Right-bias and ambiguity").
 
-### 8.4 Modular import
+### 8.4 Satisfactions, names and `using`
 
-A `satisfies` declaration is **modular**: it must be brought into scope at use sites via `use`:
+**Rule 8.4 (Satisfactions, names and `using`).** A package may declare a satisfaction for any data type and capability, including ones it does not own. A link unit may hold several satisfactions of one pair (data type, capability with its `of` arguments). Coherence per link unit, required by earlier drafts, is withdrawn.
+
+A satisfaction may be **named**:
 
 ```
-use std.maybe.Maybe satisfies Optional
+Money satisfies Ord named ByAmount:
+    fn compare(other: Self) -> is Ordering = self.amount.compare(other.amount)
 ```
 
-This single declaration imports both `Maybe` (the type) and the satisfaction binding it to `Optional`. Without the `satisfies` clause, only the type is imported; satisfaction is invisible.
+(`named` is provisional, `spec/syntax_grammar.ebnf` §9.) A satisfaction's name lives with the type names of its package and is imported by `use` like one (`use shop.money.ByAmount`). An unnamed satisfaction can be chosen only by the levels of the resolution order below that name no satisfaction (`use` of the pair, the only one in the link unit).
 
-**Visibility is scoped; the satisfaction is unique (Rule 8.4).** A satisfaction is usable only where a `use` brings it into scope, so different modules may see different sets of satisfying types for one capability, and `Cap.ctor` may resolve to different data types in different modules — as long as no single use site has more than one resolution in scope (otherwise §8.5 ambiguity applies).
+A satisfaction is **in scope** at a site where a `use` brings it in, or when it is declared in the site's own package:
 
-What may **not** differ is the satisfaction of one pair: within a link unit there is at most one `T satisfies C` for a given data type `T` and capability `C` with its `of` arguments (`spec/compilation_model.md` Rule CM6.6). Two packages that each declare one cannot be linked together. Without this, a value built under one satisfaction could be used under another — a set ordered by one `Ord` and searched by another — and values carry no record of the satisfaction they were built under. Earlier drafts had no coherence requirement at all.
+```
+use std.maybe.Maybe satisfies Optional        // the type and the satisfaction
+use shop.money.Money satisfies Ord named ByAmount
+```
+
+Without the `satisfies` clause, a `use` imports only the type, and its satisfactions are not in scope.
+
+**Resolution.** A site that needs the satisfaction of a pair (`T`, `C`) finds it by this order, innermost first. A site needs one when it calls a member of `C` on a value of type `T`, passes a `T` where `C` is a bound (the satisfaction becomes the witness), calls a constructor of `C` that resolves to `T` (§8.5), or applies a data type whose parameter is bound by `C` to `T` (Rule 8.4.a). The first level that names a satisfaction of the pair decides.
+
+1. `using` at the call site: `sort(xs) using ByAmount`;
+2. `using` in a type: `Set of Money using ByAmount`;
+3. `using` at file or package scope;
+4. the one satisfaction of the pair in scope, by `use` or by declaration in the site's package;
+5. `using` in the application root, as the default of the link unit;
+6. the only satisfaction of the pair in the link unit.
+
+Otherwise the site is ambiguous, and that is an error.
+
+A `using` names satisfactions, and each name determines its pair. At the call site it covers every resolution made in the call expression, including its arguments, unless an inner `using` decides first. In a type it covers the whole type expression it is written in (`spec/syntax_grammar.ebnf` §10). A top-level `using` declaration in a source file applies to that file. Package scope is a `using` declaration in the file `package.fixed` at the root of the package. The application root is that file in the package that declares `main`. A level that names two satisfactions of one pair is itself ambiguous.
+
+**The ambiguity error halts on purpose.** Two satisfactions of one pair differ in results, not in speed. The score, the lock file and declaration order (Rule 6.5.5) therefore never choose between them. The message states the level at which the ambiguity arose, suggests a named `using`, and lists as examples the satisfactions of the pair in scope:
+
+```
+error: two satisfactions of (Money, Ord) are in scope, and nothing chooses between them
+  --> report.fixed:12:5   (level 4: in scope by `use`)
+   |   shop.money.ByAmount   (use at report.fixed:2)
+   |   shop.money.ByDate     (use at report.fixed:3)
+  help: write `using ByAmount` at the call, in the type, or at the top of the file
+```
+
+**Rule 8.4.a (The satisfaction is part of the type).** For a bound declared on a data type's own parameter (`data Tree of K is Ord`), the elaborated type records the satisfaction that served the bound: `Tree of Money[Ord = ByAmount]`. The record is invisible when the pair has only one satisfaction in the link unit. Two types that differ only in the recorded satisfaction are different types. Mixing them is a type error that names both satisfactions and suggests `using`.
+
+Reason: a value built under one satisfaction must not be used under another. A set ordered by one `Ord` and searched by another gives wrong answers, and its cells carry no record of the order. The type carries it instead.
+
+A bound on a function's type parameter (`fn sort(xs: is Sequencing of (T is Ord))`) is not recorded in a type. The satisfaction is the witness passed for `T`, chosen at each call by the resolution order. A function whose result must keep its argument's satisfaction says so through a data type: `fn insert(s: Set of K, k: K) -> Set of K` returns the same `Set of K[Ord = …]` it received.
+
+A field-local choice point (Rule 4.1.a) is bound once per link unit, so a satisfaction recorded inside it is fixed for the whole program. A `using` in a type can name a satisfaction only for the type's parameters, never for its field-local choice points.
+
+**Rule 8.4.b (Deferred sites).** A site in a library that sees several satisfactions of a pair and has no `using` is not an error in the library. It is bound at link by levels 5 and 6, and reported as a note. If neither decides, the link fails with the ambiguity error, naming the library site. A site that sees no satisfaction of the pair is a type error, as before. A site in the application package that levels 1–4 do not decide is resolved the same way, at its link.
+
+*(Rule 8.4.b is the author's choice in P6 D12.)*
+
+**Worked examples.**
+
+```
+data Money(amount: i64, date: Date)
+
+Money satisfies Ord named ByAmount:
+    fn compare(other: Self) -> is Ordering = self.amount.compare(other.amount)
+Money satisfies Ord named ByDate:
+    fn compare(other: Self) -> is Ordering = self.date.compare(other.date)
+
+fn biggest(xs: is Sequencing of Money) -> is Sequencing of Money =
+    sort(xs) using ByAmount                  // level 1
+
+let by_amount: Set of Money using ByAmount = Set.empty   // level 2: Set of Money[Ord = ByAmount]
+let by_date: Set of Money using ByDate = Set.empty       //          Set of Money[Ord = ByDate]
+
+fn merge(a: Set of Money using ByAmount, b: Set of Money using ByAmount) -> Set of Money using ByAmount = ...
+merge(by_amount, by_date)
+// ERROR: Set of Money[Ord = ByDate] is not Set of Money[Ord = ByAmount];
+//        help: build `by_date` `using ByAmount`, or convert it explicitly
+```
+
+An application sets a default for a dependency. A library `reports` sorts `Money` with no `using`, and sees both satisfactions. The site is deferred (Rule 8.4.b). The application's `package.fixed` holds
+
+```
+use shop.money.ByAmount
+using ByAmount                           // level 5: the default of the link unit
+```
+
+and the link binds the library's site to `ByAmount`, with a note naming the site.
 
 ### 8.5 Constructor resolution
 
-A call `Cap.ctor(args...)` resolves to a concrete data constructor as follows:
+A call `Cap.ctor(args...)` resolves by the **expected type** at the call site: the function's return type, the annotated type of a `let`, or the parameter type at a call.
 
-1. Collect the in-scope `satisfies` declarations for `Cap`.
-2. Filter by **expected type** at the call site:
-   - Function return type: `fn f(...) -> is Optional of A: Optional.some(x)` — the call resolves against types that satisfy `Optional of A`.
-   - Assignment LHS type: `let y: is Optional of u64 = Optional.some(42)`.
-   - Argument expected type at a function call.
-3. If exactly one satisfying type matches, resolution succeeds.
-4. If zero match, the call is a type error.
-5. If multiple match, the typer halts with an ambiguity error and emits copy-pasteable disambiguation suggestions per `docs/plans/implementation-plan.md` §"Ambiguity resolution via compiler suggestions."
+1. **A concrete data type** `T` (`let y: Maybe of u64 = Optional.some(42)`). The call resolves to the variant that the satisfaction of (`T`, `Cap`) maps to `ctor`. Rule 8.4 picks the satisfaction. If no satisfaction of the pair is in scope, the call is a type error.
+2. **A type parameter** `R` of the enclosing function (`-> R is Optional of u64`). The call stays abstract. It resolves at the caller, through the capability table in `R`'s witness (Rule 5.1.2).
+3. **An anonymous bound** (`-> is Optional of u64`, a field, `let y: is Optional of u64`). The call is a choice point (Rule 5.1.1, item 2), and representation selection decides it (§6.5). If the body also constructs a data type directly for the same result, that type is the choice (Rule 5.1.2). Several satisfying types are not an ambiguity here: they are the candidates. The only failure is zero viable candidates (§6.5.3).
+
+The call's arguments are typed against the requirement's parameters. In case 1 they are also typed against the variant's fields, which may refine the parameters (Rule 8.1.a). In case 3 that check is part of viability (§6.5.3). In case 2 the caller's type fixes the variant.
 
 Direct data construction (`Maybe.Just(42)`) bypasses resolution: it always produces a value of the named data type, regardless of which caps are in scope.
-
-**Results typed by a capability bound.** When the expected type in step 2 is a function's return type, the outcome decides who chooses the representation of the result: if every returned value comes from a constructor call that this section leaves unresolved, the caller chooses and passes the witness; if a call resolves here, or the body constructs data directly, the function chooses and returns the witness with the value (`spec/compilation_model.md` Rule CM4.5).
 
 #### 8.5.1 Refinement-narrowed expected types (Rule 8.5.1) — resolves X1, L1
 
@@ -1076,7 +1246,7 @@ When the expected type contains refinement caps (Marker classification, per §6.
 - `E_base` — caps with constructor requirements (sum, product, recursive, capability-only).
 - `E_ref` — refinement caps (Marker class, including caps produced by cap-generators per Rule 6.3.0).
 
-**Stage B — Resolve against the residual.** Run §8.5's resolution against `E_base` only. Refinement caps are obligation-only and have no satisfactions to filter against; including them in step 2 of §8.5 produces empty filter results.
+**Stage B — Resolve against the residual.** Run §8.5's resolution against `E_base` only. Refinement caps are obligation-only and have no satisfactions to filter against; including them in the expected type of §8.5 leaves no satisfying type.
 
 **Stage C — Re-apply refinements as obligations.** The chosen constructor's result is a value of the satisfying type, which by virtue of having satisfied `E_base` is well-typed. The refinement caps in `E_ref` become **prop obligations** on that result, discharged by the verifier per `spec/properties.md` §7. If `E_base` is empty (the expected type is *only* refinement caps), resolution fails with `error[E???]: refinement caps have no constructors; the expected type must include a base capability with a constructor requirement`.
 
@@ -1086,7 +1256,8 @@ fn try_make(i: u64) -> is Optional of u64 + between(1, 99) =
 //  ^^^^^^^^^^^^^^^^
 //  Stage A: E_base = { Optional of u64 }, E_ref = { between(1, 99) }
 //  Stage B: resolve `Optional.some(i)` against `is Optional of u64` →
-//           e.g. Maybe.Just(i) via in-scope satisfaction.
+//           a choice point (§8.5, case 3); say selection picks Maybe,
+//           giving Maybe.Just(i).
 //  Stage C: Maybe.Just(i) is a value of `Maybe of u64`. The `between(1, 99)`
 //           prop becomes an obligation on i (i.e. 1 <= i && i <= 99). The
 //           prop verifier discharges it from the call site's context.
@@ -1095,6 +1266,29 @@ fn try_make(i: u64) -> is Optional of u64 + between(1, 99) =
 This rule extends to nested refinements (e.g. `is Optional of (u64 + between(1, 99))` — the inner refinement `between(1, 99)` is stripped from the *type-arg* before resolving against `is Optional of u64`, then re-applied as an obligation on the contained value at use sites).
 
 A refinement-only expected type (e.g. `is between(0, 10)` alone) is rejected: refinement caps must compose with at least one base capability (or a primitive type) so a constructor exists.
+
+### 8.6 Visibility (Rule 8.6)
+
+A declaration is private to its package by default. `pub` makes a `fn`, `data`, `cap`, `effect`, type alias or `satisfies` declaration public: other packages may name it (`spec/compilation_model.md` Rule CM6.2). A `use` declaration and a `using` declaration are never public.
+
+There is no opaque-type feature. `pub data` exposes its variants and their fields. To hide a representation, make the capability public, keep the `data` private, and let its values leave the package as a choice point (`-> is C`, Rule 5.1.2):
+
+```
+pub cap Stack:
+    Self.fn empty -> Self
+    fn push(x: i64) -> Self
+
+data ArrayStack(items: is Sequencing of i64)    // private
+ArrayStack satisfies Stack: ...                  // private
+
+pub fn new_stack() -> is Stack = Stack.empty     // the caller sees only Stack
+```
+
+**Rule 8.6.a (Private names in public signatures).** A public declaration must not name a private one in its signature, in the fields of its variants, or in its bounds. A public function that returns a value of a private data type declares the result as `-> is C`. Reason: an importer could not name the type, and an importer is compiled from the interface alone.
+
+A private satisfaction counts only inside its package: as a candidate for the package's own choice points (§6.5.2), and in the resolution of Rule 8.4. A `pub` satisfaction of a private data type is allowed. It makes the type a candidate at choice points of the whole link unit, and code outside the package then uses it only through the capability.
+
+A private function needs no floor entry. A private data type needs no accessors (`spec/compilation_model.md` Rule CM3.7).
 
 ## 9. Effects (brief)
 
@@ -1131,7 +1325,7 @@ Where `<:` is subtyping (§10.4). Prototypes may be:
 When typing an expression `e` against an expected type that includes a capability bound `is C`, the typer:
 
 1. Synthesizes `e`'s natural type `T`.
-2. Verifies that some satisfaction binds `T` to `C` (directly, transitively via `extends`, or via auto-derivation §7.4).
+2. Resolves the satisfaction of (`T`, `C`) by Rule 8.4 (directly, transitively via `extends`, or via auto-derivation §7.4).
 3. Records the satisfaction so subsequent method calls on `e` can resolve to `C`'s methods.
 
 ### 10.4 Subtyping
@@ -1148,7 +1342,7 @@ Subtyping in Fixed is intentionally narrow:
 
 (All OQ1–OQ6 from v0.1 are resolved in this version; their resolutions are folded into the relevant sections above. OQ7 is pre-resolved and deferred to `spec/properties.md`.)
 
-- **OQ-T2 — Type variables of variant fields.** Rule 4.1 lets a variant field introduce a type variable (`RGB(red: N is Numeric, green: N, blue: N)` in a `data Color` that has no `of` clause; `spec/stdlib.md` has fields with anonymous bounds). It is not stated whether such a variable is an implicit parameter of the data type or is chosen per value. If per value, each cell must store the witness of the variable (`spec/compilation_model.md` OQ-CM4), and Rules 5.9, 7.4.c and 7.4.d, which speak of parameters declared in `of`, need a second case.
+- ~~**OQ-T2 — Type variables of variant fields.**~~ Closed in v0.5.0 by Rule 4.1.a: such a variable, and an anonymous bound in a field, is a choice point bound once per link unit (P6 D3).
 
 **Pre-resolved deferrals (lift into the indicated spec doc when drafted):**
 
@@ -1178,5 +1372,7 @@ Subtyping in Fixed is intentionally narrow:
 | `spec/properties.md` (TBD) | `prop` semantics, static verification, PBT fallback, `forall`/`implies` |
 | `spec/pattern_matching.md` (TBD) | `match → fold` desugaring, exhaustiveness |
 | `spec/memory_management.md` | Lifetime classes, regions, Perceus RC insertion, drop specialization; consumes §6.5 output |
+| `spec/compilation_model.md` | Witnesses, choice points, binding at link, lock file, packages; consumes §5.1.1, §6.5, §8.4 |
+| `spec/diagnostics.md` | `inspect`, `trace`, interpolation in diagnostic sinks (Rule 5.1.3) |
 | `docs/references/scala3-compiler-reference.md` | Reference patterns from dotc — bidirectional typing, Recheck pattern |
 | `docs/plans/implementation-plan.md` | Phase plan, open design questions migrated above |

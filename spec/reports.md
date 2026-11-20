@@ -1,21 +1,28 @@
 # Fixed Reports: Coverage, Cardinality and the Tool Interface
 
-**Status:** Draft v0.1
-**Specifies:** two analyses the compiler runs and reports — coverage of code by verification, and cardinality of types — and the interface external tools use.
+**Status:** Draft v0.2
+**Specifies:** two analyses the compiler runs and reports — coverage of code by verification, and cardinality of types — the report of what the link step chose, the files a build reads besides its sources, and the interface external tools use.
 **Last revised:** 2026-11-20
 
-**Why this document exists.** Both analyses were proposed as optional plugins. Both turned out to be things the compiler needs for itself: counters are the input of profile-guided specialisation, and counting inhabitants is already done three times (exhaustiveness, generators, layout). They are therefore compiler passes with reports, and tools outside the compiler read those reports and the package interface. The decisions are recorded in `docs/decisions/P5-reports-and-tools.md`.
+**Changes from v0.1** (`docs/decisions/P6-resolution-round-2026-11-20.md`, D4, D6, D10).
+- **Counters are the measurement lane's input** (Rule RP3.3). Region and request counters are the demand side of `spec/properties.md` Rule P7.9; they go to the profile file and never license a fact.
+- **The lock file and the profile file** (new Rule RP5.3) are build inputs and things tools read (Rule RP5.1). A build is a function of its sources, its dependencies, the lock file and the profile file; it never measures.
+- **The link report** (new Rule RP5.4, `--explain-selection`): per choice point the candidates, their scores, the disambiguation rule that decided and whether the data was measured or static.
+- **Cardinality of choice points** (Rule RP4.2): symbolic until link, a number after it. An unbounded type variable still admits no inspection, so the parametric count is unchanged.
+
+**Why this document exists.** Both analyses were proposed as optional plugins. Both turned out to be things the compiler needs for itself: counters are the input of measured selection and specialisation (`spec/properties.md` Rule P7.9), and counting inhabitants is already done three times (exhaustiveness, generators, layout). They are therefore compiler passes with reports, and tools outside the compiler read those reports and the package interface. The decisions are recorded in `docs/decisions/P5-reports-and-tools.md`.
 
 ## 1. Scope
 
-This document specifies coverage (§3), cardinality (§4) and the tool interface (§5). It does not specify the report of `spec/memory_management.md` §19, to which `spec/compilation_model.md` Rule CM5.8 and `spec/cost.md` Rule CT6.4 add; it only places the new reports in the same family.
+This document specifies coverage (§3), cardinality (§4), and the tool interface with the files and reports it reads (§5). It does not specify the report of `spec/memory_management.md` §19, to which `spec/compilation_model.md` Rule CM5.8 and `spec/cost.md` Rule CT6.4 add; it only places the new reports in the same family.
 
 ## 2. Dependencies
 
-- `spec/properties.md` — §7 (verification, statuses), §8 (generators), Rule P9.2 (`unreachable` discharge).
-- `spec/compilation_model.md` — clones (§5), the interface tier (§7).
+- `spec/properties.md` — §7 (verification, statuses), Rule P7.8 (lanes), Rule P7.9 (measurement during testing), §8 (generators), Rule P9.2 (`unreachable` discharge).
+- `spec/compilation_model.md` — clones (§5), the interface tier (Rule CM7.1), choice points (Rule CM8.1), usage summaries (Rule CM8.3), selection at link (Rule CM8.4), the lock file (Rule CM8.5), the profile file (Rule CM8.6).
+- `spec/cost.md` — Rule CT8.2 (the score is usage × cost).
 - `spec/pattern_matching.md` — §6 (exhaustiveness).
-- `spec/type_system.md` — §6.4 (refinement capabilities), §6.5 (representation selection).
+- `spec/type_system.md` — §6.4 (refinement capabilities), §6.5 (representation selection), Rule 6.5.5 (disambiguation).
 - Implementation plan, Phase 6 (profile data).
 
 ## 3. Coverage
@@ -36,11 +43,11 @@ Line coverage answers one question badly. Fixed separates two.
 
 | Status | Meaning |
 |---|---|
-| `unreachable` | A `proved` prop discharges every path to it (Rule P9.2). It is not counted in any total. |
+| `unreachable` | A prop in the facts lane (`proved` or `assumed`, `spec/properties.md` Rule P7.8) discharges every path to it (Rule P9.2). It is not counted in any total. |
 | `executed` | Its counter is non-zero after the property-based tests of the build ran. |
 | `not executed` | Otherwise. |
 
-**Is the declaration constrained by a property?** Each function and member has a *specification status*: the strongest status (`proved`, then `tested`, then `assumed`; Rule P7.7) among the accepted props whose body calls it, or calls a function that (transitively) calls it. A declaration no prop reaches in this way is `unconstrained`.
+**Is the declaration constrained by a property?** Each function and member has a *specification status*: the strongest status (`proved`, then `tested`, then `assumed`, in the order of what each guarantees; Rule P7.7) among the accepted props whose body calls it, or calls a function that (transitively) calls it. A declaration no prop reaches in this way is `unconstrained`.
 
 The two are independent. The static prover does not look inside function bodies (Rule P7.2), so a `proved` prop constrains a function without executing any region of it; and a region can be executed by a test that asserts nothing about it.
 
@@ -48,7 +55,9 @@ The two are independent. The static prover does not look inside function bodies 
 
 In a test build, and in a build instrumented for profiling, the compiler puts a counter at the entry of every region. Counters are inserted in the Core of the baseline version, before specialisation, so every clone carries the counters of the regions it copies, labelled with its key (`spec/compilation_model.md` Rule CM5.1).
 
-The same build counts, per call site, which clone key the call requested. Region counters and request counters together are the profile that Phase 6 reads: the request counts are the measured `weight` of Rule CM5.4.
+The same build counts, per call site, which clone key the call requested, and, per choice point (Rule CM8.1), how often each capability method was called on its values.
+
+These counters are the **demand side of the measurement lane** (`spec/properties.md` Rules P7.8, P7.9). The build writes them to the profile file (Rule CM8.6): the request counts are the measured `weight` of Rule CM5.4, and the per-method counts are the measured `usage` of `spec/cost.md` Rule CT8.2. They choose among alternatives that are all correct; no count licenses a fact. A test build's counters rank below a production profile's (Rule P7.9).
 
 Instrumentation must not disable a mandatory specialisation (Rule CM5.5): a fused loop keeps the counters of the step bodies it contains.
 
@@ -84,10 +93,14 @@ The **cardinality** of a type is the number of values it has.
 
 A type variable bounded by capabilities (`x: T is C`) has no number: the representation is not the programmer's, and across a package edge it is never known. Its cardinality is a **symbol**, and the cardinality of a signature that mentions it is an expression in such symbols.
 
+This holds for a named type parameter (bound per use) and for a type variable whose bound makes it a choice point (bound per link unit, Rule CM8.1) alike, with one difference: a choice point gets a number at application link. Before link, a package's interface and the report give the symbol; after link, the link report (Rule RP5.4) gives the number of the chosen type. The number describes the chosen representation and does not change the symbolic bound in the interface, which must stay valid for every choice.
+
 Substituting a number for the symbol over-counts the implementations of a polymorphic signature, because a polymorphic function can only use what its bounds provide. The report therefore gives two things for a signature with bounded type variables:
 
 1. the **symbolic bound**: the expression of Rule RP4.1 with the symbols left in place;
 2. the **parametric count**, only where it is finite: the number of distinct terms of the result type that can be built from the parameters and the members of the bounds. It is finite when no member of the bounds can be applied to its own result without end. Otherwise the report says `law-bounded` and gives no number: counting terms up to the capabilities' props is not decidable in general.
+
+**An unbounded type variable admits no inspection.** `show`, `==` and `clone` on a value of an unbounded type parameter are type errors (`docs/decisions/P6-resolution-round-2026-11-20.md` D10), and diagnostics, which print any value, return nothing to the program (`spec/diagnostics.md` Rule DG3.3). So `T -> T` with `T` unbounded has one implementation, and the parametric count is as above. The alternative debated was universal `show` and `==`: every type variable would then count as bounded by `Show + Eq`, the count would still exist but would be the count for that bound, and every signature's count would grow. It was rejected.
 
 ### 4.3 Who uses the count (Rule RP4.3)
 
@@ -109,7 +122,8 @@ Counting inhabitants is one service with several users inside the compiler:
 The compiler has no plugin interface. An external tool reads:
 
 - the **interface tier** of a compiled package, and the **body tier** where a package ships one (`spec/compilation_model.md` §7);
-- the **reports**: `--explain-memory`, `--explain-cardinality` and `verify --coverage`, each with `--format json`.
+- the **reports**: `--explain-memory`, `--explain-cardinality`, `--explain-selection` (Rule RP5.4) and `verify --coverage`, each with `--format json`;
+- the **lock file** and the **profile file** (Rule RP5.3).
 
 A tool that only reads cannot change what a program means or whether it compiles, and it does not break when a compiler pass changes.
 
@@ -119,20 +133,49 @@ An analysis is a compiler pass when a compiler decision consumes its result. Car
 
 A way for a library to add a checked discipline to the type system (a third grading beside quantities and effect rows) is not specified.
 
+### 5.3 The lock file and the profile file (Rule RP5.3)
+
+Two files besides the sources are inputs of an application build:
+
+- The **lock file** (`spec/compilation_model.md` Rule CM8.5) holds, per choice point bound at link, the satisfaction chosen, its score, and any pin the user wrote. It is checked in.
+- The **profile file** (Rule CM8.6), one per target, holds the measurements of `spec/properties.md` Rule P7.9: the supply side (cost of one call per capability method, satisfaction, size class and target; machine facts) and the demand side (region, request and usage counters). Each record carries its source (production or test run) and its target label.
+
+A build **reads** these files; it never measures. Measurement is a separate step (a test build, or a production run of an instrumented binary) that writes the profile file. A build is therefore a function of its sources, its dependencies, the lock file and the profile file: two machines with the same four inputs make the same choices and the same clones. A profile whose target label differs from the build's target is ignored, and the build uses static data (`spec/cost.md` Rule CT8.2). Continuous integration builds from the checked-in lock file and does not re-measure.
+
+The link step writes the lock file. A choice that changes is a diff in it, and a pin in it is how a user overrides the selector (`spec/type_system.md` Rule 6.5.5). Whether the profile file is checked in is the project's decision; a build without it is reproducible from the other three inputs, with static weights.
+
+Tools read both files as they read the reports. A tool that rewrites the lock file (to pin a choice) changes a build input, as editing a source does; it does not plug into the compiler (Rule RP5.1).
+
+### 5.4 The link report (Rule RP5.4)
+
+`fixed link --explain-selection` (and the same flag on `fixed compile` and `fixed ship` of an application) prints, and with `--format json` emits, per choice point bound at link:
+
+- the choice point: its declaration, the bound set and the usage vector the link step summed (Rule CM8.3), with the source of each usage number (production profile, test run or static weight);
+- each candidate satisfaction: viable or not, and for a non-viable one the cost prop it failed (`spec/cost.md` Rule CT8.1); for a viable one its score and, per used method, the cost of one call, each marked **measured** (with the profile's target label) or **static** (from the bound-class table);
+- the chosen satisfaction and the **disambiguation rule that decided** (`spec/type_system.md` Rule 6.5.5): a pin, the choice recorded in the lock file within `ε`, the highest score, the capability's own package, or declaration order;
+- whether the choice differs from the one in the lock file before this link;
+- the cardinality of the chosen type (Rule RP4.2);
+- deferred satisfaction sites bound at link (`spec/type_system.md` Rule 8.4), as notes.
+
+The report is the place to see why a representation was chosen; it is not needed to reproduce the choice, which the lock file records.
+
 ## 6. Open questions
 
 - **OQ-RP1 — Typed-tree access for tools.** A tool that needs the typed tree of a package's own source has no format to read (`spec/compilation_model.md` Rule CM7.4 serialises none). A JSON dump is the obvious candidate; wait for a tool that needs it.
 - **OQ-RP2 — Specification status through capability tables.** A prop that calls a capability method constrains the requirement. Whether it also constrains each satisfying type's implementation is counted per (prop, satisfying type) pair when the prop is inherited (Rule P7.7.a), and not otherwise.
 - **OQ-RP3 — Counter cost.** Region counters in fused loops cost a load and a store per step. Whether test builds need sampling instead is to be measured.
 - **OQ-RP4 — Counting refinements.** Which refinement shapes the prover can count (intervals, finite sets) and which fall back to the base type.
+- **OQ-RP5 — Format and merging of the profile file.** How several runs (test runs on several machines of one target, production samples) are merged, and how old records age out, is not specified.
 
 ## 7. Cross-references
 
 | Document | Relationship |
 |---|---|
-| `spec/properties.md` | Statuses (Rule P7.7), `unreachable` (Rule P9.2), sampling (Rule P5.3.b), enumeration (Rule P8.5) |
-| `spec/compilation_model.md` | Clone keys label counters; request counters are the measured weight of Rule CM5.4; the interface tier carries cardinality |
+| `spec/properties.md` | Statuses (Rule P7.7), lanes (Rule P7.8), measurement (Rule P7.9), `unreachable` (Rule P9.2), sampling (Rule P5.3.b), enumeration (Rule P8.5) |
+| `spec/compilation_model.md` | Clone keys label counters; request counters are the measured weight of Rule CM5.4; the interface tier carries cardinality; choice points (Rule CM8.1), summaries (Rule CM8.3), the lock file (Rule CM8.5), the profile file (Rule CM8.6) |
+| `spec/cost.md` | Rule CT8.2 reads the counters as usage; Rule CT8.1 viability is shown in the link report |
+| `spec/diagnostics.md` | Rule DG3.3 keeps diagnostics out of the parametric count |
 | `spec/pattern_matching.md` | §6 exhaustiveness shares the inhabitant count |
-| `spec/type_system.md` | §6.5 uses the count for tags and packing |
+| `spec/type_system.md` | §6.5 uses the count for tags and packing; Rule 6.5.5 names the disambiguation rule the link report shows |
 | `spec/memory_management.md` | §19 is the first report of the family |
 | `docs/decisions/P5-reports-and-tools.md` | The decision and the alternatives rejected |

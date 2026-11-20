@@ -1,8 +1,10 @@
 # Fixed Memory Management
 
-**Status:** Draft v0.4
-**Specifies:** how the compiler places, frees and reference-counts runtime values for Fixed v0.4.4 source: lifetime classes, data-stack regions, counted regions, the Perceus heap, destinations, value witnesses, reuse (FBIP), borrowing, effect-handler memory, structured parallelism, the `fip` contract and the memory report.
+**Status:** Draft v0.5
+**Specifies:** how the compiler places, frees and reference-counts runtime values for Fixed v0.4.4 source: lifetime classes, immediates, data-stack regions, counted regions, the Perceus heap, destinations, value witnesses, reuse (FBIP), borrowing, effect-handler memory, structured parallelism, the `fip` contract and the memory report.
 **Last revised:** 2026-11-20
+
+**Changes from v0.4.** Applies decision P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`, D6, D7, D9, D11, D15, D16). A data type instance that holds no reference and fits in 64 bits is an **immediate**: no cell, no header, no count (§3.3, `spec/compilation_model.md` Rule CM3.5). The value witness gains `width`, and its family is fixed: `imm1`, `imm2`, `imm4`, `imm8`, `ref` (Rule MM7.3); `copy` takes size and field kinds from the link-time type table. A flat container stores elements at the witness's width (Rule MM16.3). The cell tag is unique in the link unit and indexes the type table; every cell, in every class, carries its tag and reference map, and only a `Heap` cell carries a count (Rule PR3.1). Rule PR7.3 states what the runtime's drop does now and what it still owes. Ownership clones are requested only where the run-time `rc == 1` test cannot stand in (Rule PR6.3). Calls through a capability table follow the convention derived from the requirement's signature (Rule PR5.5). §20.3 follows the pipeline of package compile, application link and test build; only `proved` and `assumed` props may justify reuse. §22.2 says that its `map` is what the derived `map` does. The "Recheck-style" label on a pass over Core is withdrawn.
 
 **Changes from v0.3.** The compilation model is now `spec/compilation_model.md`: every function has a polymorphic **baseline** version that receives witnesses, and specialised **clones** are built on top of it under one size budget. In this document: the class witness of Rule MM7.3 becomes the value witness, gains `copy` and `kind`, and is the default instead of a boundary case; Rule MM7.4 defers to the clone rules; the cell header carries a reference map (Rule PR3.1); the version cap and copying beyond it are withdrawn (Rule PR5.5); a `fip fn` gains a copying shared entry and may be polymorphic (§18); `fip(n)` and `fip` on method requirements are specified (Rule MM18.5, resolving OQ-MM1); the signature facts of Rule MM20.2 are the core of the package interface. The callee, not the caller, evacuates at a floor entry (Rule MM5.5). Stale wording that still said "quantity" where ownership is meant was corrected.
 
@@ -14,7 +16,7 @@
 
 This document specifies:
 
-- The lifetime classes and the ownership × class matrix (§3).
+- The lifetime classes, the ownership × class matrix and immediates (§3).
 - The region-containment invariant that keeps every pointer valid (§4).
 - How the compiler assigns a class to every allocation, including the definition of "long-lived" and evacuation (§5).
 - The region runtime: chunked data stacks, counted regions, the number of stacks (§6).
@@ -37,12 +39,13 @@ It does **not** specify:
 
 - `spec/syntax_grammar.ebnf` v0.4.10 (`FipModifier` on functions, method requirements and `satisfies` methods).
 - `spec/type_system.md` v0.4.1 — §6.5 (representation selection), §6.6 (built-in candidates), §7.5 (mutual recursion / SCC).
-- `spec/quantities.md` v0.5 — demands and exclusive ownership (§4.1), Rule Q6.1 (erasure soundness), Rule Q7.2 (FBIP), Rule Q9.3 (shared and exclusive versions), Rule Q5.13 (parallel composition, §17).
-- `spec/compilation_model.md` v0.1 — the baseline version, witnesses, clones and the package ABI. §7 and §20.2 of this document are its memory side.
+- `spec/quantities.md` v0.6 — demands and exclusive ownership (§4.1), Rule Q6.1 (erasure soundness), Rule Q7.2 (FBIP), Rule Q9.3 (shared and exclusive versions), Rule Q5.13 (parallel composition, §17).
+- `spec/compilation_model.md` — the baseline version, the travel and rest forms and immediates (Rules CM3.3, CM3.5, CM3.6), witnesses, clones, the package ABI and the application link (§8, Rule CM8.8 for the type table). §7 and §20.2 of this document are its memory side.
 - `spec/cost.md` v0.1 — cost contracts, of which `fip` is the zero case (§18).
-- `spec/effects.md` v0.2 — §6 handler semantics, §7 evidence passing, Rule E3.5 (linear effects).
+- `spec/effects.md` v0.3 — §6 handler semantics, §7 evidence passing, Rule E3.5 (linear effects), Rule E7.8 (evidence captured by closures).
 - `spec/pattern_matching.md` v0.2 — §8 match compilation.
-- `spec/properties.md` v0.2 — §9 (`proved` props, Rule P7.7, inform reuse and bounds-check elision).
+- `spec/properties.md` — Rule P7.7 (statuses) and Rule P7.8 (the facts lane: only `proved` and `assumed` props inform reuse and bounds-check elision).
+- `spec/diagnostics.md` — `inspect` and `trace` read the type table of Rule PR3.1.
 
 Theoretical basis and prior art (facts checked against the sources in November 2026):
 
@@ -69,13 +72,13 @@ Every runtime allocation is assigned exactly one **lifetime class**:
 |---|---|---|---|
 | `Erased` | nowhere (quantity 0, Rule Q6.1) | — | — |
 | `Inline` | inside its parent value, or in registers / native stack slots | no | its parent, or the native frame |
-| `Static` | static data | no | never (persistent; Lean's "persistent objects") |
-| `Frame(s)` | the scratch data stack, region of scope `s` | no | bump reset at the end of `s` |
+| `Static` | static data | descriptor, no count | never (persistent; Lean's "persistent objects") |
+| `Frame(s)` | the scratch data stack, region of scope `s` | descriptor, no count | bump reset at the end of `s` |
 | `Dest(p)` | the destination supplied for result or parameter `p` | that of the destination's class | the destination's owner |
-| `Region(r)` | counted region `r` | one count per region, not per value | region count reaching zero (§6.4) |
-| `Heap` | Perceus heap | yes (Rule PR3.1) | Perceus |
+| `Region(r)` | counted region `r` | descriptor; one count per region, not per value | region count reaching zero (§6.4) |
+| `Heap` | Perceus heap | descriptor and count (Rule PR3.1) | Perceus |
 
-`Dest(p)` is resolved at each call site to one of `Frame`, `Region` or `Heap` of the caller (§7.1). `Inline` is decided by representation selection (`spec/type_system.md` §6.5); M11 may demote any class to `Inline` but never promotes.
+`Dest(p)` is resolved at each call site to one of `Frame`, `Region` or `Heap` of the caller (§7.1). The **descriptor** is the tag and reference map that every cell carries (Rule PR3.1); only a `Heap` cell adds a count. An immediate (§3.3) is always `Inline`. For any other value, `Inline` is decided by representation selection (`spec/type_system.md` §6.5); M11 may demote any class to `Inline` but never promotes.
 
 ### 3.2 Ownership × class (Rule MM3.2)
 
@@ -89,7 +92,22 @@ Ownership (`spec/quantities.md` §4.1) decides reference-count traffic and reuse
 
 A `read` demand adds nothing to any cell: the callee borrows (§13).
 
-**Consequence (the goal of this model).** Per-value reference-count operations exist only for values that are both shared and `Heap`. Headers exist only on `Heap` values and once per `Region`.
+An immediate (§3.3) has no row in this matrix: it is copied with its slot, has no count, is never reused and is never a member of a region.
+
+**Consequence (the goal of this model).** Per-value reference-count operations exist only for values that are both shared and `Heap`. Counts exist only on `Heap` cells and once per `Region`.
+
+### 3.3 Immediates (Rule MM3.3)
+
+A data type instance that holds no reference and fits in 64 bits is an **immediate** (`spec/compilation_model.md` Rule CM3.5, which fixes the condition and the bit layout). It travels inside its slot (Rule CM3.3) and is stored inside a flat container at its width (Rule CM3.6, Rule MM16.3). It has no cell, no header and no count. The rule holds for every data type, parameterised or not; for a parameterised type it is a function of the witnesses of the arguments, so baseline code and clones agree on which instances are immediates. A type with a field that is always a reference, which includes every recursive type, is statically a cell.
+
+Consequences in this document:
+
+- An immediate is not an allocation. Class assignment (§5) does not see it, Rule MM4.1 does not constrain it, and it is never a member of a `Frame`, `Region` or cohesive group.
+- `dup`, `drop`, `consume`, `reuse_test` and evacuation of an immediate are nothing; its value witness is `imm1`, `imm2`, `imm4` or `imm8` (Rule MM7.3).
+- An immediate never yields a reuse token (§11) and never needs one. A `fip fn` that builds immediates allocates nothing (Rule MM18.1(1)).
+- Where generic code holds a value of a parameterised type that may be an immediate, every operation that depends on a cell (field access, reuse, the reference map entry) takes the cell path only when the instance's witness is `ref`. Field access goes through the type's accessors (`spec/compilation_model.md` Rule CM3.7).
+
+The reason is cost: a small value without references gains nothing from a cell and pays an allocation, a header and a count for it.
 
 ## 4. The region-containment invariant
 
@@ -152,7 +170,7 @@ Duration is never a criterion. Totality guarantees termination, not short runnin
 
 ### 5.3 Class choice (Rule MM5.3)
 
-For each allocation, in order:
+For each allocation, in order (an immediate is not an allocation, §3.3):
 
 1. Quantity 0: `Erased`.
 2. A compile-time constant with no free runtime variables: `Static`.
@@ -259,11 +277,15 @@ A borrowed parameter (§13) needs no RC operation and is never stored beyond the
 
 ### 7.3 Value witnesses (Rule MM7.3)
 
-A baseline version (`spec/compilation_model.md` §3) receives a hidden **value witness** for each of its non-phantom type parameters, and for each owned parameter whose class its signature facts (§20.2) do not fix. The value witness is the pair (type, class) compiled into a closed function, after Neut's types-as-functions. Earlier drafts called it the class witness and passed it only at higher-order and separate-compilation boundaries; it is now the default, and it disappears only in a clone (§7.4).
+A baseline version (`spec/compilation_model.md` §3) receives a hidden **value witness** for each of its non-phantom type parameters, and for each owned parameter whose class its signature facts (§20.2) do not fix (`spec/compilation_model.md` Rule CM4.1). Earlier drafts called it the class witness and passed it only at higher-order and separate-compilation boundaries; it is the default, and it disappears only in a clone (§7.4).
+
+**The family is fixed.** A value witness is one of `imm1`, `imm2`, `imm4`, `imm8` (an immediate of that width, §3.3) or `ref` (a cell). An immediate needs no `dup`, `drop` or `copy`, so its witness does not depend on its type or class. A `ref` witness does not depend on the type either: what is specific to a type (size, field kinds) is read from the cell's descriptor and the link-time type table (Rule PR3.1, `spec/compilation_model.md` Rule CM8.8). `ref` has one static instance per class that can hold a cell (`Frame` and stack `Dest`, `Region`, `Heap`, `Static`), because `drop` and `reuse_test` differ by class. Generic code picks a witness from this family, for a parameterised instance as a function of the witnesses of its arguments (Rule CM3.5); it never builds a value witness at run time. The reason is that a witness per type instance would have to be built where the instance first appears, which baseline code cannot do without allocating.
 
 ```
-witness(op, v, dest)    op ∈ { drop, dup, reuse_test, evacuate, copy, size, kind }
+witness(op, v, dest)    op ∈ { drop, dup, reuse_test, evacuate, copy, size, width, kind }
 ```
+
+For `ref`:
 
 | op | `Frame` / stack `Dest` | `Region` | `Heap` | `Static` |
 |---|---|---|---|---|
@@ -272,14 +294,16 @@ witness(op, v, dest)    op ∈ { drop, dup, reuse_test, evacuate, copy, size, ki
 | `reuse_test` | true iff exclusively owned (static) | true iff exclusively owned (static) | true if exclusively owned (static), else `rc == 1` | false |
 | `evacuate(dest)` | copy into `dest` | copy into `dest` unless `dest` is this region | identity if `dest` is the heap, else copy | identity |
 | `copy(dest)` | a new exclusively owned value in `dest` | the same | the same | the same |
-| `size` | byte size | byte size | byte size | byte size |
+| `size` | byte size, from the type table | the same | the same | the same |
+| `width` | 8 | 8 | 8 | 8 |
 | `kind` | reference | reference | reference | reference |
 
-The witness of an immediate type (`spec/compilation_model.md` Rule CM3.3) is the same for every class: `drop` is a no-op, `dup`, `evacuate` and `copy` return the 64 bits, `reuse_test` is false, `size` is 8 and `kind` is immediate.
+For `immk` (k ∈ {1, 2, 4, 8}), in every class: `drop` is a no-op; `dup`, `evacuate` and `copy` return the slot; `reuse_test` is false; `size` and `width` are k; `kind` is immediate.
 
 - A witness is passed per type parameter or per class-polymorphic owned parameter, not per value. A container's witness covers its elements, because Rule MM4.1 lets a `Frame` container hold `Heap` elements but fixes the element class for the whole container.
 - `reuse_test` follows Rule PR6.3: exclusively owned cells are reusable in every class except `Static`.
-- `copy` copies the whole value: a witness describes a type and cannot know which part a callee demands. The shared entry of a `fip fn` (§18.3) copies a demanded part of known type with code for that type and that part, and uses the witness's `copy` only for a part of parameter type. `evacuate` cannot serve, because it is the identity when the value already lives where `dest` is.
+- `copy` copies the whole value: a witness cannot know which part a callee demands. It reads the cell's tag, finds the size and field kinds of the variant in the type table (`spec/compilation_model.md` Rule CM8.8), and takes the kind of each slot of parameter type from the cell's reference map. The shared entry of a `fip fn` (§18.3) copies a demanded part of known type with code for that type and that part, and uses the witness's `copy` only for a part of parameter type. `evacuate` cannot serve, because it is the identity when the value already lives where `dest` is.
+- `width` is the number of bytes an element takes in a flat container (Rule MM16.3).
 - `kind` fills the reference map of a cell that a baseline version builds (Rule PR3.1).
 - Witnesses replace any address-range test for "is this on a stack". Chunked regions (§6.1) have no fixed address range, so a test would need tag bits; the witness does not.
 - Neut copies on every share. Fixed copies only on evacuation and keeps reference counting for `Heap` values.
@@ -296,21 +320,27 @@ A function larger than the budget has no clones and keeps its one witness-taking
 
 ### 8.1 Heap-object layout (Rule PR3.1)
 
-Every `Heap` value carries a header:
+Every cell carries a **descriptor**; a `Heap` cell also carries a count in front of it:
 
 ```
 {
-    rc: i64,            // refcount
-    tag,                // variant discriminator for sum types; 0 for product types
+    rc: i64,            // refcount; Heap cells only
+    tag,                // unique in the link unit; indexes the type table
     refs: <map>,        // which payload slots hold counted references
     pad: [N x i8],      // padding to natural alignment
-    payload: <variant fields, one 64-bit slot each>
+    payload: <variant fields in declaration order, one 64-bit slot each>
 }
 ```
 
-**Reference map.** `drop` must free a cell without knowing which type instance built it, so the header says which payload slots hold counted references (`spec/compilation_model.md` Rule CM3.4). A slot of a known type has a fixed entry. A slot of parameter type gets its entry from the value witness (`kind`, Rule MM7.3) when a baseline version builds the cell, and a constant in a clone. The widths of `tag` and `refs` and the encoding of the map are implementation-defined. A count of leading reference slots is not enough once a cell has a slot of parameter type, because the order of fields would then depend on the type instance.
+**Tag.** The tag is unique in the link unit, for every variant of every data type, product types included. It indexes a link-time **type table** of (type name, variant name, field kinds, size) (`spec/compilation_model.md` Rule CM8.8). The link step assigns each type a base; a `match` subtracts the type's base, a link-time constant, and then switches as before. The table gives `copy` and `size` (Rule MM7.3) what a type-independent witness lacks, and gives `inspect` and `trace` the names they print (`spec/diagnostics.md`). The reason the tag is global and not per type: generic baseline code holds cells whose type it does not know.
 
-`Frame`, `Dest` on a stack, `Static`, `Inline` and `Erased` values have **no header**. `Region` values have no per-value header; the region descriptor carries the count (§6.4). Sum-type values outside the heap carry their tag as part of their representation, chosen by representation selection.
+**Reference map.** `drop` must free a cell without knowing which type instance built it, so the descriptor says which payload slots hold counted references (`spec/compilation_model.md` Rule CM3.4). A slot of a known type has a fixed entry. A slot of parameter type gets its entry from the value witness (`kind`, Rule MM7.3) when a baseline version builds the cell, and a constant in a clone. The widths of `tag` and `refs` and the encoding of the map are implementation-defined. A count of leading reference slots is not enough once a cell has a slot of parameter type, because the order of fields would then depend on the type instance.
+
+**What stays.** Fields stay in declaration order, one 64-bit slot each, and each type has one cell layout. Cells stay self-describing: `drop` needs no type information. A cell can hold references only in its first 32 payload slots (30 captures for a closure); beyond that the compiler reports `B005`. Narrow fields inside a cell are not packed (accepted as lost in P6 D7; the allocator's rounding absorbs most of it).
+
+**Every cell is self-describing.** `copy` and `evacuate` of a cell reached through a `ref` witness, and `inspect` of a value of parameter type, read the descriptor whatever the cell's class. `Frame` cells, stack `Dest` cells, `Region` cells and `Static` cells therefore carry the descriptor and no count; the count of a `Region` is in its region descriptor (§6.4). `Inline` values, immediates (§3.3) and `Erased` values have no descriptor; an immediate carries its own tag inside its bits (Rule CM3.5).
+
+**Measured cost.** The first measurement charged this header with 6–8% on list-heavy programs. A bisection showed that the cost was a call, not the map: the child walk sat in a runtime helper that `clang -O2` did not inline. The runtime was fixed (Rule PR7.3); the header, the layout and the map stayed (`docs/baselines/runtime-2026-11-20-phase-4.1.md`, addendum). An 8-byte header with a 32-bit count, as in Koka and Lean, is a hypothesis (§21), not a decision.
 
 The v0.1 rules that tied stack allocation to quantity 1 and a size budget, and Rule PR3.1.a (SCC stack allocation gated on escape analysis), are superseded by §5. Size alone never sends a value to the heap.
 
@@ -401,8 +431,9 @@ At a call `g(a, b, …)`, arguments evaluated left to right and moved when the c
 
 - For a `read` parameter (§13): no `dup` / `drop` transfer.
 - For an `own` parameter: at the argument's last use, ownership transfers (no `dup`); otherwise `dup` at this position.
-- For an `exclusive` parameter: if the argument is exclusively owned, this is its last use, no other argument or capture of the call reaches it (Rule Q9.4), and the exclusive version of `g` was built (`spec/compilation_model.md` Rule CM5.3), it is moved into that version. Otherwise the call goes to `g`'s baseline version, which is the shared one. For a `fip` callee the shared entry copies the demanded part first (Rule CM5.5). No caller copies.
-- For a call through a capability table or a closure whose identity is unknown: every argument is passed under `own` (Rule CM4.6).
+- For an `exclusive` parameter: if the argument is exclusively owned, this is its last use, no other argument or capture of the call reaches it (Rule Q9.4), the argument has no per-value count or the callee is `fip` (Rule PR6.3.a), and the exclusive version of `g` was built (`spec/compilation_model.md` Rule CM5.3), it is moved into that version. Otherwise the call goes to `g`'s baseline version, which is the shared one. For a `fip` callee the shared entry copies the demanded part first (Rule CM5.5). No caller copies.
+- For a call through a capability table: the convention derived from the requirement's signature (`spec/compilation_model.md` Rule CM4.6). A parameter is `own` if a type variable of its type occurs in the result type, and `read` otherwise. So `size(self) -> u64` and `compare(self, other) -> is Ordering` borrow, `push(self, x: Part) -> Self` owns both, and `get(self, i) -> Part` borrows `self` and the satisfier `dup`s the part it returns.
+- For a call through a closure whose identity is unknown, and for an effect operation (`spec/effects.md` Rule E7.7): every argument is passed under `own`.
 - For a `0` parameter: no value is passed; an effectful argument is still evaluated.
 - If the callee is an exported version of another package whose interface records escape `unbounded` for the parameter, and the argument is not `Heap`, `Region` or `Static`: evacuate (Rule MM5.5). A floor entry needs nothing from the caller: it evacuates in the callee.
 
@@ -414,13 +445,13 @@ A closure capturing a binding `y`:
 - At invocation: the capture is consumed by the body per the body's quantity rules.
 - At closure drop: each RC-tracked capture is dropped.
 
-A closure whose environment does not escape its creation scope is itself `Frame` (no header). An escaping closure is `Heap` and its captures follow Rule MM4.1: a `Frame` capture of an escaping closure is long-lived by Rule MM5.2(a) and is placed accordingly.
+A closure whose environment does not escape its creation scope is itself `Frame` (no count). An escaping closure is `Heap` and its captures follow Rule MM4.1: a `Frame` capture of an escaping closure is long-lived by Rule MM5.2(a) and is placed accordingly.
 
 An exclusively owned capture stays exclusive only if the closure is called at most once; otherwise it is downgraded to `own` and shared (`spec/quantities.md` Rule Q5.7).
 
-**Two entry points.** A closure whose parameter is `exclusive` carries two code pointers: the closure body compiled for exclusive input, and compiled for shared input. A call through a closure whose identity is unknown at compile time (a function-typed parameter, a closure taken from a data structure) picks the pointer statically from what the caller holds. It may take the exclusive pointer only when it exclusively owns every argument in every part, because it cannot see which parameters the closure's body reuses (`spec/compilation_model.md` Rule CM4.6); otherwise it takes the shared pointer. There is no runtime test. Because a caller cannot tell from a closure it did not create whether it has a second entry, **every** closure carries both pointers. The **shared** pointer is the primary one; the exclusive pointer is the same function unless an exclusive version of the body was built (`spec/compilation_model.md` Rule CM5.3). The cost is one word per closure (closures without captures are static objects) and the second body where it exists.
+**Two entry points.** A closure whose parameter is `exclusive` carries two code pointers: the closure body compiled for exclusive input, and compiled for shared input. A call through a closure whose identity is unknown at compile time (a function-typed parameter, a closure taken from a data structure) picks the pointer statically from what the caller holds. It may take the exclusive pointer only when it exclusively owns every argument in every part, because it cannot see which parameters the closure's body reuses; otherwise it takes the shared pointer. There is no runtime test. Because a caller cannot tell from a closure it did not create whether it has a second entry, **every** closure carries both pointers. The **shared** pointer is the primary one; the exclusive pointer is the same function unless an exclusive version of the body was built (`spec/compilation_model.md` Rule CM5.3). The cost is one word per closure (closures without captures are static objects) and the second body where it exists.
 
-The same two-pointer rule governs every entry of a capability table (Rule CM4.2). A closure created in a baseline version captures the witnesses its body uses.
+Every entry of a capability table also carries two pointers (Rule CM4.2), with one difference: the exclusive pointer of a table entry requires exclusive ownership only of the `own` parameters whose type is `Self` (Rule CM4.6). `push(self, x: Part) -> Self` therefore updates `self` in place through the exclusive pointer while `x` stays shared. A closure created in a baseline version captures the witnesses its body uses, and the evidence of the effects its type does not mention (`spec/effects.md` Rule E7.8).
 
 ## 11. Reuse analysis (FBIP)
 
@@ -448,7 +479,7 @@ For an exclusively owned `x`, `drop_to_reuse` returns the memory unconditionally
 
 Two shapes match for reuse iff they have the same byte size after padding, the same alignment and the same field kind sequence. Matching is by fingerprint, not nominal type, so variants of different types can reuse each other's memory.
 
-A slot of parameter type is a field kind of its own: it matches only another slot of parameter type. Fingerprints therefore do not depend on the type instance, and a baseline version reuses cells as its clones do.
+A slot of parameter type is a field kind of its own: it matches only another slot of parameter type. Fingerprints therefore do not depend on the type instance, and a baseline version reuses cells as its clones do. For a parameterised type that may be an immediate, a baseline version takes the reuse path only when the instance's witness is `ref` (§3.3); a clone knows statically.
 
 ### 11.3 Ownership-driven reuse (Rule PR6.3)
 
@@ -457,6 +488,14 @@ Reuse is **hybrid**: static where exclusivity is proved, dynamic for shared heap
 - Exclusively owned (`spec/quantities.md` Rule Q4.1.b): reuse is unconditional, in any class except `Static` (static data is never written). Exclusivity is proved statically, through `exclusive` demands and the exclusive versions of Rule Q9.3. Quantity 1 alone is not enough.
 - Shared, `Heap`: reuse is conditional on `rc == 1` at runtime.
 - Shared, `Frame` or `Region`: no reuse. Without a count, uniqueness is unknown, and the memory is freed with its region anyway.
+- Immediates: no reuse; there is no cell (§3.3).
+
+**Rule PR6.3.a (which ownership clones are requested).** A call site requests an exclusive version of its callee (an ownership clone, `spec/compilation_model.md` Rule CM5.1) only where the run-time `rc == 1` test cannot stand in for the static proof:
+
+1. the body of a `fip fn`, and every clone it requests (mandatory, Rule CM5.5);
+2. an argument that has no per-value count: a `Frame`, stack `Dest` or `Region` value, which the baseline cannot reuse at all.
+
+A `Heap` argument does not request one: the baseline version tests `rc == 1` and reuses. The reason is the first measurement: on five benchmarks the run-time test ran as fast as unconditional reuse (`docs/baselines/runtime-2026-11-20-phase-4.1.md`, finding 5), so a clone for a `Heap` value spent budget for nothing. That measurement is suspected of hiding a compiler fault (§21); until it is ruled out, this rule is provisional.
 
 ### 11.4 Reuse across regions (Rule MM11.4)
 
@@ -481,7 +520,7 @@ A match case may reuse the matched value's memory iff its body constructs a valu
 
 For each `data` type the compiler synthesizes `drop_T(x: T) -> ()`:
 
-- Sum types: switch on the tag, drop each field of the variant, then free.
+- Sum types: switch on the tag minus the type's base (Rule PR3.1), drop each field of the variant, then free.
 - Product types: drop each field in declaration order, then free.
 - Recursive types: drop the recursive fields with tail calls (§12.3).
 - Phantom-only types: no-op.
@@ -503,7 +542,9 @@ free(x)
 
 In a baseline version, and wherever else the type or class is not known, the drop goes through the value witness (§7.3).
 
-### 12.3 Recursive drops as tail calls (Rule PR7.3)
+### 12.3 Drop in bounded native stack (Rule PR7.3)
+
+Dropping a value must run in bounded native stack, whatever the shape of the value. A deep structure must not exhaust the stack when its last reference dies.
 
 A drop function that drops a recursive field last makes it a tail call:
 
@@ -519,6 +560,10 @@ fn drop_list(x: List of A) -> () =
 ```
 
 The compiler must guarantee tail-call optimization for compiler-emitted drop functions.
+
+**The runtime's generic drop.** A drop through a witness, or of a cell whose type the code does not know, is done by the runtime from the reference map (Rule PR3.1). Today it is two pieces: `fx_drop` is a short fast path that decrements the count and returns; a count that reaches zero calls one out-of-line `free_cell`, which drops the marked children, frees the cell and continues on the highest marked child instead of recursing. A list, whose tail is its highest reference slot, is therefore freed in a loop. The fast path is kept short so that it is inlined at every drop site; the first implementation lost 6–8% by placing the child walk in a helper that was not inlined (Rule PR3.1, "Measured cost").
+
+**Still owed.** `free_cell` still recurses on every marked child except the highest. A tree that is deep in a child other than the last (a list built in the other field, or a left-leaning tree) can exhaust the native stack. A conforming runtime keeps an explicit work list of cells whose count reached zero, for example threaded through the payload of cells already being freed, so that drop uses constant native stack for every shape. Until then the runtime does not conform to this rule.
 
 ## 13. Borrowing (inferred)
 
@@ -556,6 +601,8 @@ At each `handle` install site, the compiler classifies the handler from the shap
 | capturing, escaping | some clause stores the continuation (for example, inside a closure) in a value that outlives the `handle` expression | as above, plus promotion of the reachable free `Frame` values (§14.3) |
 
 The kind is local to the install site. Effect-polymorphic code that performs the operation does not need to know it.
+
+The dynamic extent of a handler installation is also a region in the sense of Rule MM4.1, for one purpose: a closure that captured the handler's evidence must not outlive it (`spec/effects.md` Rules E5.5.b, E7.8). The check uses the escape sets of §20.1; it allocates nothing in that region.
 
 ### 14.2 Abortive operations (Rule MM14.2)
 
@@ -619,12 +666,14 @@ Drop functions for SCC members are emitted as a mutually recursive group with ta
 
 ## 16. Packed aggregates
 
+The compiler never changes the layout of a declared data type: each type has one cell layout (Rule PR3.1), and narrow fields inside a cell are not packed. Density comes from selection instead. A packed or dense representation is a satisfier of a capability (a packed array, a packed tree), and the selector picks it at application link when usage favours it (`spec/compilation_model.md` Rule CM8.4). The compiler does not repack the cells of another type.
+
 ### 16.1 Blobs (Rule MM16.1)
 
-When representation selection picks a packed layout (nested data inline, variable-size variants, narrow relative-offset links), the whole packed value is one **blob**:
+When the selected satisfier has a packed layout (nested data inline, variable-size variants, narrow relative-offset links), the whole packed value is one **blob**:
 
-- A `Frame` or stack `Dest` blob has no header.
-- A `Heap` blob has one header for the whole blob. A `Region` blob uses its region's count.
+- A `Frame` or stack `Dest` blob has one descriptor (Rule PR3.1) and no count.
+- A `Heap` blob has one header (count and descriptor) for the whole blob. A `Region` blob uses its region's count.
 - References to interior subtrees are borrows bounded by the blob owner's lifetime. They never carry their own count.
 
 Relative-offset links make a blob position-independent: it can be relocated (§6.3), evacuated or copied to another memory pool as plain bytes.
@@ -634,6 +683,16 @@ Relative-offset links make a blob position-independent: it can be relocated (§6
 A subtree that must outlive the blob's owner is **copied out** (evacuated) into the class its use requires. It is never kept as an interior pointer. This prevents a small subtree from keeping a large blob alive.
 
 Representation scoring must account for this. `spec/type_system.md` §6.5.4 "access fit" charges packed candidates for the expected volume of escaping subtree extraction, so the selector does not pick a packed layout for a workload that would copy out constantly.
+
+### 16.3 Flat containers and the rest form (Rule MM16.3)
+
+A value travels in a 64-bit slot (`spec/compilation_model.md` Rule CM3.3). How it is stored inside a **flat container** (an array or any satisfier that lays its elements out contiguously) is its **rest form** (Rule CM3.6): each element takes the `width` of its value witness (Rule MM7.3), 1, 2, 4 or 8 bytes. An immediate is stored at its width; a cell is stored as an 8-byte reference.
+
+- In baseline code the stride comes from the witness; in a clone it is a constant.
+- Widening on load and narrowing on store are those of Rule CM3.3.
+- A container of immediates holds no reference to drop, whatever the element type. How the descriptor of a container with more than 32 reference elements describes them is open (OQ-MM6): the reference map of Rule PR3.1 covers 32 slots.
+
+The reason: an array of `u8` or of a two-byte enumeration should take one or two bytes per element, and generic code that only moves elements can still do so from the witness alone.
 
 ## 17. Structured parallelism
 
@@ -679,7 +738,7 @@ Allowed: writing into destinations supplied by the caller, `Frame` temporaries w
 
 The FP² meaning. In addition to Rule MM18.1:
 
-1. no data-stack bump at all: every constructed value either reuses a consumed cell or is `Inline`;
+1. no data-stack bump at all: every constructed value either reuses a consumed cell, is an immediate (§3.3) or is `Inline`;
 2. constant native stack: every fold the function performs compiles to a loop (list-shaped folds, tail modulo constructor).
 
 ### 18.3 Arguments of `fip` functions (Rule MM18.3)
@@ -747,7 +806,7 @@ These facts appear in every function signature. For a public function they are s
 - **Per parameter:** demand per part (`0`, `read`, `own`, `exclusive`; `spec/quantities.md` Rule Q4.1.a), which replaces the separate quantity and borrowed/owned mode; escape ∈ {`none`, `into-result`, `unbounded`}; class-polymorphic or fixed (decides whether a witness is passed, §7.3).
 - **Versions:** the clones built, each with its key (`spec/compilation_model.md` Rule CM5.1); for a public function, the exported versions and whether each is a body, an alias or an adapter (Rule CM6.4).
 - **Witnesses:** the hidden parameters and their order (Rule CM4.3).
-- **Result:** destination-polymorphic or a fixed class; representation caller-chosen or callee-chosen (Rule CM4.5).
+- **Result:** destination-polymorphic or a fixed class. Who picks its representation follows from the signature (Rule CM4.5): for `-> R is C` the caller passes `R`'s witness; for `-> is C` the result is a choice point owned by the function and its witness travels with the value.
 - **Stack demand:** the maximum number of growable stacks in use at once, and the static bound on scratch bumps if one exists.
 - **Contracts:** the `fip` level (none, `fip(n)`, `fip` or `fip(strict)`) and the cost props with their statuses (`spec/cost.md`).
 
@@ -755,25 +814,36 @@ Lean ships borrow annotations in its interface files in the same way.
 
 ### 20.3 Phase placement
 
-| Runs after | Provides |
+The work is split over three builds (P6 D6). Property verification is three separate things, each placed where its input exists: the static prover, the cost checker and property-based testing.
+
+**Package compile**, in order:
+
+| Step | Provides |
 |---|---|
-| Quantity inference (`spec/quantities.md` §4), on the typed tree | Occurrence quantities; `E072`, `T021` |
-| Lowering to Core, carrying source spans | Polymorphic ANF: one baseline version per function, witnesses explicit, every allocation and generated member visible |
+| Typer | Typed tree |
+| Static prover (`spec/properties.md` §7), on the typed tree | `proved` props, and `assumed` ones under `--no-pbt` |
+| Quantity inference (`spec/quantities.md` §4), on the typed tree | Occurrence quantities; `E071`, `E072` (`resume`), `T021` |
+| Lowering to Core, carrying source spans; match desugaring (`spec/pattern_matching.md` §8) | Polymorphic ANF with decision trees: one baseline version per function, witnesses explicit, every allocation and generated member visible |
 | Demand and memory inference, M10, on Core | Demands, ownership, escape sets, lifetime classes, signature facts (§20), for each baseline version |
-| Representation selection, M11 (`spec/type_system.md` §6.5), on Core | Representations at origination sites and their witnesses, `Inline` demotions, N, copy-out sites, fingerprints. Decided on the facts of baseline versions; never repeated for a clone |
-| Specialisation (`spec/compilation_model.md` §5) | Clones, by score within the budget and the mandatory ones; M10 runs again on each clone |
-| Match desugaring (`spec/pattern_matching.md` §8) | Decision-tree IR |
-| Property verification (`spec/properties.md` §7) | Verified facts (informs reuse) |
+| Cost checker (`spec/cost.md`), on Core | Statuses of cost props |
+| Representation selection, M11 (`spec/type_system.md` §6.5), for choice points whose values do not leave the package | Representations at origination sites and their witnesses, `Inline` demotions, N, copy-out sites, fingerprints. Decided on the facts of baseline versions; never repeated for a clone |
+| Code generation | Baseline code, interface tier, body tier, summaries (`spec/compilation_model.md` §6, §8) |
+
+**Application link** (`spec/compilation_model.md` §8): selection of the remaining choice points (Rule CM8.4), accessors (Rule CM3.7), the type table and link-unique tags (Rule CM8.8, Rule PR3.1), and in a release build the clones (Rule CM8.7), on each of which M10 runs again.
+
+**Test build:** property-based testing and measurement (`spec/properties.md` Rule P7.9). Its results feed the measurement lane only.
+
+**What may justify reuse.** A reuse, a bounds-check elision or any other decision that is wrong if a claim is false is in the **facts lane** (`spec/properties.md` Rule P7.8): it takes only `proved` and `assumed` props, never a `tested` one. Choices among alternatives that are all correct (clone weights, the budget, selection) are in the measurement lane and may use anything measured.
 
 | Runs before | Consumes |
 |---|---|
 | Code generation (LLVM IR emission) | IR with `dup`, `drop`, `consume`, reuse tokens, destinations, region marks and resets, witnesses and evacuations |
 
-The pass is a Recheck-style phase (`docs/references/scala3-compiler-reference.md` §5.4). It does not change types or values.
+M10 is a pass over Core. It does not change types or values.
 
 ## 21. Hypotheses to measure
 
-Fixed has no backend yet. Every performance statement in this document is a hypothesis until measured. In particular:
+Every performance statement in this document is a hypothesis until measured; the first measurements are in `docs/baselines/runtime-2026-11-20-phase-4.1.md`. In particular:
 
 - Overall speed and memory relative to pure Perceus and to Goose-style placement. Goose's own claim of about 1.13–1.19× over safe Rust is unverified and says nothing about Fixed.
 - Witness call overhead at polymorphic boundaries, before and after PGO specialization (§7.4).
@@ -784,9 +854,12 @@ Fixed has no backend yet. Every performance statement in this document is a hypo
 - Retention by counted regions and blobs, and the copy-out volume (§6.4, §16.2).
 - Deferred dups in lanes (§17.3).
 - Baseline overhead: run time and reference-count traffic with `--no-specialise` against the default build, per benchmark (`spec/compilation_model.md` Rule CM5.7). First measurement, `docs/baselines/runtime-2026-11-20-phase-4.1.md`: up to 23% on the five runtime benchmarks, all of it witness calls; allocations, reuses and counted `dup` / `drop` are identical in both modes.
-- Whether unconditional reuse beats the runtime `rc == 1` test. First measurement: no measurable difference on the five benchmarks, so on the ownership axis a clone buys nothing there yet.
+- Whether unconditional reuse beats the runtime `rc == 1` test. First measurement: no measurable difference on the five benchmarks. Rule PR6.3.a rests on it. **Open:** the project owner suspects that the measurement hides a compiler fault (for example, exclusive versions that were not reached, or a test that the C compiler removed); it must be ruled out, with the emitted IR and instruction counts, before Rule PR6.3.a is relied on.
 - How much of that overhead the score recovers under the reference budget `B = 512` and weight base `W = 8`, how many clones a function gets, how often a function exceeds `B`, and the code-size cost (OQ-CM3).
-- The cost of calls through capability tables, which cannot borrow (Rule CM4.6, OQ-CM8).
+- The convention of calls through capability tables (Rule CM4.6): before it is frozen, a benchmark with capability-bounded parameters measures it against passing every argument `own`.
+- The header (Rule PR3.1): an 8-byte header with a 32-bit count, as in Koka and Lean, against the present count plus descriptor. A hypothesis, not a decision.
+- The descriptor on `Frame` and `Region` cells (OQ-MM7): memory and time against headerless placement.
+- About 4% on `list_pipeline` and `records` against the monomorphising backend remains unexplained after the runtime fix of Rule PR7.3.
 - How often the dynamic `rc == 1` path (§11.1) reuses a cell that static exclusivity missed. If it is rare, the shared version could drop the test.
 
 ## 22. Worked examples
@@ -799,7 +872,7 @@ fn count_pairs(x: i64, y: i64) -> i64 =
     pair.first + pair.second           // two borrowed reads
 ```
 
-`pair` is quantity ω (read twice) and `Frame`: no header, no `dup`, no `drop`. Both reads are `read` demands, so `pair` stays exclusively owned throughout. The region frees it at return. Under v0.1, this would have been a heap allocation with a `dup` / `drop` pair that borrow analysis then removed.
+`pair` holds two 64-bit fields, so it is too wide to be an immediate (§3.3). It is quantity ω (read twice) and `Frame`: a descriptor but no count, no `dup`, no `drop`. Both reads are `read` demands, so `pair` stays exclusively owned throughout. The region frees it at return. Under v0.1, this would have been a heap allocation with a `dup` / `drop` pair that borrow analysis then removed.
 
 ### 22.2 Match with reuse (FBIP)
 
@@ -810,7 +883,9 @@ fn map(list: List of A, f: A -> B) -> List of B =
         List.Nil => List.Nil
 ```
 
-`map` demands `exclusive` on the list cells and `own` on the elements. A caller passing an exclusively owned list gets the exclusive version, where the clone budget built it (`spec/compilation_model.md` Rule CM5.3): each `Cons` cell is reused unconditionally in whatever class it lives in, provided the new fields satisfy Rule MM11.4. A caller passing a shared list gets the shared version: for a `Heap` list, reuse is conditional on `rc == 1`; for a `Frame` list, the result is built in the destination and the old cells die with their region.
+Fixed functions cannot call themselves. The code above is what the auto-derived `map` of `List` does (`spec/type_system.md` §7.4), written out by hand to show the cells; a user writes `list.map(f)`.
+
+`map` demands `exclusive` on the list cells and `own` on the elements. For a `Heap` list the call goes to the baseline version whether or not the caller owns the list exclusively: each `Cons` cell is reused after the run-time `rc == 1` test, which succeeds for an exclusively owned list (Rule PR6.3.a). For an exclusively owned `Frame` or `Region` list, which has no count to test, the caller requests the exclusive version; where the clone budget built it (`spec/compilation_model.md` Rule CM5.3), each cell is reused unconditionally, provided the new fields satisfy Rule MM11.4. Otherwise, and for a shared `Frame` list, the result is built in the destination and the old cells die with their region.
 
 ### 22.3 Fold with per-step temporaries
 
@@ -819,7 +894,7 @@ fn total_len(words: List of String) -> u64 =
     words.fold(0, (acc, w) -> acc + w.trim().length())
 ```
 
-`w.trim()` is a per-step temporary: `Frame(step)`, reset after every step. `acc` is `Inline`. The loop allocates nothing that survives a step.
+`w.trim()` is a per-step temporary: `Frame(step)`, reset after every step. `acc` is a `u64`, an immediate (§3.3). The loop allocates nothing that survives a step.
 
 ### 22.4 Churn sent to the heap
 
@@ -856,6 +931,8 @@ The `Lock` handler is installed once and consumed by `Lock.release`. Its continu
 - **OQ-MM3 — N versus relocation.** Whether the compiler should prefer more growable stacks or relocation with holes (§6.3).
 - **OQ-MM4 — Cohesive-group detection.** Rule MM5.4 states the conditions; how far M10 searches for groups (one function, one call tree, across modules) is open.
 - **OQ-MM5 — Region and witness facts across packages.** What the interface carries is settled (`spec/compilation_model.md` Rule CM7.1). Its on-disk encoding is open there (OQ-CM2).
+- **OQ-MM6 — Descriptors of flat containers.** A flat container (Rule MM16.3) must stay self-describing for `drop`, `copy` and `inspect`, but its element count is not bounded by the 32 slots of a reference map. A length field and a flag "every element is a reference" in the descriptor would do; it is not decided.
+- **OQ-MM7 — Descriptors outside the heap.** Rule PR3.1 puts a descriptor on every cell, including `Frame` and `Region` cells, because a type-independent `ref` witness must read it. That is a word per cell that the Goose-style regions of v0.2 did not pay. A clone cannot omit it, because cloning never changes a layout (`spec/compilation_model.md` Rule CM3.4). Whether the cost matters is to be measured (§21).
 
 ## 24. Cross-references
 
@@ -868,8 +945,8 @@ The `Lock` handler is installed once and consumed by `Lock.release`. Its continu
 | `spec/quantities.md` | Demands and exclusive ownership (§4.1) drive §9–§11; shared and exclusive versions (Rule Q9.3); evaluation order (Rule Q9.2); M10 also computes the facts in §20; the parallel composition rule underlies §17 |
 | `spec/effects.md` | §6 and §7 drive §14; Rule E3.5 drives §14.5; §7.5 drives §14.6 |
 | `spec/pattern_matching.md` | §8 decision trees are the input to §10 |
-| `spec/properties.md` | `proved` props (Rule P7.7) inform reuse and bounds-check elision |
+| `spec/properties.md` | The facts lane (Rule P7.8): `proved` and `assumed` props inform reuse and bounds-check elision; test-build measurement (Rule P7.9) feeds only the measurement lane |
+| `spec/diagnostics.md` | `inspect` and `trace` read the cell tag and the type table (Rule PR3.1) |
 | `spec/stdlib.md` | `.clone()` is the explicit copy; borrow inference (§13) is the implicit mechanism |
-| `docs/references/scala3-compiler-reference.md` | Recheck pattern (§5.4) |
 | `docs/plans/implementation-plan.md` | Phase 4 deliverables (`perceus/PerceusInserter.scala`, region and witness emission); Phase 6 PGO witness specialization |
 | `docs/plans/phase-3-typer.md` | M10 (§5.7) computes §20 |

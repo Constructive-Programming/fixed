@@ -1,10 +1,18 @@
 # Fixed Cost Contracts
 
-**Status:** Draft v0.1
-**Specifies:** what a cost contract bounds (steps, constructions, releases), how one is written (cost props, `fip`), the size index, how cost is inferred and verified, when a change to a contract is an ABI change, and how representation selection uses contracts.
+**Status:** Draft v0.2
+**Specifies:** what a cost contract bounds (steps, constructions, releases), how one is written (cost props, `fip`), the size index, how cost is inferred and verified, when a change to a contract is an ABI change, and how representation selection uses contracts and measured costs.
 **Last revised:** 2026-11-20
 
-**Why this document exists.** In Fixed the programmer does not pick a data structure, so the source alone does not say what an operation costs: `get(i)` is constant on an array and linear on a list. Cost is therefore a **contract on capability members**. A representation that cannot meet a capability's contract cannot satisfy the capability; among those that can, the contracts tell representation selection how they differ. The decisions behind this document are recorded in `docs/decisions/P3-cost-contracts.md`.
+**Changes from v0.1** (`docs/decisions/P6-resolution-round-2026-11-20.md`, D4, D5, D6, D10, D12).
+- **The selector's score is usage × cost** (Rule CT8.2, rewritten). Usage per capability method and the cost of one call are measured where data exists (`spec/properties.md` Rule P7.9, `spec/compilation_model.md` Rule CM8.6); the bound-class table (Rule CT8.3) and the static weights are the fallback. `K < ε` now holds for the fallback only; measured changes are covered by the lock file's hysteresis (`spec/type_system.md` Rule 6.5.5). A tie no longer halts.
+- **Viability moves to application link** for the choice points bound there (Rule CT8.1). Zero viable candidates is a link error. At package compile a call on a choice-point value costs the requirement's contract, and `?` where it states none (Rule CT6.1).
+- **Lanes** (Rule CT6.5, new). A cost prop never justifies a decision that is wrong if the prop is false; contracts and measured costs feed only the measurement lane of `spec/properties.md` Rule P7.8. A `tested` exact bound is a measurement; an asymptotic bound stays `proved`, failed or `assumed`.
+- **`clone`** (Rule CT4.5, new): the cost prop of a satisfaction's `clone` tells whether it shares or copies.
+- **Candidates are satisfactions** (Rule CT8.1): two satisfactions of the same (type, capability) are never ranked against each other.
+- Diagnostics are not steps (Rule CT3.5). A reference cost table shipped by a package is measurement, not contract (Rule CT7.1).
+
+**Why this document exists.** In Fixed the programmer does not pick a data structure, so the source alone does not say what an operation costs: `get(i)` is constant on an array and linear on a list. Cost is therefore a **contract on capability members**. A representation that cannot meet a capability's contract cannot satisfy the capability; among those that can, the contracts, and measured costs where they exist, tell representation selection how they differ. The decisions behind this document are recorded in `docs/decisions/P3-cost-contracts.md`.
 
 ## 1. Scope
 
@@ -15,7 +23,7 @@ This document specifies:
 - The size index and symbolic cost terms (§5).
 - Inference of cost on Core, verification, and statuses (§6).
 - Compatibility of contracts across versions of a package (§7).
-- The use of contracts in representation selection (§8).
+- The use of contracts and measured costs in representation selection (§8).
 
 It does **not** specify:
 
@@ -29,7 +37,8 @@ It does **not** specify:
 - `spec/quantities.md` — §4.1 (demands, `exclusive` parts).
 - `spec/memory_management.md` — §11 (reuse), §18 (`fip`), §20.3 (Core).
 - `spec/properties.md` — §3 (where props appear), §7 (verification, statuses).
-- `spec/compilation_model.md` — the interface tier that carries contracts (Rule CM7.1), ABI changes (Rule CM6.7).
+- `spec/compilation_model.md` — the interface tier that carries contracts (Rule CM7.1), ABI changes (Rule CM6.7), choice points and their binding at link (Rules CM8.1, CM8.2, CM8.4), usage summaries (Rule CM8.3), the lock file (Rule CM8.5), the profile file and measured costs (Rule CM8.6).
+- `spec/properties.md` — Rules P7.8 (lanes) and P7.9 (measurement during testing).
 
 Prior art, cited from general knowledge and not re-checked for this draft:
 
@@ -78,7 +87,7 @@ An in-place bound (`constructs(m) − releases(m) ≤ 0`) holds only for callers
 
 ### 3.5 Contracts do not depend on the version (Rule CT3.5)
 
-Witness operations (`spec/compilation_model.md` §4) and reference-count operations are not steps and build no cell. A contract therefore says the same about a function's baseline version and about each of its clones. What a clone saves is the plumbing, which a contract does not count and the reports of `spec/memory_management.md` §19 do.
+Witness operations (`spec/compilation_model.md` §4), reference-count operations and diagnostics (`spec/diagnostics.md` Rule DG3.3) are not steps and build no cell. A call that the link step binds to a chosen satisfaction (`spec/compilation_model.md` Rule CM8.2) costs what a direct call costs. A contract therefore says the same about a function's baseline version and about each of its clones. What a clone saves is the plumbing, which a contract does not count and the reports of `spec/memory_management.md` §19 do.
 
 ## 4. Stating a contract
 
@@ -142,6 +151,22 @@ The `fip` modifiers may be written on a capability **method requirement** and on
 
 A member with no contract has an inferred cost (§6.1), which is reported and is not a promise.
 
+### 4.5 `clone` (Rule CT4.5)
+
+`clone` returns a value equal to its receiver (`spec/stdlib.md` §4.11). The satisfier chooses whether it **shares** (the result is the same cell, with its count raised) or **copies** (the result is new cells), and its cost prop says which:
+
+```
+Rope satisfies Clone:
+    fn clone -> Self = self                       // shares
+    prop clone_cells: constructs(clone) <= 0
+
+Buffer satisfies Clone:
+    fn clone -> Self = …                          // copies
+    prop clone_cells: constructs(clone) <= size(self)
+```
+
+The capability `Clone` states only the copying bound, so that both kinds satisfy it. A caller that knows the type relies on the claim of its satisfaction (Rule CT4.4); the selector sees it as the cost of `clone` (Rule CT8.2). A satisfaction with no cost prop on `clone` has the inferred cost of its body. A type whose values must not be duplicated does not satisfy `Clone`.
+
 ## 5. Size and symbolic terms
 
 ### 5.1 The size index (Rule CT5.1)
@@ -169,11 +194,13 @@ The cost of performing `E.op` depends on the handler, which the performer cannot
 The compiler infers `steps`, `constructs` and `releases` for every function from the Core of its baseline version (`spec/memory_management.md` §20.3), by these rules:
 
 - a sequence adds; a branch takes the maximum over its arms;
-- a direct call adds the callee's inferred cost; a call through a capability table adds the requirement's **declared** contract, or the unknown cost `?` if it has none; a call of a function-typed parameter adds the symbolic term of §5.2;
+- a direct call adds the callee's inferred cost; a call through a capability table, and a call on a value of a choice point that the package does not bind itself (`spec/compilation_model.md` Rules CM8.1, CM8.2), add the requirement's **declared** contract, or the unknown cost `?` if it has none; a call of a function-typed parameter adds the symbolic term of §5.2;
 - a derived `fold` over `x` with step `s` costs `size(x) · (cost(s) + k)` for a constant `k`; a derived `unfold` costs the same in the size of its result;
 - a constructor application adds one construction; one that the reuse analysis pairs with a cell of an `exclusive` part (`spec/memory_management.md` §11) also adds one release.
 
 Functions cannot call themselves, so the only source of a size factor is a `fold` or an `unfold`. The inference is therefore syntax-directed: it solves no recurrences.
+
+A call on a choice-point value costs the contract and not the chosen satisfier's cost, because the choice is made after the package is compiled and the package is compiled once for every choice. Where the requirement states no contract the term is `?`, and a cost prop that depends on it continues at step 2 of Rule CT6.2: an exact bound may be `tested` in the test build, under the satisfaction that the test build's link chose (`spec/properties.md` Rule P7.4); an asymptotic bound is `assumed`. The link step reads no bodies and does not infer cost again; the link report (`spec/reports.md` Rule RP5.4) shows the chosen satisfier's claims beside the contract.
 
 The size of a result is known where the member that built it says so (a `map` keeps the size; a constructor adds one). Where it is not known the result's size is a fresh symbol, and a bound that depends on it is `?`.
 
@@ -188,7 +215,7 @@ A cost prop is verified like any prop (`spec/properties.md` §7) and gets a stat
 2. **Testing, exact bounds only.** A test build counts steps and constructions around a call. For generated inputs the driver evaluates the bound at the inputs' sizes and compares. No counterexample gives `tested`.
 3. **Otherwise** the prop is `assumed`.
 
-Property-based testing cannot refute an asymptotic bound: a finite sample fixes neither `k` nor `n0`. A bound written with `O(…)` is therefore `proved`, failed by step 1, or `assumed`; it is never `tested`. For an `assumed` asymptotic bound the test build may still measure the member at doubling sizes and report **W120** (measured growth exceeds the declared class). W120 is a warning, because the measurement proves nothing.
+Property-based testing cannot refute an asymptotic bound: a finite sample fixes neither `k` nor `n0`. A bound written with `O(…)` is therefore `proved`, failed by step 1, or `assumed`; it is never `tested`. A `tested` exact bound is a measurement of the member on the generated inputs (`spec/properties.md` Rule P7.9) and belongs to the measurement lane (Rule CT6.5). For an `assumed` asymptotic bound the test build may still measure the member at doubling sizes and report **W120** (measured growth exceeds the declared class). W120 is a warning, because the measurement proves nothing.
 
 A failed exact bound is an error with a counterexample, as for any prop (Rule P8.4).
 
@@ -202,6 +229,14 @@ This check replaces the per-satisfaction re-check of default bodies for cost: a 
 
 `fixed compile --explain-memory` (`spec/memory_management.md` §19) adds, per function: the inferred `steps`, `constructs` and `releases`, with `?` where unknown and the call that made it unknown; and per cost prop its status. `--format json` gives the same data.
 
+### 6.5 Contracts are in the measurement lane (Rule CT6.5)
+
+`spec/properties.md` Rule P7.8 separates decisions that are wrong if a claim is false (the facts lane) from choices among alternatives that are all correct (the measurement lane). Every use of a cost contract is in the measurement lane: viability (Rule CT8.1), the score (Rule CT8.2), clone weights and the budget. A wrong contract makes a program slower, never wrong. What code does at a call site (whether a cell is reused, whether a branch is removed) is decided from the inferred cost and the reuse analysis of the code itself (Rules CT3.4, CT6.1), never from a cost prop.
+
+So the status of a cost prop never licenses a fact, and a `tested` cost prop, which is a measurement, is used as one. An asymptotic bound is `proved`, failed or `assumed` (Rule CT6.2); an `assumed` bound is taken as stated for selection, and W120 reports a measured growth that contradicts it.
+
+`fip` is not a cost prop in this sense: it is checked on the code (Rule CT4.3), and its failure is an error, not a status.
+
 ## 7. Compatibility
 
 ### 7.1 Changing a contract (Rule CT7.1)
@@ -212,30 +247,53 @@ Contracts are part of a package's interface (`spec/compilation_model.md` Rule CM
 - **Weakening** a bound, removing a cost prop, or removing `fip` is an ABI change: importers and their representation choices relied on it.
 - **Adding** a cost prop or `fip` to a capability requirement is an ABI change for packages that satisfy the capability, and compatible for packages that only use it.
 - A change of an **inferred** cost that no contract covers is compatible. It shows in a comparison of two interfaces as a performance change.
+- A **reference cost table** that a package ships in its interface (Rule CT8.2) is measurement, not contract. It is labelled with its target, a change to it is compatible, and it is not part of the content hash of `spec/compilation_model.md` Rule CM7.1, so a package built on two machines has one interface.
 
-## 8. Contracts in representation selection
+## 8. Contracts and measured costs in representation selection
 
 ### 8.1 Viability (Rule CT8.1)
 
-A candidate that fails a cost prop of a capability in the bound set (Rule CT6.2, step 1) is **not viable** (`spec/type_system.md` §6.5.3). A candidate whose contract is `tested` or `assumed` is viable, as for refinement capabilities (Rule P7.7.c): a wrong cost is a performance fault, not an unsound program.
+The selector's **candidates** at a choice point (`spec/compilation_model.md` Rule CM8.1) are satisfactions. For each data type that satisfies the bound set, the one satisfaction that the resolution order of `spec/type_system.md` Rule 8.4 picks is the candidate; two satisfactions of the same (type, capability) are never ranked against each other, because they differ in results and not in speed.
+
+A candidate that fails a cost prop of a capability in the bound set (Rule CT6.2, step 1) is **not viable**. A candidate whose cost prop is `tested` or `assumed` meets it: a wrong cost is a performance fault, not an unsound program (Rule CT6.5).
+
+Viability is decided where the choice is made:
+
+- **At package compile**, for a choice point whose values never leave the package (`spec/compilation_model.md` Rule CM8.4).
+- **At application link**, for every other choice point. The link step checks each candidate against the cost props that the interface tier records for the requirements of the capabilities in the bound set, with the status the candidate's package recorded. It reads no bodies.
+
+Zero viable candidates at a choice point bound at link is a **link error** that names the choice point, the bound set and, per candidate, the cost prop it failed. It is the only error selection can produce (`spec/type_system.md` Rule 6.5.5).
 
 This is where contracts decide. If `RandomAccess` promises `steps(get) <= O(1)`, a linked list never competes for a value bounded by `RandomAccess`: its `get` is a `fold` over the list, its inferred cost is `O(n)`, and the prop fails.
 
-### 8.2 Derived scoring dimensions (Rule CT8.2)
+### 8.2 The score is usage × cost (Rule CT8.2)
 
-Among viable candidates some beat the contracts. Two dimensions of `spec/type_system.md` Rule 6.5.4 are derived from that, instead of being scored by hand.
-
-Let the **written bounds** be the capabilities of the bound set as the program states them, before `extends`-closure. For a candidate `r` and a written bound `c`, let `worst_steps(c, r)` be the lowest table value (Rule CT8.3) among the `steps` bounds of `r`'s members of `c`, the members `c` inherits included, and `worst_cells(c, r)` the same for the bounds on `constructs − releases`. A member with no bound counts as *other*. A written bound with no members at all (a refinement capability) is skipped.
+Among viable candidates, the selector ranks by **expected cost** (`spec/type_system.md` Rule 6.5.4):
 
 ```
-access_fit(r)      = max(0, 10 − 0.6 × Σ_c (10 − worst_steps(c, r)) / 10)
-contract_cells(r)  = max(0, 10 − 0.6 × Σ_c (10 − worst_cells(c, r)) / 10)
+expected(p, r) = Σ_m usage(p, m) × unit(m, r)
+```
+
+over the capability methods `m` called on values of the choice point `p`. Lower is better.
+
+- `usage(p, m)` is how often `m` is called on values of `p`. The link step adds the usage vectors of the summaries along the edges of `spec/compilation_model.md` Rule CM8.3. Its source is the first that exists, in this order: a **production profile**; the **test-run usage** recorded by `spec/properties.md` Rule P7.9; the **static weights** of the summaries (the `W^d` weights of Rule CM5.4).
+- `unit(m, r)` is the cost of one call of `r`'s member `m` at the size class the profile shows for `p`. Its source is the first that exists: a measurement of the application on its own target (the profile file, Rule CM8.6); the **reference cost table** that `r`'s package ships in its interface, if its target label matches; otherwise none, and the static fallback below applies.
+
+Measured and static numbers are never mixed in one comparison. When some viable candidate at `p` has no measured `unit` for a method `p` uses, every candidate at `p` is scored by the **static fallback**: the derived dimensions below, combined with the other dimensions of Rule 6.5.4.
+
+**Static fallback.** Let the **written bounds** be the capabilities of the bound set as the program states them, before `extends`-closure. For a candidate `r` and a written bound `c`, let `steps_fit(c, r)` be the usage-weighted mean, over the members of `c` (inherited ones included) that `p` calls, of the table value (Rule CT8.3) of `r`'s bound on `steps` of that member; if `p` calls no member of `c`, the lowest such value over all members of `c`. `cells_fit(c, r)` is the same for the bounds on `constructs − releases`. A member with no bound counts as *other*. A written bound with no members (a refinement capability) is skipped.
+
+```
+access_fit(r)      = max(0, 10 − 0.6 × Σ_c (10 − steps_fit(c, r)) / 10)
+contract_cells(r)  = max(0, 10 − 0.6 × Σ_c (10 − cells_fit(c, r)) / 10)
 allocation_cost(r) = min(class_score(r), contract_cells(r))
 ```
 
 `class_score(r)` is the placement score of the value's lifetime class (`spec/memory_management.md` §3.1). Provisional values: `Inline` 10, `Static` 9, `Frame` and stack `Dest` 8, `Region` 5, `Heap` 3, less the charge for expected copy-out of a packed candidate (§16.2).
 
-Each written bound moves each derived dimension by at most 0.6 raw points, whatever the other candidates are and however many capabilities the bound inherits. With the weights of Rule 6.5.4 (0.30 each), adding one bound moves a candidate's total by at most `0.36`, which keeps the Lipschitz requirement `K < ε` of that rule. The price is that a difference in one capability's class is never decisive alone; decisiveness comes from viability (Rule CT8.1), and a remaining tie is reported for the programmer to resolve (`spec/type_system.md` §6.5.5).
+`steps_fit` and `cells_fit` are means of values in `[0, 10]`, so each written bound still moves each derived dimension by at most 0.6 raw points, whatever the usage, the other candidates and the capabilities the bound inherits. With the weights of Rule 6.5.4 (0.30 each), adding one bound moves a candidate's total by at most `0.36`, which keeps `K < ε`.
+
+**Stability.** `K < ε` holds for the static fallback, and says that one added bound cannot turn a clear winner into a clear loser. It can turn a clear winner into a tie; a tie does not halt, and the choice recorded in the lock file stays while its score is within `ε` of the best (`spec/type_system.md` Rule 6.5.5; `spec/compilation_model.md` Rule CM8.5). Measured scores have no Lipschitz bound: a new profile can move them by any amount. The lock file's hysteresis is the only thing that keeps them from flipping a choice on noise, and a build that reads the lock file and no new profile makes the same choices (`spec/reports.md` Rule RP5.3).
 
 ### 8.3 Table of classes (Rule CT8.3)
 
@@ -248,11 +306,11 @@ Each written bound moves each derived dimension by at most 0.6 raw points, whate
 | `O(n²)` | 1 |
 | other, or no bound | 0 |
 
-The values are provisional, like the weights of Rule 6.5.4. Rule CT8.2's factor `0.6` must be lowered if the weights of the two derived dimensions are raised, so that `K < ε` survives.
+The table is the static fallback of Rule CT8.2; measured costs replace it where they exist. The values are provisional, like the weights of Rule 6.5.4. Rule CT8.2's factor `0.6` must be lowered if the weights of the two derived dimensions are raised, so that `K < ε` survives.
 
 ### 8.4 Across a package edge (Rule CT8.4)
 
-A package cannot see how an importer uses a value it returns, nor how a dependency implements a capability it calls. Contracts are what crosses: a callee's declared bounds, a capability's obligations and a `data` type's claims are in the interface tier, and selection in one package uses them as it uses its own.
+A package cannot see how an importer uses a value it returns, nor how a dependency implements a capability it calls. What crosses the edge: a callee's declared bounds, a capability's obligations and a `data` type's claims, in the interface tier; per choice point and per parameter, the usage vectors of the summaries (`spec/compilation_model.md` Rule CM8.3); and, optionally, a reference cost table. The package selects for the choice points whose values never leave it. The link step selects for the rest, from these summaries and the profile file, and writes the result to the lock file.
 
 ## 9. Standard library
 
@@ -265,16 +323,19 @@ A package cannot see how an importer uses a value it returns, nor how a dependen
 - **OQ-CT3 — Peak memory.** A bound on live cells composes by maximum and needs liveness. Not specified.
 - **OQ-CT4 — Expected versus worst case.** A hash map's lookup is constant in expectation and linear in the worst case. A contract states one bound; which one `Map` should state is open (`spec/stdlib.md` OQ-S2).
 - **OQ-CT5 — Contracts on functions.** Needs function-level props.
+- **OQ-CT7 — Unit of a measured cost.** Rule CT8.2 compares measured costs of one call; whether the unit is cycles, or a weighted sum of cycles, cache misses and allocations, is not fixed. Cycles alone hide the cost a candidate imposes on the rest of the program through the cache.
 - **OQ-CT6 — How often `?` appears.** If most inferred costs are unknown, the static path of Rule CT6.2 proves little. To be measured on the examples once inference exists.
 
 ## 11. Cross-references
 
 | Document | Relationship |
 |---|---|
-| `spec/type_system.md` | §6.5.3 viability and §6.5.4 scoring use §8; Rule 6.1.1 uses Rule CT6.3 |
+| `spec/type_system.md` | §6.5.3 viability, Rule 6.5.4 (score) and Rule 6.5.5 (disambiguation) use §8; Rule 8.4 resolves which satisfaction is a candidate; Rule 6.1.1 uses Rule CT6.3 |
 | `spec/quantities.md` | `releases` is defined on `exclusive` parts (Rule Q4.1.a); Rule Q4.1 lists cost props beside `fip` as the ways to state a demand |
 | `spec/memory_management.md` | §11 reuse pairs give `releases`; §18 `fip` is the zero case; §19 carries the report |
-| `spec/properties.md` | Cost props are props: §3 placement, §7 verification, Rule P7.7 statuses |
-| `spec/compilation_model.md` | Contracts travel in the interface tier; Rule CM6.7 makes weakening an ABI change; Rule CM4.7 on `fip` through a table |
+| `spec/properties.md` | Cost props are props: §3 placement, §7 verification, Rule P7.7 statuses; Rule P7.8 lanes; Rule P7.9 measurement |
+| `spec/compilation_model.md` | Contracts travel in the interface tier; Rule CM6.7 makes weakening an ABI change; Rule CM4.7 on `fip` through a table; Rules CM8.1–CM8.6 on choice points, summaries, selection at link, the lock file and the profile file |
+| `spec/reports.md` | Rule RP5.3 (the lock file and the profile file as build inputs), Rule RP5.4 (the link report) |
+| `spec/diagnostics.md` | Rule DG3.3: diagnostics are not steps |
 | `spec/stdlib.md` | §4.12 contracts of the core capabilities |
 | `docs/decisions/P3-cost-contracts.md` | The decision and the alternatives rejected |

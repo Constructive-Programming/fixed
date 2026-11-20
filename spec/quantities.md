@@ -1,8 +1,16 @@
 # Fixed Quantities (QTT)
 
-**Status:** Draft v0.5
+**Status:** Draft v0.6
 **Specifies:** quantity and demand inference for Fixed v0.4.4 source.
 **Last revised:** 2026-11-20
+
+**Changes from v0.5.** Applies decision P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`, D6, D9, D15).
+- §4: property verification is no longer one pass that runs before quantity inference. The static prover runs after the typer and before quantity inference; the cost checker runs on Core; property-based testing is a separate test build whose results never enter the facts lane (`spec/properties.md` Rule P7.8). This resolves the phase-order contradiction with `spec/memory_management.md` §20.3.
+- Rule Q4.1.e: a call through a capability table follows the convention derived from the requirement's signature (`spec/compilation_model.md` Rule CM4.6); closures of unknown identity and effect operations keep `own` on every argument.
+- Rule Q9.3: an exclusive version is requested only where the run-time `rc == 1` test cannot stand in (`fip fn` bodies and what they request; values with no count). The measurement behind this is under suspicion (open).
+- Rule Q5.13: fork site 3 takes only `proved` props; whether an admissible site forks (granularity) is in the measurement lane.
+- Rule Q7.1: the diagnostic codes are `E071` for a `fip` obligation, `E072` for `resume` and `E083` for a linear effect; the text had given `E071` for all three.
+- The "Recheck-style" label applies to the quantity pass on the typed tree only, not to demand inference on Core.
 
 **Changes from v0.4.**
 - Demands are inferred on the **baseline version** of each function, which is polymorphic and shared (`spec/compilation_model.md` §3), and again on each clone. The statement that Core has one instance per type is withdrawn (§4).
@@ -48,7 +56,7 @@ It does **not** specify:
 ## 2. Dependencies and theoretical basis
 
 - `spec/syntax_grammar.ebnf` v0.4.10 — every syntactic form referenced.
-- `spec/compilation_model.md` v0.1 — the baseline version on which demands are inferred, and the clones Rule Q9.3 refers to.
+- `spec/compilation_model.md` — the baseline version on which demands are inferred, and the clones Rule Q9.3 refers to.
 - `spec/type_system.md` v0.4.1 — Rule 4.1 (typevar introduction), §5.9 (phantom inference), Rule 6.1 (default method bodies), §7.3.b (`of` value-params at the type level).
 - Atkey, *"Syntax and Semantics of Quantitative Type Theory"*, LICS 2018. The mathematical model.
 - Brady, *"Idris 2: Quantitative Type Theory in Practice"*, ECOOP 2021. A production implementation Fixed broadly follows for the inference shape.
@@ -111,13 +119,15 @@ Two analyses run, with different inputs:
 - **Quantities** (§3, §5) count occurrences on the typed tree, after the typer. They give erasure, closure call counts (Rule Q5.7), the `resume` check (Rule Q5.11), linear effects and the unused-binding warning, all with source positions.
 - **Demands** (§4.1) are data flow over Core, the backend IR, after lowering. Core sees every allocation and every compiler-generated member (derived `fold`, `unfold`, `map`). Each function has one **baseline version** in Core, polymorphic in its type parameters (`spec/compilation_model.md` Rule CM3.1); demands are inferred on it, and inferred again on every clone the specialiser builds, where known types and ownership make them more precise (§9.3). Lowering carries source spans into Core, so demand diagnostics (`E110`) still point at source. Representation selection consumes demands and therefore also runs on Core (`spec/memory_management.md` §20.3).
 
-The rest of this section describes the **quantity** analysis. Quantity inference is a **Recheck-style phase** (see `docs/references/scala3-compiler-reference.md` §5.4). It runs:
+Property verification is three things, placed where their inputs exist (P6 D6, `spec/memory_management.md` §20.3): the **static prover** on the typed tree, right after the typer and before quantity inference; the **cost checker** on Core, after demand inference; and **property-based testing** in a separate test build. A decision that is wrong if a claim is false (reuse justified by a prop, a parallel fork site) is in the **facts lane** and never takes a `tested` prop; results of the test build never enter it (`spec/properties.md` Rule P7.8). Decisions among alternatives that are all correct (fork granularity, clone weights) are in the measurement lane (Rule P7.9).
+
+The rest of this section describes the **quantity** analysis. Quantity inference runs on the typed tree and is a **Recheck-style phase** (see `docs/references/scala3-compiler-reference.md` §5.4). Demand inference is a pass over Core and is not. Quantity inference runs:
 
 | Runs after | Provides input |
 |---|---|
 | Base typer | Typed AST |
 | Capability closure (§6.2) | Bound sets |
-| Property verification | Static prop results (so quantity 0 contexts are verified) |
+| Static prover (`spec/properties.md` §7) | `proved` props, available to every later pass (fork site 3, Rule Q5.13.a) |
 
 | Runs before | Consumes output |
 |---|---|
@@ -155,7 +165,7 @@ and only until the first use that keeps it (`own`) while the binding stays live.
 
 **Rule Q4.1.d (relation to quantities).** Quantity 0 and demand `0` coincide. Otherwise the two are independent: a binding of quantity 1 may demand `read` (one comparison), and a binding of quantity ω may be passed to an `exclusive` parameter at its last use.
 
-**Rule Q4.1.e (members without a body).** A capability method requirement has no body, so no demand can be inferred for it. A call through a capability table, through a closure whose identity is unknown, or of an effect operation follows the fixed convention of `spec/compilation_model.md` Rule CM4.6: every argument is passed under `own` on the shared pointer, and the exclusive pointer may be used only by a caller that exclusively owns every argument in every part. A satisfying type's method keeps its own inferred demands for callers that know the type; the table entry adapts it to the convention.
+**Rule Q4.1.e (members without a body).** A capability method requirement has no body, so no demand can be inferred for it. A call through a capability table follows the convention derived from the requirement's signature (`spec/compilation_model.md` Rule CM4.6): a parameter is `own` if a type variable of its type occurs in the result type, and `read` otherwise; the exclusive pointer requires exclusive ownership only of the `own` parameters whose type is `Self`. So `size(self) -> u64` borrows, and `push(self, x: Part) -> Self` owns both and may update `self` in place while `x` stays shared. A satisfier that must keep a `read` argument `dup`s it; one that ignores an `own` argument drops it. A call through a closure whose identity is unknown, and a call of an effect operation (`spec/effects.md` Rule E7.7), pass every argument under `own` on the shared pointer, and the exclusive pointer may be used only by a caller that exclusively owns every argument in every part. A satisfying type's method keeps its own inferred demands for callers that know the type; the table entry adapts it to the convention. The reason for a convention read off the signature: it is the only thing a caller and every satisfier, possibly in different packages, both see.
 
 Demands are inferred, never written. A program states something about ownership only through a contract: `fip` (§7.5), which requires `exclusive` on the parts a function reuses, and the cost props of `spec/cost.md`, whose `releases` term is defined on `exclusive` parts.
 
@@ -203,7 +213,7 @@ A type parameter inferred phantom per type_system.md §5.9 is **always quantity 
 
 Prop bodies are **excluded from the compiled artifact** (the program binary). References to bindings inside a prop body therefore do **not contribute to the binding's runtime quantity** in the compiled artifact. If a binding is used only inside prop bodies, it has runtime quantity 0 in the artifact and is erased.
 
-Property verification (`spec/properties.md` §7) may compile prop bodies separately into a **test build** — for example, a PBT driver that runs the prop body on generated inputs. Inside that test build, bindings have their normal quantities determined by all uses (including the prop body itself); the test build genuinely runs the body and is subject to standard quantity arithmetic. The test build is **not** part of the program binary.
+Property-based testing (`spec/properties.md` §7) compiles prop bodies separately into a **test build** — for example, a PBT driver that runs the prop body on generated inputs. Inside that test build, bindings have their normal quantities determined by all uses (including the prop body itself); the test build genuinely runs the body and is subject to standard quantity arithmetic. The test build is **not** part of the program binary, and its results never enter the facts lane (`spec/properties.md` Rule P7.8).
 
 Operationally: when computing a binding's runtime quantity in the compiled artifact, the typer ignores uses inside prop bodies. Property verification is then handled separately, with its own compilation pipeline.
 
@@ -267,7 +277,7 @@ fn g(x: i64) -> i64 =
 
 ### 5.11 `resume` in handlers (Rule Q5.11)
 
-`resume(v)` inside a handler clause body is **always quantity 1** (single-shot). The clause body must contain `resume(...)` exactly zero or one time on every code path; two or more `resume` calls reachable on a single path is a compile error.
+`resume(v)` inside a handler clause body is **always quantity 1** (single-shot). The clause body must contain `resume(...)` exactly zero or one time on every code path; two or more `resume` calls reachable on a single path is a compile error (`E072`, Rule Q7.1).
 
 ```
 handle action():
@@ -299,9 +309,9 @@ Fixed has no surface syntax for parallelism. The compiler may evaluate independe
 2. **Tree unfold.** An auto-derived `unfold` (Rule 7.4.b) whose step returns a variant with two or more recursive seeds. The sub-unfolds of those seeds are the lanes. Required: the step has an empty effect row.
 3. **Sequence fold over a proved associative operation.** A `fold(init, step)` over a value with one recursive position, where `step` has the form `(acc, x) -> op(acc, g(x))` with `op: (R, R) -> R`, all effect rows are empty, and props with status `proved` (`spec/properties.md` Rule P7.7) state that `op` is associative and that `init` is its identity. The sequence is split into contiguous runs. Each run is a lane, and the lane results are combined with `op` in sequence order.
 
-Sites 1 and 2 need no props. Each lane computes exactly the sub-result that sequential evaluation computes, and the node function combines the sub-results in the same order. Site 3 changes the association order, so its result differs from the sequential one unless `op` is associative. That is why it needs `proved` props: a `tested` or `assumed` prop does not qualify (Rule P7.7.c). Floating-point addition is the standard case that is rejected: it is not associative, so the prop is never `proved` and the fold stays sequential.
+Sites 1 and 2 need no props. Each lane computes exactly the sub-result that sequential evaluation computes, and the node function combines the sub-results in the same order. Site 3 changes the association order, so its result differs from the sequential one unless `op` is associative. That is why it needs `proved` props: a `tested` or `assumed` prop does not qualify (Rule P7.7.c). The props come from the static prover, which runs before this pass (§4); a `tested` status, which only the test build can give, could not arrive in time and is excluded from the facts lane in any case (`spec/properties.md` Rule P7.8). Floating-point addition is the standard case that is rejected: it is not associative, so the prop is never `proved` and the fold stays sequential.
 
-An effect row is a typing fact (`spec/effects.md` §5), not a prop, so "pure" needs no verification status.
+An effect row is a typing fact (`spec/effects.md` §5), not a prop, so "pure" needs no verification status. A callback that reaches a `fold` through an unannotated function type (`spec/effects.md` Rule E5.5.a) keeps its own non-empty row and carries captured evidence (Rule E7.8), so its `fold` is not a fork site and captured evidence never crosses into a lane.
 
 **Rule Q5.13.b (quantities across lanes).** Every lane runs, so a free binding's contribution is the **sum** (`+`, §3.1) of its usages over the lanes, as for sequencing (Rule Q5.10):
 
@@ -315,7 +325,7 @@ The function arguments of a `fold` are closures that run once per node, so the b
 
 **Rule Q5.13.c (same result).** A forked evaluation must produce the result of sequential evaluation. Empty effect rows and totality make the order of lanes unobservable. If more than one lane panics (`unreachable`, or an `impossible` mapping per `spec/type_system.md` §8.2), the panic reported is that of the first such lane in sequential order.
 
-**Rule Q5.13.d (the fork decision).** Whether an admissible site actually forks is a cost decision of the compiler and runtime (granularity), observable only as timing. The memory report (`spec/memory_management.md` §19) states for every `fold` / `unfold` whether it is a fork site and, when it is not, the reason: the effect that makes a row non-empty, or the prop that is not `proved` and its status.
+**Rule Q5.13.d (the fork decision).** Whether an admissible site actually forks is a cost decision of the compiler and runtime (granularity), observable only as timing. It is in the measurement lane (`spec/properties.md` Rules P7.8, P7.9): it may use costs measured in the test build or a profile (`spec/compilation_model.md` Rule CM8.6), because every choice is correct. The memory report (`spec/memory_management.md` §19) states for every `fold` / `unfold` whether it is a fork site and, when it is not, the reason: the effect that makes a row non-empty, or the prop that is not `proved` and its status.
 
 ## 6. Erasure (quantity 0)
 
@@ -355,7 +365,7 @@ Inference alone cannot be violated: a binding used twice simply has quantity ω 
 
 Capturing an exclusively owned value in a closure that may run several times is not an error. The capture is downgraded to `own` (Rule Q5.7), and the value is shared from then on.
 
-Violations: `error[E071]: <obligation> not met`, naming which of the three applies.
+Violations: `error[E071]: <obligation> not met` for item 1, `error[E072]` for item 2 (two `resume`s reachable on one path), and `error[E083]` for item 3 (`spec/effects.md` Rule E3.5.a). Each names the obligation and the locations involved.
 
 ### 7.2 FBIP / in-place reuse (Rule Q7.2)
 
@@ -431,6 +441,13 @@ Every function has a **shared version**: its baseline version (`spec/compilation
 
 An **exclusive version** is a clone of it, compiled for a caller that exclusively owns some of the `exclusive` parts: there reuse is unconditional. When a caller passes an exclusively owned value to an `exclusive` parameter and that clone exists, it calls the clone; otherwise it calls the shared version. The caller knows statically which kind of value it holds, so the choice is made at compile time. A call through a capability table or a closure makes the same choice between two code pointers (Rule Q4.1.e).
 
+**Which exclusive versions are requested (Rule Q9.3.a).** A caller requests an exclusive version only where the run-time `rc == 1` test of the shared version cannot stand in for the static proof (`spec/memory_management.md` Rule PR6.3.a):
+
+1. the body of a `fip fn` and every clone it requests (mandatory, `spec/compilation_model.md` Rule CM5.5);
+2. an exclusively owned argument that has no per-value count (`Frame`, stack `Dest`, `Region`), which the shared version cannot reuse.
+
+An exclusively owned `Heap` argument goes to the shared version, whose run-time test succeeds on it. The reason is the first measurement, in which the test ran as fast as unconditional reuse. **Open:** the project owner suspects that this measurement hides a compiler fault; until that is ruled out (`spec/memory_management.md` §21), the rule is provisional.
+
 ```
 fn bump(xs: List of u64) -> List of u64 =
     match xs:
@@ -443,9 +460,9 @@ fn main() -> () with Console =
     Console.print_line(a.show())
 ```
 
-Had `main` printed `a` before calling `bump`, the call would be `a`'s last use, `a` would still be exclusively owned, and the exclusive version of `bump`, if built, would overwrite `a`'s cell in place.
+Had `main` printed `a` before calling `bump`, the call would be `a`'s last use and `a` would still be exclusively owned. If `a` is `Heap`, the shared version's `rc == 1` test succeeds and `a`'s cell is overwritten in place. If `a` is `Frame`, the call requests the exclusive version (Rule Q9.3.a), which overwrites the cell if it was built.
 
-**Which exclusive versions exist.** An exclusive version is one axis of a clone key, beside known types and classes (`spec/compilation_model.md` Rule CM5.1). Clones are built for the combinations that call sites request, in the order of their score, while the function's clone budget lasts (Rules CM5.3, CM5.4). A package also exports the ownership combinations of its public functions within the same budget (Rule CM6.4). A combination that was not built costs nothing but the opportunity: the caller calls the shared version. Earlier drafts capped the number of versions at four and made the caller copy beyond the cap; both are withdrawn.
+**Which exclusive versions exist.** An exclusive version is one axis of a clone key, beside known types and classes (`spec/compilation_model.md` Rule CM5.1). Clones are built for the combinations that call sites request under Rule Q9.3.a, in the order of their score, while the function's clone budget lasts (Rules CM5.3, CM5.4). A package also exports the ownership combinations of its public functions within the same budget, for classes with no per-value count only (Rule CM6.4). A combination that was not built costs nothing but the opportunity: the caller calls the shared version. Earlier drafts capped the number of versions at four and made the caller copy beyond the cap; both are withdrawn.
 
 **Copying.** A `fip fn` has no shared body, because a body that tested counts or allocated would not be `fip`. Its shared entry **copies the demanded part** of a shared argument and calls the one body: the cells the demand covers are copied, the parts it does not cover are shared (`spec/compilation_model.md` Rule CM5.5). Copying is the strategy Neut applies to every share (`spec/memory_management.md` §7.3); Fixed applies it only here. Values are immutable, so a copy is never observable. Every copy is reported by `--explain-memory` (`spec/memory_management.md` §19).
 

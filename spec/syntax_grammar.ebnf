@@ -1,11 +1,43 @@
 (* ============================================================
-   Fixed Programming Language — Syntax Grammar v0.3
+   Fixed Programming Language — Syntax Grammar
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4.10
+   Status:        DRAFT v0.4.11
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
    Last revised:  2026-11-20
+
+   Refinements in v0.4.11
+   ----------------------
+   Applies decision record P6 (docs/decisions/P6-resolution-round-
+   2026-11-20.md, D11–D13).
+   - **`pub`** may precede a `fn`, `data`, `cap`, `effect`, type alias or
+     `satisfies` declaration at top level (`Visibility`, §2). It is not
+     admitted on `use`, on `using` or on a local `fn`. Declarations are
+     private by default (spec/type_system.md §8.6).
+   - **`using`** is a new reserved word, written in three places. As a
+     top-level declaration (`UsingDecl`, §3): `using ByAmount`. As a
+     postfix on an application expression (`UsingClause` in `AppExpr`,
+     §13): `sort(xs) using ByAmount`. After a type reference (`TypeRef`,
+     §10): `Set of Money using ByAmount`. It names satisfactions; see
+     spec/type_system.md Rule 8.4.
+   - **Named satisfactions**: `Money satisfies Ord named ByAmount:`
+     (`SatisfactionName`, §9). `named` is a provisional contextual word,
+     recognised only after the capability of a `satisfies` declaration
+     or of a `use … satisfies` tail. It is not reserved.
+   - **Diagnostics need no production.** `inspect` and `trace` are
+     ordinary identifiers that the prelude binds and the compiler
+     knows; see the note in §13. Interpolation (`"… {x} …"`) is not
+     lexical: see the note at STRING_LITERAL (§1).
+   - **Nested `fn` declarations** now have the production the v0.4.8
+     entry promised: `BlockStmt` (§13) admits a local `FnDecl` in an
+     indented `BlockTail` or `LambdaBody`.
+   - Comments that contradicted the productions were corrected (the
+     `AppSuffix` note on multi-line lambdas, the `BlockTail` note on
+     function bodies). The title no longer carries a second version
+     number.
+   - `mod` and `in` stay reserved without productions. Packages are
+     defined by spec/compilation_model.md §6, not by source syntax.
 
    Refinements in v0.4.10
    ----------------------
@@ -21,7 +53,8 @@
      `size`, `O`, `log` and `max` are not reserved: they have their cost
      meaning only inside such a prop.
    - No visibility or package syntax yet: `mod` and `pub` stay reserved
-     without productions (spec/compilation_model.md OQ-CM1).
+     without productions (spec/compilation_model.md OQ-CM1). [`pub`
+     received its production in v0.4.11.]
 
    Refinements in v0.4.9
    ---------------------
@@ -312,6 +345,15 @@ UPPER_IDENT     = (* [A-Z][a-zA-Z0-9_]*   *) ;
 INT_LITERAL     = (* digits, optional `_` as visual separator *) ;
 FLOAT_LITERAL   = (* digits "." digits ( ("e"|"E") ("+"|"-")? digits )? *) ;
 STRING_LITERAL  = (* '"' { strchar | escape } '"' *) ;
+(* Interpolation is not lexical. `{` and `}` are ordinary characters in
+   every string literal (examples/04_json.fixed writes "{}"). When a
+   string literal is the message of a diagnostic sink — the argument of
+   `trace`, the message of a panic or of `unreachable`, the failure
+   report of a prop (spec/diagnostics.md) — the compiler reads
+   `{ LOWER_IDENT ( "." LOWER_IDENT )* }` inside it as an interpolated
+   name or field path, and `{{` and `}}` as literal braces. Only a path
+   is admitted, not a general Expr, so that a string literal never
+   needs nested lexing. *)
 CHAR_LITERAL    = (* "'" ( char | escape ) "'"  *) ;
 BOOL_LITERAL    = "true" | "false" ;
 UNIT_LITERAL    = "(" ")" ;
@@ -326,11 +368,18 @@ DEDENT          = (* synthetic token: closing of an indented block *) ;
      if      implies     impossible  in          is          let
      linear  match       mod         of          prop        pub
      resume  return      Self        satisfies   suchThat    true
-     type    unreachable use         with                                  *)
+     type    unreachable use         using       with                      *)
 (* `phantom` removed in v0.4.1 — phantom-ness is now inferred from usage.
    `linear` added in v0.4.2 — modifier on `effect` declarations.
    `suchThat` added in v0.4.4 — filter clause in `forall` quantifiers.
-   `fip` added in v0.4.9 — modifier on `fn` declarations. *)
+   `fip` added in v0.4.9 — modifier on `fn` declarations.
+   `using` added in v0.4.11 — satisfaction choice (spec/type_system.md
+   Rule 8.4). It is a separate token from `use`: the scanner takes the
+   longest identifier, so `using` never lexes as `use` followed by `ing`.
+   `mod` and `in` are reserved without productions.
+   Contextual words, not reserved: `strict` (inside `fip( … )`), `named`
+   (provisional, after the capability of a `satisfies`). `inspect` and
+   `trace` are ordinary identifiers. *)
 
 
 (* ============================================================
@@ -343,12 +392,20 @@ CompilationUnit
 
 TopItem
     = UseDecl
-    | CapDecl
-    | EffectDecl
-    | DataDecl
-    | TypeAlias
-    | FnDecl
-    | SatisfiesDecl
+    | UsingDecl
+    | Visibility? ( CapDecl
+                  | EffectDecl
+                  | DataDecl
+                  | TypeAlias
+                  | FnDecl
+                  | SatisfiesDecl )
+    ;
+
+(* v0.4.11. Declarations are private to their package by default;
+   `pub` makes one public (spec/type_system.md §8.6). `pub` comes before
+   any other modifier: `pub fip fn`, `pub linear effect`. *)
+Visibility
+    = "pub"
     ;
 
 
@@ -366,10 +423,25 @@ UsePath
 
 UseTail
     = "." "{" UseSel ( "," UseSel )* ","? "}"      (* use-group: not a block, brace-grouped *)
-    | "satisfies" CapRef                            (* use a.b.T satisfies C *)
+    | "satisfies" CapRef SatisfactionName?          (* use a.b.T satisfies C [named N] *)
     ;
 
+(* A named satisfaction is imported like a type: `use shop.money.ByAmount`
+   (a UsePath ending in UPPER_IDENT). *)
 UseSel  = UPPER_IDENT ;
+
+(* v0.4.11. A top-level `using` names satisfactions that decide, for this
+   file, which satisfaction of a pair a site uses (spec/type_system.md
+   Rule 8.4, level 3; in the application root, level 5). Each name must
+   be a named satisfaction in scope. `use` imports a name; `using`
+   chooses a satisfaction. The two never start the same production. *)
+UsingDecl
+    = "using" SatisfactionRef ( "," SatisfactionRef )*
+    ;
+
+SatisfactionRef
+    = UPPER_IDENT
+    ;
 
 
 (* ============================================================
@@ -566,7 +638,16 @@ FnBody
    ============================================================ *)
 
 SatisfiesDecl
-    = SatisfiesSubject "satisfies" CapRef SatisfiesBody?
+    = SatisfiesSubject "satisfies" CapRef SatisfactionName? SatisfiesBody?
+    ;
+
+(* v0.4.11. `named` is a provisional contextual word (P6 D12; open as
+   spec/compilation_model.md OQ-CM14). It is recognised only here and in
+   UseTail, right after the CapRef. `CapRef`'s optional `of OfArg` cannot
+   absorb it: an OfArg that is a TypeExpr ends at a LOWER_IDENT that is
+   not followed by `(`. *)
+SatisfactionName
+    = "named" UPPER_IDENT
     ;
 
 SatisfiesSubject
@@ -690,8 +771,15 @@ PrimitiveType
     | UNIT_LITERAL
     ;
 
+(* v0.4.11. A `using` clause after a type reference names the
+   satisfactions that serve the bounds of that type expression:
+   `Set of Money using ByAmount`. Like `of`, it binds to the innermost
+   TypeRef, so the line above parses as `Set of (Money using ByAmount)`.
+   The position does not change the meaning: each name determines its
+   (type, capability) pair, and the clause covers the whole type
+   expression it is written in (spec/type_system.md Rule 8.4). *)
 TypeRef
-    = UPPER_IDENT ( "of" OfArg )?
+    = UPPER_IDENT ( "of" OfArg )? UsingClause?
     | PrimitiveType
     ;
 
@@ -888,13 +976,33 @@ UnaryExpr
     = ( "-" | "!" )? AppExpr
     ;
 
+(* v0.4.11. A trailing `using` clause names the satisfactions used by
+   the resolutions inside this application expression, its arguments
+   included (spec/type_system.md Rule 8.4, level 1). It binds tighter
+   than every binary operator: `sort(xs) using ByAmount |> f` applies
+   `using` to `sort(xs)` only. To give an operator site a satisfaction,
+   write the method call (`a.compare(b) using ByAmount`). `using` cannot
+   start an expression, so the clause is not ambiguous with a following
+   argument or statement.
+
+   `inspect(x)`, `trace("…")` and `unreachable("…")` need no production.
+   `inspect` and `trace` are LOWER_IDENT atoms applied by AppSuffix;
+   the prelude binds them, the compiler knows them, and a user
+   declaration of the same name shadows them (examples/05_phantom_types
+   .fixed declares its own `fn inspect`). `unreachable("…")` parses as
+   the atom `unreachable` applied by AppSuffix. Their meaning is given
+   by spec/diagnostics.md. *)
 AppExpr
-    = AtomExpr AppSuffix*
+    = AtomExpr AppSuffix* UsingClause?
+    ;
+
+UsingClause
+    = "using" SatisfactionRef ( "," SatisfactionRef )*
     ;
 
 (* Block lambdas removed in v0.3. Trailing-block style replaced by
-   single-expression arrow lambdas; for multi-line bodies, use
-   `(x) -> do: …` or a named helper. *)
+   single-expression arrow lambdas; for a multi-line body, write
+   `(x) ->` followed by an indented block (v0.3.1). *)
 AppSuffix
     = "(" ArgList? ")"
     | "." LOWER_IDENT ApplyTail?
@@ -960,16 +1068,25 @@ LambdaParam
    expression continuation. See the bracket-suppression note in §1. *)
 LambdaBody
     = Expr                                                         (* inline single-expr *)
-    | NEWLINE INDENT Expr ( NEWLINE Expr )* NEWLINE? DEDENT        (* multi-line block *)
+    | NEWLINE INDENT BlockStmt ( NEWLINE BlockStmt )* NEWLINE? DEDENT   (* multi-line block *)
     ;
 
-(* Block tail used by every colon-introduced block: function bodies,
-   if/else branches, match case RHS, do-block, lambda do-bodies. May be
-   inline (single Expr on same line) or indented (NEWLINE then INDENT
-   block). *)
+(* Block tail used after `=` (function and method bodies) and after `:`
+   or `=>` (if/else branches, match case and handler clause bodies).
+   May be inline (single Expr on the same line) or indented (NEWLINE
+   then INDENT block). *)
 BlockTail
     = Expr                                                         (* inline *)
-    | NEWLINE INDENT Expr ( NEWLINE Expr )* NEWLINE? DEDENT        (* indented block *)
+    | NEWLINE INDENT BlockStmt ( NEWLINE BlockStmt )* NEWLINE? DEDENT   (* indented block *)
+    ;
+
+(* A statement of an indented block: an expression, or a local function
+   declaration (v0.4.8, production added in v0.4.11) whose name is
+   visible in the rest of the block. A local function takes no `pub`.
+   The last statement of a block is its value and must be an Expr. *)
+BlockStmt
+    = FnDecl
+    | Expr
     ;
 
 (* IfExpr: `if cond: BODY ( else: BODY | else IfExpr )?`
@@ -1074,7 +1191,21 @@ Whitespace       = (* space; tab is a v0.3 error *) ;
         See type_system.md §5.7.
 
    Q11 — `mod`, `pub`, `in` keywords (closed)
-        Reserved without productions.
+        `mod` and `in` are reserved without productions. `pub` has a
+        production since v0.4.11 (`Visibility`, §2).
+
+   New in v0.4.11 (open, for the owner):
+
+   N7 — Importing a function by name. `UseSel` and the last segment
+        of `UsePath` admit only UPPER_IDENT (v0.2.4), so a `pub fn` of
+        another package cannot be named in a `use`. Whether to admit
+        LOWER_IDENT there, or to call through a qualified path, is
+        not decided.
+
+   N8 — Package scope for `using`. spec/type_system.md Rule 8.4 places
+        package scope and the application root in a file named
+        `package.fixed` (author's choice). There is no package
+        declaration in the grammar.
 
    Q16 — `unreachable` → spec/type_system.md §5.6.
 
@@ -1155,8 +1286,9 @@ Whitespace       = (* space; tab is a v0.3 error *) ;
    The anchor sets, by context, are:
 
      Top-level item:
-       `use`, `fn`, `fip`, `cap`, `data`, `effect`, `linear`, `type`, `mod`,
-       `pub`, UPPER_IDENT (start of a satisfies declaration), EOF.
+       `use`, `using`, `fn`, `fip`, `cap`, `data`, `effect`, `linear`,
+       `type`, `mod`, `pub`, UPPER_IDENT (start of a satisfies
+       declaration), EOF.
 
      Block body:
        NEWLINE at the block's indent, DEDENT, plus any top-level anchor.
