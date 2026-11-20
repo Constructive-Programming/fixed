@@ -1,6 +1,7 @@
 # P2 — A polymorphic baseline, with specialisation on top
 
 **Status:** Decided 2026-11-20 (design debate with the project owner). Specified in `spec/compilation_model.md` §3–§5.
+**Superseded in part by P6** (`docs/decisions/P6-resolution-round-2026-11-20.md`): ownership clones ranked by score are replaced by P6 D15 (requested only where a run-time `rc == 1` test cannot stand in); the lexical weight of decision 5 is replaced by P6 D15 (the weight of the requesting function's own call sites, carried along call edges).
 **Affects:** `spec/compilation_model.md` (new), `spec/memory_management.md` §7.3, §7.4, §8.1, §20.3, `spec/quantities.md` §4, §9.3, `spec/type_system.md` §6.5, §7.4, `spec/effects.md` §7.
 
 ## Problem

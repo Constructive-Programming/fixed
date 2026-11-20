@@ -4,6 +4,8 @@
 **Goal:** the compiler complies with `spec/compilation_model.md`: one polymorphic, witness-passing **baseline** version per function, **clones** built on top of it under one size budget in score order, the shared version as the primary one, and a `--no-specialise` build mode.
 **Decisions:** `docs/decisions/P1`–`P5`. Review findings: `docs/decisions/P0-spec-review-2026-11-20.md`.
 
+**Note, 2026-11-20 (after P6).** Decision P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`) superseded rules this plan was built against: ownership clones ranked by score in the shared budget (now requested only where a run-time `rc == 1` test cannot stand in, D15); the lexical weight of a request (D15); witness records and tables per instance (D15); the caller-chosen / callee-chosen result rule of Rule CM4.5 (the signature decides, D2); and coherence per link unit (several satisfactions of one pair, chosen by `using`, D12). The milestone records below describe what was built under the earlier rules and are left as they were. The 6–8% that the M2 header seemed to cost was located and fixed: it was an uninlined call in the runtime's child walk, not the reference map (`docs/baselines/runtime-2026-11-20-phase-4.1.md`, addendum; P6 D16).
+
 ## 1. Scope
 
 In scope, in the order of §C below:

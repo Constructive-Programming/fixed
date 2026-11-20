@@ -1,6 +1,6 @@
 # Fixed Compiler — Phase 3: Type Checker (Implementation Plan)
 
-**Status:** Part A functionally complete (M1–M5); M5 perf checkpoint open — see `docs/Phase3Conformance.md`
+**Status:** Part A functionally complete (M1–M5); M5 perf checkpoint open — see `docs/Phase3Conformance.md`. Part B: M6, M7 and M10 done (`phase-3.1-capability-closure.md`, `phase-3.2-effects.md`, `phase-3.4-qtt.md`); M9, M11 and M8' not started
 **Scope:** Scala 3 implementation of the typer pipeline. Untyped AST (Phase 2 output) → typed AST → typed AST refined by capability closure / effect inference / quantity check / representation selection.
 **Prerequisite:** Phase 2 + 2.1 complete (parser produces a usable AST with diagnostics, gap nodes, and trivia for every `examples/*.fixed`, even on syntactically broken input).
 **Reference:** `docs/references/scala3-compiler-reference.md` §4 (typer pipeline) and §5.4 (recheck pattern). Read both end-to-end before starting M1.
@@ -25,7 +25,7 @@ Phase 3 is split into Part A (this plan) and Part B (separate sub-plans, sketche
 - **Effect inference** (`effects/EffectChecker.scala`, `phase-3.2-effects.md`) — infer effect rows for every expression; verify that all effects are handled before they reach `main`.
 - **Property verifier** (`caps/PropVerifier.scala`, `phase-3.3-properties.md`) — discharge static `prop` obligations via Princess (per §5.6.1); queue PBT obligations for the rest.
 - **Quantity checker** (`qtt/QuantityChecker.scala`, `phase-3.4-qtt.md`) — infer 0/1/ω quantities; verify erasure and linearity.
-- **Representation selector** (`repr/RepresentationSelector.scala`, `phase-3.5-repr.md`) — assign concrete C-level representations per `spec/type_system.md` §6.5.
+- **Representation selector** (`repr/RepresentationSelector.scala`, `phase-3.5-repr.md`) — assign concrete representations per `spec/type_system.md` §6.5.
 
 ### 1.2 What's NOT in Phase 3 (deferred)
 
@@ -64,6 +64,8 @@ Phase 3 is split into two parts: **Part A — Base typer (M1–M5, this plan)** 
 | M10 ✅ | Quantities, demands and lifetimes | `phase-3.4-qtt.md` | Occurrence quantities on the typed tree (3.4.M1 ✅); demands (`0`/`read`/`own`/`exclusive`), shared versions, escape sets, lifetime classes, garbage-free carry, handler kinds, signature facts and `fip` check on Core after lowering, per `spec/memory_management.md` §20; runs **before** M9 to feed it |
 | M11 | Representation selector (on Core after lowering, since it reads M10's Core facts; `phase-3.4-qtt.md` decision A4) | `phase-3.5-repr.md` | `ReprMap` per `spec/type_system.md` §6.5; consumes M6 + M10 (quantities, classes, escape sets); demotes to `Inline`, resolves growable-stack count N and packed copy-out requirements; re-checks abstract `Cap.ctor` calls against the chosen variant's fields (§6.5.6, Rule 8.1.a refinement) |
 | M8' | Conformance gaps for exhaustiveness | `phase-3.x-exhaustiveness.md` | Nested-pattern + refinement-cap-aided + handler-clause coverage per `spec/pattern_matching.md` §6 |
+
+The sub-plans `phase-3.3-properties.md`, `phase-3.5-repr.md` and `phase-3.x-exhaustiveness.md` named in this document, and `phase-4-codegen.md` in §11, have not been written.
 
 **Phase 3 (overall) success criterion:** every example in `examples/01..11.fixed` type-checks AND has a complete capability/effect/quantity/representation picture ready for Phase 4 codegen.
 
@@ -801,7 +803,7 @@ Because this check requires only the M5 type information (not closure / effects 
 
 A v1 typer that ships only top-level variant coverage is **non-conformant** per Rule M6.4.b ("an implementation that ignores refinement-cap evidence and demands wildcards even when the reachable domain is fully covered by literals is non-conformant"). This plan accepts the non-conformance for v1 and creates `docs/plans/phase-3.x-exhaustiveness.md` as the closing sub-plan. Authoring that plan is itself a Phase 3.x milestone (estimated 2–3 weeks of design + implementation).
 
-The v1 conformance level is documented in the compiler's `--print:conformance` output (a small piece of M11 scaffolding) so users can see what's not enforced.
+The v1 conformance level is documented in `docs/Phase3Conformance.md` so users can see what's not enforced; the compiler has no `--print` flag (see §5.8).
 
 ### 5.6 Property verifier (M9 — recheck)
 
@@ -876,7 +878,7 @@ Per `spec/type_system.md` §6.5, every cap classifier (Sum / Product / Recursive
 
 - Sum cap → tagged union (small variants → 1 byte tag + variant payload; large → boxed).
 - Product cap → flat struct (field layout per spec §6.6).
-- Recursive cap → heap-allocated; auto-derived `fold` → tail-recursive C function.
+- Recursive cap → heap-allocated; auto-derived `fold` → a tail-recursive function.
 - Capability-only cap → the baseline version passes witnesses (capability tables); clones for known types are chosen by the score under the per-function budget, later with profile data (`spec/compilation_model.md` §4–§5).
 - Marker / Refinement cap → zero-sized at runtime; type-only.
 
@@ -967,6 +969,8 @@ The first match wins. Multiple matches in the same scope are an ambiguity error 
 
 #### 7.4.1 Soundness of local-scope satisfies
 
+**Note, 2026-11-20.** Decision P6 D12 withdrew coherence: a link unit may hold several satisfactions of one pair, `using` chooses between them, and for a bound on a data type's own parameter the satisfaction is recorded in the type (`spec/type_system.md` Rules 8.4, 8.4.a). Items 1, 3 and 5 below describe the withdrawn model. The compiler never built the coherence check of items 2 and 4: `T012` is not in its diagnostic catalogue.
+
 Scoped visibility on its own would be a real divergence from Scala/Haskell/Rust. Haskell's orphan-instance problem and Rust's coherence rules exist precisely because a value of type `Maybe[Int]` viewed through `Optional` in module A and viewed through a *different* `Optional` satisfaction in module B can satisfy different invariants — passing the value across the module boundary breaks reasoning. Fixed must address this; the choice is not free.
 
 **The Fixed soundness model (v1):**
@@ -993,7 +997,7 @@ The typer (M5) handles the binding; the prop verifier (M9) handles the proof obl
 
 Per `spec/type_system.md` §5.9, phantom type parameters are *inferred* — there is no surface `phantom` keyword. A type parameter is phantom if it appears nowhere in the value-position arguments and only in marker / refinement caps. The QTT pass (M10) detects this by computing each type parameter's quantity: 0 → phantom, ω otherwise.
 
-The `phantom` keyword was removed from the language in v0.4.1; the parser doesn't recognise it. The typer's job is the inference; the codegen (Phase 4) elides phantom parameters at the C level.
+The `phantom` keyword was removed from the language in v0.4.1; the parser doesn't recognise it. The typer's job is the inference; the codegen (Phase 4) elides phantom parameters in the emitted code (LLVM IR).
 
 ## 8. Risks and mitigations
 

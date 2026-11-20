@@ -22,7 +22,7 @@ Capabilities *are* predicate functors over the type universe. Cropping = existen
 ### Keeping performance without explicit data
 
 - **Algebraic effect handlers** — effects are declared, tracked in types, and handled with composable handlers. No monads, no transformers, no colored functions.
-- **QTT** — Quantitative Type Theory tracks how each value is used: erased (type-level only), linear (used once, no RC), or shared (full RC). This makes dependent types sound with RC and enables guaranteed in-place mutation for linear values. We can consider this a bit of the theory behind both **FBIP (Functional But In-Place)** and the Perceus reference counter.
+- **QTT** — Quantitative Type Theory tracks how often each binding is used: 0 (erased, type-level only), 1 or ω. Erasure is what makes dependent types sound with reference counting. In-place update (**FBIP, Functional But In-Place**) and the Perceus counts follow a separate inferred fact, ownership: a value owned exclusively is updated in place, a shared one only after a run-time `rc == 1` test. Using a binding once does not make its value exclusively owned.
 - **Evidence passing** — effects compile to efficient evidence-vector lookups, not full delimited continuations.
 
 You will recognize some of these features from [Koka](https://koka-lang.github.io/koka/doc/index.html). Koka is a research language that got several hard things right and Fixed adopts all of them wholesale. The compilation target is LLVM IR. Memory management is Perceus. Effects are algebraic with evidence passing. FBIP optimizes functional updates.
@@ -39,6 +39,8 @@ Where Koka still has `struct`, `enum`, and named data types, Fixed pushes the la
 | Programmer picks the representation | Compiler picks the representation |
 
 The programmer writes **capabilities** — what values can do — and the compiler decides how to lay them out in memory. Request `Sequencing + Folding`? The compiler might choose a linked list. Add `RandomAccess + Sized`? Now it *should* use a contiguous array. The capability set narrows the representation space.
+
+The choice is made late. A package is compiled once, to code that works for every representation; where a representation depends on how the rest of the program uses a type, it is chosen when the application is linked, from usage summaries, and recorded in a lock file. Nothing is recompiled when a choice changes. Declarations are private unless marked `pub`. Several satisfactions of one capability by one type may coexist (`Money satisfies Ord named ByAmount`), and `using` chooses between them (`sort(xs) using ByAmount`).
 
 This is the tagless final encoding applied to an entire language: programs are written against abstract interfaces, and the "interpreter" (the compiler) chooses the concrete semantics.
 
@@ -218,11 +220,11 @@ Refinement capabilities are zero-cost: compile-time only, no wrapping, the value
 2. **`data` is where structure gets planned** — `data` lets you express the shape of your data when you need a specific closed set of variants
 3. **`prop` invariants are specified in place** — properties (from property-based testing) are built into the language as a form of lightweight theorem proving
 4. **Functions are total** — only capabilities and data can self-reference; all recursion is structural via fold/unfold
-8. **No mutation** — purely functional; the compiler optimizes in-place updates via FBIP
+5. **No mutation** — purely functional; the compiler optimizes in-place updates via FBIP
 6. **Everything is an expression** — no statements, no semicolons; blocks return their last expression
-5. **No explicit layouts** — the programmer never writes references; the compiler handles borrowing/moving/cloning via Perceus
-7. **Algebraic effects for all side effects** — declared with `effect`, handled with `handle`/`resume`
-9. **Quantities are inferred, not written** — the compiler tracks erasure (0), linearity (1), and sharing (ω) for every binding. The programmer writes capabilities; the compiler infers resource usage
+7. **No explicit layouts** — the programmer never writes references; the compiler handles borrowing/moving/cloning via Perceus
+8. **Algebraic effects for all side effects** — declared with `effect`, handled with `handle`/`resume`
+9. **Quantities and ownership are inferred, not written** — the compiler infers how often each binding is used (0, 1, ω) and which values are borrowed, owned or exclusively owned. The programmer writes capabilities; the compiler infers resource usage
 10. **Agent friendly** — the compiler produces clear, structured output designed for humans, which also makes it ideal for AI harnesses and automated tooling
 
 ## Theoretical foundation
@@ -236,24 +238,31 @@ Quine's five predicate functor operations map directly onto Fixed's capability c
 | **Permutation** | Reorder arguments | Capability bounds are unordered — `A + B` = `B + A` |
 | **Reflection** | Identify two variables | Named aliases — `N is Numeric` constrains multiple params to share a type |
 | **Composition** | Conjoin predicates | Capability composition — `extends`, `+` bounds |
-| **Quantities** | Multiplicity of variable usage | QTT quantities — 0 (erased), 1 (linear), ω (shared). Maps Perceus RC decisions into the type system |
+| **Quantities** | Multiplicity of variable usage | QTT quantities — 0 (erased), 1, ω. Quantity 0 is erased; reference counting and reuse follow inferred ownership |
 
 
 ## Repository structure
 
 ```
 examples/           11 example programs exercising the language design
-docs/plans/         Implementation plan (phases 0–6)
-spec/               (planned) Formal specification
-stdlib/             (planned) Standard library in Fixed
-src/                (planned) Compiler implementation in Rust
+docs/plans/         Implementation plan and per-phase plans
+docs/decisions/     Design decision records
+spec/               Specification (drafts)
+compiler/           Compiler implementation in Scala 3, with its C runtime and prelude
+bench/              JMH front-end benchmarks and runtime benchmark programs
+scalafix/           Custom lint rules
 ```
 
 ## Running the compiler
 
 ```
-sbt "run -- examples/01_basics.fixed"   # parse + (stub) typecheck; prints diagnostics, exits 1 on errors
+sbt "run -- examples/01_basics.fixed"                          # check; prints diagnostics, exits 1 on errors
+sbt "run -- compile examples/01_basics.fixed -o 01.ll"         # LLVM IR
+sbt "run -- ship examples/01_basics.fixed -o 01"               # native executable, via clang
+sbt "run -- compile examples/01_basics.fixed --explain-memory" # memory and clone report
 ```
+
+`--no-specialise` builds no clones beyond the mandatory ones. There is one package and no link step yet.
 
 ## Quality checks
 
@@ -289,7 +298,9 @@ scanner, parser and end-to-end throughput over `examples/`, with allocation per 
 
 ## Status
 
-**Phase 0 (design) is under way.** The language design is explored through 11 example programs covering:
+Phases 0 (design), 2 and 2.1 (parser), 4.0 (naive backend) and most of 4.1 (polymorphic baseline and specialiser) are done. Phase 1 (specification) exists as drafts under `spec/`. Of the type checker (Phase 3), the base typer, capability closure, effect inference and quantity, demand and lifetime inference are done; property verification and representation selection are not. Examples `01`, `03`, `04` and `05` compile to native code and run. The application link, visibility, `using` and the other decisions of `docs/decisions/P6-resolution-round-2026-11-20.md` are specified but not built.
+
+The language design is explored through 11 example programs covering:
 
 - Basic I/O, numeric polymorphism, named/anonymous capability aliases
 - Capability-driven collections (Sequencing, Functor, Folding, RandomAccess, etc.)
@@ -302,8 +313,6 @@ scanner, parser and end-to-end throughput over `examples/`, with allocation per 
 - A mini interpreter with fold-based eval on capabilities
 - Geometry with type aliases and data declarations
 - Property-based invariants (`prop`, `forall`, `implies`) and dependent types (`fn -> cap`, refinement types)
-
-Next: formal specification (Phase 1) and parser implementation (Phase 2).
 
 See [`docs/plans/implementation-plan.md`](docs/plans/implementation-plan.md) for the full roadmap.
 

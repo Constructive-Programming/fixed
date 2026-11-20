@@ -1,6 +1,7 @@
 # P1 — Packages are the ABI boundary
 
 **Status:** Decided 2026-11-20 (design debate with the project owner). Specified in `spec/compilation_model.md` §6–§7.
+**Superseded in part by P6** (`docs/decisions/P6-resolution-round-2026-11-20.md`): coherence per link unit (decision 5) is withdrawn by P6 D12; making every decision at the package edge is replaced by binding at application link (P6 "The change of direction", D1, D4).
 **Affects:** `spec/compilation_model.md` (new), `spec/type_system.md` §8.4, `spec/memory_management.md` §7, §18, §20.2, `spec/quantities.md` §9.3.
 
 ## Problem

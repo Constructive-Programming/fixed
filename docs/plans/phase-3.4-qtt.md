@@ -90,7 +90,7 @@ after the last argument. 3.4.M2 adds a test that pins this.
 
 ### 3.3 Versions (Rule Q9.3)
 
-The lowering's instance names gain an ownership suffix: `bump[u64]` and `bump[u64]#s` (shared on
+The lowering's instance names gain an ownership suffix: `bump[u64]` and `bump[u64]#n` (shared on
 the first exclusive parameter). Instances are requested on demand by call sites, as type instances
 are today, so only called combinations exist. Cap: 4 versions per function; a call beyond it
 copies the demanded part with a generated `copy_T` (one per data type, copying the slots the
