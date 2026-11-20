@@ -153,21 +153,18 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
   /** Instance `name` of `decl`: `sigma` for its type parameters, `bounds` for its anonymously bound
     * parameter types (each replaced by the argument type at the call, or in a baseline version by
     * its implicit type parameter), and the witnesses and tables `hidden` before the declared
-    * parameters. `at` gives the argument type of each anonymously bound parameter by position:
-    * two parameters with the same bound may be given different types.
+    * parameters.
     */
   private def function(
       decl: Trees.FnDecl,
       sigma: Sigma,
       bounds: Map[Type, Type],
       name: String,
-      hidden: List[Var] = Nil,
-      at: List[Option[Type]] = Nil
+      hidden: List[Var] = Nil
   ): Fn =
     val (paramTypes, ret) = symbols(symbols.scope(decl.name)).info match
       case Type.ArrowType(lhs, r, _) =>
-        val declared = Members.params(lhs).zipWithIndex
-        (declared.map((d, i) => at.lift(i).flatten.getOrElse(concrete(d, sigma, bounds))), concrete(r, sigma, bounds))
+        (Members.params(lhs).map(concrete(_, sigma, bounds)), concrete(r, sigma, bounds))
       case other => (Nil, other)
     val params = decl.params.zip(paramTypes).map((p, t) => typed(fresh(p.name, ctype(t, p.span)), t, p.span))
     spans(name) = decl.span
@@ -218,7 +215,7 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
   private def application(fn: Tree, args: List[Tree], result: Tree, sc: Scope)(k: K): Expr =
     fn match
       case f @ Trees.Ident(name, span) if !sc.env.contains(name) && isFn(name) =>
-        if decls.contains(name) then call(name, unit.typeOf(f).getOrElse(Type.NeverType), args, result, sc)(k)
+        if decls.contains(name) then call(name, typeOf(f, sc), args, result, sc)(k)
         else unsupported(span, s"call of `$name`, which has no body", k)
       case _ => expr(fn, sc)(c => all(args, sc)(as => bind(Rhs.CallClosure(c, as), result, sc)(k)))
 
@@ -349,23 +346,19 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
       else bind(Rhs.Prim(op, List(a)), u, sc)(k)
     )
 
-  /** A call of top-level function `name`: type parameters solved against the typer type `fnType`
-    * of its reference, before `sc`'s bound substitution, then made concrete.
-    */
+  /** A call of top-level function `name`, instantiated at the concrete type of its reference. */
   private def call(name: String, fnType: Type, args: List[Tree], t: Tree, sc: Scope)(k: K): Expr =
     val id = symbols.scope(name)
     val params = symbols.typeParamsOf(id)
     val solved = TypeOps.solve(params.toSet, symbols(id).info, fnType, Map.empty, Members.boundsOf(symbols, _))
-    val sigma = params.map(p => p -> concrete(solved.getOrElse(p, Type.UnitType), sc.sigma, sc.bounds)).toMap
+    val sigma = params.map(p => p -> solved.getOrElse(p, Type.UnitType)).toMap
     val (declared, ret) = TypeOps.signature(symbols(id).info)
     val argTypes = args.map(typeOf(_, sc))
-    val positional = declared.zip(argTypes).map {
-      case (d, actual: Type.CapRef) if TypeOps.anonymous(d)                => Some(actual)
-      case (d, actual) if TypeOps.anonymous(d) && dataOf(actual).isDefined => Some(actual)
-      case _                                                               => None
-    }
-    val bounds = declared.zip(positional).collect { case (d, Some(a)) => d -> a }.toMap
-    val typeArgs = params.map(sigma) ++ positional.flatten
+    val bounds = declared.zip(argTypes).collect {
+      case (d, actual: Type.CapRef) if TypeOps.anonymous(d)                => d -> actual
+      case (d, actual) if TypeOps.anonymous(d) && dataOf(actual).isDefined => d -> actual
+    }.toMap
+    val typeArgs = params.map(sigma) ++ declared.flatMap(bounds.get)
     val version = baselineOf(name, params, declared, ret).map(_.flatMap { typeParams =>
       /** A declared type parameter is keyed by itself; an implicit one by the bound it stands for. */
       val actuals = typeParams.map { (key, p) =>
@@ -399,7 +392,7 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
             val inst = if shown.isEmpty then name else shown.map(symbols.render(_)).mkString(s"$name[", ",", "]")
             other.foreach(_.left.foreach(instances(inst) = _))
             (inst, Nil, Some(bounds))
-        at.foreach(b => instance(callee)(function(decls(name), sigma, b, callee, at = positional)))
+        at.foreach(b => instance(callee)(function(decls(name), sigma, b, callee)))
         all(args, sc)(as => bind(Rhs.Call(callee, ws ++ as, runtime = false), t, sc)(k))
 
   /** That no static table among the hidden arguments `pairs` has a null entry ([[Tables.unbuilt]])
@@ -907,14 +900,7 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
 
   protected def fresh(base: String, t: CType): Var = Var(s"$base.${ids.next()}", t)
 
-  /** `t`'s concrete type. A variable's is the type recorded where it was bound, which tells apart
-    * two parameters with the same anonymous bound, each a fresh type variable (`spec/type_system.md` §5.1).
-    */
-  private def typeOf(t: Tree, sc: Scope): Type =
-    val bound = t match
-      case Trees.Ident(name, _) => sc.env.get(name).flatMap(v => types.get(v.name))
-      case _                    => None
-    bound.getOrElse(concrete(unit.typeOf(t).getOrElse(Type.NeverType), sc.sigma, sc.bounds))
+  private def typeOf(t: Tree, sc: Scope): Type = concrete(unit.typeOf(t).getOrElse(Type.NeverType), sc.sigma, sc.bounds)
 
   /** `t` at the instance's concrete types, with capability bounds replaced by their representation. */
   private def concrete(t: Type, sigma: Sigma, bounds: Map[Type, Type] = Map.empty): Type =

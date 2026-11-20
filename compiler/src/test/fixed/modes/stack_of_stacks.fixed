@@ -8,7 +8,17 @@ data Stack of A:
 Stack satisfies Sequencing:
     Push as cons
     Empty as empty
-Stack satisfies Folding
+    fn length = self.fold(0, (n, x) -> n + 1)
+    fn head = match self:
+        Stack.Push(h, _) => Optional.some(h)
+        Stack.Empty => Optional.none
+    fn tail = match self:
+        Stack.Push(_, t) => t
+        Stack.Empty => Stack.Empty
+Stack satisfies Folding:
+    fn fold(init: R, f: (R, Part) -> R) = self.fold((h, rest: R -> R) -> (acc) -> rest(f(acc, h)), () -> (acc) -> acc)(init)
+    fn fold_right(init: R, f: (Part, R) -> R) = self.fold((h, acc) -> f(h, acc), () -> init)
+    fn find(pred: Part -> bool) = self.fold((x, found) -> if pred(x): Optional.some(x) else: found, () -> Optional.none)
 
 fn total(s: Stack of u64) -> u64 = s.fold(0, (a, x) -> a + x)
 

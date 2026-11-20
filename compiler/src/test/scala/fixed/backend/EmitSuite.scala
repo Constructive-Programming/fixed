@@ -396,12 +396,10 @@ class EmitSuite extends munit.FunSuite:
       "    Console.print_line(two([byte(5)], Stack.Push(byte(6), Stack.Bottom)))\n"
     check("anonymous_two", src, "34|12\n5|6\n")
 
-  /** Pending (`.fail`: expected to fail) on a question for the typer. It gives both occurrences of
-    * `is Folding of (A is Show)` one type, so the backend cannot tell which one `id(a)` has (it
-    * takes `b`'s, `List of u8`) and prints `|34`. Should the typer give each anonymous bound its
-    * own type variable (`spec/type_system.md` §5.1), which would also reject `if c: a else: b`?
+  /** The typer gives each anonymous bound its own type variable (`spec/type_system.md` §5.1), so an
+    * expression typed by one of two such parameters (`id(a)`) keeps that parameter's type.
     */
-  test("an expression typed by one of two parameters with one anonymous bound keeps that parameter's type".fail):
+  test("an expression typed by one of two parameters with one anonymous bound keeps that parameter's type"):
     val src = stacks + "fn two(a: is Folding of (A is Show), b: is Folding of (A is Show)) -> String =\n" +
       "    id(a).fold(\"\", (s, x) -> s.concat(x.show())).concat(\"|\").concat(id(b).fold(\"\", (s, x) -> s.concat(x.show())))\n\n" +
       s"fn main() -> () with Console =\n    Console.print_line(two($stack12, [byte(3), byte(4)]))\n"
