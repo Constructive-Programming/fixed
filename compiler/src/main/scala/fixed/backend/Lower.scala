@@ -14,8 +14,8 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
   * each function it reaches. By default each polymorphic function is monomorphised per instance:
   * `sc.sigma` maps the instance's type parameters to concrete types. With `baseline`
   * (`--no-specialise`), a polymorphic function is lowered once under its own name where it can be
-  * (Rule CM3.1, [[baselineOf]]): it takes a witness per type parameter, and a value of a type
-  * parameter is a slot named by its witness. Derived members (`fold`, `unfold`, `Folding.fold`) are
+  * (Rule CM3.1, [[baselineOf]]): it takes a witness and the tables of the bound set per type
+  * parameter, and a value of a type parameter is a slot named by its witness. Derived members (`fold`, `unfold`, `Folding.fold`) are
   * generated as Core functions ([[Generated.member]]). Constructs beyond the current milestone are
   * `B005`, and so is a cell with a reference beyond its header's reference map (`refMapLimit`).
   */
@@ -142,13 +142,15 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
   private def expr(t: Tree, sc: Scope)(k: K): Expr =
     t match
       case l: Trees.IntLit =>
-        ctype(typeOf(l, sc), l.span) match
+        val t = typeOf(l, sc)
+        ctype(t, l.span) match
           case f: CType.Float => k(Atom.FloatC(BigDecimal(l.value), f))
-          case _: CType.Slot  => unsupported(l.span, "a literal of parameter type", k)
-          case c              => k(Atom.IntC(l.value, c))
+          case _: CType.Slot  =>
+            tableCall(t, "Numeric", "from_i64", List(Atom.IntC(l.value, CType.Int(64, signed = true))), l, sc)(k)
+          case c => k(Atom.IntC(l.value, c))
       case l: Trees.FloatLit =>
         ctype(typeOf(l, sc), l.span) match
-          case _: CType.Slot => unsupported(l.span, "a literal of parameter type", k)
+          case _: CType.Slot => unsupported(l.span, "a float literal of parameter type (no `from_f64`)", k)
           case c             => k(Atom.FloatC(l.value, c))
       case Trees.BoolLit(v, _)       => k(Atom.BoolC(v))
       case Trees.CharLit(c, _)       => k(Atom.IntC(BigInt(c.toInt), CType.Int(32, signed = false)))
@@ -254,7 +256,7 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
         expr(b.lhs, sc)(l =>
           expr(b.rhs, sc)(r =>
             (op, l.tpe) match
-              case (_, _: CType.Slot) => unsupported(b.span, s"`${op.symbol}` on a value of parameter type", k)
+              case (_, _: CType.Slot) => slotOp(op, l, r, typeOf(b.lhs, sc), b, sc)(k)
               case (Eq, CType.Boxed)  => bind(Rhs.Call("fx_str_eq", List(l, r), runtime = true), b, sc)(k)
               case (Neq, CType.Boxed) =>
                 val eq = fresh("eq", CType.Bool)
@@ -265,12 +267,47 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
           )
         )
 
+  /** `l op r` on values of type parameter `t`, through the tables of its bound set (Rule CM4.1):
+    * `>` and `>=` are `lt` and `le` with the operands swapped (plan §2), `!=` is `eq` negated.
+    */
+  private def slotOp(op: Trees.BinOperator, l: Atom, r: Atom, t: Type, b: Tree, sc: Scope)(k: K): Expr =
+    import Trees.BinOperator.*
+    val call = (cap: String, member: String, args: List[Atom]) => tableCall(t, cap, member, args, b, sc)
+    op match
+      case Add      => call("Numeric", "add", List(l, r))(k)
+      case Sub      => call("Numeric", "sub", List(l, r))(k)
+      case Mul      => call("Numeric", "mul", List(l, r))(k)
+      case Div      => call("Numeric", "div", List(l, r))(k)
+      case Mod      => call("Numeric", "rem", List(l, r))(k)
+      case Eq       => call("Eq", "eq", List(l, r))(k)
+      case Neq      => call("Eq", "eq", List(l, r))(e => bind(Rhs.Prim(PrimOp.Not, List(e)), b, sc)(k))
+      case Lt       => call("Ord", "lt", List(l, r))(k)
+      case Le       => call("Ord", "le", List(l, r))(k)
+      case Gt       => call("Ord", "lt", List(r, l))(k)
+      case Ge       => call("Ord", "le", List(r, l))(k)
+      case And | Or => unsupported(b.span, s"`${op.symbol}` on a value of parameter type", k)
+
+  /** Member `member` of capability `cap`, called with `args` (the receiver first, Rule CM4.6)
+    * through the table of type parameter `t`'s bound set that holds `cap`'s members; the result is
+    * bound as the value of `tree`.
+    */
+  private def tableCall(t: Type, cap: String, member: String, args: List[Atom], tree: Tree, sc: Scope)(k: K): Expr =
+    val found = (t, symbols.scope.get(cap)) match
+      case (Type.TypeRef(p, Nil), Some(owner)) if isTypeParam(t) =>
+        boundCaps(p).find(Tables.reached(symbols, _).contains(owner)).map(c =>
+          (tableOf(p, c), Tables.members(symbols, c).indexOf(member))
+        )
+      case _ => None
+    found match
+      case Some((table, i)) if i >= 0 => bind(Rhs.CallTable(table, i, args), tree, sc)(k)
+      case _ => unsupported(tree.span, s"`$cap.$member` on a value of type ${symbols.render(t)} without that bound", k)
+
   private def unaryOp(u: Trees.UnaryOp, sc: Scope)(k: K): Expr =
     val op = u.op match
       case Trees.UnaryOperator.Neg => PrimOp.Neg
       case Trees.UnaryOperator.Not => PrimOp.Not
     expr(u.operand, sc)(a =>
-      if a.tpe.slot then unsupported(u.span, "an operator on a value of parameter type", k)
+      if a.tpe.slot && op == PrimOp.Neg then tableCall(typeOf(u.operand, sc), "Numeric", "negate", List(a), u, sc)(k)
       else bind(Rhs.Prim(op, List(a)), u, sc)(k)
     )
 
@@ -288,10 +325,9 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
       case (d @ (_: Type.IsBound | _: Type.CapRef), actual) if dataOf(actual).isDefined => d -> actual
     }.toMap
     val typeArgs = params.map(sigma) ++ declared.flatMap(bounds.get)
-    baselineOf(name, params, declared) match
-      case Some(Right(())) =>
-        val ws = params.map(sigma andThen witnessAtom)
-        all(args, sc)(as => bind(Rhs.Call(name, ws ++ as, runtime = false), t, sc)(k))
+    val chosen = baselineOf(name, params, declared).map(_.flatMap(_ => hiddenArgs(params, sigma)))
+    chosen match
+      case Some(Right(ws)) => all(args, sc)(as => bind(Rhs.Call(name, ws ++ as, runtime = false), t, sc)(k))
       case Some(Left(why)) if typeArgs.exists(typeParamsIn(_).nonEmpty) =>
         unsupported(t.span, s"a call of `$name` at a type parameter, which has no baseline version ($why)", k)
       case other =>
@@ -302,16 +338,17 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
 
   /** In baseline mode, for a polymorphic function `name` whose type parameters are `params` and
     * declared parameter types `declared`: its baseline version (Rule CM3.1), built once under its
-    * own name and taking a witness per type parameter first (Rule CM4.3), or why it has none. `None`
-    * in the default mode and for a monomorphic function.
+    * own name and taking first a witness per type parameter, each followed by a table per
+    * capability of its bound set ([[Tables.hiddenOf]], Rule CM4.3); or why it has none. `None` in
+    * the default mode and for a monomorphic function. A call whose type arguments have no table of
+    * a bound (`String` has no `Ord.lt`) calls an instance instead.
     */
   private def baselineOf(name: String, params: List[SymbolId], declared: List[Type]): Option[Either[String, Unit]] =
     val anonymous = declared.exists { case _: Type.IsBound | _: Type.CapRef => true; case _ => false }
     def build: Either[String, Unit] =
       if anonymous then Left("an anonymous bound in parameter position (4.1.M7c)")
-      else if params.exists(p => symbols(p).info != Type.IsBound(Nil)) then Left("a bounded type parameter (4.1.M7b)")
       else
-        attempt(instance(name)(function(decls(name), Map.empty, Map.empty, name, params.map(witnessOf)))).map { _ =>
+        attempt(instance(name)(function(decls(name), Map.empty, Map.empty, name, params.flatMap(hiddenOf)))).map { _ =>
           val _ = baselines += name
         }
     Option.when(baseline && (params.nonEmpty || anonymous))(tried.getOrElseUpdate(name, build))
@@ -372,6 +409,8 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
           case None => unsupported(m.span, s"field `${m.method}` of ${symbols.render(recvType)}", k)
       case Some(Resolution.DerivedFold(_)) =>
         generatedCall(recvType, m, sc, Some(typeOf(m, sc)))(derivedFold(_, _, _, m.span))(k)
+      case Some(Resolution.CapMember(_, member)) if isTypeParam(recvType) =>
+        tableMethod(m, member, recvType, args, sc)(k)
       case Some(Resolution.CapMember(cap, _)) =>
         (symbols(cap).name, m.method, args) match
           case ("Concat", "concat", List(arg)) =>
@@ -407,6 +446,27 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
           case (c, name, _)                                             =>
             unsupported(m.span, s"member $c.$name on ${symbols.render(recvType)} (arrives in 4.0.M4)", k)
       case None => unsupported(m.span, s"member `${m.method}`", k)
+
+  /** `m`, resolved to capability member `member`, on a receiver of type parameter `t`, through the
+    * table of its bound set that holds the member: the witness of each of the member's own type
+    * parameters, solved from the argument and result types, then the receiver and the arguments
+    * (Rule CM4.3). A member type parameter the types do not solve is `B005`.
+    */
+  private def tableMethod(m: Trees.MethodCall, member: SymbolId, t: Type, args: List[Tree], sc: Scope)(k: K): Expr =
+    val d = symbols(member)
+    val own = symbols.typeParamsOf(member)
+    val (declared, ret) = d.info match
+      case Type.ArrowType(lhs, r, _) => (Members.params(lhs), r)
+      case other                     => (Nil, other)
+    val actual = declared.zip(args.map(typeOf(_, sc))) :+ (ret -> typeOf(m, sc))
+    val solved = actual.foldLeft(Map.empty[SymbolId, Type])((acc, dc) => Lower.solve(own.toSet, dc._1, dc._2, acc))
+    own.find(!solved.contains(_)) match
+      case Some(q) => unsupported(m.span, s"`${m.method}` whose `${symbols(q).name}` the call does not determine", k)
+      case None    =>
+        val witnesses = own.map(solved andThen witnessAtom)
+        expr(m.receiver, sc)(r =>
+          all(args, sc)(as => tableCall(t, symbols(d.owner).name, m.method, witnesses ++ (r :: as), m, sc)(k))
+        )
 
   /** A sum capability's `fold` on the data type representing it: callbacks follow the capability's
     * constructor requirements; the data's derived fold takes them in variant order. For each

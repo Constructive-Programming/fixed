@@ -267,6 +267,34 @@ class EmitSuite extends munit.FunSuite:
     assert(plain.contains("call i64 @\"fx_u_last\"(ptr @fx_w_ref,"), plain)
     assert(plain.contains("call i64 @\"fx_u_last\"(ptr @fx_w_imm,"), plain)
 
+  test("one baseline version of a Numeric function wraps at u8 and not at i64; comparisons follow the sign (4.1.M7b)"):
+    val src = header + "fn grow(x: N is Numeric) -> N = x * 2 + 100\n\n" +
+      "fn compare(a: N is Numeric, b: N) -> String =\n" +
+      "    let lt = if a < b: \"<\" else: \"\"\n    let le = if a <= b: \"<=\" else: \"\"\n" +
+      "    let gt = if a > b: \">\" else: \"\"\n    let ge = if a >= b: \">=\" else: \"\"\n" +
+      "    let eq = if a == b: \"==\" else: \"\"\n    let ne = if a != b: \"!=\" else: \"\"\n" +
+      "    lt.concat(le).concat(gt).concat(ge).concat(eq).concat(ne)\n\n" +
+      "fn arith(a: N is Numeric, b: N) -> N = -(a / b) + a % b - 1\n\n" +
+      "fn shown(x: N is Numeric + Show) -> String = (x + 1).show()\n\n" +
+      "fn byte(x: u8) -> u8 = x\n\nfn sbyte(x: i8) -> i8 = x\n\n" +
+      "fn main() -> () with Console =\n" +
+      "    Console.print_line(grow(byte(100)).show())\n    Console.print_line(grow(100).show())\n" +
+      "    Console.print_line(compare(byte(255), byte(1)))\n    Console.print_line(compare(sbyte(-1), sbyte(1)))\n" +
+      "    Console.print_line(compare(7, 7))\n" +
+      "    Console.print_line(arith(17, 5).show())\n    Console.print_line(arith(byte(17), byte(5)).show())\n" +
+      "    Console.print_line(shown(byte(255)))\n    Console.print_line(shown(2.5))\n"
+    val _ = check("numeric", src, "44\n300\n>>=!=\n<<=!=\n<=>===\n-2\n254\n0\n3.5\n")
+    val plain = ir("numeric", src, Mode.NoSpecialise)
+    List("grow", "compare", "arith", "shown").foreach { f =>
+      assertEquals(s"define \\S+ @\"fx_u_$f[\"\\[]".r.findAllIn(plain).size, 1, s"$f:\n$plain")
+    }
+    assert(plain.contains("call i64 @\"fx_u_grow\"(ptr @fx_w_imm, ptr @\"fx_t_u8:Numeric\","), plain)
+    assert(plain.contains("call i64 @\"fx_u_grow\"(ptr @fx_w_imm, ptr @\"fx_t_i64:Numeric\","), plain)
+    assert(plain.contains("@\"fx_t_u8:Show\""), plain)
+
+  test("a function bounded by Ord runs at String through an instance and at i64 through its baseline version"):
+    val _ = check("partial", BaselineSuite.partial, "true\nfalse\n")
+
   test("a closure in a baseline version captures the witness of a slot it binds; a failed attempt keeps no callee"):
     val src = header + "data Pair of (A, B):\n    P(a: A, b: B)\n\n" +
       "fn later(p: Pair of (A, B)) -> () -> u64 =\n    () -> match p:\n        Pair.P(x, y) => 7\n\n" +

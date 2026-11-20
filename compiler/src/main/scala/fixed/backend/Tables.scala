@@ -39,6 +39,50 @@ private[backend] trait Tables extends Generated:
           case None    => Right(Atom.StaticTable(s"${symbols.render(t)}:$cap", entries.map((_, ""))))
       case _ => Left(s"no table of `$cap` at `${symbols.render(t)}`")
 
+  /** The capabilities of type parameter `p`'s bound set that get a table (Rule CM4.3): aliases
+    * expanded, in the order written; a capability without members has none, and neither has one
+    * that another capability of the set extends, whose table already holds its members.
+    */
+  protected def boundCaps(p: SymbolId): List[SymbolId] =
+    val caps = symbols(p).info match
+      case Type.IsBound(bs) => Members.expandAliases(symbols, bs).collect { case Type.CapRef(c, _) => c }.distinct
+      case _                => Nil
+    val tabled = caps.filter(Tables.members(symbols, _).nonEmpty)
+    tabled.filterNot(c => tabled.exists(d => d != c && Tables.reached(symbols, d).contains(c)))
+
+  /** The table parameter of type parameter `p` for capability `cap`. */
+  protected def tableOf(p: SymbolId, cap: SymbolId): Atom.Var =
+    Atom.Var(s"t.${symbols(p).name}.${p.toInt}.${symbols(cap).name}", CType.Table)
+
+  /** The hidden parameters of type parameter `p`: its witness, then a table per capability of its
+    * bound set (Rule CM4.3).
+    */
+  protected def hiddenOf(p: SymbolId): List[Atom.Var] = witnessOf(p) :: boundCaps(p).map(tableOf(p, _))
+
+  /** The hidden arguments of a call that instantiates type parameters `params` at `sigma`: per
+    * parameter in the order of [[hiddenOf]], the witness of its type argument and its tables; or
+    * why a table cannot be had.
+    */
+  protected def hiddenArgs(params: List[SymbolId], sigma: Map[SymbolId, Type]): Either[String, List[Atom]] =
+    val (whys, args) =
+      params.flatMap(p => Right(witnessAtom(sigma(p))) :: boundCaps(p).map(tableAtom(sigma(p), _))).partitionMap(
+        identity
+      )
+    whys.headOption.toLeft(args)
+
+  /** The table of capability `cap` at type `t` where the code being lowered runs: the table
+    * parameter of a type parameter whose bound set has `cap`, else the static table of a known type.
+    */
+  protected def tableAtom(t: Type, cap: SymbolId): Either[String, Atom] =
+    t match
+      case Type.TypeRef(p, Nil) if isTypeParam(t) =>
+        Either.cond(
+          boundCaps(p).contains(cap),
+          tableOf(p, cap),
+          s"no table of `${symbols(cap).name}` for `${symbols(p).name}`, whose bound set has none of its own"
+        )
+      case _ => table(t, symbols(cap).name)
+
   /** The entry of `member`: its adapter, `""` for a null entry, `None` if `t` does not define it. */
   private def entry(t: Type, c: CType, cap: SymbolId, member: String): Option[String] =
     val built = dataOf(t) match
@@ -170,5 +214,5 @@ object Tables:
     (declared.map(_.name) ++ (if caps.exists(symbols(_).name == "Ord") then ordEntries else Nil)).distinct
 
   /** `cap` and the capabilities its `extends` chain reaches, depth first in the order written. */
-  private def reached(symbols: SymbolTable, cap: SymbolId): List[SymbolId] =
+  def reached(symbols: SymbolTable, cap: SymbolId): List[SymbolId] =
     fixed.typer.MemberTables.reached(symbols, cap, None, scala.collection.immutable.BitSet.empty).map(_._1)
