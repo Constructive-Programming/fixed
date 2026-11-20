@@ -220,7 +220,7 @@ g(1) + g(2)                        // g used twice → q' = ω; so y contributes
 
 Because closures may be called arbitrarily many times by their own callers (their `q'` is generally `ω`), captured bindings typically end up at quantity ω. A closure called exactly once preserves its captured bindings' quantities.
 
-**Demands of captures.** A capture's demand is the closure body's demand on it. If the body demands `exclusive` but the closure may be called more than once (`q' = ω`), the capture is downgraded to `own`: a second call would find it already overwritten. A closure whose own parameter is `exclusive` carries **two code pointers**, one compiled for exclusive input and one for shared input (`spec/memory_management.md` Rule PR5.6). A call through an unknown closure picks the pointer statically from what the caller holds. This costs one word per such closure and no runtime test.
+**Demands of captures.** A capture's demand is the closure body's demand on it. If the body demands `exclusive` but the closure may be called more than once (`q' = ω`), the capture is downgraded to `own`: a second call would find it already overwritten. Every closure carries **two code pointers**, one compiled for exclusive input and one for shared input; they coincide unless a parameter is `exclusive` (`spec/memory_management.md` Rule PR5.6). A call through an unknown closure picks the pointer statically from what the caller holds. This costs one word per closure and no runtime test.
 
 ### 5.8 Pattern bindings (Rule Q5.8)
 

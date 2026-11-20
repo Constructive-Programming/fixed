@@ -63,8 +63,9 @@ void fx_drop(fx_header *h) {
     n_drop++;
     if (h->rc < 0) return;
     if (--h->rc == 0) {
-        /* A closure (tag 0xFFFFFFFF) keeps its code pointer in slot 0; its boxed captures follow. */
-        fx_header **fields = (fx_header **)(h + 1) + (h->tag == UINT32_MAX);
+        /* A closure (tag 0xFFFFFFFF) keeps two code pointers in slots 0 and 1 (exclusive and
+           shared entry); its boxed captures follow. */
+        fx_header **fields = (fx_header **)(h + 1) + 2 * (h->tag == UINT32_MAX);
         for (uint32_t i = 0; i < h->nptr; i++) fx_drop(fields[i]);
         free(h);
         n_free++;

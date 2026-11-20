@@ -397,7 +397,7 @@ A closure whose environment does not escape its creation scope is itself `Frame`
 
 An exclusively owned capture stays exclusive only if the closure is called at most once; otherwise it is downgraded to `own` and shared (`spec/quantities.md` Rule Q5.7).
 
-**Two entry points.** A closure whose parameter is `exclusive` carries two code pointers: the closure body compiled for exclusive input, and compiled for shared input. A call through a closure whose identity is unknown at compile time (a function-typed parameter, a closure taken from a data structure) picks the pointer statically from what the caller holds, exactly as a direct call picks the version. The cost is one word in such a closure and the second body; there is no runtime test. Closures with no `exclusive` parameter have one code pointer.
+**Two entry points.** A closure whose parameter is `exclusive` carries two code pointers: the closure body compiled for exclusive input, and compiled for shared input. A call through a closure whose identity is unknown at compile time (a function-typed parameter, a closure taken from a data structure) picks the pointer statically from what the caller holds, exactly as a direct call picks the version. There is no runtime test. Because a caller cannot tell from a closure it did not create whether it has a second entry, **every** closure carries both pointers; they are the same function unless a parameter is `exclusive`. The cost is one word per closure (closures without captures are static objects) and the second body where it differs.
 
 ## 11. Reuse analysis (FBIP)
 

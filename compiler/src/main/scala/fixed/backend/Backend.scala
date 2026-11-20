@@ -5,6 +5,7 @@ import java.nio.file.{Files, Path}
 import scala.sys.process.{Process, ProcessLogger}
 
 import fixed.CompilationUnit
+import fixed.core.render
 import fixed.util.{DiagCode, Diagnostic, Severity, Span}
 
 /** The backend slice's entry points (`docs/plans/phase-4.0-backend-slice.md`): a checked unit to
@@ -14,7 +15,18 @@ object Backend:
 
   /** LLVM IR for `unit`, which must have passed the typer without errors. */
   def compile(unit: CompilationUnit): Either[List[Diagnostic], String] =
-    Lower(unit).program.map(fns => EmitLLVM().program(Aborts(fns).map(Rc(_))))
+    core(unit).map(fns => EmitLLVM().program(Aborts(fns).map(Rc(_))))
+
+  /** Core for `unit`: lowered, then split into the versions demand inference calls for (3.4.M3). */
+  def core(unit: CompilationUnit): Either[List[Diagnostic], List[Fn]] =
+    val lower = Lower(unit)
+    lower.program.map { fns =>
+      val render = (t: fixed.core.Type) => unit.symbols.render(t)
+      val (demands, table) = Demands.analyse(lower, fns, render)
+      val byKey = Demands.typesByKey(lower, render)
+      val versions = Versions(demands, table, fns, (k, parts) => byKey.get(k).flatMap(lower.copy(_, parts))).run()
+      versions ++ lower.functions.filter(_.name.contains(".copy["))
+    }
 
   /** Write `ir` next to `out`, then link it with the runtime into the executable `out`. */
   def ship(ir: String, out: Path): Either[Diagnostic, Path] =

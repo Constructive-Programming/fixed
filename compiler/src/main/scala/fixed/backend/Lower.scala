@@ -38,6 +38,13 @@ final class Lower(unit: CompilationUnit) extends Generated:
   /** Top-level functions with bodies: the prelude's, then the unit's (which shadow them). */
   private val decls: Map[String, Trees.FnDecl] = fixed.typer.Stdlib.functions(unit.tree)
 
+  /** Every function instance built so far, including copies requested after [[program]]. */
+  def functions: List[Fn] = fns.values.toList
+
+  /** A function copying a value of type `t`: cells at part keys `parts` copied, the rest shared. */
+  def copy(t: Type, parts: Set[(String, Int)]): Option[String] =
+    dataOf(t).map((d, args) => copyOf(d, args, parts, symbols.render(_), Span.NoSpan))
+
   /** Every function instance reachable from `main`, or the problems found. */
   def program: Either[List[Diagnostic], List[Fn]] =
     if !decls.contains("main") then Left(List(problem(DiagCode.B003, Span.NoSpan, "no `main` function")))
@@ -232,7 +239,7 @@ final class Lower(unit: CompilationUnit) extends Generated:
   protected def closure(params: List[Var], body: Expr, ret: CType)(k: Var => Expr): Expr =
     val captures = (Core.freeVars(body) -- params).toList.sortBy(_.name)
     val env = fresh("env", CType.Boxed)
-    val slots = Layout.slots(captures.map(_.ctype), first = 1)
+    val slots = Layout.slots(captures.map(_.ctype), first = Layout.closureCode)
     val loaded = captures.zip(slots).foldRight(body)((cs, acc) => Expr.Let(cs._1, Rhs.Field(env, cs._2), acc))
     val code = s"lambda.${ids.next()}"
     fns(code) = Fn(code, env :: params, ret, loaded)

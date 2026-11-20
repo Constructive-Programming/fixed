@@ -36,14 +36,22 @@ object Demands:
 
   /** Demands of every function instance `lower` built. */
   def of(lower: Lower, fns: List[Fn], render: fixed.core.Type => String): DemandTable =
-    val byKey = lower.types.values.map(t => render(t) -> t).toMap
-    val keyed = (k: String) => byKey.get(k)
-    Demands(
+    analyse(lower, fns, render)._2
+
+  /** The analysis over `fns` and its result. */
+  def analyse(lower: Lower, fns: List[Fn], render: fixed.core.Type => String): (Demands, DemandTable) =
+    val keyed = typesByKey(lower, render).get
+    val d = Demands(
       fns,
       v => lower.types.get(v).map(render),
       (k, slot) => keyed(k).flatMap(lower.slotType(_, slot)).map(render),
       (k, tag) => keyed(k).flatMap(lower.cellSize(_, tag))
-    ).run()
+    )
+    (d, d.run())
+
+  /** Each type lowering recorded, by its part key rendering. */
+  def typesByKey(lower: Lower, render: fixed.core.Type => String): Map[String, fixed.core.Type] =
+    lower.types.values.map(t => render(t) -> t).toMap
 
 object Need:
   type Part = (String, Int)
@@ -72,12 +80,12 @@ final class DemandTable(val params: Map[String, List[Need]], val reuses: Map[Str
   */
 final class Demands(
     fns: List[Fn],
-    typeKey: String => Option[String],
+    private[backend] val typeKey: String => Option[String],
     slotKey: (String, Int) => Option[String],
     cellSize: (String, Int) => Option[Int]
 ):
   /** Where a variable's value lives: a root variable and the slot path below it. */
-  final private case class Path(root: String, slots: List[Int]):
+  final private[backend] case class Path(root: String, slots: List[Int]):
     def below(slot: Int): Path = Path(root, slots :+ slot)
 
     /** `this` is `that` or an ancestor of it. */
@@ -86,7 +94,7 @@ final class Demands(
     def overlaps(that: Path): Boolean = covers(that) || that.covers(this)
 
   /** Path facts flowing forward along one path of a function body. */
-  final private case class Ctx(
+  final private[backend] case class Ctx(
       paths: Map[String, Path],
       keys: Map[String, String],
       kept: List[Path],
@@ -108,23 +116,19 @@ final class Demands(
     val before = signatures.toMap
     fns.foreach(f =>
       reuses(f.name) = mutable.HashMap.empty
-      val ctx = Ctx(
-        Map.empty,
-        f.params.flatMap(p => typeKey(p.name).map(p.name -> _)).toMap,
-        Nil,
-        Map.empty,
-        Set.empty,
-        Set.empty
-      )
-      val needs = walk(f.body, ctx, f.name)
+      val needs = walk(f.body, entry(f), f.name)
       signatures(f.name) = f.params.map(p => needs.getOrElse(p.name, Need.zero))
     )
     if signatures.toMap != before then fixpoint()
 
+  /** The path facts at the start of `f`'s body. */
+  private[backend] def entry(f: Fn): Ctx =
+    Ctx(Map.empty, f.params.flatMap(p => typeKey(p.name).map(p.name -> _)).toMap, Nil, Map.empty, Set.empty, Set.empty)
+
   private def sig(f: String, i: Int): Need =
     signatures.get(f).flatMap(_.lift(i)).getOrElse(if byName.contains(f) then Need.zero else Need.own)
 
-  private def names(e: Expr): Set[String] = Core.freeVars(e).map(_.name)
+  private[backend] def names(e: Expr): Set[String] = Core.freeVars(e).map(_.name)
 
   private def join(a: Map[String, Need], b: Map[String, Need]): Map[String, Need] = (a.keySet ++ b.keySet).map(k =>
     k -> (a.getOrElse(k, Need.zero) join b.getOrElse(k, Need.zero))
@@ -143,7 +147,7 @@ final class Demands(
       case Expr.Drop(_, b) => walk(b, ctx, fn)
 
   /** `ctx` after `let x = rhs`: `x`'s path and type, and the paths `rhs` keeps while they stay live. */
-  private def forward(x: Atom.Var, rhs: Rhs, live: Set[String], ctx: Ctx): Ctx =
+  private[backend] def forward(x: Atom.Var, rhs: Rhs, live: Set[String], ctx: Ctx): Ctx =
     val (path, key) = rhs match
       case Rhs.Field(o: Atom.Var, slot) =>
         (ctx.path(o.name).below(slot), ctx.keys.get(o.name).flatMap(slotKey(_, slot)))
@@ -160,12 +164,12 @@ final class Demands(
   private def owned(rhs: Rhs): List[String] =
     def vars(as: List[Atom]) = as.flatMap(Core.boxedVar).map(_.name)
     rhs match
-      case Rhs.Con(_, fs)         => vars(fs)
-      case Rhs.Closure(_, cs)     => vars(cs)
-      case Rhs.CallClosure(c, as) => vars(c :: as)
-      case Rhs.Call(f, as, _)     => keptBy(f, as)
-      case Rhs.Catch(f, as)       => keptBy(f, as)
-      case _                      => Nil
+      case Rhs.Con(_, fs)            => vars(fs)
+      case Rhs.Closure(_, cs, _)     => vars(cs)
+      case Rhs.CallClosure(c, as, _) => vars(c :: as)
+      case Rhs.Call(f, as, _)        => keptBy(f, as)
+      case Rhs.Catch(f, as)          => keptBy(f, as)
+      case _                         => Nil
 
   /** The boxed arguments of a call of `f` whose parameters keep them (`own` or `exclusive`). */
   private def keptBy(f: String, as: List[Atom]): List[String] =
@@ -174,7 +178,7 @@ final class Demands(
     }
 
   /** Whether `v`, an argument among `args`, still has no other reference at this use. */
-  private def exclusive(v: String, args: List[String], live: Set[String], ctx: Ctx): Boolean =
+  private[backend] def exclusive(v: String, args: List[String], live: Set[String], ctx: Ctx): Boolean =
     val p = ctx.path(v)
     !live.exists(l => ctx.path(l).overlaps(p)) &&
     args.count(a => ctx.path(a).overlaps(p)) == 1 &&
@@ -210,8 +214,8 @@ final class Demands(
       case Rhs.Catch(f, as)             => call(f, as, live, ctx)
       case Rhs.Call(_, as, true)        => uses(as, Need.own)
       case Rhs.Con(_, fs)               => uses(fs, Need.own)
-      case Rhs.Closure(_, cs)           => uses(cs, Need.own)
-      case Rhs.CallClosure(c, as)       => uses(c :: as, Need.own)
+      case Rhs.Closure(_, cs, _)        => uses(cs, Need.own)
+      case Rhs.CallClosure(c, as, _)    => uses(c :: as, Need.own)
       case Rhs.Field(o: Atom.Var, slot) =>
         val key = ctx.keys.getOrElse(o.name, "?")
         Map(o.name -> Need(Demand.Read, xNeed.parts.updated((key, slot), xNeed.root join xNeed.part((key, slot)))))

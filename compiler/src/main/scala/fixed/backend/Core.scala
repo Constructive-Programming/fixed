@@ -68,12 +68,15 @@ enum Rhs:
   case Switch(scrutinee: Atom, cases: List[(Int, Expr)])
 
   /** A closure of code function `code`, whose first parameter is the closure itself. A closure
-    * with no captures is a static object. Consumes the captures.
+    * with no captures is a static object. Consumes the captures. `shared` is the entry compiled
+    * for shared arguments (`spec/memory_management.md` Rule PR5.6); empty means `code` itself.
     */
-  case Closure(code: String, captures: List[Atom])
+  case Closure(code: String, captures: List[Atom], shared: String = "")
 
-  /** Call a closure. Consumes the closure and the arguments. */
-  case CallClosure(closure: Atom, args: List[Atom])
+  /** Call a closure through its exclusive entry or its shared one (Rule PR5.6). Consumes the
+    * closure and the arguments.
+    */
+  case CallClosure(closure: Atom, args: List[Atom], exclusive: Boolean = false)
 
   /** Call a `handle` subject function: like `Call`, but not followed by an abort test (`Aborts`). */
   case Catch(fn: String, args: List[Atom])
@@ -99,12 +102,12 @@ object Core:
     e match
       case Expr.Let(_, rhs, body) =>
         val own = rhs match
-          case Rhs.Call(f, _, false) => Set(f)
-          case Rhs.Closure(code, _)  => Set(code)
-          case Rhs.Catch(f, _)       => Set(f)
-          case Rhs.If(_, t, f)       => callees(t) ++ callees(f)
-          case Rhs.Switch(_, cases)  => cases.flatMap((_, c) => callees(c)).toSet
-          case _                     => Set.empty[String]
+          case Rhs.Call(f, _, false)   => Set(f)
+          case Rhs.Closure(code, _, s) => Set(code) ++ Option(s).filter(_.nonEmpty)
+          case Rhs.Catch(f, _)         => Set(f)
+          case Rhs.If(_, t, f)         => callees(t) ++ callees(f)
+          case Rhs.Switch(_, cases)    => cases.flatMap((_, c) => callees(c)).toSet
+          case _                       => Set.empty[String]
         own ++ callees(body)
       case Expr.Dup(_, b)  => callees(b)
       case Expr.Drop(_, b) => callees(b)
@@ -115,16 +118,16 @@ object Core:
     def atoms(as: List[Atom]): Set[Atom.Var] = as.collect { case v: Atom.Var => v }.toSet
     def rhs(r: Rhs): Set[Atom.Var] =
       r match
-        case Rhs.Move(a)            => atoms(List(a))
-        case Rhs.Prim(_, as)        => atoms(as)
-        case Rhs.Call(_, as, _)     => atoms(as)
-        case Rhs.If(c, t, f)        => atoms(List(c)) ++ freeVars(t) ++ freeVars(f)
-        case Rhs.Con(_, fs)         => atoms(fs)
-        case Rhs.Field(o, _)        => atoms(List(o))
-        case Rhs.Switch(x, cases)   => atoms(List(x)) ++ cases.flatMap((_, c) => freeVars(c))
-        case Rhs.Closure(_, cs)     => atoms(cs)
-        case Rhs.CallClosure(c, as) => atoms(c :: as)
-        case Rhs.Catch(_, as)       => atoms(as)
+        case Rhs.Move(a)               => atoms(List(a))
+        case Rhs.Prim(_, as)           => atoms(as)
+        case Rhs.Call(_, as, _)        => atoms(as)
+        case Rhs.If(c, t, f)           => atoms(List(c)) ++ freeVars(t) ++ freeVars(f)
+        case Rhs.Con(_, fs)            => atoms(fs)
+        case Rhs.Field(o, _)           => atoms(List(o))
+        case Rhs.Switch(x, cases)      => atoms(List(x)) ++ cases.flatMap((_, c) => freeVars(c))
+        case Rhs.Closure(_, cs, _)     => atoms(cs)
+        case Rhs.CallClosure(c, as, _) => atoms(c :: as)
+        case Rhs.Catch(_, as)          => atoms(as)
     e match
       case Expr.Let(x, r, body) => rhs(r) ++ (freeVars(body) - x)
       case Expr.Ret(a)          => atoms(List(a))
@@ -137,8 +140,11 @@ object Core:
   */
 object Layout:
 
-  /** The tag that marks a closure (its slot 0 is code, not a boxed field). */
+  /** The tag that marks a closure (its slots 0 and 1 are code, not boxed fields). */
   val closureTag: Int = -1
+
+  /** Payload slots a closure spends on code pointers: the exclusive entry, then the shared one. */
+  val closureCode: Int = 2
 
   /** The slot of each field, in declaration order. */
   def slots(fields: List[CType], first: Int = 0): List[Int] =

@@ -46,16 +46,16 @@ object Rc:
   private def consumed(rhs: Rhs): List[Var] =
     def boxed(as: List[Atom]) = as.flatMap(Core.boxedVar)
     rhs match
-      case Rhs.Move(a)            => boxed(List(a))
-      case Rhs.Prim(_, as)        => boxed(as)
-      case Rhs.Call(_, as, _)     => boxed(as)
-      case Rhs.Con(_, fs)         => boxed(fs)
-      case Rhs.Closure(_, cs)     => boxed(cs)
-      case Rhs.CallClosure(c, as) => boxed(c :: as)
-      case Rhs.Catch(_, as)       => boxed(as)
-      case Rhs.Field(_, _)        => Nil
-      case Rhs.If(c, t, f)        => (boxed(List(c)).toSet ++ free(t) ++ free(f)).toList
-      case Rhs.Switch(s, cases)   => (boxed(List(s)).toSet ++ cases.flatMap((_, c) => free(c))).toList
+      case Rhs.Move(a)               => boxed(List(a))
+      case Rhs.Prim(_, as)           => boxed(as)
+      case Rhs.Call(_, as, _)        => boxed(as)
+      case Rhs.Con(_, fs)            => boxed(fs)
+      case Rhs.Closure(_, cs, _)     => boxed(cs)
+      case Rhs.CallClosure(c, as, _) => boxed(c :: as)
+      case Rhs.Catch(_, as)          => boxed(as)
+      case Rhs.Field(_, _)           => Nil
+      case Rhs.If(c, t, f)           => (boxed(List(c)).toSet ++ free(t) ++ free(f)).toList
+      case Rhs.Switch(s, cases)      => (boxed(List(s)).toSet ++ cases.flatMap((_, c) => free(c))).toList
 
   /** Boxed variables `rhs` only borrows. */
   private def reads(rhs: Rhs): Set[Var] =

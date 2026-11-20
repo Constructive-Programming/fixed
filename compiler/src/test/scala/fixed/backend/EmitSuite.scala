@@ -180,3 +180,22 @@ class EmitSuite extends munit.FunSuite:
       "fn add(x: u64, y: u64) -> u64 with Console =\n    Console.print_line(\"call\")\n    x + y\n" +
       "fn main() -> () with Console =\n    Console.print_line(add(a(), b()).show())\n"
     check("order", src, "a\nb\ncall\n3\n")
+
+  test("a shared list passed to a reusing function is left intact (shared version, 3.4.M3)"):
+    val src = header + "data L:\n    E\n    C(h: u64, t: L)\n\n" +
+      "fn bump(xs: L) -> L =\n    match xs:\n        L.C(h, t) => L.C(h + 1, t)\n        L.E => L.E\n\n" +
+      "fn first(xs: L) -> u64 =\n    match xs:\n        L.C(h, _) => h\n        L.E => 0\n\n" +
+      "fn main() -> () with Console =\n    let a = L.C(1, L.C(2, L.E))\n    let b = bump(a)\n" +
+      "    Console.print_line(first(a).show())\n    Console.print_line(first(b).show())\n"
+    check("shared_bump", src, "1\n2\n")
+
+  test("beyond the version cap the caller copies, and the copy is freed (3.4.M3)"):
+    val src = header + "data L:\n    E\n    C(h: u64, t: L)\n\n" +
+      "fn bump(xs: L) -> L =\n    match xs:\n        L.C(h, t) => L.C(h + 1, t)\n        L.E => L.E\n\n" +
+      "fn first(xs: L) -> u64 =\n    match xs:\n        L.C(h, _) => h\n        L.E => 0\n\n" +
+      "fn three(a: L, b: L, c: L) -> u64 = first(bump(a)) + first(bump(b)) + first(bump(c))\n\n" +
+      "fn drive(a: L, b: L, c: L) -> u64 =\n" +
+      "    three(a, b, c) + three(a, b, L.E) + three(a, L.E, c) + three(L.E, b, c) + three(L.E, L.E, L.E)\n" +
+      "        + first(a) + first(b) + first(c)\n\n" +
+      "fn main() -> () with Console =\n    Console.print_line(drive(L.C(1, L.E), L.C(2, L.E), L.C(3, L.E)).show())\n"
+    check("cap_copy", src, "33\n")

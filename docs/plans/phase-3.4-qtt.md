@@ -1,6 +1,6 @@
 # Phase 3.4 — Quantities, demands and lifetimes (M10)
 
-**Status:** 3.4.M1 and 3.4.M2 done; 3.4.M3 next. Design settled (decisions §8).
+**Status:** 3.4.M1–M3 done; 3.4.M4 next. Design settled (decisions §8).
 **Parent:** `docs/plans/phase-3-typer.md` §1.3 (Part B, M10) and §5.7
 **Runs:** after M7 and the Phase 4.0 slice, **before M9**. The quantity walk runs after the typer;
 everything else runs on Core after lowering.
@@ -130,7 +130,7 @@ violations are `E110` with the reason chain.
 |---|---|---|
 | 3.4.M1 ✅ | Occurrence quantities on the typed tree; `E072`, `T021` | `QuantityPhaseSuite` (§10.1's `go` is `(ω, 1, ω)`); examples `01`–`06` raise no new diagnostics; walk costs 25.4% of typer time |
 | 3.4.M2 ✅ | Spans and types per Core variable; demand inference per part, with exclusivity lost to later uses, keeps and aliasing; reuse pairs; evaluation-order test | `DemandSuite` (6 tests) and `EmitSuite`'s order test; every Core function of examples `01`–`05` and the benchmarks has demands |
-| 3.4.M3 | Versions and copies; two-pointer closures | Suite: shared caller gets `#s`, last-use caller gets the exclusive version, cap triggers a copy; goldens unchanged |
+| 3.4.M3 ✅ | Versions and copies; two-pointer closures | `VersionSuite` (4 tests); `EmitSuite` runs a shared list through a reusing function and a program past the cap, both leak-free; goldens unchanged |
 | 3.4.M4 | Escape sets, classes, cohesive groups, garbage-free carry, handler kinds, fork facts, reason chains | Suite per escape kind, class and handler kind; no binding without a class |
 | 3.4.M5 | `--explain-memory`, `--format json`; `fip` check | Golden report for `01`; accept and reject tests per Rule MM18.1 item |
 | 3.4.M6 | Backend consumption (§3.6); new baseline | Goldens and leak checks pass; an aliasing program and a shared-list program prove the unsound cases stay correct; `docs/baselines/runtime-<date>.md` with the four numbers and the change against 4.0 |
@@ -156,6 +156,25 @@ the benchmarks and reported; there is no fixed budget until a first measurement 
   `records`.
 - **Ownership per binding** for version selection is computed in 3.4.M3 with the same predicate
   that demand inference uses (`Demands.exclusive`), so the two cannot disagree.
+
+### 4.2 Notes from 3.4.M3
+
+- **`Versions`** (`backend/Versions.scala`) runs after demand inference, from `main`. Ownership per
+  binding and per part (`Own`) is tracked forward; the exclusivity test at calls is
+  `Demands.exclusive`, so versions and demands agree. Result ownership per version is a summary
+  computed to a fixed point, starting optimistic. Shared versions are named `f#n`.
+- **Copies** are generated per type and part set (`T.copy[...]`, `Generated.copyOf`): the cell and
+  the fields at demanded parts are copied, the rest shared. They are used only past the cap of 4.
+- **Two code pointers on every closure**, not only on closures with an exclusive parameter: a
+  caller cannot tell from a closure it did not create whether a second entry exists. Spec updated
+  (Rule PR5.6, Rule Q5.7). Closures grow by one word; closures without captures are static.
+- **Element ownership through closures stays open.** Unfold builds list elements from the step
+  closure's result, which is treated as shared, so `records` cannot reuse its `Order` elements
+  statically until fold specialisation (Rule 7.4.b.2) makes the step known. The dynamic
+  `rc == 1` path of 3.4.M6 covers that case meanwhile. `map`'s cells and recursive slot are
+  exclusive in every benchmark pipeline.
+- Versions change no behaviour yet: every version has the same body until 3.4.M6 consumes
+  ownership.
 
 ## 5. Tests
 

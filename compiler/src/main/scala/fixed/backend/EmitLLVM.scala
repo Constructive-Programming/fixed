@@ -72,21 +72,24 @@ final class EmitLLVM:
         line(s"  %${x.name}.p = getelementptr inbounds i8, ptr ${operand(obj)}, i64 ${16 + 8 * slot}")
         line(s"  %${x.name} = load ${EmitLLVM.llType(x.ctype)}, ptr %${x.name}.p")
         label
-      case Rhs.Closure(code, Nil) =>
+      case Rhs.Closure(code, Nil, shared) =>
         val name = s"closure.$code"
-        statics(name) = s"@\"$name\" = private unnamed_addr constant <{ i64, i32, i32, ptr }> " +
-          s"<{ i64 -1, i32 ${Layout.closureTag}, i32 0, ptr ${EmitLLVM.user(code)} }>, align 8\n"
+        statics(name) = s"@\"$name\" = private unnamed_addr constant <{ i64, i32, i32, ptr, ptr }> " +
+          s"<{ i64 -1, i32 ${Layout.closureTag}, i32 0, ptr ${EmitLLVM.user(code)}, " +
+          s"ptr ${EmitLLVM.user(if shared.isEmpty then code else shared)} }>, align 8\n"
         aliases(x.name) = s"@\"$name\""
         label
-      case Rhs.Closure(code, captures) =>
+      case Rhs.Closure(code, captures, shared) =>
         val types = captures.map(_.tpe)
-        allocate(x, Layout.closureTag, Layout.boxedCount(types), captures.size + 1)
+        allocate(x, Layout.closureTag, Layout.boxedCount(types), captures.size + Layout.closureCode)
         line(s"  store ptr ${EmitLLVM.user(code)}, ptr %${x.name}.0")
-        store(x, captures.zip(Layout.slots(types, first = 1)))
+        line(s"  %${x.name}.code1 = getelementptr inbounds i8, ptr %${x.name}, i64 24")
+        line(s"  store ptr ${EmitLLVM.user(if shared.isEmpty then code else shared)}, ptr %${x.name}.code1")
+        store(x, captures.zip(Layout.slots(types, first = Layout.closureCode)))
         label
-      case Rhs.CallClosure(c, args) =>
+      case Rhs.CallClosure(c, args, exclusive) =>
         val n = ids.next()
-        line(s"  %code.$n.p = getelementptr inbounds i8, ptr ${operand(c)}, i64 16")
+        line(s"  %code.$n.p = getelementptr inbounds i8, ptr ${operand(c)}, i64 ${if exclusive then 16 else 24}")
         line(s"  %code.$n = load ptr, ptr %code.$n.p")
         val argList = typed(c :: args)
         line(s"  %${x.name} = call ${EmitLLVM.llType(x.ctype)} %code.$n($argList)")
