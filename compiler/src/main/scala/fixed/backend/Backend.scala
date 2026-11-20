@@ -23,11 +23,19 @@ final case class Analysed(
     spans: String => Span
 )
 
+/** A build mode (`spec/compilation_model.md` Rule CM5.7), by the clone budget it gives each
+  * function. With `--no-specialise` the budget is 0, so only mandatory versions are built: shared
+  * versions, `fip` bodies with their shared entries, and the clones a `fip` body needs.
+  */
+enum Mode(val budget: Int):
+  case Default extends Mode(Versions.budget)
+  case NoSpecialise extends Mode(0)
+
 object Backend:
 
   /** LLVM IR for `unit`, which must have passed the typer without errors. */
-  def compile(unit: CompilationUnit): Either[List[Diagnostic], String] =
-    analyse(unit).flatMap { a =>
+  def compile(unit: CompilationUnit, mode: Mode = Mode.Default): Either[List[Diagnostic], String] =
+    analyse(unit, mode.budget).flatMap { a =>
       FipCheck(a) match
         case Nil =>
           val (fns, borrowed) = Consume(a)

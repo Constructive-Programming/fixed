@@ -43,3 +43,10 @@ class CompilerSuite extends munit.FunSuite:
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString("<test>", "fn f(x: i64 -> i64 = x\n")))
     assert(unit.hasErrors)
     assert(unit.diagnostics.forall(_.code.toString.startsWith("P")), unit.diagnostics)
+
+  test("4.1.M4: --no-specialise is taken from any position"):
+    val plain = List("compile", "f.fixed", "-o", "out")
+    assertEquals(Main.modeOf(plain), (backend.Mode.Default, plain))
+    List(0, 1, 2, 4).foreach { i =>
+      assertEquals(Main.modeOf(plain.patch(i, List("--no-specialise"), 0)), (backend.Mode.NoSpecialise, plain))
+    }

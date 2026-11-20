@@ -16,12 +16,16 @@ class EmitSuite extends munit.FunSuite:
 
   private val dir = Path.of("target", "emit-tests")
 
-  /** Exit code, standard output, standard error. */
-  private def run(name: String, source: String, stdin: String = ""): (Int, String, String) =
+  /** LLVM IR for `source` in build mode `mode`. */
+  private def ir(name: String, source: String, mode: Mode): String =
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString(s"$name.fixed", source)))
     assert(!unit.hasErrors, unit.diagnostics)
-    val ir = Backend.compile(unit).fold(ds => fail(s"lowering failed: $ds"), identity)
-    val exe = Backend.ship(ir, dir.resolve(name), checks = true).fold(d => fail(d.message), identity)
+    Backend.compile(unit, mode).fold(ds => fail(s"lowering failed: $ds"), identity)
+
+  /** Exit code, standard output, standard error. */
+  private def run(name: String, source: String, stdin: String, mode: Mode): (Int, String, String) =
+    val exe = Backend.ship(ir(name, source, mode), dir.resolve(s"$name-$mode"), checks = true)
+      .fold(d => fail(d.message), identity)
     val (out, err) = (new StringBuilder, new StringBuilder)
     val code =
       (Process(Seq(exe.toAbsolutePath.toString), None, "FIXED_RT_STATS" -> "1") #<
@@ -30,15 +34,19 @@ class EmitSuite extends munit.FunSuite:
       )
     (code, out.toString, err.toString)
 
-  /** Run `source`, expect exit 0, `expected` on stdout and no leak; the runtime's counters. */
-  private def check(name: String, source: String, expected: String, stdin: String = ""): Map[String, Long] =
-    val (code, out, err) = run(name, source, stdin)
-    assertEquals(code, 0, err)
-    assertEquals(out, expected)
-    val counts = "\"(\\w+)\":(\\d+)".r.findAllMatchIn(err).map(m => m.group(1) -> m.group(2).toLong).toMap
-    assert(counts.contains("allocs") && counts.contains("frees"), s"no runtime counters: $err")
-    assertEquals(counts.get("allocs"), counts.get("frees"), s"leak: $err")
-    counts
+  /** Run `source` in every build mode (Rule CM5.7), expect exit 0, `expected` on stdout and no leak;
+    * the runtime's counters per mode.
+    */
+  private def check(name: String, source: String, expected: String, stdin: String = ""): Map[Mode, Map[String, Long]] =
+    Mode.values.toList.map { mode =>
+      val (code, out, err) = run(name, source, stdin, mode)
+      assertEquals(code, 0, s"$mode: $err")
+      assertEquals(out, expected, mode)
+      val counts = "\"(\\w+)\":(\\d+)".r.findAllMatchIn(err).map(m => m.group(1) -> m.group(2).toLong).toMap
+      assert(counts.contains("allocs") && counts.contains("frees"), s"$mode: no runtime counters: $err")
+      assertEquals(counts.get("allocs"), counts.get("frees"), s"$mode: leak: $err")
+      mode -> counts
+    }.toMap
 
   private val header = "use std.io.Console\n\n"
 
@@ -128,10 +136,12 @@ class EmitSuite extends munit.FunSuite:
          |    Console.print_line((false && div(1, 0) == 0).show())
          |    Console.print_line(div(1, 0).show())
          |""".stripMargin
-    val (code, out, err) = run("divzero", src)
-    assertEquals(out, "false\n")
-    assertEquals(code, 101)
-    assert(err.contains("panic: integer division by zero"), err)
+    Mode.values.foreach { mode =>
+      val (code, out, err) = run("divzero", src, "", mode)
+      assertEquals(out, "false\n", mode)
+      assertEquals(code, 101, mode)
+      assert(err.contains("panic: integer division by zero"), s"$mode: $err")
+    }
 
   test("data, match, tuples, closures with captures, generic instances"):
     val src = header +
@@ -238,10 +248,17 @@ class EmitSuite extends munit.FunSuite:
       "    Console.print_line(twice(() -> first(bump(a))).show())\n"
     check("closure_twice", src, "4\n")
 
-  test("map over a fresh list reuses its cells (3.4.M6)"):
+  test("map over a fresh list reuses its cells; with --no-specialise only after an `rc == 1` test (Rule CM5.7)"):
     val src = header + "fn upto(n: u64) -> List of u64 =\n    List.unfold(0, (i) ->\n        if i >= n:\n" +
       "            List.Nil\n        else:\n            List.Cons(i, i + 1)\n    )\n\n" +
       "fn main() -> () with Console =\n" +
       "    Console.print_line(upto(4).map((x) -> x * 2).fold(0, (a, x) -> a + x).show())\n"
+    val (default, plain) = (ir("map_reuse", src, Mode.Default), ir("map_reuse", src, Mode.NoSpecialise))
+    assert(default.contains("@\"fx_u_List of u64.map[u64]#x[") && default.contains("call ptr @fx_reuse_excl("))
+    assert(!plain.contains("#x[") && !plain.contains("call ptr @fx_reuse_excl("), plain)
+    assert(plain.contains("call ptr @fx_reuse("), plain)
+
+    /** A reuse after a passing `rc == 1` test counts as a reuse too, so the counters agree. */
     val counts = check("map_reuse", src, "12\n")
-    assert(counts.getOrElse("reuses", 0L) >= 4, counts)
+    assert(counts(Mode.Default).getOrElse("reuses", 0L) >= 4, counts)
+    assertEquals(counts(Mode.Default)("reuses"), counts(Mode.NoSpecialise)("reuses"))

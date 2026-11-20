@@ -3,7 +3,7 @@ package fixed
 import java.nio.file.{Files, Path}
 
 import fixed.ast.Trees
-import fixed.backend.{Backend, MemoryReport}
+import fixed.backend.{Backend, MemoryReport, Mode}
 import fixed.util.{Diagnostic, Reporter, SourceFile}
 
 /** Command-line entry point.
@@ -13,22 +13,25 @@ import fixed.util.{Diagnostic, Reporter, SourceFile}
   *   - `fixed ship <file.fixed> -o <exe>` builds a native executable with `clang`.
   *   - `fixed compile <file.fixed> --explain-memory [--format json]` prints the memory report
   *     (`spec/memory_management.md` §19).
+  *   - `--no-specialise`, in any position, builds only mandatory versions
+  *     (`spec/compilation_model.md` Rule CM5.7).
   *
   * Exit codes (implementation plan, "Agent-Friendly CLI"): 0 success, 1 compile error, 2 usage,
   * 3 build failure.
   */
 object Main:
   def main(args: Array[String]): Unit =
-    args.toList.filterNot(_ == "--") match
-      case "compile" :: file :: "-o" :: out :: Nil => sys.exit(backend(file)(ir => write(Path.of(out), ir)))
+    val (mode, rest) = modeOf(args.toList.filterNot(_ == "--"))
+    rest match
+      case "compile" :: file :: "-o" :: out :: Nil => sys.exit(backend(file, mode)(ir => write(Path.of(out), ir)))
       case "compile" :: file :: "--explain-memory" :: format if format == Nil || format == List("--format", "json") =>
-        sys.exit(explain(file, json = format.nonEmpty))
+        sys.exit(explain(file, json = format.nonEmpty, mode))
       case "ship" :: file :: "-o" :: out :: Nil =>
-        sys.exit(backend(file)(ir => Backend.ship(ir, Path.of(out)).fold(d => { print(file, d); 3 }, _ => 0)))
+        sys.exit(backend(file, mode)(ir => Backend.ship(ir, Path.of(out)).fold(d => { print(file, d); 3 }, _ => 0)))
       case Nil | ("compile" | "ship") :: _ =>
         Console.err.println(
           "usage: fixed <file.fixed>... | fixed compile|ship <file.fixed> -o <out>" +
-            " | fixed compile <file.fixed> --explain-memory [--format json]"
+            " | fixed compile <file.fixed> --explain-memory [--format json]; --no-specialise anywhere"
         )
         sys.exit(2)
       case paths =>
@@ -36,23 +39,28 @@ object Main:
         units.foreach(report)
         sys.exit(if units.exists(_.hasErrors) then 1 else 0)
 
+  /** The build mode `args` ask for, and the other arguments. */
+  private[fixed] def modeOf(args: List[String]): (Mode, List[String]) =
+    val (flag, rest) = args.partition(_ == "--no-specialise")
+    (if flag.isEmpty then Mode.Default else Mode.NoSpecialise, rest)
+
   /** Check `file`, lower it to LLVM IR and hand the IR to `use`; exit code 1 on any error. */
-  private def backend(file: String)(use: String => Int): Int =
+  private def backend(file: String, mode: Mode)(use: String => Int): Int =
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromPath(file)))
     if unit.hasErrors then
       report(unit)
       1
     else
-      Backend.compile(unit) match
+      Backend.compile(unit, mode) match
         case Left(ds) =>
           report(unit.report(ds))
           1
         case Right(ir) => use(ir)
 
   /** Print the memory report of `file`; exit code 1 on any error. */
-  private def explain(file: String, json: Boolean): Int =
+  private def explain(file: String, json: Boolean, mode: Mode): Int =
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromPath(file)))
-    Option.when(!unit.hasErrors)(Backend.analyse(unit)) match
+    Option.when(!unit.hasErrors)(Backend.analyse(unit, mode.budget)) match
       case Some(Right(a)) =>
         println(if json then MemoryReport.json(unit, a) else MemoryReport.text(unit, a))
         0
