@@ -240,6 +240,20 @@ class EmitSuite extends munit.FunSuite:
       "fn main() -> () with Console =\n    let a = L.C(1, L.C(5, L.E))\n    Console.print_line(both(a, rest(a)).show())\n"
     check("alias_part", src, "7\n")
 
+  /** `q` dies inside a `match` and `r` inside an `if`, each dropped there: the cells built after
+    * them must not reuse theirs. `swap` reuses its own argument's cell.
+    */
+  test("a cell that dies inside a branch is not reused after it; a generic swap reuses its argument"):
+    val src = header + "data Pair of (A, B):\n    P(a: A, b: B)\n\n" +
+      "fn swap(p: Pair of (A, B)) -> Pair of (B, A) =\n    match p:\n        Pair.P(x, y) => Pair.P(y, x)\n\n" +
+      "fn main() -> () with Console =\n    let q = swap(Pair.P(\"a\".concat(\"b\"), 7))\n" +
+      "    match q:\n        Pair.P(n, s) => Console.print_line(s.concat(n.show()))\n" +
+      "    let r = Pair.P(\"c\".concat(\"d\"), 8)\n    if \"x\".concat(\"y\") == \"xy\":\n" +
+      "        match r:\n            Pair.P(s, n) => Console.print_line(s)\n    else:\n        Console.print_line(\"no\")\n" +
+      "    let t = Pair.P(\"e\".concat(\"f\"), 9)\n    match t:\n        Pair.P(s, n) => Console.print_line(s)\n"
+    val counts = check("reuse_after_branch", src, "ab7\ncd\nef\n")
+    modes.foreach(m => assert(counts(m).getOrElse("reuses", 0L) >= 1, s"$m: swap reuses no cell: ${counts(m)}"))
+
   test("an exclusive value captured by a closure called twice is not overwritten (3.4.M6)"):
     val src = cells + "fn twice(f: () -> u64) -> u64 = f() + f()\n\n" +
       "fn main() -> () with Console =\n    let a = L.C(1, L.E)\n" +

@@ -89,6 +89,7 @@ Fixed in this change because they sit in text that was being edited:
 Compiler faults that exist on `main` and were not fixed:
 
 - A generic function that rebuilds a `data Pair of (A, B)` cell (a `swap`) fails the exclusive-reuse check in a test build; with `--no-specialise` it corrupts the heap.
+  - **Fixed** (`Demands.forward`): a cell that died inside an earlier `match` or `if` was paired for reuse after it, where `Rc` had already dropped it; `swap` itself was not at fault.
 - A parameter with an anonymous bound that is passed on to another function leaks.
 - Two parameters with the same anonymous bound, called at two different data types, both get the last argument's type in the instance path.
 - `fx_drop` is recursive; a long list can exhaust the native stack (Rule PR7.3 requires a loop). **Fixed in part** in `fixed_rt.c` (`aff3d3c`, P6 D16): an out-of-line `free_cell` continues on the highest marked child instead of recursing, so a list is freed without recursion; it still recurses on the other children (OQ-CM17). The same change located the 6–8% that the first measurement charged to the reference-map header: it was this child walk sitting in a helper that `clang -O2` did not inline, not the map (`docs/baselines/runtime-2026-11-20-phase-4.1.md`, addendum).

@@ -154,11 +154,16 @@ final class Demands(
       case Rhs.Move(v: Atom.Var) => (ctx.path(v.name), ctx.keys.get(v.name))
       case _                     => (Path(x.name, Nil), typeKey(x.name))
     val keeps = owned(rhs).filter(v => live.exists(l => ctx.path(l).overlaps(ctx.path(v)))).map(ctx.path)
+
+    /** An `If` or `Switch` hands its branches what they use; what is dead after it dies inside them (`Rc`). */
+    val inBranches =
+      if Core.branches(rhs).isEmpty then Nil
+      else (Core.atoms(rhs).flatMap(Core.countedVar).map(_.name) ++ Core.branches(rhs).flatMap(names)).filterNot(live)
     ctx.copy(
       paths = ctx.paths.updated(x.name, path),
       keys = key.fold(ctx.keys)(k => ctx.keys.updated(x.name, k)),
       kept = keeps ++ ctx.kept,
-      moved = owned(rhs).map(ctx.path) ++ ctx.moved
+      moved = (owned(rhs) ++ inBranches).map(ctx.path) ++ ctx.moved
     )
 
   /** Counted variables a right-hand side keeps (stores, or passes to a parameter that keeps it). */
@@ -189,7 +194,7 @@ final class Demands(
   /** A constructor reuses the cell of a variable of matching size that died on this path (drop
     * guided, Rule MM11.5): the variable is then demanded exclusive. Its children may stay live. A
     * variable moved into another value or call earlier on the path did not die here: its cell
-    * belongs to the new owner.
+    * belongs to the new owner. Nor did one that died inside an earlier branch, which dropped it.
     * The variant of a candidate is known inside a `Switch` case, or always for single-variant types.
     */
   private def reuse(x: Atom.Var, rhs: Rhs, live: Set[String], ctx: Ctx, fn: String): Option[String] =
