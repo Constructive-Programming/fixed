@@ -39,6 +39,10 @@ object Own:
   * version, so its callers always copy (Rule MM18.3). Every closure gets an
   * exclusive and a shared entry (Rule PR5.6), and a closure call picks one statically.
   *
+  * A constructor paired with a dead cell by demand inference becomes a `Reuse`: unconditional where
+  * this version owns the cell exclusively, else after a runtime `rc == 1` test (hybrid reuse, Rule
+  * PR6.3).
+  *
   * Result ownership per version is a summary: optimistic at first (fresh results are exclusive),
   * then recomputed until no summary changes. A value only becomes exclusive by construction, so
   * each round can only take exclusivity away.
@@ -61,6 +65,9 @@ final class Versions(
   private val built = mutable.LinkedHashMap.empty[String, Fn]
   private val queue = mutable.Queue.empty[(String, Mask, String)]
   private val queued = mutable.HashSet.empty[String]
+
+  /** The version being built: its reuse pairs come from demand inference (by instance name). */
+  private val current = scala.util.DynamicVariable("")
   private val copies = Iterator.from(1)
 
   /** The functions of every version reachable from `main`. */
@@ -98,18 +105,21 @@ final class Versions(
       val m = mask.lift(i).getOrElse(Set.empty)
       p.name -> Own(m(None), m.flatten, rest = false)
     }.toMap
-    val (body, result) = walk(fn.body, d.entry(fn), owns)
+    val (body, result) = current.withValue(name)(walk(fn.body, d.entry(fn), owns))
     built(name) = fn.copy(name = name, body = body)
     results(name) = result
 
   /** A program point: the variables live after it, the path facts and the ownership so far. */
   final private case class At(live: Set[String], ctx: d.Ctx, owns: Map[String, Own]):
-    /** Ownership of `a` here: shared if another live value or an earlier keep overlaps it. */
+    /** Ownership of `a` here: shared if another live value or an earlier keep holds it, directly or
+      * through an ancestor. A live part of `a` does not share `a`'s own cell; a call that would
+      * overwrite that part is caught by the aliasing test ([[Demands.exclusive]]).
+      */
     def own(a: Atom): Own =
       a match
         case v: Atom.Var if v.ctype.boxed =>
           val p = ctx.path(v.name)
-          if live.exists(l => l != v.name && ctx.path(l).overlaps(p)) || ctx.kept.exists(_.overlaps(p)) then Own.shared
+          if live.exists(l => l != v.name && ctx.path(l).covers(p)) || ctx.kept.exists(_.covers(p)) then Own.shared
           else owns.getOrElse(v.name, Own.shared)
         case _ => Own.all
 
@@ -139,8 +149,14 @@ final class Versions(
       case Rhs.Call(f, as, false) if byName.contains(f) => call(f, as, at)(Rhs.Call(_, _, runtime = false))
       case Rhs.Catch(f, as) if byName.contains(f)       => call(f, as, at)(Rhs.Catch(_, _))
       case Rhs.Call(_, _, true) | _: Rhs.Prim           => plain(Own.all)
-      case Rhs.Con(_, fs)                               => plain(construct(x, fs, at))
-      case Rhs.Field(o, slot)                           =>
+      case Rhs.Con(tag, fs)                             =>
+        val made = construct(x, fs, at)
+        table.reuses.getOrElse(Memory.base(current.value), Map.empty).get(x.name) match
+          case Some(v) =>
+            val cell = Atom.Var(v, CType.Boxed)
+            (Nil, Rhs.Reuse(cell, tag, fs, unconditional = at.own(cell).root), made)
+          case None => plain(made)
+      case Rhs.Field(o, slot) =>
         val parent = at.own(o)
         val key = (Core.boxedVar(o).flatMap(v => ctx.keys.get(v.name)).getOrElse("?"), slot)
         plain(if parent.root then parent.copy(root = parent.part(key)) else Own.shared)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build the runtime benchmarks with the backend slice, run each one RUNS times, and write
-# docs/baselines/runtime-<date>.md (docs/plans/phase-4.0-backend-slice.md §4.9).
-# Usage: bench/runtime/run.sh [RUNS]   (default 5). Needs sbt and clang on PATH.
+# Build the runtime benchmarks, run each one RUNS times, and write docs/baselines/runtime-<date>.md
+# (docs/plans/phase-4.0-backend-slice.md §4.9). NOTE, if set, replaces the description paragraph.
+# Usage: [NOTE=...] bench/runtime/run.sh [RUNS]   (default 5). Needs sbt and clang on PATH.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -20,17 +20,16 @@ report=docs/baselines/runtime-$(date +%F).md
 {
   echo "# Runtime baseline, $(date +%F)"
   echo
-  echo "Phase 4.0 backend slice (\`docs/plans/phase-4.0-backend-slice.md\` §4.9): everything boxed and"
-  echo "reference-counted, no fusion, no reuse, no borrowing. Later milestones report against these numbers."
+  echo "${NOTE:-Phase 4.0 backend slice (\`docs/plans/phase-4.0-backend-slice.md\` §4.9): everything boxed and reference-counted, no fusion, no reuse, no borrowing. Later milestones report against these numbers.}"
   echo
   echo "- Commit: \`$(git rev-parse --short HEAD)\`$(git diff --quiet HEAD -- compiler bench || echo ' (with local changes)')"
   echo "- Machine: $(uname -srm), $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//')"
   echo "- Toolchain: $(clang --version | head -1), \`clang -O2\`"
   echo "- Wall time: best of $runs runs, measured by the runtime from \`main\` start to end (no process start-up)."
-  echo "- Counts are deterministic: every run gives the same allocations, \`dup\`s and \`drop\`s."
+  echo "- Counts are deterministic: every run gives the same allocations, reuses, \`dup\`s and \`drop\`s."
   echo
-  echo "| Program | Size | Result | Wall (ms) | Peak RSS (KiB) | Allocations | Frees | dups | drops |"
-  echo "|---|---|---|---:|---:|---:|---:|---:|---:|"
+  echo "| Program | Size | Result | Wall (ms) | Peak RSS (KiB) | Allocations | Reuses | Frees | dups | drops |"
+  echo "|---|---|---|---:|---:|---:|---:|---:|---:|---:|"
   for p in "${progs[@]}"; do
     best=""; result=""
     for _ in $(seq "$runs"); do
@@ -39,9 +38,10 @@ report=docs/baselines/runtime-$(date +%F).md
       if [ -z "$best" ] || [ "$wall" -lt "$(echo "$best" | field wall_ns)" ]; then best=$stats; fi
     done
     size=$(sed -n 's|^// Size: ||p' "bench/runtime/$p.fixed")
-    printf '| `%s` | %s | %s | %.1f | %s | %s | %s | %s | %s |\n' "$p" "$size" "$(cat "$out/$p.out")" \
+    printf '| `%s` | %s | %s | %.1f | %s | %s | %s | %s | %s | %s |\n' "$p" "$size" "$(cat "$out/$p.out")" \
       "$(echo "scale=3; $(echo "$best" | field wall_ns) / 1000000" | bc)" "$(echo "$best" | field peak_rss_kb)" \
-      "$(echo "$best" | field allocs)" "$(echo "$best" | field frees)" "$(echo "$best" | field dups)" "$(echo "$best" | field drops)"
+      "$(echo "$best" | field allocs)" "$(echo "$best" | field reuses)" "$(echo "$best" | field frees)" \
+      "$(echo "$best" | field dups)" "$(echo "$best" | field drops)"
   done
 } > "$report"
 echo "wrote $report"

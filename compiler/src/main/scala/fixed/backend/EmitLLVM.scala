@@ -68,6 +68,14 @@ final class EmitLLVM:
         allocate(x, tag, Layout.boxedCount(types), fields.size)
         store(x, fields.zip(Layout.slots(types)))
         label
+      case Rhs.Reuse(token, tag, fields, _) =>
+        val types = fields.map(_.tpe)
+        val size = 8 * fields.size
+        line(
+          s"  %${x.name} = call ptr @fx_alloc_at(ptr ${operand(token)}, i32 $tag, i32 ${Layout.boxedCount(types)}, i64 $size)"
+        )
+        store(x, fields.zip(Layout.slots(types)))
+        label
       case Rhs.Field(obj, slot) =>
         line(s"  %${x.name}.p = getelementptr inbounds i8, ptr ${operand(obj)}, i64 ${16 + 8 * slot}")
         line(s"  %${x.name} = load ${EmitLLVM.llType(x.ctype)}, ptr %${x.name}.p")
@@ -197,7 +205,8 @@ object EmitLLVM:
     "declare void @fx_dup(ptr)",
     "declare void @fx_drop(ptr)",
     "declare void @fx_panic_div() noreturn",
-    "declare ptr @fx_alloc(i32, i32, i64)"
+    "declare ptr @fx_alloc(i32, i32, i64)",
+    "declare ptr @fx_alloc_at(ptr, i32, i32, i64)"
   )
 
   /** A user function's LLVM name, quoted: instance names carry type arguments. */

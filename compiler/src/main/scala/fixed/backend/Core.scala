@@ -81,6 +81,12 @@ enum Rhs:
   /** Call a `handle` subject function: like `Call`, but not followed by an abort test (`Aborts`). */
   case Catch(fn: String, args: List[Atom])
 
+  /** `Con(tag, fields)` built in the memory of the dead cell `cell` (`spec/memory_management.md`
+    * §11): unconditionally where the cell is exclusively owned, else after a runtime `rc == 1`
+    * test, allocating fresh when it fails. Consumes the cell and the fields.
+    */
+  case Reuse(cell: Atom, tag: Int, fields: List[Atom], unconditional: Boolean)
+
 enum Expr:
   case Let(x: Atom.Var, rhs: Rhs, body: Expr)
   case Ret(a: Atom)
@@ -145,6 +151,7 @@ object Core:
         case Rhs.Closure(_, cs, _)     => atoms(cs)
         case Rhs.CallClosure(c, as, _) => atoms(c :: as)
         case Rhs.Catch(_, as)          => atoms(as)
+        case Rhs.Reuse(c, _, fs, _)    => atoms(c :: fs)
     e match
       case Expr.Let(x, r, body) => rhs(r) ++ (freeVars(body) - x)
       case Expr.Ret(a)          => atoms(List(a))

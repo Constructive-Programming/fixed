@@ -1,6 +1,6 @@
 # Phase 3.4 — Quantities, demands and lifetimes (M10)
 
-**Status:** 3.4.M1–M5 done; 3.4.M6 next. Design settled (decisions §8).
+**Status:** done (3.4.M1–M6). New baseline: `docs/baselines/runtime-2026-11-20.md`. Design settled (decisions §8).
 **Parent:** `docs/plans/phase-3-typer.md` §1.3 (Part B, M10) and §5.7
 **Runs:** after M7 and the Phase 4.0 slice, **before M9**. The quantity walk runs after the typer;
 everything else runs on Core after lowering.
@@ -133,7 +133,7 @@ violations are `E110` with the reason chain.
 | 3.4.M3 ✅ | Versions and copies; two-pointer closures | `VersionSuite` (4 tests); `EmitSuite` runs a shared list through a reusing function and a program past the cap, both leak-free; goldens unchanged |
 | 3.4.M4 ✅ | Escape sets, classes, cohesive groups, garbage-free carry, handler kinds, fork facts, reason chains | `MemorySuite` (7 tests); every allocation of the run examples and benchmarks has a class |
 | 3.4.M5 ✅ | `--explain-memory`, `--format json`; `fip` check | `FipSuite` (6 tests) with a golden JSON report for `01` (`examples/golden/01_basics.memory.json`, regenerate with `FIXED_REGEN=1`); `EmitSuite` runs a shared value copied into a `fip fn` |
-| 3.4.M6 | Backend consumption (§3.6); new baseline | Goldens and leak checks pass; an aliasing program and a shared-list program prove the unsound cases stay correct; `docs/baselines/runtime-<date>.md` with the four numbers and the change against 4.0 |
+| 3.4.M6 ✅ | Backend consumption (§3.6); new baseline | Goldens and leak checks pass with every unconditional reuse verified at runtime in test builds (`FX_CHECK_EXCL`); aliasing, closure-called-twice, shared-list and copy programs stay correct; `docs/baselines/runtime-2026-11-20.md`: `list_pipeline` −31%, `records` −18%, allocations −40–50% there |
 
 Each milestone ends with the full gate. Core analyses are timed against lowering plus emission on
 the benchmarks and reported; there is no fixed budget until a first measurement exists.
@@ -216,6 +216,25 @@ the benchmarks and reported; there is no fixed budget until a first measurement 
   `fip` contract, parameter demands per part and escapes, allocations with class, escapes and
   reasons, fork facts and copy sites, then handler kinds, with `line:column` positions. Closures
   built by lowering carry no span yet (`-`).
+
+### 4.5 Notes from 3.4.M6
+
+- **`Reuse`** is a Core form produced by `Versions` from demand inference's reuse pairs:
+  unconditional where the version owns the cell exclusively, dynamic otherwise. `Rc` takes the
+  token where the cell would be dropped (drop guided, Rule MM11.5): `fx_reuse_excl` or Koka's
+  `fx_reuse`, which release the cell's children and leave an empty cell; the constructor fills it
+  (`fx_alloc_at`), or it is dropped like any value. Taking the token before the recursive call is
+  what makes the moved tail exclusive in the callee.
+- **Two soundness bugs found by the runtime check** (`FX_CHECK_EXCL`, on in every `EmitSuite` run):
+  a value moved into another value was taken as a dead cell (fixed: moved values are not
+  candidates), and a live sibling field made its parent look shared (fixed: ownership counts only
+  live ancestors; descendant conflicts stay with the aliasing test).
+- **`Consume`** erases demand-`0` parameters and borrows `read` parameters, for functions called
+  directly. Borrowing everything slowed `bintrees` by 18% (freeing moved to a second pass), so a
+  parameter is borrowed only where some caller keeps the argument live after the call.
+- **Not done, for Phase 4 Perceus:** drop specialisation (moving fields out of an exclusive cell
+  rather than dup + release), a borrowing closure-call convention, typing the derived `unfold`'s
+  layer so its cell can be reused. These are where the remaining `dup`s are.
 
 ## 5. Tests
 

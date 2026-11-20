@@ -21,7 +21,7 @@ class EmitSuite extends munit.FunSuite:
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString(s"$name.fixed", source)))
     assert(!unit.hasErrors, unit.diagnostics)
     val ir = Backend.compile(unit).fold(ds => fail(s"lowering failed: $ds"), identity)
-    val exe = Backend.ship(ir, dir.resolve(name)).fold(d => fail(d.message), identity)
+    val exe = Backend.ship(ir, dir.resolve(name), checks = true).fold(d => fail(d.message), identity)
     val (out, err) = (new StringBuilder, new StringBuilder)
     val code =
       (Process(Seq(exe.toAbsolutePath.toString), None, "FIXED_RT_STATS" -> "1") #<
@@ -30,13 +30,14 @@ class EmitSuite extends munit.FunSuite:
       )
     (code, out.toString, err.toString)
 
-  /** Run `source`, expect exit 0, `expected` on stdout and no leak. */
-  private def check(name: String, source: String, expected: String, stdin: String = ""): Unit =
+  /** Run `source`, expect exit 0, `expected` on stdout and no leak; the runtime's counters. */
+  private def check(name: String, source: String, expected: String, stdin: String = ""): Map[String, Long] =
     val (code, out, err) = run(name, source, stdin)
     assertEquals(code, 0, err)
     assertEquals(out, expected)
-    val counts = "\"(allocs|frees)\":(\\d+)".r.findAllMatchIn(err).map(m => m.group(1) -> m.group(2).toLong).toMap
+    val counts = "\"(\\w+)\":(\\d+)".r.findAllMatchIn(err).map(m => m.group(1) -> m.group(2).toLong).toMap
     assertEquals(counts.get("allocs"), counts.get("frees"), s"leak: $err")
+    counts
 
   private val header = "use std.io.Console\n\n"
 
@@ -207,3 +208,27 @@ class EmitSuite extends munit.FunSuite:
       "fn main() -> () with Console =\n    let a = L.C(1, L.C(2, L.E))\n" +
       "    Console.print_line(first(bump(a)).show())\n    Console.print_line(first(a).show())\n"
     check("fip_copy", src, "2\n1\n")
+
+  private val cells = header + "data L:\n    E\n    C(h: u64, t: L)\n\n" +
+    "fn bump(xs: L) -> L =\n    match xs:\n        L.C(h, t) => L.C(h + 1, t)\n        L.E => L.E\n\n" +
+    "fn first(xs: L) -> u64 =\n    match xs:\n        L.C(h, _) => h\n        L.E => 0\n\n" +
+    "fn rest(xs: L) -> L =\n    match xs:\n        L.C(_, t) => t\n        L.E => L.E\n\n"
+
+  test("a value and a part of it passed to one call stay intact (3.4.M6, Rule Q9.4)"):
+    val src = cells + "fn both(xs: L, ys: L) -> u64 = first(bump(xs)) + first(ys)\n\n" +
+      "fn main() -> () with Console =\n    let a = L.C(1, L.C(5, L.E))\n    Console.print_line(both(a, rest(a)).show())\n"
+    check("alias_part", src, "7\n")
+
+  test("an exclusive value captured by a closure called twice is not overwritten (3.4.M6)"):
+    val src = cells + "fn twice(f: () -> u64) -> u64 = f() + f()\n\n" +
+      "fn main() -> () with Console =\n    let a = L.C(1, L.E)\n" +
+      "    Console.print_line(twice(() -> first(bump(a))).show())\n"
+    check("closure_twice", src, "4\n")
+
+  test("map over a fresh list reuses its cells (3.4.M6)"):
+    val src = header + "fn upto(n: u64) -> List of u64 =\n    List.unfold(0, (i) ->\n        if i >= n:\n" +
+      "            List.Nil\n        else:\n            List.Cons(i, i + 1)\n    )\n\n" +
+      "fn main() -> () with Console =\n" +
+      "    Console.print_line(upto(4).map((x) -> x * 2).fold(0, (a, x) -> a + x).show())\n"
+    val counts = check("map_reuse", src, "12\n")
+    assert(counts.getOrElse("reuses", 0L) >= 4, counts)

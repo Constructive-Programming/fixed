@@ -32,7 +32,7 @@ typedef struct fx_string {
     char bytes[];
 } fx_string;
 
-static uint64_t n_alloc, n_free, n_dup, n_drop;
+static uint64_t n_alloc, n_free, n_dup, n_drop, n_reuse;
 static struct timespec t_start;
 
 static void fx_die(const char *msg, int code) {
@@ -48,6 +48,45 @@ void *fx_alloc(uint32_t tag, uint32_t nptr, size_t payload) {
     h->tag = tag;
     h->nptr = nptr;
     n_alloc++;
+    return h;
+}
+
+void fx_drop(fx_header *h);
+
+/* Reuse (spec/memory_management.md §11), drop guided: the token is taken where the cell would
+   have been dropped. The cell's children are dropped (lowering duplicated the ones it read, so
+   those return to the count they had), and the empty cell (nptr 0) is the token: a constructor
+   fills it, or, if none does, it is dropped like any value. */
+static fx_header *reclaim(fx_header *h) {
+    fx_header **fields = (fx_header **)(h + 1);
+    for (uint32_t i = 0; i < h->nptr; i++) fx_drop(fields[i]);
+    h->nptr = 0;
+    n_reuse++;
+    return h;
+}
+
+/* Exclusively owned: no test. FX_CHECK_EXCL (test builds) verifies the claim. */
+void *fx_reuse_excl(fx_header *h) {
+#ifdef FX_CHECK_EXCL
+    if (h->rc != 1) fx_die("internal error: reused a cell that is not exclusively owned", 103);
+#endif
+    return reclaim(h);
+}
+
+/* Shared: Koka's path. Reuse when the count says no one else holds it; else release our share. */
+void *fx_reuse(fx_header *h) {
+    if (h->rc == 1) return reclaim(h);
+    fx_drop(h);
+    return NULL;
+}
+
+/* A cell for a constructor: the reuse token if there is one, else a fresh allocation. */
+void *fx_alloc_at(void *token, uint32_t tag, uint32_t nptr, size_t payload) {
+    if (!token) return fx_alloc(tag, nptr, payload);
+    fx_header *h = token;
+    h->rc = 1;
+    h->tag = tag;
+    h->nptr = nptr;
     return h;
 }
 
@@ -232,8 +271,8 @@ int main(void) {
         int64_t wall_ns = (t_end.tv_sec - t_start.tv_sec) * 1000000000LL + (t_end.tv_nsec - t_start.tv_nsec);
         fprintf(stderr,
                 "{\"allocs\":%" PRIu64 ",\"frees\":%" PRIu64 ",\"dups\":%" PRIu64 ",\"drops\":%" PRIu64
-                ",\"peak_rss_kb\":%ld,\"wall_ns\":%" PRId64 "}\n",
-                n_alloc, n_free, n_dup, n_drop, ru.ru_maxrss, wall_ns);
+                ",\"reuses\":%" PRIu64 ",\"peak_rss_kb\":%ld,\"wall_ns\":%" PRId64 "}\n",
+                n_alloc, n_free, n_dup, n_drop, n_reuse, ru.ru_maxrss, wall_ns);
     }
     return 0;
 }

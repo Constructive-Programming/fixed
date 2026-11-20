@@ -100,7 +100,8 @@ final class Demands(
       kept: List[Path],
       tags: Map[String, Int],
       paired: Set[String],
-      after: Set[String]
+      after: Set[String],
+      moved: List[Path] = Nil
   ):
     def path(v: String): Path = paths.getOrElse(v, Path(v, Nil))
 
@@ -156,7 +157,8 @@ final class Demands(
     ctx.copy(
       paths = ctx.paths.updated(x.name, path),
       keys = key.fold(ctx.keys)(k => ctx.keys.updated(x.name, k)),
-      kept = keeps ++ ctx.kept
+      kept = keeps ++ ctx.kept,
+      moved = owned(rhs).map(ctx.path) ++ ctx.moved
     )
 
   /** Boxed variables a right-hand side keeps (stores, or passes to a parameter that keeps it). */
@@ -184,7 +186,9 @@ final class Demands(
     !ctx.kept.exists(_.overlaps(p))
 
   /** A constructor reuses the cell of a variable of matching size that died on this path (drop
-    * guided, Rule MM11.5): the variable is then demanded exclusive. Its children may stay live.
+    * guided, Rule MM11.5): the variable is then demanded exclusive. Its children may stay live. A
+    * variable moved into another value or call earlier on the path did not die here: its cell
+    * belongs to the new owner.
     * The variant of a candidate is known inside a `Switch` case, or always for single-variant types.
     */
   private def reuse(x: Atom.Var, rhs: Rhs, live: Set[String], ctx: Ctx, fn: String): Option[String] =
@@ -197,7 +201,8 @@ final class Demands(
               if !ctx.paired(v) && !inFields(v) &&
                 ctx.keys.get(v).flatMap(cellSize(_, tag)).contains(fields.size) &&
                 !live.exists(l => ctx.path(l).covers(ctx.path(v))) &&
-                !ctx.kept.exists(_.covers(ctx.path(v))) =>
+                !ctx.kept.exists(_.covers(ctx.path(v))) &&
+                !ctx.moved.exists(_.covers(ctx.path(v))) =>
             reuses(fn)(x.name) = v
             v
         }
@@ -213,6 +218,7 @@ final class Demands(
       case Rhs.Catch(f, as)             => call(f, as, live, ctx)
       case Rhs.Call(_, as, true)        => uses(as, Need.own)
       case Rhs.Con(_, fs)               => uses(fs, Need.own)
+      case Rhs.Reuse(c, _, fs, _)       => uses(c :: fs, Need.own)
       case Rhs.Closure(_, cs, _)        => uses(cs, Need.own)
       case Rhs.CallClosure(c, as, _)    => uses(c :: as, Need.own)
       case Rhs.Field(o: Atom.Var, slot) =>

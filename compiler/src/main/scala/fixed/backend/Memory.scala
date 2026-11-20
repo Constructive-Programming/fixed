@@ -111,6 +111,7 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
     rhs match
       case Rhs.Move(a)               => flows(List(a), ex)
       case Rhs.Con(_, fs)            => flows(fs, ex + Escape.Field(x.name))
+      case Rhs.Reuse(_, _, fs, _)    => flows(fs, ex + Escape.Field(x.name))
       case Rhs.Closure(_, cs, _)     => flows(cs, ex + Escape.Closure(x.name))
       case Rhs.CallClosure(_, as, _) =>
         flows(as, Set(Escape.Unbounded(s"passed to a closure the compiler cannot see, at ${where.start}")))
@@ -159,6 +160,7 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
     val esc = escapeOf.getOrElse(f.name, Map.empty)
     val sites = all.collect {
       case (x, Rhs.Con(_, fs)) if fs.nonEmpty        => x.name
+      case (x, _: Rhs.Reuse)                         => x.name
       case (x, Rhs.Closure(_, cs, _)) if cs.nonEmpty => x.name
     }
     val longLived = sites.flatMap(x => long(x, esc.getOrElse(x, Set.empty), f.name).map(x -> _)).toMap

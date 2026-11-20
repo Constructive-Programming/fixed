@@ -26,7 +26,9 @@ object Backend:
   def compile(unit: CompilationUnit): Either[List[Diagnostic], String] =
     analyse(unit).flatMap { a =>
       FipCheck(a) match
-        case Nil      => Right(EmitLLVM().program(Aborts(a.fns).map(Rc(_))))
+        case Nil =>
+          val (fns, borrowed) = Consume(a)
+          Right(EmitLLVM().program(Aborts(fns).map(Rc(_, f => borrowed.getOrElse(f, Set.empty)))))
         case problems => Left(problems)
     }
 
@@ -47,8 +49,10 @@ object Backend:
       Analysed(all, table, Memory(all, table, spans).run(), lower.fips.toMap, spans)
     }
 
-  /** Write `ir` next to `out`, then link it with the runtime into the executable `out`. */
-  def ship(ir: String, out: Path): Either[Diagnostic, Path] =
+  /** Write `ir` next to `out`, then link it with the runtime into the executable `out`. With
+    * `checks`, the runtime verifies every unconditional reuse (test builds).
+    */
+  def ship(ir: String, out: Path, checks: Boolean = false): Either[Diagnostic, Path] =
     val dir = Option(out.toAbsolutePath.getParent).getOrElse(Path.of("."))
     val _ = Files.createDirectories(dir)
     val ll = dir.resolve(s"${out.getFileName}.ll")
@@ -56,7 +60,8 @@ object Backend:
     val _ = Files.writeString(ll, ir)
     val _ = Files.write(rt, runtimeSource)
     val log = new StringBuilder
-    val cmd = Seq("clang", "-O2", "-std=c11", "-o", out.toString, ll.toString, rt.toString, "-lm")
+    val cmd = Seq("clang", "-O2", "-std=c11") ++ Option.when(checks)("-DFX_CHECK_EXCL") ++
+      Seq("-o", out.toString, ll.toString, rt.toString, "-lm")
     val code =
       try Process(cmd).!(ProcessLogger(l => { val _ = log.append(l).append('\n') }))
       catch case _: java.io.IOException => -1
