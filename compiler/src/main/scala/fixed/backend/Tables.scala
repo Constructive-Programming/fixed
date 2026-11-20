@@ -31,7 +31,7 @@ private[backend] trait Tables extends Generated:
     val known = Lower.scalar(t).isDefined || dataOf(t).isDefined || isStringType(t)
     (Option.when(known)(ctype(t, Span.NoSpan)), symbols.scope.get(cap).filter(symbols(_).kind == SymKind.Cap)) match
       case _ if typeParamsIn(t).nonEmpty =>
-        Left(s"a table at `${symbols.render(t)}` needs a witness record built at run time (4.1.M7c)")
+        Left(s"a table at `${symbols.render(t)}` needs a witness record built at run time, which is not built yet")
       case (Some(c), Some(id)) =>
         val (missing, entries) = Tables.members(symbols, id).partitionMap(m => entry(t, c, id, m).toRight(m))
         missing.headOption match
@@ -43,45 +43,46 @@ private[backend] trait Tables extends Generated:
     * expanded, in the order written; a capability without members has none, and neither has one
     * that another capability of the set extends, whose table already holds its members.
     */
-  protected def boundCaps(p: SymbolId): List[SymbolId] =
-    val caps = symbols(p).info match
-      case Type.IsBound(bs) => Members.expandAliases(symbols, bs).collect { case Type.CapRef(c, _) => c }.distinct
-      case _                => Nil
+  protected def boundCaps(p: Type): List[SymbolId] =
+    val bounds = p match
+      case Type.TypeRef(id, Nil) => symbols(id).info
+      case _                     => implicitBounds.getOrElse(p, Type.IsBound(Nil))
+    match
+      case Type.IsBound(bs) => bs
+      case c                => List(c)
+    val caps = Members.expandAliases(symbols, bounds).collect { case Type.CapRef(c, _) => c }.distinct
     val tabled = caps.filter(Tables.members(symbols, _).nonEmpty)
     tabled.filterNot(c => tabled.exists(d => d != c && Tables.reached(symbols, d).contains(c)))
 
   /** The table parameter of type parameter `p` for capability `cap`. */
-  protected def tableOf(p: SymbolId, cap: SymbolId): Atom.Var =
-    Atom.Var(s"t.${symbols(p).name}.${p.toInt}.${symbols(cap).name}", CType.Table)
+  protected def tableOf(p: Type, cap: SymbolId): Atom.Var =
+    Atom.Var(s"t.${witnessVar(p).name.stripPrefix("w.")}.${symbols(cap).name}", CType.Table)
 
   /** The hidden parameters of type parameter `p`: its witness, then a table per capability of its
     * bound set (Rule CM4.3).
     */
-  protected def hiddenOf(p: SymbolId): List[Atom.Var] = witnessOf(p) :: boundCaps(p).map(tableOf(p, _))
+  protected def hiddenOf(p: Type): List[Atom.Var] = witnessVar(p) :: boundCaps(p).map(tableOf(p, _))
 
-  /** The hidden arguments of a call that instantiates type parameters `params` at `sigma`: per
-    * parameter in the order of [[hiddenOf]], the witness of its type argument and its tables; or
-    * why a table cannot be had.
+  /** The hidden arguments of a call that instantiates each type parameter of `params` at its type:
+    * per parameter in the order of [[hiddenOf]], the witness of its type and its tables; or why a
+    * table cannot be had.
     */
-  protected def hiddenArgs(params: List[SymbolId], sigma: Map[SymbolId, Type]): Either[String, List[Atom]] =
+  protected def hiddenArgs(params: List[(Type, Type)]): Either[String, List[Atom]] =
     val (whys, args) =
-      params.flatMap(p => Right(witnessAtom(sigma(p))) :: boundCaps(p).map(tableAtom(sigma(p), _))).partitionMap(
-        identity
-      )
+      params.flatMap((p, t) => Right(witnessAtom(t)) :: boundCaps(p).map(tableAtom(t, _))).partitionMap(identity)
     whys.headOption.toLeft(args)
 
   /** The table of capability `cap` at type `t` where the code being lowered runs: the table
     * parameter of a type parameter whose bound set has `cap`, else the static table of a known type.
     */
   protected def tableAtom(t: Type, cap: SymbolId): Either[String, Atom] =
-    t match
-      case Type.TypeRef(p, Nil) if isTypeParam(t) =>
-        Either.cond(
-          boundCaps(p).contains(cap),
-          tableOf(p, cap),
-          s"no table of `${symbols(cap).name}` for `${symbols(p).name}`, whose bound set has none of its own"
-        )
-      case _ => table(t, symbols(cap).name)
+    if isTypeParam(t) then
+      Either.cond(
+        boundCaps(t).contains(cap),
+        tableOf(t, cap),
+        s"no table of `${symbols(cap).name}` for `${symbols.render(t)}`, whose bound set has none of its own"
+      )
+    else table(t, symbols(cap).name)
 
   /** The entry of `member`: its adapter, `""` for a null entry, `None` if `t` does not define it. */
   private def entry(t: Type, c: CType, cap: SymbolId, member: String): Option[String] =

@@ -56,7 +56,13 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
   val instances: mutable.Map[String, String] = mutable.LinkedHashMap.empty
 
   /** Whether each polymorphic function tried has a baseline version, or why not. */
-  private val tried = mutable.Map.empty[String, Either[String, Unit]]
+  private val tried = mutable.Map.empty[String, Either[String, List[(Type, Type)]]]
+
+  /** The anonymous bound each implicit type parameter stands for ([[baselineOf]]). */
+  protected val implicitBounds: mutable.Map[Type, Type] = mutable.HashMap.empty
+
+  /** The entries of its tables each type parameter's code calls, directly or by passing the table on. */
+  private val calledEntries = mutable.Map.empty[Type, Set[String]].withDefaultValue(Set.empty)
 
   /** Every function instance built so far, including copies and table entries requested after [[program]]. */
   def functions: List[Fn] = fns.values.toList
@@ -118,9 +124,10 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
       instances.keySet.toList.filterNot(instead).foreach(instances.remove)
       Left(why)
 
-  /** Instance `name` of `decl`: `sigma` for its type parameters, `bounds` for its capability-bound
-    * parameter types (each replaced by the concrete argument type at the call), and the witnesses
-    * `hidden` before the declared parameters.
+  /** Instance `name` of `decl`: `sigma` for its type parameters, `bounds` for its anonymously bound
+    * parameter types (each replaced by the argument type at the call, or in a baseline version by
+    * its implicit type parameter), and the witnesses and tables `hidden` before the declared
+    * parameters.
     */
   private def function(
       decl: Trees.FnDecl,
@@ -293,13 +300,15 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
     */
   private def tableCall(t: Type, cap: String, member: String, args: List[Atom], tree: Tree, sc: Scope)(k: K): Expr =
     val found = (t, symbols.scope.get(cap)) match
-      case (Type.TypeRef(p, Nil), Some(owner)) if isTypeParam(t) =>
-        boundCaps(p).find(Tables.reached(symbols, _).contains(owner)).map(c =>
-          (tableOf(p, c), Tables.members(symbols, c).indexOf(member))
+      case (_, Some(owner)) if isTypeParam(t) =>
+        boundCaps(t).find(Tables.reached(symbols, _).contains(owner)).map(c =>
+          (tableOf(t, c), Tables.members(symbols, c).indexOf(member))
         )
       case _ => None
     found match
-      case Some((table, i)) if i >= 0 => bind(Rhs.CallTable(table, i, args), tree, sc)(k)
+      case Some((table, i)) if i >= 0 =>
+        calledEntries(t) += member
+        bind(Rhs.CallTable(table, i, args), tree, sc)(k)
       case _ => unsupported(tree.span, s"`$cap.$member` on a value of type ${symbols.render(t)} without that bound", k)
 
   private def unaryOp(u: Trees.UnaryOp, sc: Scope)(k: K): Expr =
@@ -320,38 +329,74 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
     val declared = symbols(id).info match
       case Type.ArrowType(lhs, _, _) => Members.params(lhs)
       case _                         => Nil
-    val bounds = declared.zip(args.map(typeOf(_, sc))).collect {
-      case (d @ (_: Type.IsBound | _: Type.CapRef), actual: Type.CapRef)                => d -> actual
-      case (d @ (_: Type.IsBound | _: Type.CapRef), actual) if dataOf(actual).isDefined => d -> actual
+    val argTypes = args.map(typeOf(_, sc))
+    val bounds = declared.zip(argTypes).collect {
+      case (d, actual: Type.CapRef) if Lower.anonymous(d)                => d -> actual
+      case (d, actual) if Lower.anonymous(d) && dataOf(actual).isDefined => d -> actual
     }.toMap
     val typeArgs = params.map(sigma) ++ declared.flatMap(bounds.get)
-    val chosen = baselineOf(name, params, declared).map(_.flatMap(_ => hiddenArgs(params, sigma)))
+    val chosen = baselineOf(name, params, declared).map(_.flatMap { implicits =>
+      val actuals = implicits.map((d, p) => p -> declared.zip(argTypes).collect { case (`d`, a) => a }.distinct)
+      actuals.collectFirst { case (p, as) if as.size > 1 => p } match
+        case Some(p) => Left(s"parameters bounded by `${symbols.render(implicitBounds(p))}` at different types")
+        case None    =>
+          val pairs = params.map(p => Type.TypeRef(p, Nil) -> sigma(p)) ++ actuals.map((p, as) => p -> as.head)
+          checkEntries(pairs).flatMap(_ => hiddenArgs(pairs))
+    })
     chosen match
       case Some(Right(ws)) => all(args, sc)(as => bind(Rhs.Call(name, ws ++ as, runtime = false), t, sc)(k))
       case Some(Left(why)) if typeArgs.exists(typeParamsIn(_).nonEmpty) =>
         unsupported(t.span, s"a call of `$name` at a type parameter, which has no baseline version ($why)", k)
       case other =>
-        val inst = if typeArgs.isEmpty then name else typeArgs.map(symbols.render(_)).mkString(s"$name[", ",", "]")
+        val anonymousArgs = declared.zip(argTypes).collect { case (d, a) if Lower.anonymous(d) => a }
+        val shown = if typeArgs.isEmpty && other.isDefined then anonymousArgs else typeArgs
+        val inst = if shown.isEmpty then name else shown.map(symbols.render(_)).mkString(s"$name[", ",", "]")
         other.foreach(_.left.foreach(instances(inst) = _))
         val _ = instance(inst)(function(decls(name), sigma, bounds, inst))
         all(args, sc)(as => bind(Rhs.Call(inst, as, runtime = false), t, sc)(k))
 
+  /** That no static table among the hidden arguments `pairs` has a null entry ([[Tables.unbuilt]])
+    * where the callee's code calls one, or why: such a call then goes to an instance.
+    */
+  private def checkEntries(pairs: List[(Type, Type)]): Either[String, Unit] =
+    pairs.foreach((p, t) => if isTypeParam(t) then calledEntries(t) ++= calledEntries(p))
+    val missing =
+      for
+        (p, t) <- pairs if !isTypeParam(t)
+        cap <- boundCaps(p)
+        table <- table(t, symbols(cap).name).toOption.toList
+        (m, e) <- Tables.members(symbols, cap).zip(table.entries) if e._1.isEmpty && calledEntries(p)(m)
+      yield s"`${symbols.render(t)}` has no `${symbols(cap).name}.$m` the backend builds"
+    missing.headOption.toLeft(())
+
   /** In baseline mode, for a polymorphic function `name` whose type parameters are `params` and
     * declared parameter types `declared`: its baseline version (Rule CM3.1), built once under its
-    * own name and taking first a witness per type parameter, each followed by a table per
-    * capability of its bound set ([[Tables.hiddenOf]], Rule CM4.3); or why it has none. `None` in
-    * the default mode and for a monomorphic function. A call whose type arguments have no table of
-    * a bound (`String` has no `Ord.lt`) calls an instance instead.
+    * own name, and its implicit type parameters, or why it has none. `None` in the default mode
+    * and for a monomorphic function. An implicit type parameter stands for each distinct anonymous
+    * bound in `declared` (`is Folding of String`): a reserved type variable, substituted for the
+    * bound as the instance path substitutes the argument type. The version takes first a witness
+    * per type parameter, each followed by a table per capability of its bound set, then the same
+    * for each implicit type parameter ([[Tables.hiddenOf]], Rule CM4.3). A call whose type
+    * arguments have no table of a bound (`String` has no `Ord.lt`) calls an instance instead.
     */
-  private def baselineOf(name: String, params: List[SymbolId], declared: List[Type]): Option[Either[String, Unit]] =
-    val anonymous = declared.exists { case _: Type.IsBound | _: Type.CapRef => true; case _ => false }
-    def build: Either[String, Unit] =
-      if anonymous then Left("an anonymous bound in parameter position (4.1.M7c)")
-      else
-        attempt(instance(name)(function(decls(name), Map.empty, Map.empty, name, params.flatMap(hiddenOf)))).map { _ =>
-          val _ = baselines += name
-        }
-    Option.when(baseline && (params.nonEmpty || anonymous))(tried.getOrElseUpdate(name, build))
+  private def baselineOf(
+      name: String,
+      params: List[SymbolId],
+      declared: List[Type]
+  ): Option[Either[String, List[(Type, Type)]]] =
+    val anonymous = declared.filter(Lower.anonymous).distinct
+    def build: Either[String, List[(Type, Type)]] =
+      val implicits = anonymous.map { d =>
+        val p = Type.TypeVar(-2 - implicitBounds.size)
+        implicitBounds(p) = d
+        d -> p
+      }
+      val hidden = (params.map(Type.TypeRef(_, Nil)) ++ implicits.map(_._2)).flatMap(hiddenOf)
+      attempt(instance(name)(function(decls(name), Map.empty, implicits.toMap, name, hidden))).map { _ =>
+        baselines += name
+        implicits
+      }
+    Option.when(baseline && (params.nonEmpty || anonymous.nonEmpty))(tried.getOrElseUpdate(name, build))
 
   /** A lambda becomes a code function taking the closure first; its captures ([[closure]]) are
     * loaded from the closure on entry.
@@ -805,6 +850,12 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
     Diagnostic(Severity.Error, code, span, message)
 
 object Lower:
+
+  /** Whether declared parameter type `t` is an anonymous bound (`is Folding of String`). */
+  def anonymous(t: Type): Boolean =
+    t match
+      case _: Type.IsBound | _: Type.CapRef => true
+      case _                                => false
 
   private val ints =
     Map("i8" -> 8, "i16" -> 16, "i32" -> 32, "i64" -> 64, "u8" -> 8, "u16" -> 16, "u32" -> 32, "u64" -> 64)

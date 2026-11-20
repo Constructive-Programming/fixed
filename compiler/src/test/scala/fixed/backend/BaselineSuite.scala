@@ -27,14 +27,18 @@ class BaselineSuite extends munit.FunSuite:
   private def named(fns: List[Fn], name: String): Fn =
     fns.find(_.name == name).getOrElse(fail(s"no $name in ${fns.map(_.name)}"))
 
-  /** For each example and benchmark: how many baseline versions `--no-specialise` builds, and the
-    * functions it still lowers per instance. A change in either is a change in what is measured.
+  /** The baseline versions `main` reaches. */
+  private def reached(lower: Lower, fns: List[Fn]): Set[String] =
+    Core.reach(Set("main"), fns.map(f => f.name -> f).toMap) & lower.baselines.toSet
+
+  /** For each example and benchmark: how many baseline versions `--no-specialise` reaches, the
+    * functions it still lowers per instance, and what the reason for each says. A change in any of
+    * them is a change in what is measured.
     */
   private val programs = List(
-    "examples/01_basics" -> (5, Set()),
-    "examples/03_option_result" -> (1, Set()),
-    "examples/04_json" ->
-      (9, Set("join[List of String]", "map_optional[Tuple of (String, Json),Json,Maybe of Tuple of (String, Json)]")),
+    "examples/01_basics" -> (5, Set(), ""),
+    "examples/03_option_result" -> (1, Set(), ""),
+    "examples/04_json" -> (11, Set(), ""),
     "examples/05_phantom_types" ->
       (
         0,
@@ -57,21 +61,22 @@ class BaselineSuite extends munit.FunSuite:
           "show_quantity[(),Quantity of ?29]",
           "show_quantity[(),Quantity of Newtons]",
           "show_quantity[(),Quantity of Meters]"
-        )
+        ),
+        "no table of `"
       ),
-    "bench/runtime/bintrees" -> (2, Set()),
-    "bench/runtime/nat_loop" -> (4, Set()),
-    "bench/runtime/list_pipeline" -> (3, Set()),
-    "bench/runtime/records" -> (3, Set()),
-    "bench/runtime/fail_chain" -> (2, Set())
+    "bench/runtime/bintrees" -> (2, Set(), ""),
+    "bench/runtime/nat_loop" -> (4, Set(), ""),
+    "bench/runtime/list_pipeline" -> (3, Set(), ""),
+    "bench/runtime/records" -> (3, Set(), ""),
+    "bench/runtime/fail_chain" -> (2, Set(), "")
   )
 
-  test("every example and benchmark: the baseline versions built and the functions still lowered per instance"):
-    programs.foreach { case (path, (baselines, instances)) =>
-      val (lower, _) = lowered(path, file(path))
-      assertEquals(lower.baselines.size, baselines, s"$path: ${lower.baselines}")
+  test("every example and benchmark: the baseline versions reached and the functions still lowered per instance"):
+    programs.foreach { case (path, (baselines, instances, reason)) =>
+      val (lower, fns) = lowered(path, file(path))
+      assertEquals(reached(lower, fns).size, baselines, s"$path: ${reached(lower, fns)}")
       assertEquals(lower.instances.keySet.toSet, instances, s"$path: ${lower.instances}")
-      lower.instances.foreach((f, why) => assert(why.contains("(4.1.M7"), s"$path: $f: $why"))
+      lower.instances.foreach((f, why) => assert(why.contains(reason), s"$path: $f: $why"))
     }
 
   test("records folds a List of u64 and a List of Order through one foldLeft, its accumulator a slot"):
@@ -134,6 +139,41 @@ class BaselineSuite extends munit.FunSuite:
     assert(lower.instances("same[String]").contains("`String` does not define `Ord.lt`"), lower.instances)
     assertEquals(fns.map(_.name).filter(_.startsWith("same")).sorted, List("same", "same[String]"))
 
+  test("join has one version: its parts a slot of an implicit type parameter, folded through its Folding table"):
+    val (lower, fns) = lowered("04_json", file("examples/04_json"))
+    assertEquals(fns.map(_.name).filter(_.startsWith("join")), List("join"))
+    val join = named(fns, "join")
+    val (w, t) = (join.params(0), join.params(1))
+    assertEquals(join.params.map(_.ctype), List(CType.Witness, CType.Table, CType.Slot(w.name), CType.Boxed))
+    val body = Core.lets(join.body).map(_._2)
+    assert(body.exists { case Rhs.CallTable(`t`, 0, _, _) => true; case _ => false }, body)
+    assert(!Core.callees(join.body).exists(_.contains("foldLeft")), Core.callees(join.body))
+    assert(lower.baselines("map_optional"), lower.baselines)
+
+  test("count and sum over `is Folding of ...` have one version each, called at three list types"):
+    val (lower, fns) = lowered("anonymous", BaselineSuite.anonymous)
+    assertEquals(lower.instances.toMap, Map.empty[String, String])
+    List("count", "sum").foreach(f => assertEquals(fns.map(_.name).filter(_.startsWith(f)), List(f)))
+    val hidden = named(fns, "sum").params.take(4)
+    assertEquals(hidden.map(_.ctype), List(CType.Witness, CType.Table, CType.Witness, CType.Table))
+    assert(hidden(0).name.startsWith("w.N.") && hidden(2).name.startsWith("w.is."), hidden)
+
+  test("two parameters with one anonymous bound at different types call an instance; at one type, the baseline"):
+    val lower = Lower(unit("unshared", BaselineSuite.unshared), baseline = true)
+    val ds = lower.program.fold(identity, fns => fail(s"lowered: ${fns.map(_.name)}"))
+    assert(lower.instances("two[u8,String]").contains("at different types"), lower.instances)
+    assert(lower.baselines("two"), lower.baselines)
+    assert(ds.forall(_.message.contains("is Show")), ds)
+    assert(Lower(unit("unshared", BaselineSuite.unshared)).program.isLeft, "the default mode rejects it too")
+
+  test("a table entry the backend does not build is never called: the call is an instance, here B005"):
+    val src = "fn right(xs: is Folding of u8) -> u64 = xs.fold_right(0, (x, n) -> n + 1)\n\n" +
+      "fn byte(x: u8) -> u8 = x\n\nfn main() -> () =\n    let n = right([byte(1), byte(2)])\n    ()\n"
+    val lower = Lower(unit("right", src), baseline = true)
+    val ds = lower.program.fold(identity, fns => fail(s"lowered: ${fns.map(_.name)}"))
+    assert(ds.exists(_.message.contains("fold_right")), ds)
+    assert(lower.instances("right[List of u8]").contains("no `Folding.fold_right` the backend builds"), lower.instances)
+
   test("in the default mode the same program is lowered per instance"):
     val (_, fns) = lowered("generic", BaselineSuite.generic, baseline = false)
     assertEquals(fns.map(_.name).filter(_.startsWith("last")).sorted, List("last[String]", "last[i8]"))
@@ -156,3 +196,21 @@ object BaselineSuite:
   val partial = "use std.io.Console\n\nfn same(a: N is Ord, b: N) -> bool = a == b\n\n" +
     "fn main() -> () with Console =\n    Console.print_line(same(\"x\", \"x\").show())\n" +
     "    Console.print_line(same(3, 4).show())\n"
+
+  /** Functions over an anonymous `Folding` bound, at `List of String`, `List of u8` and `List of i64`. */
+  val anonymous = "use std.io.Console\n\nfn count(xs: is Folding of A) -> u64 = xs.fold(0, (n, x) -> n + 1)\n\n" +
+    "fn sum(zero: N is Numeric, xs: is Folding of N) -> N = xs.fold(zero, (a, x) -> a + x)\n\n" +
+    "fn byte(x: u8) -> u8 = x\n\nfn main() -> () with Console =\n" +
+    "    Console.print_line(count([\"a\".concat(\"b\"), \"c\".concat(\"d\")]).show())\n" +
+    "    Console.print_line(count([byte(1), byte(2), byte(3)]).show())\n" +
+    "    Console.print_line(sum(byte(0), [byte(200), byte(100)]).show())\n" +
+    "    Console.print_line(sum(0, [200, 100]).show())\n" +
+    "    Console.print_line(join([\"x\".concat(\"y\"), \"z\"], \", \"))\n"
+
+  /** `two` at one type for both parameters, which shares the baseline version, and at two types,
+    * where the instance, like the default mode, cannot represent `is Show` at a scalar (`B005`).
+    */
+  val unshared = "use std.io.Console\n\nfn two(a: is Show, b: is Show) -> String = a.show().concat(b.show())\n\n" +
+    "fn byte(x: u8) -> u8 = x\n\nfn main() -> () with Console =\n" +
+    "    Console.print_line(two(byte(7), \"x\".concat(\"y\")))\n" +
+    "    Console.print_line(two(byte(1), byte(2)))\n"

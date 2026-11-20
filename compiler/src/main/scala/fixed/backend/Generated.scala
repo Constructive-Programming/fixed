@@ -39,6 +39,9 @@ private[backend] trait Generated:
   /** Report `what` as a problem of the code being lowered (`B005`). */
   protected def report(what: String): Unit
 
+  /** The anonymous bound each implicit type parameter of a baseline version stands for (`Lower.baselineOf`). */
+  protected def implicitBounds: collection.Map[Type, Type]
+
   /** Record `x`'s typer type for `Demands`; returns `x`. */
   protected def typed(x: Var, t: Type, span: Span): Var
 
@@ -192,11 +195,12 @@ private[backend] trait Generated:
   /** The witness parameter of type parameter `p` (`spec/compilation_model.md` Rule CM4.3). */
   protected def witnessOf(p: SymbolId): Var = Var(s"w.${symbols(p).name}.${p.toInt}", CType.Witness)
 
-  /** The witness parameter of a type parameter: a declared one, or [[Generated.R]]. */
+  /** The witness parameter of a type parameter: a declared one, [[Generated.R]] or an implicit one. */
   protected def witnessVar(t: Type): Var =
     t match
-      case Type.TypeRef(p, Nil) => witnessOf(p)
-      case _                    => Var("w.R", CType.Witness)
+      case Type.TypeRef(p, Nil)                          => witnessOf(p)
+      case Type.TypeVar(n) if implicitBounds.contains(t) => Var(s"w.is.${-n}", CType.Witness)
+      case _                                             => Var("w.R", CType.Witness)
 
   /** The witness of type `t` where the code being lowered runs: the witness parameter of a type
     * parameter, else the static witness of a known type (every value that is not an immediate is on
@@ -215,11 +219,11 @@ private[backend] trait Generated:
   protected def typeParamsIn(t: Type): List[Type] =
     if isTypeParam(t) then List(t) else t.children.flatMap(typeParamsIn)
 
-  /** Whether `t` is a type parameter: a declared one, or [[Generated.R]]. */
+  /** Whether `t` is a type parameter: a declared one, [[Generated.R]] or an implicit one. */
   protected def isTypeParam(t: Type): Boolean =
     t match
       case Type.TypeRef(p, Nil) => symbols(p).kind == fixed.core.SymKind.TypeParam
-      case _                    => t == Generated.R
+      case _                    => t == Generated.R || implicitBounds.contains(t)
 
   /** Generated member `gen(args, r)` of `data`, with the hidden witnesses to call it with. In baseline
     * mode it is built once, at `data`'s own parameters and [[Generated.R]], and takes the witness of
@@ -347,5 +351,6 @@ object Generated:
   /** The type parameter of a generated member built once that is the member's own: the result of a
     * `fold`, the new element of a `map`, the seed of an `unfold`. The typer gives none of them a
     * symbol, so this reserved type variable stands for each, and its witness parameter is `w.R`.
+    * The variables below it, from -2 down, are the implicit type parameters of baseline versions.
     */
   val R: Type = Type.TypeVar(-1)

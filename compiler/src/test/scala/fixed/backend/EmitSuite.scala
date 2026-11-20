@@ -292,6 +292,13 @@ class EmitSuite extends munit.FunSuite:
     assert(plain.contains("call i64 @\"fx_u_grow\"(ptr @fx_w_imm, ptr @\"fx_t_i64:Numeric\","), plain)
     assert(plain.contains("@\"fx_t_u8:Show\""), plain)
 
+  test("one baseline version over an anonymous Folding bound runs at List of String, of u8 and of i64 (4.1.M7c)"):
+    val src = BaselineSuite.anonymous
+    val _ = check("anonymous", src, "2\n3\n44\n300\nxy, z\n")
+    val plain = ir("anonymous", src, Mode.NoSpecialise)
+    assert(plain.contains("@\"fx_t_List of u8:Folding\""), plain)
+    assert(plain.contains("@\"fx_t_List of String:Folding\""), plain)
+
   test("a function bounded by Ord runs at String through an instance and at i64 through its baseline version"):
     val _ = check("partial", BaselineSuite.partial, "true\nfalse\n")
 
