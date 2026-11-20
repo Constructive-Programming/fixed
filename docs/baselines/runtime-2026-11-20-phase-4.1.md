@@ -118,3 +118,21 @@ The default mode emits more code than `main` (IR bytes +39% to +84% on these pro
 - Compile time. Each round of the specialiser lowers the whole program again.
 - Programs larger than a page. The largest function here has 7 Core bindings; the budget of 512 was never under pressure.
 - 32-bit targets, where the 64-bit slot costs four bytes per reference field.
+
+## Addendum: the cost of the reference-map header was a call, not the map
+
+A bisection of commit `deedb3f` showed that neither the bitmap nor the declaration-order layout causes the 6–8% above. With references placed first again the emitted IR is byte-identical to the IR before the commit and the programs are as slow as after it. The cost is in `fixed_rt.c`: the child walk had moved into a helper that `clang -O2` does not inline (it inlines `fx_drop` into the helper instead), so every freed or reused cell paid an extra call, and the processor's front end stalled more (fewer instructions, more cycles, more front-end stall cycles, read through `perf_event_open`).
+
+The fix keeps the header and the layout. `fx_drop` is a short fast path; a count that reaches zero calls one out-of-line `free_cell`, which drops the marked children, frees the cell and continues on the highest marked child instead of recursing. A list is therefore freed without recursion.
+
+Best of 15 interleaved runs, on a loaded machine (load average about 7), so only the relative order is reliable:
+
+| Program | main (ms) | before the fix (`f5e59ec`) | with the fix |
+|---|---:|---:|---:|
+| `bintrees` | 63.6 | 68.8 | 64.3 |
+| `nat_loop` | 76.3 | 82.9 | 77.0 |
+| `list_pipeline` | 100.2 | 109.2 | 104.4 |
+| `records` | 64.5 | 69.0 | 66.9 |
+| `fail_chain` | 85.7 | 87.7 | 84.8 |
+
+Counts of allocations, frees, `dup`s and `drop`s are unchanged. Not explained: the remaining 4% on `list_pipeline` and `records`.

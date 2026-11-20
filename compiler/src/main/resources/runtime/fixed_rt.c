@@ -104,16 +104,35 @@ void fx_dup(fx_header *h) {
     if (h->rc > 0) h->rc++;
 }
 
-/* ponytail: recursive; a long list exhausts the native stack. Phase 4 drops by tail call (Rule PR7.3). */
+/* Free a cell whose count reached zero, and its children. Loops on the highest marked slot, so a list
+   (tail declared last) is freed without recursion. Kept out of line: with the walk inlined into fx_drop
+   list-heavy programs ran 6-8% slower (docs/baselines/runtime-2026-11-20-phase-4.1.md).
+   ponytail: still recursive on the other children; a deep left-leaning tree can exhaust the native
+   stack. Rule PR7.3 wants an explicit work list. */
+static __attribute__((noinline)) void free_cell(fx_header *h) {
+    for (;;) {
+        fx_header **slots = (fx_header **)(h + 1);
+        uint32_t refs = h->refs;
+        fx_header *last = NULL;
+        if (refs) {
+            uint32_t hi = 31 - (uint32_t)__builtin_clz(refs);
+            last = slots[hi];
+            for (refs &= ~(1u << hi); refs; refs &= refs - 1) fx_drop(slots[__builtin_ctz(refs)]);
+        }
+        free(h);
+        n_free++;
+        if (!last) return;
+        n_drop++;
+        if (last->rc < 0 || --last->rc != 0) return;
+        h = last;
+    }
+}
+
 void fx_drop(fx_header *h) {
     if (!h) return;
     n_drop++;
-    if (h->rc < 0) return;
-    if (--h->rc == 0) {
-        drop_children(h);
-        free(h);
-        n_free++;
-    }
+    if (h->rc < 0 || --h->rc != 0) return;
+    free_cell(h);
 }
 
 void fx_panic_div(void) { fx_die("panic: integer division by zero", 101); }
