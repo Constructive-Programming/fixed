@@ -967,7 +967,7 @@ Added by the owner's decisions after the consistency review (P6, third round), i
 
 | # | Work | Spec | Depends on |
 |---|---|---|---|
-| 10 | **camelCase rename.** The prelude, the examples, the benchmarks, the compiler's built-in member names (`Tables`, `Generated`, `Lower`) and the tests still use snake_case for value-level names; the specs are renamed. One mechanical change, golden outputs unchanged | `spec/stdlib.md` Rule S1.1 | the open branches `kryptt/p6-typer` and `kryptt/p6-faults` merged first, since both touch the prelude and the examples |
+| 10 | **camelCase rename.** Done (`087327e`): the prelude, the examples, the benchmarks, the test programs and the compiler's built-in member names use camelCase for value-level names; 157 names, golden outputs unchanged | `spec/stdlib.md` Rule S1.1 | — |
 | 11 | **`assume prop` and the open state.** The parser accepts `assume` before `prop`; a prop nobody checked is open, not `assumed`; only `proved` and `assumed` props reach a facts-lane decision | `spec/properties.md` Rules P7.1, P7.7, P7.8 | nothing; `fixed verify` does not exist yet, so today this is the parser and the status type |
 | 12 | **`Clone` on request.** The typer derives `clone` only for a type that declares `T satisfies Clone` without a body; the prelude declares it for its data types | `spec/stdlib.md` §4.11 | the typer branch (bounds for `show`, `==`, `clone`) |
 | 13 | **`use` of a lower-case name**, so that a `pub fn` can be imported | grammar `UseSel` | 3 |
