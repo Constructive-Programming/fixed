@@ -47,7 +47,7 @@ final case class Candidate(key: String, removed: Int, weight: Long, reason: Stri
   * text), and built while the function's charges stay within `budget` (Rule CM5.3); each clone is
   * charged the function's size in Core `let`s. `removed` counts the sites where the clone's walk
   * decides differently from the shared version's: a reuse without a test, a call that requests a
-  * clone, a closure call through the exclusive entry. `weight` sums `8^d` over the requesting call
+  * clone, a closure or table call through the exclusive entry. `weight` sums `8^d` over the requesting call
   * sites, `d` being the number of loop steps enclosing the site ([[depths]]). A call whose clone
   * was not built calls the shared version; nothing is copied (Rule CM5.6).
   *
@@ -263,7 +263,7 @@ final class Versions(
     def from(f: String, k: Int, seen: Set[String]): Map[String, Int] =
       val lets = all.collect { case (`f`, l) => l }
       val steps = lets.collect {
-        case (_, Rhs.Call(g, as, false)) if loops.exists(g.contains) => as.flatMap(Core.boxedVar).map(_.name)
+        case (_, Rhs.Call(g, as, false)) if loops.exists(g.contains) => as.flatMap(Core.countedVar).map(_.name)
       }.flatten.toSet
       lets.collect {
         case (x, Rhs.Closure(code, _, _)) if !seen(code) =>
@@ -285,6 +285,7 @@ final class Versions(
       val m = mask.lift(i).getOrElse(Set.empty)
       p.name -> Own(m(None), m.flatten, rest = false)
     }.toMap
+    Core.tableEntries(fn.body).filter(byName.contains).foreach(g => log.value.requests += ((g, shared(g))))
     val (body, result) = current.withValue(f)(walk(fn.body, d.entry(fn), owns))
     (body, result, log.value)
 
@@ -296,7 +297,7 @@ final class Versions(
       */
     def own(a: Atom): Own =
       a match
-        case v: Atom.Var if v.ctype.boxed =>
+        case v: Atom.Var if v.ctype.counted =>
           val p = ctx.path(v.name)
           if live.exists(l => l != v.name && ctx.path(l).covers(p)) || ctx.kept.exists(_.covers(p)) then Own.shared
           else owns.getOrElse(v.name, Own.shared)
@@ -338,40 +339,50 @@ final class Versions(
           case None => (rhs, made)
       case Rhs.Field(o, slot) =>
         val parent = at.own(o)
-        val key = (Core.boxedVar(o).flatMap(v => ctx.keys.get(v.name)).getOrElse("?"), slot)
+        val key = (Core.countedVar(o).flatMap(v => ctx.keys.get(v.name)).getOrElse("?"), slot)
         (rhs, if parent.root then parent.copy(root = parent.part(key)) else Own.shared)
       case Rhs.Closure(code, cs, _) =>
         val exclusive = target(code, full(code))
         log.value.requests += ((code, full(code)))
         (Rhs.Closure(code, cs, if exclusive == code then "" else exclusive), Own(root = true, Set.empty, rest = false))
       case Rhs.CallClosure(c, as, _) =>
-        val args = as.flatMap(Core.boxedVar).map(_.name)
-        val ex = args.nonEmpty && as.forall {
-          case v: Atom.Var if v.ctype.boxed => at.exclusive(v.name, args) && at.own(v).whole
-          case _                            => true
-        }
+        val ex = indirect(as, at)
         log.value.sites += s"closure $ex"
         (Rhs.CallClosure(c, as, ex), Own.shared)
+      case Rhs.CallTable(t, entry, as, _) =>
+        val ex = indirect(as, at)
+        log.value.sites += s"table $ex"
+        (Rhs.CallTable(t, entry, as, ex), Own.shared)
       case Rhs.If(c, t, f) =>
         val branch = ctx.copy(after = live)
         val ((t2, o1), (f2, o2)) = (walk(t, branch, owns), walk(f, branch, owns))
         (Rhs.If(c, t2, f2), o1 meet o2)
       case Rhs.Switch(s, cases) =>
         val walked = cases.map { (tag, c) =>
-          val tags = Core.boxedVar(s).fold(ctx.tags)(v => ctx.tags.updated(v.name, tag))
+          val tags = Core.countedVar(s).fold(ctx.tags)(v => ctx.tags.updated(v.name, tag))
           (tag, walk(c, ctx.copy(after = live, tags = tags), owns))
         }
         (Rhs.Switch(s, walked.map((t, w) => (t, w._1))), walked.map(_._2._2).reduceOption(_ meet _).getOrElse(Own.all))
       case _ => (rhs, Own.shared)
+
+  /** Whether a call through a closure or a table may take the exclusive pointer: this version
+    * exclusively owns every counted argument in every part (Rules PR5.6, CM4.6).
+    */
+  private def indirect(as: List[Atom], at: At): Boolean =
+    val args = as.flatMap(Core.countedVar).map(_.name)
+    args.nonEmpty && as.forall {
+      case v: Atom.Var if v.ctype.counted => at.exclusive(v.name, args) && at.own(v).whole
+      case _                              => true
+    }
 
   /** A constructor result: its cell is fresh; a part is exclusive iff every field is exclusive in
     * it, and the field stored at that part is itself exclusive.
     */
   private def construct(x: Atom.Var, fs: List[Atom], at: At): Own =
     val key = d.typeKey(x.name).getOrElse("?")
-    val others = (v: String) => fs.flatMap(Core.boxedVar).map(_.name).filter(_ != v).toSet
+    val others = (v: String) => fs.flatMap(Core.countedVar).map(_.name).filter(_ != v).toSet
     fs.zip(Layout.slots(fs.map(_.tpe))).foldLeft(Own.all) {
-      case (acc, (v: Atom.Var, slot)) if v.ctype.boxed =>
+      case (acc, (v: Atom.Var, slot)) if v.ctype.counted =>
         val o = at.copy(live = at.live ++ others(v.name)).own(v)
         val met = acc meet o.copy(root = true)
         if o.root then met else met.without((key, slot))
@@ -383,11 +394,11 @@ final class Versions(
     */
   private def call(f: String, as: List[Atom], at: At)(make: (String, List[Atom]) => Rhs): (Rhs, Own) =
     val want = full(f)
-    val args = as.flatMap(Core.boxedVar).map(_.name)
+    val args = as.flatMap(Core.countedVar).map(_.name)
     val mask = as.zipWithIndex.map { (a, i) =>
       val w = want.lift(i).getOrElse(Set.empty)
       a match
-        case v: Atom.Var if v.ctype.boxed && w.nonEmpty =>
+        case v: Atom.Var if v.ctype.counted && w.nonEmpty =>
           val o = at.own(v)
           if !o.root || !at.exclusive(v.name, args) then Set.empty[Option[Need.Part]]
           else w.filter(_.forall(o.part))

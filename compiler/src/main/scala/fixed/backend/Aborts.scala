@@ -39,9 +39,9 @@ object Aborts:
 
   private def mayAbort(rhs: Rhs): Boolean =
     rhs match
-      case Rhs.Call(f, _, runtime)                        => !runtime || f == "fx_abort"
-      case _: Rhs.CallClosure | _: Rhs.If | _: Rhs.Switch => true
-      case _                                              => false
+      case Rhs.Call(f, _, runtime)                                           => !runtime || f == "fx_abort"
+      case _: Rhs.CallClosure | _: Rhs.CallTable | _: Rhs.If | _: Rhs.Switch => true
+      case _                                                                 => false
 
   private def aborts(e: Expr): Boolean =
     e match

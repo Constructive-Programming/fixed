@@ -35,13 +35,15 @@ object Backend:
 
   /** LLVM IR for `unit`, which must have passed the typer without errors. */
   def compile(unit: CompilationUnit, mode: Mode = Mode.Default): Either[List[Diagnostic], String] =
-    analyse(unit, mode.budget).flatMap { a =>
-      FipCheck(a) match
-        case Nil =>
-          val (fns, borrowed) = Consume(a)
-          Right(EmitLLVM().program(Aborts(fns).map(Rc(_, f => borrowed.getOrElse(f, Set.empty)))))
-        case problems => Left(problems)
-    }
+    analyse(unit, mode.budget).flatMap(emit)
+
+  /** LLVM IR for analysed Core: the `fip` check, erasure and borrowing, abort tests, reference counting. */
+  def emit(a: Analysed): Either[List[Diagnostic], String] =
+    FipCheck(a) match
+      case Nil =>
+        val (fns, borrowed) = Consume(a)
+        Right(EmitLLVM().program(Aborts(fns).map(Rc(_, f => borrowed.getOrElse(f, Set.empty)))))
+      case problems => Left(problems)
 
   /** Core for `unit`: lowered, then split into the versions demand inference calls for (3.4.M3). */
   def core(unit: CompilationUnit): Either[List[Diagnostic], List[Fn]] = analyse(unit).map(_.fns)
@@ -61,6 +63,14 @@ object Backend:
       val spans = (v: String) => lower.spans.getOrElse(v, Span.NoSpan)
       Analysed(all, versions.candidates, table, Memory(all, table, spans).run(), lower.fips.toMap, spans)
     }
+
+  /** Hand-built Core with no source types (tests): its versions, demands and memory facts. */
+  def analyseCore(fns: List[Fn], fips: Map[String, fixed.ast.Trees.Fip] = Map.empty): Analysed =
+    val demands = Demands(fns, _ => None, (_, _) => None, (_, _) => None)
+    val table = demands.run()
+    val versions = Versions(demands, table, fns, (_, _) => None, fips.contains, Versions.budget)
+    val all = versions.run()
+    Analysed(all, versions.candidates, table, Memory(all, table, _ => Span.NoSpan).run(), fips, _ => Span.NoSpan)
 
   /** Write `ir` next to `out`, then link it with the runtime into the executable `out`. With
     * `checks`, the runtime verifies every unconditional reuse (test builds).

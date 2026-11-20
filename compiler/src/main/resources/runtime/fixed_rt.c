@@ -118,6 +118,40 @@ void fx_drop(fx_header *h) {
 
 void fx_panic_div(void) { fx_die("panic: integer division by zero", 101); }
 
+/* ---- value witnesses (spec/compilation_model.md Rule CM4.1, spec/memory_management.md Rule MM7.3) ----
+
+   A value witness record describes how to handle a 64-bit slot of a type the code cannot see.
+   Fields are only ever appended, so emitted code reads each at a fixed offset: `kind` at 0 (1 when
+   the slot holds a counted reference, so that it is the slot's reference-map bit), then `dup` at 8,
+   `drop` at 16 and `copy` at 24. `reuse_test`, `evacuate` and `size` have no consumer before region
+   lowering and are not here yet. Every reference is on the heap, so two witnesses give `kind`, `dup`
+   and `drop` for every type: one for immediates and one for heap references. */
+
+typedef struct fx_witness {
+    int64_t kind;
+    void (*dup)(int64_t);
+    void (*drop)(int64_t);
+    int64_t (*copy)(int64_t);
+} fx_witness;
+
+static void imm_keep(int64_t v) { (void)v; }
+static int64_t imm_copy(int64_t v) { return v; }
+static void ref_dup(int64_t v) { fx_dup((fx_header *)(intptr_t)v); }
+static void ref_drop(int64_t v) { fx_drop((fx_header *)(intptr_t)v); }
+
+/* A cell's header gives neither its size nor its field types, so one witness for every reference
+   type cannot copy one. Copying needs a witness per type, whose `copy` is that type's copy
+   function; nothing asks for a copy of a value of parameter type yet
+   (docs/plans/phase-4.1-baseline-specialiser.md, 4.1.M5). */
+static int64_t ref_copy(int64_t v) {
+    (void)v;
+    fx_die("internal error: no copy of a reference of unknown type", 103);
+    return 0;
+}
+
+const fx_witness fx_w_imm = {0, imm_keep, imm_keep, imm_copy};
+const fx_witness fx_w_ref = {1, ref_dup, ref_drop, ref_copy};
+
 /* ---- checked abort for abortive effect operations (slice §4.6) ---- */
 
 static bool aborting;

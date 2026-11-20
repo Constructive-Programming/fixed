@@ -103,7 +103,7 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
       case Expr.Drop(_, b) => walk(b, target, fn)
 
   private def flows(as: List[Atom], es: Set[Escape]): Map[String, Set[Escape]] =
-    as.flatMap(Core.boxedVar).map(v => v.name -> es).toMap
+    as.flatMap(Core.countedVar).map(v => v.name -> es).toMap
 
   /** What `let x = rhs` contributes, given `x`'s own escapes `ex`. */
   private def right(x: Atom.Var, rhs: Rhs, ex: Set[Escape], fn: String): Map[String, Set[Escape]] =
@@ -115,6 +115,8 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
       case Rhs.Closure(_, cs, _)     => flows(cs, ex + Escape.Closure(x.name))
       case Rhs.CallClosure(_, as, _) =>
         flows(as, Set(Escape.Unbounded(s"passed to a closure the compiler cannot see, at ${where.start}")))
+      case Rhs.CallTable(_, _, as, _) =>
+        flows(as, Set(Escape.Unbounded(s"passed through a capability table, at ${where.start}")))
       case Rhs.Call(f, as, true) if f == "fx_abort" =>
         flows(as, Set(Escape.Unbounded(s"an abort payload, at ${where.start}")))
       case Rhs.Call(f, as, false) => call(f, as, ex, where, fn)
@@ -133,10 +135,10 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
       case ParamEscape.IntoResult => ex
       case ParamEscape.Unbounded  => Set[Escape](Escape.Unbounded(s"kept by `$who` beyond the call, at ${where.start}"))
     as.zipWithIndex.collect {
-      case (v: Atom.Var, i) if v.ctype.boxed =>
+      case (v: Atom.Var, i) if v.ctype.counted =>
         if !carried(f, i) then Map(v.name -> by(param(f, i), f))
         else
-          val step = as.drop(i + 1).flatMap(Core.boxedVar).flatMap(s => closureMap(fn).get(s.name)).headOption
+          val step = as.drop(i + 1).flatMap(Core.countedVar).flatMap(s => closureMap(fn).get(s.name)).headOption
           Map(v.name -> (step.fold(by(ParamEscape.Unbounded, f))(code => by(param(code, 1), code)) + Escape.Carried(f)))
     }.foldLeft(Map.empty[String, Set[Escape]])(merge)
 
@@ -193,8 +195,8 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
     val calls = byName.get(fn).toList.flatMap(f => Core.lets(f.body)).collect { case (_, Rhs.Call(g, as, false)) =>
       (g, as)
     }
-    calls.find((g, as) => g == loop && as.exists(Core.boxedVar(_).exists(_.name == x))).exists { (_, as) =>
-      as.flatMap(Core.boxedVar).flatMap(v => closureMap(fn).get(v.name)).exists { code =>
+    calls.find((g, as) => g == loop && as.exists(Core.countedVar(_).exists(_.name == x))).exists { (_, as) =>
+      as.flatMap(Core.countedVar).flatMap(v => closureMap(fn).get(v.name)).exists { code =>
         val i = 1
         demands.params.get(code).flatMap(_.lift(i)).exists(_.root == Demand.Excl) ||
         signatures.get(code).flatMap(_.lift(i)).contains(ParamEscape.IntoResult)
@@ -226,7 +228,7 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
     Core.lets(f.body).collect {
       case (x, Rhs.Call(g, as, false))
           if g != f.name && (g.contains(".fold[") || g.contains(".unfold[") || g.contains(".foldLeft[")) =>
-        val steps = as.drop(1).flatMap(Core.boxedVar)
+        val steps = as.drop(1).flatMap(Core.countedVar)
         val isTree = !g.contains(".foldLeft[") && tree(g)
         val (ok, why) =
           if g.contains(".foldLeft[") then
@@ -259,6 +261,7 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
         case (_, Rhs.Call(g, _, false)) => pure(g, seen + fn)
         case (_, Rhs.Catch(g, _))       => pure(g, seen + fn)
         case (_, _: Rhs.CallClosure)    => false
+        case (_, _: Rhs.CallTable)      => false
         case _                          => true
       }
     }

@@ -1,9 +1,6 @@
 package fixed.backend
 
-import java.io.ByteArrayInputStream
 import java.nio.file.Path
-
-import scala.sys.process.{Process, ProcessLogger}
 
 import fixed.util.{DiagCode, SourceFile}
 import fixed.{CompilationUnit, Compiler}
@@ -30,13 +27,7 @@ class EmitSuite extends munit.FunSuite:
   private def run(name: String, source: String, stdin: String, mode: Mode): (Int, String, String) =
     val exe = Backend.ship(ir(name, source, mode), dir.resolve(s"$name-$mode"), checks = true)
       .fold(d => fail(d.message), identity)
-    val (out, err) = (new StringBuilder, new StringBuilder)
-    val code =
-      (Process(Seq(exe.toAbsolutePath.toString), None, "FIXED_RT_STATS" -> "1") #<
-        ByteArrayInputStream(stdin.getBytes("UTF-8"))).!(
-        ProcessLogger(l => { val _ = out.append(l).append('\n') }, l => { val _ = err.append(l).append('\n') })
-      )
-    (code, out.toString, err.toString)
+    Native.run(exe, stdin)
 
   /** Run `source` in every build mode (Rule CM5.7), expect exit 0, `expected` on stdout and no leak;
     * the runtime's counters per mode.
@@ -46,7 +37,7 @@ class EmitSuite extends munit.FunSuite:
       val (code, out, err) = run(name, source, stdin, mode)
       assertEquals(code, 0, s"$mode: $err")
       assertEquals(out, expected, mode)
-      val counts = "\"(\\w+)\":(\\d+)".r.findAllMatchIn(err).map(m => m.group(1) -> m.group(2).toLong).toMap
+      val counts = Native.counters(err)
       assert(counts.contains("allocs") && counts.contains("frees"), s"$mode: no runtime counters: $err")
       assertEquals(counts.get("allocs"), counts.get("frees"), s"$mode: leak: $err")
       mode -> counts

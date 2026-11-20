@@ -8,16 +8,19 @@ package fixed.backend
   * parameter stays owned and the callee frees as it reads. Both apply only to functions called
   * directly: a closure's code is called through `CallClosure`, whose convention is fixed, and
   * `main` is called by the runtime. Arguments are atoms, already evaluated by earlier `Let`s, so
-  * erasing one never removes an effect (Rule Q6.1.3).
+  * erasing one never removes an effect (Rule Q6.1.3). A table entry is called only through its
+  * table, so it is as indirect as a closure's code.
   */
 object Consume:
 
   /** The rewritten functions and each function's borrowed parameter indices (after erasure). */
   def apply(a: Analysed): (List[Fn], Map[String, Set[Int]]) =
-    val indirect = Core.closureEntries(a.fns) + "main"
+    val indirect = Core.indirectEntries(a.fns) + "main"
     val needs = (f: Fn) => if indirect(f.name) then Nil else a.demands.params.getOrElse(f.instance, Nil)
     val erased =
-      a.fns.map(f => f.name -> needs(f).zipWithIndex.collect { case (n, i) if n.root == Demand.Zero => i }.toSet).toMap
+      a.fns.map(f =>
+        f.name -> needs(f).zipWithIndex.collect { case (n, i) if n.root == Demand.Zero && !witness(f, i) => i }.toSet
+      ).toMap
     val keptAfter = a.fns.flatMap(f => liveAfter(f.body, Set.empty)).toSet
     val borrowed = a.fns.map { f =>
       val kept = f.params.indices.filterNot(erased(f.name))
@@ -31,6 +34,9 @@ object Consume:
       f.copy(params = drop(f.name, f.params).collect { case v: Atom.Var => v }, body = calls(f.body, drop))
     )
     (fns, borrowed)
+
+  /** A witness parameter is never erased: `Rc` adds `dup` and `drop` calls through it after demand inference. */
+  private def witness(f: Fn, i: Int): Boolean = f.params(i).ctype == CType.Witness
 
   /** The (callee, parameter index) pairs whose argument stays live after some direct call. */
   private def liveAfter(e: Expr, after: Set[String]): List[(String, Int)] =
@@ -49,7 +55,7 @@ object Consume:
       case Expr.Ret(_)     => Nil
 
   private def kept(f: String, as: List[Atom], live: Set[String]): List[(String, Int)] =
-    as.zipWithIndex.flatMap((a, i) => Core.boxedVar(a).filter(v => live(v.name)).map(_ => (f, i)))
+    as.zipWithIndex.flatMap((a, i) => Core.countedVar(a).filter(v => live(v.name)).map(_ => (f, i)))
 
   private def calls(e: Expr, drop: (String, List[Atom]) => List[Atom]): Expr =
     e match

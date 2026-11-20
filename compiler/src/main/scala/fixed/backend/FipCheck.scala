@@ -8,7 +8,8 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
   *
   *   1. no `Heap` or `Region` allocation (Rule MM18.1(1));
   *   2. no reference-count operation: no call of a shared version, no call of a closure the
-  *      compiler cannot see (Rule MM18.1(2));
+  *      compiler cannot see or through a capability table, and no `dup` or `drop` of a value of
+  *      parameter type, which goes through its witness (Rule MM18.1(2), Rule CM4.7);
   *   3. no evacuation: no copy (Rule MM18.1(3));
   *   4. no drop list: none exists before Phase 4 region lowering, so nothing to check;
   *   5. bounded scratch: no `Frame` allocation in a function that calls itself, other than a
@@ -54,6 +55,13 @@ object FipCheck:
         )
       case (f, (x, _: Rhs.CallClosure)) =>
         error("reference-count operation (Rule MM18.1(2))", a.spans(x), s"`$f` calls a closure the compiler cannot see")
+      case (f, (x, _: Rhs.CallTable)) =>
+        error("reference-count operation (Rule CM4.7)", a.spans(x), s"`$f` calls a member through a capability table")
+    }
+    val witnessed = reached.toList.sorted.flatMap(f => byName.get(f).toList).flatMap { g =>
+      witnessOps(Rc(g).body).map(v =>
+        error("reference-count operation (Rule CM4.7)", a.spans(v.name), s"`${g.name}` duplicates or drops `${v.name}`")
+      )
     }
     val scratch = allocations.collect {
       case (f, x @ Allocation(_, _: LifetimeClass.Frame, _, _, _))
@@ -71,7 +79,18 @@ object FipCheck:
           case k if k.tree =>
             error("not a loop (Rule MM18.2(2))", k.span, s"`${k.loop}` is a tree fold")
         }
-    heap ++ rc ++ scratch ++ strict
+    heap ++ rc ++ witnessed ++ scratch ++ strict
+
+  /** The slot variables `e` duplicates or drops, each a call of its witness. Reference counting is
+    * applied with no borrowing, so a discarded slot is dropped by the function that discards it.
+    */
+  private def witnessOps(e: Expr): List[Atom.Var] =
+    def op(x: Atom.Var, b: Expr) = Core.witnessOf(x).map(_ => x).toList ++ witnessOps(b)
+    e match
+      case Expr.Dup(x, b)      => op(x, b)
+      case Expr.Drop(x, b)     => op(x, b)
+      case Expr.Let(_, rhs, b) => Core.branches(rhs).flatMap(witnessOps) ++ witnessOps(b)
+      case Expr.Ret(_)         => Nil
 
   /** A derived loop: its recursion is structural, and its step's scratch resets per step. */
   private def loop(f: String): Boolean = Seq(".fold[", ".unfold[", ".foldLeft[", ".map[", ".copy[").exists(f.contains)

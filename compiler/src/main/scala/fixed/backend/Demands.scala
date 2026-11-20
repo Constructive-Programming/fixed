@@ -161,21 +161,22 @@ final class Demands(
       moved = owned(rhs).map(ctx.path) ++ ctx.moved
     )
 
-  /** Boxed variables a right-hand side keeps (stores, or passes to a parameter that keeps it). */
+  /** Counted variables a right-hand side keeps (stores, or passes to a parameter that keeps it). */
   private def owned(rhs: Rhs): List[String] =
-    def vars(as: List[Atom]) = as.flatMap(Core.boxedVar).map(_.name)
+    def vars(as: List[Atom]) = as.flatMap(Core.countedVar).map(_.name)
     rhs match
-      case Rhs.Con(_, fs)            => vars(fs)
-      case Rhs.Closure(_, cs, _)     => vars(cs)
-      case Rhs.CallClosure(c, as, _) => vars(c :: as)
-      case Rhs.Call(f, as, _)        => keptBy(f, as)
-      case Rhs.Catch(f, as)          => keptBy(f, as)
-      case _                         => Nil
+      case Rhs.Con(_, fs)             => vars(fs)
+      case Rhs.Closure(_, cs, _)      => vars(cs)
+      case Rhs.CallClosure(c, as, _)  => vars(c :: as)
+      case Rhs.CallTable(_, _, as, _) => vars(as)
+      case Rhs.Call(f, as, _)         => keptBy(f, as)
+      case Rhs.Catch(f, as)           => keptBy(f, as)
+      case _                          => Nil
 
-  /** The boxed arguments of a call of `f` whose parameters keep them (`own` or `exclusive`). */
+  /** The counted arguments of a call of `f` whose parameters keep them (`own` or `exclusive`). */
   private def keptBy(f: String, as: List[Atom]): List[String] =
     as.zipWithIndex.collect {
-      case (v: Atom.Var, i) if v.ctype.boxed && sig(f, i).root.ordinal >= Demand.Own.ordinal => v.name
+      case (v: Atom.Var, i) if v.ctype.counted && sig(f, i).root.ordinal >= Demand.Own.ordinal => v.name
     }
 
   /** Whether `v`, an argument among `args`, still has no other reference at this use. */
@@ -194,7 +195,7 @@ final class Demands(
   private def reuse(x: Atom.Var, rhs: Rhs, live: Set[String], ctx: Ctx, fn: String): Option[String] =
     rhs match
       case Rhs.Con(_, fields) if fields.nonEmpty =>
-        val inFields = fields.flatMap(Core.boxedVar).map(_.name).toSet
+        val inFields = fields.flatMap(Core.countedVar).map(_.name).toSet
         val products = ctx.keys.collect { case (v, k) if cellSize(k, 1).isEmpty && cellSize(k, 0).isDefined => v -> 0 }
         (products ++ ctx.tags).toList.sortBy(_._1).collectFirst {
           case (v, tag)
@@ -221,6 +222,7 @@ final class Demands(
       case Rhs.Reuse(c, _, fs, _)       => uses(c :: fs, Need.own)
       case Rhs.Closure(_, cs, _)        => uses(cs, Need.own)
       case Rhs.CallClosure(c, as, _)    => uses(c :: as, Need.own)
+      case Rhs.CallTable(t, _, as, _)   => join(uses(List(t), Need.read), uses(as, Need.own))
       case Rhs.Field(o: Atom.Var, slot) =>
         val key = ctx.keys.getOrElse(o.name, "?")
         Map(o.name -> Need(Demand.Read, xNeed.parts.updated((key, slot), xNeed.root join xNeed.part((key, slot)))))
@@ -230,7 +232,7 @@ final class Demands(
         join(uses(List(c), Need.read), join(walk(t, branch, fn), walk(f, branch, fn)))
       case Rhs.Switch(s, cases) =>
         val tagged = (tag: Int) =>
-          Core.boxedVar(s).fold(ctx.copy(after = live))(v =>
+          Core.countedVar(s).fold(ctx.copy(after = live))(v =>
             ctx.copy(after = live, tags = ctx.tags.updated(v.name, tag))
           )
         cases.foldLeft(uses(List(s), Need.read))((acc, c) => join(acc, walk(c._2, tagged(c._1), fn)))
@@ -239,10 +241,10 @@ final class Demands(
     * version's need where it is not exclusive at this call.
     */
   private def call(f: String, as: List[Atom], live: Set[String], ctx: Ctx): Map[String, Need] =
-    val args = as.flatMap(Core.boxedVar).map(_.name)
+    val args = as.flatMap(Core.countedVar).map(_.name)
     as.zipWithIndex.collect { case (v: Atom.Var, i) =>
       val n = sig(f, i)
-      Map(v.name -> (if !v.ctype.boxed || exclusive(v.name, args, live, ctx) then n else n.shared))
+      Map(v.name -> (if !v.ctype.counted || exclusive(v.name, args, live, ctx) then n else n.shared))
     }.foldLeft(Map.empty[String, Need])(join)
 
   /** Every variable among `as`, scalars included (a used scalar is not erased), demanded `n`. */

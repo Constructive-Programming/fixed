@@ -18,41 +18,54 @@ final class EmitLLVM:
   private val entries = mutable.Set.empty[String]
 
   def program(fns: List[Fn]): String =
-    entries ++= Core.closureEntries(fns)
+    entries ++= Core.indirectEntries(fns)
     val bodies = fns.map(f => function(f, slots = entries(f.name))).mkString("\n")
     val globals = strings.map((s, name) => stringGlobal(name, s)).mkString + statics.values.mkString
     val decls = (EmitLLVM.always ++ declared.values).mkString("\n")
     s"$globals\n$decls\n\n$bodies"
 
-  /** Emit `fn`. When `slots` is set, `fn` is a closure's code: every parameter after the closure,
-    * and the result, is a 64-bit slot (Rule CM3.3(3)), so it narrows its parameters on entry and
-    * widens its result.
+  /** Emit `fn`. When `slots` is set, `fn` is a closure's code or a table entry: every parameter
+    * after the closure or table, and the result, is an `i64` slot (Rule CM3.3(3)), so it narrows
+    * its parameters on entry and widens its result.
     */
   private def function(fn: Fn, slots: Boolean): String =
     out.clear()
+    aliases.clear()
     line("entry:")
-    val inSlot = (t: CType) => slots && !fillsSlot(t)
+    val inSlot = fn.params.zipWithIndex.map((p, i) => p -> (slots && i > 0)).toMap
     val params =
-      fn.params.map(p => if inSlot(p.ctype) then s"i64 %${p.name}.s" else s"${EmitLLVM.llType(p.ctype)} %${p.name}")
-    fn.params.filter(p => inSlot(p.ctype)).foreach(p => narrow(p, s"%${p.name}.s"))
+      fn.params.map(p => if inSlot(p) then s"i64 %${p.name}.s" else s"${EmitLLVM.llType(p.ctype)} %${p.name}")
+    fn.params.filter(inSlot).foreach(p => narrow(p, s"%${p.name}.s"))
     val (result, _) = value(fn.body, "entry")
     val ret = zeroIfUnit(result, fn.ret)
-    val retType = if inSlot(fn.ret) then "i64" else EmitLLVM.llType(fn.ret)
-    line(s"  ret ${if slots then widen(ret, fn.ret, "ret") else s"$retType $ret"}")
+    val retType = if slots then "i64" else EmitLLVM.llType(fn.ret)
+    line(s"  ret ${if slots then slotted(ret, fn.ret, "ret") else s"$retType $ret"}")
     s"define $retType ${EmitLLVM.user(fn.name)}(${params.mkString(", ")}) {\n$out}\n"
 
   /** Emit `e`, starting in block `label`; its result operand and the block it ends in. */
   private def value(e: Expr, label: String): (String, String) =
     e match
       case Expr.Ret(a)          => (operand(a), label)
-      case Expr.Dup(x, body)    => line(s"  call void @fx_dup(ptr ${operand(x)})"); value(body, label)
-      case Expr.Drop(x, body)   => line(s"  call void @fx_drop(ptr ${operand(x)})"); value(body, label)
+      case Expr.Dup(x, body)    => count(x, "dup", EmitLLVM.witnessDup); value(body, label)
+      case Expr.Drop(x, body)   => count(x, "drop", EmitLLVM.witnessDrop); value(body, label)
       case Expr.Let(x, r, body) => value(body, rhs(x, r, label))
+
+  /** `dup` or `drop` `x`: a reference directly, a slot through its witness's entry at `offset`
+    * (Rule CM4.1), an indirect call.
+    */
+  private def count(x: Var, op: String, offset: Int): Unit =
+    Core.witnessOf(x) match
+      case None    => line(s"  call void @fx_$op(ptr ${operand(x)})")
+      case Some(w) =>
+        val n = ids.next()
+        line(s"  %wop.$n.p = getelementptr inbounds i8, ptr ${operand(w)}, i64 $offset")
+        line(s"  %wop.$n = load ptr, ptr %wop.$n.p")
+        line(s"  call void %wop.$n(i64 ${operand(x)})")
 
   /** Emit `x = r`; the block emission continues in. */
   private def rhs(x: Var, r: Rhs, label: String): String =
     r match
-      case Rhs.Move(a)           => aliases(x.name) = operand(a); label
+      case Rhs.Move(a)           => move(x, a); label
       case Rhs.Prim(op, args)    => prim(x, op, args, label)
       case Rhs.Call(f, args, rt) => call(x, f, args, rt); label
       case Rhs.Catch(f, args)    => call(x, f, args, runtime = false); label
@@ -76,15 +89,14 @@ final class EmitLLVM:
         label
       case Rhs.Con(tag, fields) =>
         val types = fields.map(_.tpe)
-        allocate(x, tag, Layout.refs(types), fields.size)
+        allocate(x, tag, refs(types, 0), fields.size)
         store(x, fields.zip(Layout.slots(types)))
         label
       case Rhs.Reuse(token, tag, fields, _) =>
         val types = fields.map(_.tpe)
         val size = 8 * fields.size
-        line(
-          s"  %${x.name} = call ptr @fx_alloc_at(ptr ${operand(token)}, i32 $tag, i32 ${Layout.refs(types)}, i64 $size)"
-        )
+        val map = refs(types, 0)
+        line(s"  %${x.name} = call ptr @fx_alloc_at(ptr ${operand(token)}, i32 $tag, i32 $map, i64 $size)")
         store(x, fields.zip(Layout.slots(types)))
         label
       case Rhs.Field(obj, slot) =>
@@ -100,28 +112,62 @@ final class EmitLLVM:
         label
       case Rhs.Closure(code, captures, exclusive) =>
         val types = captures.map(_.tpe)
-        allocate(
-          x,
-          Layout.closureTag,
-          Layout.refs(types, first = Layout.closureCode),
-          captures.size + Layout.closureCode
-        )
+        allocate(x, Layout.closureTag, refs(types, Layout.closureCode), captures.size + Layout.closureCode)
         line(s"  store ptr ${EmitLLVM.user(orCode(exclusive, code))}, ptr %${x.name}.0")
         line(s"  %${x.name}.code1 = getelementptr inbounds i8, ptr %${x.name}, i64 24")
         line(s"  store ptr ${EmitLLVM.user(code)}, ptr %${x.name}.code1")
         store(x, captures.zip(Layout.slots(types, first = Layout.closureCode)))
         label
       case Rhs.CallClosure(c, args, exclusive) =>
-        val n = ids.next()
-        line(s"  %code.$n.p = getelementptr inbounds i8, ptr ${operand(c)}, i64 ${if exclusive then 16 else 24}")
-        line(s"  %code.$n = load ptr, ptr %code.$n.p")
-        val argList = (s"ptr ${operand(c)}" :: args.zipWithIndex.map((a, i) => widen(operand(a), a.tpe, s"$n.$i")))
-          .mkString(", ")
-        if fillsSlot(x.ctype) then line(s"  %${x.name} = call ${EmitLLVM.llType(x.ctype)} %code.$n($argList)")
-        else
-          line(s"  %${x.name}.s = call i64 %code.$n($argList)")
-          narrow(x, s"%${x.name}.s")
+        indirect(x, c, if exclusive then 16 else 24, args)
         label
+      case Rhs.CallTable(t, entry, args, exclusive) =>
+        indirect(x, t, 16 * entry + (if exclusive then 0 else 8), args)
+        label
+
+  /** Call the code pointer at `offset` in `self` (a closure or a table) with `self` and `args` as
+    * `i64` slots, and narrow the slot it returns into `x` (Rule CM3.3(3)).
+    */
+  private def indirect(x: Var, self: Atom, offset: Int, args: List[Atom]): Unit =
+    val n = ids.next()
+    line(s"  %code.$n.p = getelementptr inbounds i8, ptr ${operand(self)}, i64 $offset")
+    line(s"  %code.$n = load ptr, ptr %code.$n.p")
+    val argList = (s"ptr ${operand(self)}" :: args.zipWithIndex.map((a, i) => slotted(operand(a), a.tpe, s"$n.$i")))
+      .mkString(", ")
+    line(s"  %${x.name}.s = call i64 %code.$n($argList)")
+    narrow(x, s"%${x.name}.s")
+
+  /** `x = a`: an alias, or a conversion where exactly one of them is a slot (Rule CM3.3). */
+  private def move(x: Var, a: Atom): Unit =
+    (x.ctype, a.tpe) match
+      case (_: CType.Slot, _: CType.Slot) => aliases(x.name) = operand(a)
+      case (_: CType.Slot, from) => aliases(x.name) = slotted(operand(a), from, s"mv.${ids.next()}").stripPrefix("i64 ")
+      case (_, _: CType.Slot)    => narrow(x, operand(a))
+      case _                     => aliases(x.name) = operand(a)
+
+  /** `v` of type `t` as an `i64` operand in slot form: a pointer as its address, else [[widen]]. */
+  private def slotted(v: String, t: CType, n: String): String =
+    t match
+      case CType.Boxed | CType.Witness | CType.Table =>
+        line(s"  %wd.$n = ptrtoint ptr $v to i64")
+        s"i64 %wd.$n"
+      case _ => widen(v, t, n)
+
+  /** The reference map of a cell whose slots from `first` hold `types`, as an `i32` operand: the
+    * static bits of its references, or'ed at run time with the `kind` (at offset 0) of each slot
+    * field's witness, shifted to that field's bit (Rules CM3.4, PR3.1).
+    */
+  private def refs(types: List[CType], first: Int): String =
+    types.zip(Layout.slots(types, first)).foldLeft(Layout.refs(types, first).toString) {
+      case (map, (CType.Slot(w), slot)) =>
+        val n = ids.next()
+        line(s"  %kind.$n.w = load i64, ptr ${operand(Var(w, CType.Witness))}")
+        line(s"  %kind.$n.b = trunc i64 %kind.$n.w to i32")
+        line(s"  %kind.$n.s = shl i32 %kind.$n.b, $slot")
+        line(s"  %kind.$n = or i32 $map, %kind.$n.s")
+        s"%kind.$n"
+      case (map, _) => map
+    }
 
   /** A closure's exclusive entry: `code` itself where no exclusive version was built. */
   private def orCode(exclusive: String, code: String): String = if exclusive.isEmpty then code else exclusive
@@ -138,7 +184,7 @@ final class EmitLLVM:
     line(s"  %${x.name} = phi ${EmitLLVM.llType(x.ctype)} ${results.mkString(", ")}")
     s"join.$n"
 
-  private def allocate(x: Var, tag: Int, refs: Int, slots: Int): Unit =
+  private def allocate(x: Var, tag: Int, refs: String, slots: Int): Unit =
     line(s"  %${x.name} = call ptr @fx_alloc(i32 $tag, i32 $refs, i64 ${8 * slots})")
     line(s"  %${x.name}.0 = getelementptr inbounds i8, ptr %${x.name}, i64 16")
 
@@ -180,26 +226,28 @@ final class EmitLLVM:
       line(s"  $v.s = load i64, ptr $v.p")
       narrow(x, s"$v.s")
 
-  /** Define `x` from `slot`, an `i64` in canonical slot form (Rule CM3.3), narrowed to `x`'s type,
-    * which must not fill the slot.
-    */
+  /** Define `x` from `slot`, an `i64` in canonical slot form (Rule CM3.3), narrowed to `x`'s type. */
   private def narrow(x: Var, slot: String): Unit =
     val v = s"%${x.name}"
     x.ctype match
-      case CType.Float(64) => line(s"  $v = bitcast i64 $slot to double")
-      case CType.Float(_)  =>
+      case CType.Int(64, _) | _: CType.Slot          => aliases(x.name) = slot
+      case CType.Boxed | CType.Witness | CType.Table => line(s"  $v = inttoptr i64 $slot to ptr")
+      case CType.Float(64)                           => line(s"  $v = bitcast i64 $slot to double")
+      case CType.Float(_)                            =>
         line(s"  $v.b = trunc i64 $slot to i32")
         line(s"  $v = bitcast i32 $v.b to float")
       case t => line(s"  $v = trunc i64 $slot to ${EmitLLVM.llType(t)}")
 
-  /** Whether a value of type `t` is its own slot form: a reference, or a 64-bit integer. */
+  /** Whether a value of type `t` is its own slot form: a reference, a 64-bit integer, a slot, or
+    * a pointer to a witness or table.
+    */
   private def fillsSlot(t: CType): Boolean =
     t match
-      case CType.Boxed | CType.Int(64, _) => true
-      case _                              => false
+      case CType.Boxed | CType.Int(64, _) | _: CType.Slot | CType.Witness | CType.Table => true
+      case _                                                                            => false
 
   private def call(x: Var, f: String, args: List[Atom], runtime: Boolean): Unit =
-    require(runtime || !entries(f), s"closure code $f takes slots and must be called through its closure")
+    require(runtime || !entries(f), s"$f takes slots and must be called through its closure or table")
     val argList = typed(args)
     if !runtime then line(s"  %${x.name} = call ${EmitLLVM.llType(x.ctype)} ${EmitLLVM.user(f)}($argList)")
     else
@@ -243,10 +291,10 @@ final class EmitLLVM:
     if v != "0" then v
     else
       t match
-        case CType.Boxed    => "null"
-        case CType.Float(_) => "0.0"
-        case CType.Bool     => "false"
-        case _              => v
+        case CType.Boxed | CType.Witness | CType.Table => "null"
+        case CType.Float(_)                            => "0.0"
+        case CType.Bool                                => "false"
+        case _                                         => v
 
   private def typed(as: List[Atom]): String = as.map(a => s"${EmitLLVM.llType(a.tpe)} ${operand(a)}").mkString(", ")
 
@@ -260,6 +308,15 @@ final class EmitLLVM:
       case Atom.BoolC(b)                    => b.toString
       case Atom.UnitC                       => "0"
       case Atom.StrC(s)                     => "@" + strings.getOrElseUpdate(s, s"str.${strings.size + 1}")
+      case Atom.StaticWitness(name)         =>
+        declared(s"fx_w_$name") = s"@fx_w_$name = external constant ${EmitLLVM.witnessRecord}"
+        s"@fx_w_$name"
+      case Atom.StaticTable(key, es) =>
+        val name = s"@\"fx_t_$key\""
+        val ptrs =
+          es.map((sh, ex) => s"{ ptr, ptr } { ptr ${EmitLLVM.user(orCode(ex, sh))}, ptr ${EmitLLVM.user(sh)} }")
+        statics(name) = s"$name = private unnamed_addr constant [${es.size} x { ptr, ptr }] [${ptrs.mkString(", ")}]\n"
+        name
 
   /** A string constant: a static heap object (`rc = -1`, never counted or freed). Layout as `fx_string`. */
   private def stringGlobal(name: String, s: String): String =
@@ -274,6 +331,10 @@ final class EmitLLVM:
 
 object EmitLLVM:
 
+  /** The runtime's value witness record `fx_witness`: `kind`, then `dup`, `drop` and `copy` code at 8, 16 and 24. */
+  private val witnessRecord = "{ i64, ptr, ptr, ptr }"
+  private val (witnessDup, witnessDrop) = (8, 16)
+
   private val always = List(
     "declare void @fx_dup(ptr)",
     "declare void @fx_drop(ptr)",
@@ -287,12 +348,13 @@ object EmitLLVM:
 
   def llType(t: CType): String =
     t match
-      case CType.Int(bits, _) => s"i$bits"
-      case CType.Float(32)    => "float"
-      case CType.Float(_)     => "double"
-      case CType.Bool         => "i1"
-      case CType.Unit         => "i8"
-      case CType.Boxed        => "ptr"
+      case CType.Int(bits, _)                        => s"i$bits"
+      case CType.Float(32)                           => "float"
+      case CType.Float(_)                            => "double"
+      case CType.Bool                                => "i1"
+      case CType.Unit                                => "i8"
+      case CType.Slot(_)                             => "i64"
+      case CType.Boxed | CType.Witness | CType.Table => "ptr"
 
   private def instruction(op: PrimOp, t: CType): String =
     (op, t) match

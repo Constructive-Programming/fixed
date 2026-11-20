@@ -419,13 +419,14 @@ final class Lower(unit: CompilationUnit) extends Generated:
         val w = fresh("w", to)
         Expr.Let(w, Rhs.Prim(PrimOp.Widen, List(r)), runtime(name, List(w), m, sc)(k))
     r.tpe match
-      case _ if receiver == Type.PrimType("char") => runtime("fx_show_char", List(r), m, sc)(k)
-      case CType.Int(_, true)                     => widened("fx_show_i64", CType.Int(64, signed = true))
-      case CType.Int(_, false)                    => widened("fx_show_u64", CType.Int(64, signed = false))
-      case CType.Float(_)                         => widened("fx_show_f64", CType.Float(64))
-      case CType.Bool                             => runtime("fx_show_bool", List(r), m, sc)(k)
-      case CType.Unit                             => k(Atom.StrC("()"))
-      case CType.Boxed                            => k(r)
+      case _ if receiver == Type.PrimType("char")      => runtime("fx_show_char", List(r), m, sc)(k)
+      case CType.Int(_, true)                          => widened("fx_show_i64", CType.Int(64, signed = true))
+      case CType.Int(_, false)                         => widened("fx_show_u64", CType.Int(64, signed = false))
+      case CType.Float(_)                              => widened("fx_show_f64", CType.Float(64))
+      case CType.Bool                                  => runtime("fx_show_bool", List(r), m, sc)(k)
+      case CType.Unit                                  => k(Atom.StrC("()"))
+      case CType.Boxed                                 => k(r)
+      case _: CType.Slot | CType.Witness | CType.Table => unsupported(m.span, "`show` on a value of parameter type", k)
 
   /** Data constructors, derived `unfold`, capability constructors resolved by the typer, and the
     * runtime effects. ponytail: `Console` is matched by name; effect resolution arrives with

@@ -13,7 +13,18 @@ enum CType:
   /** A pointer to a heap object with a reference-count header. */
   case Boxed
 
+  /** A value of parameter type in its 64-bit slot (Rule CM3.3); the variable `witness` holds its value witness. */
+  case Slot(witness: String)
+
+  /** Pointers to a value witness record and to a capability table: static data, never counted. */
+  case Witness, Table
+
   def boxed: Boolean = this == CType.Boxed
+
+  /** May hold a counted reference: what reference counting and the analyses track. */
+  def counted: Boolean = this match
+    case CType.Boxed | _: CType.Slot => true
+    case _                           => false
 
 /** An operand: a variable or a constant. A string constant is a static object (never counted). */
 enum Atom:
@@ -24,14 +35,22 @@ enum Atom:
   case UnitC
   case StrC(value: String)
 
+  /** The runtime's value witness `fx_w_<name>`, `imm` or `ref`. */
+  case StaticWitness(name: String)
+
+  /** Table `key`: per entry its shared and exclusive code (or `""`); stored exclusive first (Rule CM4.2). */
+  case StaticTable(key: String, entries: List[(String, String)])
+
   def tpe: CType =
     this match
-      case Var(_, t)    => t
-      case IntC(_, t)   => t
-      case FloatC(_, t) => t
-      case BoolC(_)     => CType.Bool
-      case UnitC        => CType.Unit
-      case StrC(_)      => CType.Boxed
+      case Var(_, t)        => t
+      case IntC(_, t)       => t
+      case FloatC(_, t)     => t
+      case BoolC(_)         => CType.Bool
+      case UnitC            => CType.Unit
+      case StrC(_)          => CType.Boxed
+      case _: StaticWitness => CType.Witness
+      case _: StaticTable   => CType.Table
 
 extension (rhs: Rhs)
   /** `rhs` with `f` applied to each branch of an `If` or `Switch`; other right-hand sides unchanged. */
@@ -45,8 +64,10 @@ extension (rhs: Rhs)
 enum PrimOp:
   case Add, Sub, Mul, Div, Rem, Eq, Ne, Lt, Le, Gt, Ge, Neg, Not, Widen
 
-/** The right-hand side of a `Let`. Calls consume their boxed arguments. */
+/** The right-hand side of a `Let`. Calls consume their counted arguments. */
 enum Rhs:
+
+  /** `a` under a new name; converted to or from slot form where exactly one side is a slot (Rule CM3.3). */
   case Move(a: Atom)
   case Prim(op: PrimOp, args: List[Atom])
 
@@ -60,7 +81,7 @@ enum Rhs:
   case Con(tag: Int, fields: List[Atom])
 
   /** Read payload slot `slot` of `obj` (see [[Layout]]). Borrows: `obj` is not consumed, and a
-    * boxed result is dup'ed by reference counting.
+    * counted result is dup'ed by reference counting.
     */
   case Field(obj: Atom, slot: Int)
 
@@ -78,6 +99,9 @@ enum Rhs:
     */
   case CallClosure(closure: Atom, args: List[Atom], exclusive: Boolean = false)
 
+  /** Call entry `entry` of `table` through either pointer, like `CallClosure` (Rule CM4.6). */
+  case CallTable(table: Atom, entry: Int, args: List[Atom], exclusive: Boolean = false)
+
   /** Call a `handle` subject function: like `Call`, but not followed by an abort test (`Aborts`). */
   case Catch(fn: String, args: List[Atom])
 
@@ -87,6 +111,7 @@ enum Rhs:
     */
   case Reuse(cell: Atom, tag: Int, fields: List[Atom], unconditional: Boolean)
 
+/** `Dup` and `Drop` of a [[CType.Slot]] variable go through its value witness. */
 enum Expr:
   case Let(x: Atom.Var, rhs: Rhs, body: Expr)
   case Ret(a: Atom)
@@ -121,32 +146,72 @@ object Core:
   def merge[V](a: Map[String, V], b: Map[String, V], zero: V)(f: (V, V) => V): Map[String, V] =
     (a.keySet ++ b.keySet).map(k => k -> f(a.getOrElse(k, zero), b.getOrElse(k, zero))).toMap
 
-  /** The boxed variable `a` is, if any: the only atoms reference counting tracks. */
-  def boxedVar(a: Atom): Option[Atom.Var] =
+  /** The counted variable `a` is, if any: the only atoms reference counting tracks. */
+  def countedVar(a: Atom): Option[Atom.Var] =
     a match
-      case v: Atom.Var if v.ctype.boxed => Some(v)
-      case _                            => None
+      case v: Atom.Var if v.ctype.counted => Some(v)
+      case _                              => None
 
-  /** The code functions of the closures that `fns` build; only `CallClosure` calls them (Rule CM3.3). */
-  def closureEntries(fns: List[Fn]): Set[String] =
-    fns.flatMap(f => lets(f.body)).collect { case (_, Rhs.Closure(code, _, exclusive)) =>
-      Set(code, exclusive)
-    }.flatten.toSet - ""
+  /** The witness variable of slot variable `v`. */
+  def witnessOf(v: Atom.Var): Option[Atom.Var] =
+    v.ctype match
+      case CType.Slot(w) => Some(Atom.Var(w, CType.Witness))
+      case _             => None
 
-  /** The user functions `e` calls. */
-  def callees(e: Expr): Set[String] =
+  /** The operands of `rhs` itself, not of its branches. */
+  def atoms(rhs: Rhs): List[Atom] =
+    rhs match
+      case Rhs.Move(a)                => List(a)
+      case Rhs.Prim(_, as)            => as
+      case Rhs.Call(_, as, _)         => as
+      case Rhs.If(c, _, _)            => List(c)
+      case Rhs.Con(_, fs)             => fs
+      case Rhs.Field(o, _)            => List(o)
+      case Rhs.Switch(x, _)           => List(x)
+      case Rhs.Closure(_, cs, _)      => cs
+      case Rhs.CallClosure(c, as, _)  => c :: as
+      case Rhs.CallTable(t, _, as, _) => t :: as
+      case Rhs.Catch(_, as)           => as
+      case Rhs.Reuse(c, _, fs, _)     => c :: fs
+
+  /** The code of the closures and table entries `fns` name: called only indirectly, with slots (Rule CM3.3(3)). */
+  def indirectEntries(fns: List[Fn]): Set[String] =
+    fns.flatMap(f =>
+      lets(f.body).collect { case (_, Rhs.Closure(c, _, x)) => List(c, x) }.flatten ++ tableEntries(f.body)
+    )
+      .toSet - ""
+
+  /** The code of the tables `e` names anywhere, its results included. */
+  def tableEntries(e: Expr): List[String] =
+    operands(e).collect { case Atom.StaticTable(_, es) => es.flatMap((s, x) => List(s, x)) }.flatten.filter(_.nonEmpty)
+
+  def branches(rhs: Rhs): List[Expr] =
+    rhs match
+      case Rhs.If(_, t, f)      => List(t, f)
+      case Rhs.Switch(_, cases) => cases.map(_._2)
+      case _                    => Nil
+
+  private def operands(e: Expr): List[Atom] =
+    e match
+      case Expr.Let(_, r, b) => atoms(r) ++ branches(r).flatMap(operands) ++ operands(b)
+      case Expr.Ret(a)       => List(a)
+      case Expr.Dup(_, b)    => operands(b)
+      case Expr.Drop(_, b)   => operands(b)
+
+  /** The user functions `e` calls, closures' and tables' code included. */
+  def callees(e: Expr): Set[String] = calls(e) ++ tableEntries(e)
+
+  private def calls(e: Expr): Set[String] =
     e match
       case Expr.Let(_, rhs, body) =>
         val own = rhs match
           case Rhs.Call(f, _, false)   => Set(f)
           case Rhs.Closure(code, _, s) => Set(code) ++ Option(s).filter(_.nonEmpty)
           case Rhs.Catch(f, _)         => Set(f)
-          case Rhs.If(_, t, f)         => callees(t) ++ callees(f)
-          case Rhs.Switch(_, cases)    => cases.flatMap((_, c) => callees(c)).toSet
           case _                       => Set.empty[String]
-        own ++ callees(body)
-      case Expr.Dup(_, b)  => callees(b)
-      case Expr.Drop(_, b) => callees(b)
+        own ++ branches(rhs).flatMap(calls) ++ calls(body)
+      case Expr.Dup(_, b)  => calls(b)
+      case Expr.Drop(_, b) => calls(b)
       case Expr.Ret(_)     => Set.empty
 
   /** Every function reachable from `from`, closures' code included. */
@@ -154,27 +219,14 @@ object Core:
     val next = from ++ from.flatMap(f => byName.get(f).toList.flatMap(g => callees(g.body)))
     if next == from then from else reach(next, byName)
 
-  /** Every variable `e` uses but does not bind, of any type: a lambda's captures. */
+  /** Every variable `e` uses but does not bind (a slot's witness too): a lambda's captures. */
   def freeVars(e: Expr): Set[Atom.Var] =
-    def atoms(as: List[Atom]): Set[Atom.Var] = as.collect { case v: Atom.Var => v }.toSet
-    def rhs(r: Rhs): Set[Atom.Var] =
-      r match
-        case Rhs.Move(a)               => atoms(List(a))
-        case Rhs.Prim(_, as)           => atoms(as)
-        case Rhs.Call(_, as, _)        => atoms(as)
-        case Rhs.If(c, t, f)           => atoms(List(c)) ++ freeVars(t) ++ freeVars(f)
-        case Rhs.Con(_, fs)            => atoms(fs)
-        case Rhs.Field(o, _)           => atoms(List(o))
-        case Rhs.Switch(x, cases)      => atoms(List(x)) ++ cases.flatMap((_, c) => freeVars(c))
-        case Rhs.Closure(_, cs, _)     => atoms(cs)
-        case Rhs.CallClosure(c, as, _) => atoms(c :: as)
-        case Rhs.Catch(_, as)          => atoms(as)
-        case Rhs.Reuse(c, _, fs, _)    => atoms(c :: fs)
+    def vars(as: List[Atom]): Set[Atom.Var] = as.collect { case v: Atom.Var => v :: witnessOf(v).toList }.flatten.toSet
     e match
-      case Expr.Let(x, r, body) => rhs(r) ++ (freeVars(body) - x)
-      case Expr.Ret(a)          => atoms(List(a))
-      case Expr.Dup(x, b)       => freeVars(b) + x
-      case Expr.Drop(x, b)      => freeVars(b) + x
+      case Expr.Let(x, r, body) => vars(atoms(r)) ++ branches(r).flatMap(freeVars) ++ (freeVars(body) - x)
+      case Expr.Ret(a)          => vars(List(a))
+      case Expr.Dup(x, b)       => freeVars(b) ++ vars(List(x))
+      case Expr.Drop(x, b)      => freeVars(b) ++ vars(List(x))
 
 /** Payload layout of a heap object (`spec/memory_management.md` Rule PR3.1, `spec/compilation_model.md`
   * Rules CM3.3 and CM3.4): every field takes one 64-bit slot, in declaration order, whatever the
@@ -195,13 +247,15 @@ object Layout:
   /** The slot of each field: declaration order, after `first` reserved slots. */
   def slots(fields: List[CType], first: Int = 0): List[Int] = fields.indices.map(first + _).toList
 
-  /** The slots among `slots(fields, first)` that hold counted references. */
+  /** The slots among `slots(fields, first)` that may hold counted references. */
   def refSlotsOf(fields: List[CType], first: Int = 0): List[Int] =
-    slots(fields, first).zip(fields).collect { case (s, t) if t.boxed => s }
+    slots(fields, first).zip(fields).collect { case (s, t) if t.counted => s }
 
-  /** The header's reference map, negative when slot 31 holds a reference; `Lower` reports overflow as `B005`. */
+  /** The reference map's static bits (a slot's comes from its witness); overflow is `Lower`'s `B005`. */
   def refs(fields: List[CType], first: Int = 0): Int =
-    refSlotsOf(fields, first).foldLeft(0) { (m, s) =>
-      require(s < refMapBits, s"a reference in payload slot $s is beyond the reference map")
-      m | 1 << s
+    slots(fields, first).zip(fields).foldLeft(0) {
+      case (m, (s, t)) if t.counted =>
+        require(s < refMapBits, s"a reference in payload slot $s is beyond the reference map")
+        if t.boxed then m | 1 << s else m
+      case (m, _) => m
     }
