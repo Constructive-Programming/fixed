@@ -8,6 +8,8 @@
 document), `spec/type_system.md` Rules 7.4.a–7.4.d (derived members), `spec/effects.md` §3.3
 (abortive operations), `spec/stdlib.md` §4.10 (`Show`)
 
+**Superseded in part (2026-11-20).** This plan is a record of what the slice built, and some of its statements no longer describe the target. Monomorphic Core with one instance per type is replaced by a polymorphic baseline version per function (`spec/compilation_model.md` §3). The worklist from `main` is replaced by the roots of Rule CM3.2, and the one representation rule by a representation that travels by witness (Rule CM3.4). Separate compilation, deferred in §2, is now specified by packages and the interface tier (§6, Rule CM7.1). The plan that changes the code is `docs/plans/phase-4.1-baseline-specialiser.md`.
+
 ## 1. Goal
 
 Produce running native code and a recorded baseline as cheaply as possible, so that M10, M11 and

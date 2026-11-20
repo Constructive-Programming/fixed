@@ -1,8 +1,10 @@
 # Fixed Effects
 
-**Status:** Draft v0.2.2
+**Status:** Draft v0.2.3
 **Specifies:** algebraic effect declarations, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.4 source.
-**Last revised:** 2026-11-19
+**Last revised:** 2026-11-20
+
+**Changes from v0.2.2.** §7 aligned with `spec/compilation_model.md`: operation arguments and results are 64-bit slots (§7.1); evidence is passed in every baseline version, and a known handler is one component of a clone key, not a consequence of monomorphisation (§7.6); new Rule E7.7 fixes what an operation call hands over and how an evidence vector is ordered.
 
 **Changes from v0.2.1.** Adds Rule E5.5.a (ambient pass-through): a callback whose expected function type declares no `with` clause passes its effects to the enclosing body. Adds Rule E8.1.a (how row variables are solved) and OQ-E8 (row-polymorphic data).
 
@@ -408,7 +410,7 @@ Each operation of each effect is compiled to an indirect call through a per-hand
 
 - A function pointer to the clause body.
 - A handler-frame reference (the captured continuation root).
-- Type information sufficient for boxing args / return value when needed.
+- Nothing about the types of arguments and results: they are passed as 64-bit slots, an immediate in the slot and anything wider behind a pointer (`spec/compilation_model.md` Rule CM3.3), so an entry needs no boxing information.
 
 ### 7.2 Operation dispatch (Rule E7.2)
 
@@ -449,7 +451,16 @@ This is the common case in I/O handlers and is the primary performance optimizat
 
 ### 7.6 Evidence threading
 
-Polymorphic functions parametric over effect rows (§8) receive evidence vectors as additional implicit arguments. Monomorphisation of effect-polymorphic functions specialises these evidence-vector arguments per call site.
+Every function whose row is not empty receives its evidence as a hidden parameter (`spec/compilation_model.md` Rule CM4.3), and a function parametric over an effect row (§8) receives the evidence for the row variable the same way. This is the function's baseline version: it performs an operation by a lookup and an indirect call.
+
+Where a call site knows the handler, the specialiser may build a clone of the callee for that handler, in which the lookup and the indirect call become a direct call or inline code. A known handler is one component of a clone key, charged to the same budget and chosen by the same score as any other (`spec/compilation_model.md` Rules CM5.1, CM5.3, CM5.4). With `--no-specialise` no such clone is built.
+
+### 7.7 What an operation call hands over (Rule E7.7)
+
+- **Arguments.** The performer cannot see the clause, so it cannot know the clause's demands. It passes every argument under demand `own`, as a call through a capability table does (`spec/compilation_model.md` Rule CM4.6, `spec/quantities.md` Rule Q4.1.e). A clone for a known handler uses the clause's inferred demands.
+- **Evidence is not a witness.** Both are hidden parameters that hold code pointers. Evidence is dynamically scoped: each `handle` installs an entry and may shadow an outer one (Rule E6.5), and an entry refers to a handler frame. A witness is static and the same throughout a link unit.
+- **Order.** The entries of an evidence vector for a signature follow the canonical order of its effect row, so that a caller and a callee in different packages agree. How row variables and the library entry points of Rule E5.4 are laid out is open (`spec/compilation_model.md` OQ-CM9).
+- **Cost.** The cost of performing an operation is that of the clause, which the performer cannot see; in a cost bound it is a symbolic term until a `handle` supplies the clause (`spec/cost.md` Rule CT5.3).
 
 ## 8. Effect polymorphism
 
@@ -559,6 +570,7 @@ fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A) =
 |---|---|
 | `spec/syntax_grammar.ebnf` | All effect-related syntax |
 | `spec/type_system.md` | Effect declarations as type-level constructs (§9 forwards here); `!` typing (§5.6) |
+| `spec/compilation_model.md` | Evidence as a hidden parameter (Rule CM4.3); a known handler as a clone key component (Rule CM5.1); the convention of Rule E7.7 |
 | `spec/quantities.md` | Rule Q5.11 (`resume` quantity 1); OQ-Q1 ↔ OQ-E1; Rule Q9.2 fixes the order in which argument effects are performed (left to right) |
 | `spec/memory_management.md` | §14: handler kinds, abort resets, fiber stacks for capturing handlers, continuation memory |
 | `spec/properties.md` (TBD) | Effects in `prop` bodies are forbidden — props are checked at quantity 0 (Rule Q5.5), and `prop` bodies are compile-time only |

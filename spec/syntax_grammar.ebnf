@@ -3,9 +3,25 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4.9
+   Status:        DRAFT v0.4.10
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
-   Last revised:  2026-11-19
+   Last revised:  2026-11-20
+
+   Refinements in v0.4.10
+   ----------------------
+   - **`fip` on capability members.** `FipModifier` may precede a method
+     requirement (`InstanceMethodDecl`, `StaticMethodDecl`), where it obliges
+     every satisfying type, and a `satisfies` method (`InstanceMethodDef`).
+     See spec/memory_management.md Rule MM18.5 and spec/cost.md Rule CT4.3.
+   - **`fip(n)`** added: `fip(INT_LITERAL)` allows at most `n` fresh cells
+     per call (FP²'s `fip(n)`).
+   - **Cost props need no production.** A cost contract is an ordinary
+     `PropDecl` whose expression is a comparison with a cost term on the
+     left (spec/cost.md Rule CT4.1). `steps`, `constructs`, `releases`,
+     `size`, `O`, `log` and `max` are not reserved: they have their cost
+     meaning only inside such a prop.
+   - No visibility or package syntax yet: `mod` and `pub` stay reserved
+     without productions (spec/compilation_model.md OQ-CM1).
 
    Refinements in v0.4.9
    ---------------------
@@ -398,11 +414,11 @@ CapMember
    *extension method* on every type satisfying the cap; satisfying
    types may override it via an explicit `satisfies`-block method. *)
 InstanceMethodDecl
-    = "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" TypeExpr WithClause? ( "=" BlockTail )?
+    = FipModifier? "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" TypeExpr WithClause? ( "=" BlockTail )?
     ;
 
 StaticMethodDecl
-    = "Self" "." "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" TypeExpr WithClause? ( "=" BlockTail )?
+    = FipModifier? "Self" "." "fn" LOWER_IDENT TypeParamsHint? FnParamList? "->" TypeExpr WithClause? ( "=" BlockTail )?
     ;
 
 TypeParamsHint
@@ -502,9 +518,11 @@ FnDecl
     ;
 
 (* Checked in-place contract (v0.4.9); see spec/memory_management.md §18.
-   `strict` is a contextual word, recognised only here. *)
+   `strict` is a contextual word, recognised only here. `fip(n)` (v0.4.10)
+   allows at most `n` fresh cells per call. The modifier may also precede a
+   capability method requirement and a `satisfies` method (v0.4.10). *)
 FipModifier
-    = "fip" ( "(" "strict" ")" )?
+    = "fip" ( "(" ( "strict" | INT_LITERAL ) ")" )?
     ;
 
 FnParamList
@@ -584,7 +602,7 @@ SatisfiesLhs
    `fn` keyword position; return type is optional (inferred from the
    cap method declaration when omitted). *)
 InstanceMethodDef
-    = "fn" LOWER_IDENT TypeParamsHint? FnParamList? ( "->" TypeExpr )? WithClause? "=" BlockTail
+    = FipModifier? "fn" LOWER_IDENT TypeParamsHint? FnParamList? ( "->" TypeExpr )? WithClause? "=" BlockTail
     ;
 
 

@@ -1,8 +1,10 @@
 # Fixed Standard Library — Core Types and Capabilities
 
-**Status:** Draft v0.1
+**Status:** Draft v0.2
 **Specifies:** the core data types and capabilities Fixed's stdlib provides; the cap-vs-data classification each one takes; the auto-derived satisfactions.
-**Last revised:** 2026-05-01
+**Last revised:** 2026-11-20
+
+**Changes from v0.1.** New §4.12: provisional cost contracts for the core capabilities (`spec/cost.md`). §4.11 no longer says a caller copies the demanded part: only the shared entry of a `fip fn` does (`spec/quantities.md` Rule Q9.3). §3 states how a `data` type's layout reaches code that does not know it.
 
 ## 1. Scope
 
@@ -37,7 +39,7 @@ It does **not** specify:
 
 ## 3. Data declarations (normative shape)
 
-These are the shapes programmers may match on. The compiler still owns the representation for each (e.g., `List` may be backed by linked list or array depending on use).
+These are the shapes programmers may match on. The compiler still owns the representation for each (e.g., `List` may be backed by linked list or array depending on use). A value carries its representation by witness to code that does not know it (`spec/compilation_model.md` §4), so the choice never becomes part of a package's ABI.
 
 ### 3.1 `data List`
 
@@ -237,11 +239,32 @@ cap Clone:
 
 Produces a value of the same type whose lifetime is independent of the receiver. Implementations are expected to perform a deep copy when the underlying representation is heap-allocated (refcount-incremented copy is acceptable when the representation is a refcounted shared structure — see `spec/memory_management.md`).
 
-**Relationship with ownership inference.** `.clone()` is never needed to satisfy ownership. Demands (`spec/quantities.md` §4.1) decide what each call needs: a `read` parameter borrows, an `own` parameter takes a counted reference, and an `exclusive` parameter given a shared value makes the compiler call the callee's shared version, or copy the demanded part itself (Rule Q9.3). Values are immutable, so a copy is never observable and needs no `Clone`. `.clone()` remains for programs that want an independent value for their own reasons, for example to bound how long a large structure is kept alive.
+**Relationship with ownership inference.** `.clone()` is never needed to satisfy ownership. Demands (`spec/quantities.md` §4.1) decide what each call needs: a `read` parameter borrows, an `own` parameter takes a counted reference, and an `exclusive` parameter given a shared value makes the compiler call the callee's shared version (Rule Q9.3). Only the shared entry of a `fip fn` copies the demanded part. Values are immutable, so a copy is never observable and needs no `Clone`. `.clone()` remains for programs that want an independent value for their own reasons, for example to bound how long a large structure is kept alive.
 
 In current example code, `.clone()` was used defensively in places where borrow inference is expected to handle the duplication implicitly; the v0.4.5 sweep removed those calls. Programs that *need* an explicit duplicate continue to call `.clone()`; the typer ensures the receiver type satisfies `Clone`.
 
 **Auto-derivation.** `Clone` is auto-derived for any `data` type whose every field type satisfies `Clone`. Primitives satisfy `Clone` trivially. Capabilities do not auto-derive `Clone` because the underlying representation isn't fixed; satisfying types must opt in.
+
+### 4.12 Cost contracts (provisional)
+
+The core capabilities carry cost props (`spec/cost.md` §4). A satisfying type must meet them (Rule CT6.3), and representation selection uses them (`spec/cost.md` §8). `n` is `size(self)` (`spec/cost.md` Rule CT5.1); `f` is the function argument, and `steps(f)` the cost of one call of it. The table is provisional until the library is written in Fixed (implementation plan, Phase 5).
+
+| Capability | Member | `steps` | `constructs` | In place when exclusively owned |
+|---|---|---|---|---|
+| `Optional`, `Result`, `Pair`, `Ordering`, `Boolean` | constructors, accessors | `O(1)` | at most 1 | — |
+| `Optional`, `Result`, `Boolean` | `fold` | `O(steps(f))` | `constructs(f)` | — |
+| `Empty` | `empty`, `is_empty` | `O(1)` | 0 | — |
+| `Numeric` | arithmetic, `from_i64` | `O(1)` for the primitive types; no bound stated for user satisfactions | 0 for the primitive types | — |
+| `Eq`, `Ord` | `eq`, `compare` | `O(n)` | 0 | — |
+| `Show` | `show` | `O(n)` | `O(n)` | no |
+| `Clone` | `clone` | `O(n)` plus the cost of cloning each element | `O(n)` plus what cloning each element builds | no |
+| `Folding` | `fold` | `O(n * steps(f))` | `n * constructs(f)` | — |
+| `Functor` | `map` | `O(n * steps(f))` | at most `n + n * constructs(f)` | yes: `constructs(map) − releases(map) <= n * constructs(f)` |
+| `Filtering` | `filter` | `O(n * steps(f))` | at most `n` | yes |
+| `Sized` | `size` | `O(1)` | 0 | — |
+| `RandomAccess` | `get` | `O(1)` | at most 1 | — |
+
+Consequences already visible in `spec/type_system.md` §6.6: the built-in linked list does not satisfy `Sized` or `RandomAccess`, because it cannot meet these bounds, and the contiguous array does. `Clone` states the deep-copy bound; a satisfying type whose `clone` only increments a count is within it. `Map` and `Set` have no contracts yet (OQ-S2); a hash map needs a decision between its expected and its worst case (`spec/cost.md` OQ-CT4).
 
 ## 5. Canonical satisfactions
 
@@ -310,6 +333,8 @@ Earlier drafts (`docs/plans/implementation-plan.md` line 352) classified `List`,
 | `spec/type_system.md` | Auto-derivation rules (Rule 7.4); cap classification (§6.4); satisfaction resolution (§8) |
 | `spec/pattern_matching.md` | Match restricted to data types (Rule M3.4.c); `Tuple` matchable, `Pair` not |
 | `spec/effects.md` | I/O effects (`Console`, `FileSystem`, …) — separate module |
+| `spec/cost.md` | The contract language of §4.12; viability and scoring of representations |
+| `spec/compilation_model.md` | Capability tables are built from these declarations (Rule CM4.2); the standard library is a package (§6) |
 | `docs/plans/implementation-plan.md` | Phase 5 deliverables in `stdlib/*.fixed` |
 | `examples/03_option_result.fixed` | `data Maybe satisfies Optional`, `data Outcome satisfies Result` — typical user satisfactions |
 

@@ -1,8 +1,10 @@
 # Fixed Type System
 
-**Status:** Draft v0.4.2
+**Status:** Draft v0.4.3
 **Specifies:** typing of Fixed v0.4.4 source.
-**Last revised:** 2026-05-01
+**Last revised:** 2026-11-20
+
+**Changes from v0.4.2.** Aligned with `spec/compilation_model.md` (baseline versions, witnesses, clones, packages) and `spec/cost.md` (cost contracts). §6.5: a representation is chosen where a value originates and travels by witness; the bound set is closed over the package and the signatures it imports; cost contracts are an input, a viability criterion (§6.5.3) and the source of two scoring dimensions (§6.5.4); the cache key includes the lifetime class. Rule 6.1.1 Phase 2 no longer re-checks a default body per satisfying type. Rules 7.4.b.1 and 7.4.b.2 are restated without "after monomorphisation": they are the mandatory specialisations of Rule CM5.5. Rule 7.3.b covers baseline code. Rule 8.2: the panic of an `impossible` constructor lives in the capability table. §8.4: satisfactions are coherent per link unit. §8.5 points to Rule CM4.5 for results typed by a capability bound. New OQ-T2 (type variables of variant fields).
 
 **Changes from v0.4.1.** §8 reframed to make the *capabilities-declare-requirements, types-provide-constructors* distinction explicit (new §8 intro). §8.1 wording updated (Rule 8.1.a / 8.1.b refer to "constructor requirements"). §8.2 (`impossible`) example replaced with a self-contained `Either` / `AlwaysRight` pair to avoid ambiguity between the simplified `Optional` and the canonical one. **Rule 8.2 weakened**: `impossible` is no longer statically verified to be unreachable — calls to an impossible-mapped constructor compile to runtime panics rather than compile errors. Users who need static guarantees may add a `prop` excluding the offending path. Wording across §6.4, §6.6, §7.4.f tightened to "constructor requirements" instead of "constructors".
 
@@ -25,7 +27,9 @@ It does **not** define:
 - `prop` static verification and PBT fallback — see `spec/properties.md`.
 - `match → fold` desugaring and exhaustiveness checking — see `spec/pattern_matching.md`.
 - Memory management (lifetime classes, regions, Perceus reference counting) — see `spec/memory_management.md`.
-- Capability-set narrowing into concrete representations (the algorithm) — touched in §4.5; full treatment lives with the compiler implementation, with PGO-driven decisions documented separately.
+- Capability-set narrowing into concrete representations (the algorithm) — touched in §6.5; full treatment lives with the compiler implementation, with PGO-driven decisions documented separately.
+- How code is compiled for a value whose representation is not known where it is used (baseline versions, witnesses, clones), and the package ABI — see `spec/compilation_model.md`.
+- Cost contracts on capability members — see `spec/cost.md`.
 
 ## 2. Dependencies
 
@@ -43,7 +47,7 @@ Fixed makes a hard distinction between what the **programmer writes** and what t
 | `data` declarations: closed sets of variants | Tagged unions / structs |
 | `of` application | Type application |
 
-A user never names "the type" in the conventional sense. The compiler computes a concrete representation from the union of capability bounds collected across a value's lifetime (see §4.5). For the rest of this document, "type" refers to the compiler's internal view; "capability" is the user-facing thing.
+A user never names "the type" in the conventional sense. The compiler computes a concrete representation from the union of capability bounds collected across a value's lifetime (see §6.5), as far as the package and the signatures it imports show that lifetime (§6.5.1). Code that handles the value without knowing the representation receives a witness for it (`spec/compilation_model.md` §4). For the rest of this document, "type" refers to the compiler's internal view; "capability" is the user-facing thing.
 
 ## 4. Identifier scoping
 
@@ -350,14 +354,17 @@ A cap method's default body is type-checked in **two phases**, layered to balanc
 
 A body that fails Phase 1 is a compile error against the cap declaration, not against any particular satisfying type.
 
-**Phase 2 — Per-satisfaction Recheck (cap-closure phase).** When a `Type satisfies Cap` declaration is processed, the cap's default bodies are **re-checked** against the satisfying type's concrete signatures, but only for *quantities* (per `spec/quantities.md` §5.12) and *effects* (per `spec/effects.md`). Types are guaranteed compatible by cap-closure (the satisfaction is rejected at this phase if the satisfying type's signatures are not assignable to the cap's declared signatures). The re-check therefore catches:
+**Phase 2 — The satisfaction meets the requirements (cap-closure phase).** When a `Type satisfies Cap` declaration is processed, the satisfying type's members are checked against the cap's **requirements**, not against the cap's default bodies:
 
-- Quantity and demand mismatches: the satisfying type's `fold` demands `exclusive` in some position, and a default body passes a shared value there (it then calls `fold`'s shared version, `spec/quantities.md` Rule Q9.3), or the quantities differ.
-- Effect-row mismatches: the satisfying type's method performs effects the default body's `with`-clause does not declare.
+- Types: the satisfying type's signatures must be assignable to the cap's declared signatures (cap-closure rejects the satisfaction otherwise).
+- Effects: a satisfying method's effect row must be contained in the row its requirement declares. A default body calls the requirement through the capability table (`spec/compilation_model.md` Rule CM4.2), so an effect the requirement does not declare would be performed behind the default body's back.
+- Contracts: a satisfying method must meet the cost props and the `fip` modifier of its requirement (`spec/cost.md` Rule CT6.3).
 
-A body that passes Phase 1 but fails Phase 2 is a compile error against the *satisfaction* (not the cap declaration), with the satisfying type named in the diagnostic.
+A satisfaction that fails Phase 2 is a compile error against the *satisfaction*, with the satisfying type named in the diagnostic.
 
-**Why two phases.** Phase 1 catches obvious bugs early and gives cap authors actionable errors at the cap-declaration site, without requiring N satisfying types to be in scope. Phase 2 covers the gap Phase 1 leaves — quantities and effect rows are not visible at the abstract-`Self` level, so per-satisfaction visibility is required to catch their mismatches. This pattern mirrors Scala 3's `cc/` capture-checker and is consistent with the existing Recheck-phase architecture for quantities (`spec/quantities.md` §5.12) and representation selection (§6.5.7 of this doc).
+The default body itself is not checked again. It is compiled once, as a baseline version that takes the witness of `Self`, with the demands of the table convention (`spec/quantities.md` Rule Q4.1.e, Rule Q5.12). A clone of it for a known satisfying type is analysed again by the specialiser, which may then borrow or reuse where the baseline could not; that is an optimisation and cannot fail.
+
+**Why two phases.** Phase 1 catches obvious bugs early and gives cap authors actionable errors at the cap-declaration site, without requiring N satisfying types to be in scope. Phase 2 states what a default body may assume about every satisfying type, so a package can satisfy a capability of another package without seeing that capability's default bodies. Earlier drafts re-checked each default body per satisfying type for quantities and effects; that needed the body wherever a satisfaction was declared.
 
 ```
 cap Optional:
@@ -539,16 +546,21 @@ A cap may belong to multiple of these categories transitively via `extends` (e.g
 
 ### 6.5 Representation selection
 
-The representation-selection pass determines, for each value (binding, parameter, return), the concrete representation the compiler will use to lay out that value at runtime. It runs as a **Recheck-style phase** (see `docs/references/scala3-compiler-reference.md` §5.4 for the pattern) after capability closure and quantity inference, and before code generation.
+The representation-selection pass determines the concrete representation the compiler will use to lay out a value at runtime. It runs as a **Recheck-style phase** (see `docs/references/scala3-compiler-reference.md` §5.4 for the pattern) after capability closure and quantity inference, and before code generation.
+
+**Where a representation is chosen (Rule 6.5.0).** A representation is chosen at the site where a value **originates**: an abstract constructor-requirement call that §8.5 left unresolved, a literal of bounded type, or a built-in candidate's constructor. Selection uses the facts of baseline versions (demands, lifetime classes) and is made once per origination site. From there the value carries its representation with it: code that knows the origin uses the layout directly, and code that does not (a baseline version, `spec/compilation_model.md` Rule CM3.1; another package) uses the value through its witness. Selection never changes because a function was cloned, and cloning never changes a layout (Rule CM3.4).
+
+A function whose result is typed by a capability bound either leaves the choice to its caller or makes it itself; which one is a fact of its signature (Rule CM4.5).
 
 #### 6.5.1 Inputs
 
 For each value, the pass collects:
 
-- **Bound set** — the union of all `is`-bounds the value must satisfy across its lifetime: declaration site, assignment LHS, parameter positions, return positions. Closed under `extends` (§6.2) and alias distribution (§5.8).
+- **Bound set** — the union of all `is`-bounds the value must satisfy across its lifetime: declaration site, assignment LHS, parameter positions, return positions. Closed under `extends` (§6.2) and alias distribution (§5.8). The lifetime is followed through the functions of the package, and through the **signatures** of imported functions; what another package does with the value beyond its signature is not visible and does not contribute.
+- **Cost contracts** — the cost props of the capabilities in the bound set, and the claims each candidate makes for its members (`spec/cost.md` §4.4).
 - **Quantity context** — the QTT quantity assigned to the value (§7.3.b, `spec/quantities.md`).
 - **Lifetime class and escape set** — computed by M10 (`spec/memory_management.md` §5, §20). The class, not the quantity, decides placement: only `Heap` and `Region` values need representations compatible with reference counting. The pass may demote any class to `Inline`, never promote it.
-- **PGO data** — when available, profile observations from prior runs of the program or its predecessors.
+- **PGO data** — when available, profile observations from prior runs of the program or its predecessors, attributed to the origination site.
 
 #### 6.5.2 Candidate pool
 
@@ -570,24 +582,26 @@ A candidate is **viable** for the bound set iff every C ∈ bound set is satisfi
 
 Refinement caps (Marker class, §6.4) are viable iff their `prop` obligations verify under the candidate's representation. Verification follows `spec/properties.md`'s static-then-PBT pipeline; a failed prop disqualifies the candidate.
 
+**Cost contracts.** A candidate is not viable if one of its members fails a cost prop of a capability in the bound set (`spec/cost.md` Rule CT8.1). This is the decisive use of contracts: a capability that promises a constant-time `get` is never satisfied by a candidate whose `get` is linear.
+
 If zero candidates are viable, emit `error[E060]: no representation satisfies <bound set>`, listing each cap and the candidate(s) that came closest.
 
 #### 6.5.4 Scoring
 
 For each viable candidate, compute a **performance score** as a weighted linear combination over these dimensions:
 
-- **Allocation cost** — bytes per instance and allocator pressure, given the value's lifetime class (`spec/memory_management.md` §3.1): `Inline` > `Static` > `Frame` / stack `Dest` > `Region` > `Heap`. Packed candidates are charged for expected copy-out of escaping subtrees (`spec/memory_management.md` §16.2).
-- **Access fit** — how well the candidate's strengths match the operations actually invoked on the value: `RandomAccess + Sized` ⇒ array beats list; sequential-fold ⇒ either acceptable; key-lookup ⇒ hash-map beats list.
+- **Allocation cost** — the lower of two scores (`spec/cost.md` Rule CT8.2): the placement score of the value's lifetime class (`spec/memory_management.md` §3.1: `Inline` > `Static` > `Frame` / stack `Dest` > `Region` > `Heap`, with packed candidates charged for expected copy-out of escaping subtrees, §16.2), and the score derived from the candidate's bounds on `constructs − releases` for the capabilities of the bound set.
+- **Access fit** — derived from the candidate's bounds on `steps` for the capabilities of the bound set (`spec/cost.md` Rule CT8.2). It measures how far the candidate beats the contracts; a candidate that breaks one is already gone (§6.5.3).
 - **Memory footprint** — total bytes including headers, padding, and discriminator tags, per typical instance.
-- **Locality** — contiguous layouts score higher for fold-heavy use; pointer-chased layouts lose cache lines and amortise across allocator slabs.
+- **Locality** — a property of the candidate's layout: contiguous layouts score higher; pointer-chased layouts lose cache lines and amortise across allocator slabs.
 - **PGO hit rate** — when profile data is present, weight the operations the profile shows dominate.
 
 **Provisional weights and tie threshold (Rule 6.5.4 — resolves C4).** The scoring *mechanism* is normative: a weighted sum over the dimensions above, a tie threshold ε, and a Lipschitz bound `K < ε`. The *numeric values* below are **provisional**. They were chosen before any backend or benchmark existed, and adding candidates to the pool (§6.6) is expected to change them. They become normative only once they are calibrated against measured workloads. Until then they are the defaults every implementation uses, for cross-implementation determinism:
 
 | Dimension | Weight | Range of raw score |
 |---|---|---|
-| Allocation cost | 0.30 | 0–10 (lower allocation cost ⇒ higher raw score) |
-| Access fit | 0.30 | 0–10 (perfect match ⇒ 10; mismatch with workaround ⇒ 0–5) |
+| Allocation cost | 0.30 | 0–10 (derived: `spec/cost.md` Rule CT8.2; lower allocation cost ⇒ higher raw score) |
+| Access fit | 0.30 | 0–10 (derived: `spec/cost.md` Rule CT8.2) |
 | Memory footprint | 0.15 | 0–10 (smaller is higher) |
 | Locality | 0.15 | 0–10 (cache-friendly ⇒ higher) |
 | PGO hit rate | 0.10 | 0–10 (more profile coverage ⇒ higher; 0 if no PGO data) |
@@ -596,11 +610,13 @@ Each candidate's raw scores per dimension are normalised to `[0, 10]` and combin
 
 The **tie threshold ε** is fixed at `ε = 0.5` (5% of the maximum total). Two candidates whose scores differ by less than ε are treated as tied; ties trigger the ambiguity error described in §6.5.5.
 
-The **Lipschitz bound** on the scoring function is `K ≤ 0.4` per single-bound addition: extending a candidate's bound set by one additional capability bound shifts its score by at most 0.4 points. Because `K < ε`, a single-bound extension cannot flip a clear winner into a tie or vice versa — this is what makes representation selection stable under small program changes.
+The **Lipschitz bound** on the scoring function is `K ≤ 0.4` per single-bound addition: extending a candidate's bound set by one additional capability bound shifts its score by at most 0.4 points. Because `K < ε`, a single-bound extension cannot turn a clear winner into a clear loser: two candidates each move by at most `K`, so a margin of at least ε cannot become a margin of at least ε the other way. It can turn a clear winner into a tie, which halts with the ambiguity error of §6.5.5 and so is visible. This is what makes representation selection stable under small program changes: it never silently picks a different representation. (Earlier drafts claimed a clear winner could not even become a tie; that does not follow from `K < ε`.)
 
-PGO data may override per-call-site (within the per-call instantiation) but never globally; the global default weights and ε remain fixed regardless of profile data.
+PGO data may override the choice per origination site but never globally; the global default weights and ε remain fixed regardless of profile data. Profile data also decides which clones of a function are built (`spec/compilation_model.md` Rule CM5.4); that never changes a representation.
 
-Implementations are conformant if they (a) use these defaults for unprofiled code and (b) document any per-call-site PGO override that can deviate from them. Because the values are provisional, a spec revision may change which candidate wins for a given bound set; programs that depend on a specific representation choice should pin it via explicit type annotation rather than relying on scoring. A revision must keep `K < ε`, so the stability property above survives recalibration.
+**The derived dimensions keep `K < ε`.** Allocation cost and access fit are computed by `spec/cost.md` Rule CT8.2 so that one added bound, with everything it inherits, moves each by at most 0.6 raw points, 0.36 in the weighted total. Memory footprint and locality depend on the candidate only.
+
+Implementations are conformant if they (a) use these defaults for unprofiled code and (b) document any per-origination-site PGO override that can deviate from them. Because the values are provisional, a spec revision may change which candidate wins for a given bound set; programs that depend on a specific representation choice should pin it via explicit type annotation rather than relying on scoring. A revision must keep `K < ε`, so the stability property above survives recalibration.
 
 #### 6.5.5 Pick or halt
 
@@ -609,7 +625,7 @@ Implementations are conformant if they (a) use these defaults for unprofiled cod
 
 #### 6.5.6 Commit
 
-The selected representation is recorded on the symbol's denotation as a phase-indexed view (`docs/references/scala3-compiler-reference.md` §4.4). Subsequent passes — match-to-fold desugaring, Perceus insertion, code generation — see only the concrete representation.
+The selected representation is recorded at the origination site as a phase-indexed view (`docs/references/scala3-compiler-reference.md` §4.4), together with its witness: the value witness and the capability tables that code without knowledge of the representation will use (`spec/compilation_model.md` §4). Subsequent passes — match-to-fold desugaring, Perceus insertion, code generation — see the concrete representation wherever the origin is known to them, and the witness elsewhere.
 
 Committing a representation re-checks every abstract constructor-requirement call bound to it (a `Cap.ctor(args)` left unresolved by §8.5) against the chosen variant's fields: a field may refine its requirement parameter (Rule 8.1.a), so an argument accepted by the requirement can be rejected by the representation. Such a rejection is a type error at the call site.
 
@@ -626,19 +642,21 @@ Committing a representation re-checks every abstract constructor-requirement cal
 
 | Runs before | Consumes selection output |
 |---|---|
+| Specialisation (`spec/compilation_model.md` §5) | Clones are keyed by the witnesses of the representations chosen here; selection is not repeated for a clone |
 | Match-to-fold desugaring | Emits auto-derived `fold` per chosen rep |
 | Perceus insertion | Knows heap-vs-stack from chosen rep |
 | Code generation | Emits LLVM IR per chosen rep |
 
 #### 6.5.8 Caching and SCC unification
 
-Bound sets are **canonicalised** (sorted, deduplicated, alias-expanded, `extends`-flattened) and hashed. Two values with the same canonical bound set and quantity context share their selection result — selection is computed once per canonical key.
+Bound sets are **canonicalised** (sorted, deduplicated, alias-expanded, `extends`-flattened) and hashed. Two values of one package with the same canonical bound set, quantity context and lifetime class share their selection result — selection is computed once per canonical key. The canonical order of a bound set is also the order of capability tables among a function's hidden parameters (`spec/compilation_model.md` Rule CM4.3).
 
 Mutually recursive `data` types (§7.5) form a strongly-connected component on the data-dependency graph. Selection runs **once per SCC**, not once per member; all members of a recursive group adopt a unified representation strategy (a co-recursive group with one shared header layout when its values are `Heap`). A future relaxation may allow per-member rep within an SCC when the inter-member references are tail-position only.
 
 #### 6.5.9 Open questions
 
-- **Cross-function rep flow.** A generic function's representation is determined by its signature; concrete reps are monomorphised at each instantiation. Whether two call sites share a monomorphisation is an implementation detail; this spec promises only that selection is consistent within a single function instantiation.
+- ~~**Cross-function rep flow.**~~ Resolved in v0.4.3. A generic function has no representation of its own: its baseline version handles every representation through witnesses, and a clone is compiled for the representations of its key (`spec/compilation_model.md` §3, §5). Which clones exist is not observable (Rule CM5.2).
+- **Ties created by a dependency.** A package that adds a satisfaction can create a tie (§6.5.5) in an importer the next time the importer is compiled. This is a source-level change for the importer, not an ABI change (`spec/compilation_model.md` Rule CM6.7).
 - ~~**Heuristic stability.**~~ Resolved in v0.4.5 — the Lipschitz bound `K ≤ 0.4 < ε = 0.5` is now part of Rule 6.5.4 (the requirement `K < ε` is normative; the numeric values are provisional). Single-bound extensions cannot flip a clear winner.
 - **Stack-allocated recursive data** (deferred). Recursive `data` declarations whose `of` value-params are concrete and bound the recursion depth could be added as a sixth built-in candidate (stack-flat struct), competing alongside the heap-allocated co-recursive group. Targeted for v0.5+ once the pass is implemented and the win is measured against a representative workload.
 
@@ -729,7 +747,7 @@ Bounded of (N, hi=30)       — INVALID: no named application in v0.2
 
 Omitting an arg with no declared default is a compile error.
 
-**Rule 7.3.b (QTT for of value-params).** `of` value-params are quantity 0 by default — type-level, erased at runtime. The compiler materialises them as compile-time constants at access sites (so `b.lo` in `b.lo <= b.value` becomes the statically known constant for `b`'s type). See `spec/quantities.md` for the full rule. Note that the "non-phantom" qualifier present in earlier drafts was redundant — `phantom` only ever applied to type parameters; all `of` value-params are erased uniformly.
+**Rule 7.3.b (QTT for of value-params).** `of` value-params are quantity 0 by default — type-level, erased at runtime: no value stores them. Where the value of the parameter is statically known, the compiler materialises it as a compile-time constant at access sites (so `b.lo` in `b.lo <= b.value` becomes the constant for `b`'s type). A baseline version that is compiled for every value of the parameter and reads it receives it as a hidden argument instead (`spec/compilation_model.md` Rule CM4.4). See `spec/quantities.md` for the full rule. Note that the "non-phantom" qualifier present in earlier drafts was redundant — `phantom` only ever applied to type parameters; all `of` value-params are erased uniformly.
 
 **Rule 7.3.c (Constructor calls).** A variant constructor call passes only the variant's **declared fields** positionally. The values of the data type's `of` value-params come from the type at which the variant is being constructed:
 
@@ -798,13 +816,13 @@ The compiler iterates `step` until no recursive seeds remain. The combination of
 
 1. The result of an `unfold` (or of a conversion the compiler derives from one, such as `to_nat`) is consumed by exactly one `fold`.
 2. That result is used once (quantity 1, `spec/quantities.md` §5): nothing else observes it. Exclusive ownership is not required, because the structure is never built.
-3. Both calls resolve to auto-derived `fold` / `unfold` (Rules 7.4.a, 7.4.b) after monomorphisation.
+3. Both calls resolve to auto-derived `fold` / `unfold` (Rules 7.4.a, 7.4.b) of a data type that is statically known at the call site.
 
 Outside this class the compiler is permitted, but not required, to fuse.
 
-**Rule 7.4.b.2 (Guaranteed specialisation).** When an argument of an auto-derived `fold` or `unfold` is a lambda or a statically known function after monomorphisation, the compiler **must** compile the call with that argument inlined: no closure allocation and no indirect call per step.
+**Rule 7.4.b.2 (Guaranteed specialisation).** When an argument of an auto-derived `fold` or `unfold` of a statically known data type is a lambda or a statically known function, the compiler **must** compile the call with that argument inlined: no closure allocation and no indirect call per step.
 
-These two guarantees are part of code generation (`docs/plans/implementation-plan.md` Phase 4), not of profile-guided optimisation.
+These two guarantees are **mandatory specialisations** (`spec/compilation_model.md` Rule CM5.5). They are part of code generation, not of profile-guided optimisation: they are not charged to the clone budget and hold in every build mode, including `--no-specialise`. In a baseline version whose data type is a type parameter, the data type is not statically known and neither guarantee applies; in a clone of it for a known type both apply again.
 
 **Rule 7.4.c (Functor over the rightmost type parameter).** A *named* `data T of (X1, ..., Xn)` declaration is auto-derived as `Functor of Xn` (the **rightmost type parameter** — right-bias convention) iff:
 
@@ -993,7 +1011,7 @@ AlwaysRight satisfies Either of (L, R):
 
 Calling `Either.right(v)` at a position whose expected type resolves to `AlwaysRight` selects the `right` mapping and constructs an `AlwaysRight(v)`. Calling `Either.left(err)` at the same position has no implementation in `AlwaysRight` — the compiler emits a **runtime panic** at that call site.
 
-**Rule 8.2 (Impossible — runtime panic semantics).** Mapping `impossible as name` records that the satisfying type provides no implementation of the constructor requirement `name`. The compiler does **not** statically verify that the requirement is unreachable on this satisfying type. Calls to `Cap.name(...)` whose resolution targets this satisfying type compile to a runtime panic of the form `panic: impossible constructor 'name' invoked on <SatisfyingType>`.
+**Rule 8.2 (Impossible — runtime panic semantics).** Mapping `impossible as name` records that the satisfying type provides no implementation of the constructor requirement `name`. The compiler does **not** statically verify that the requirement is unreachable on this satisfying type. The satisfying type's capability table holds, for `name`, an entry that panics with `panic: impossible constructor 'name' invoked on <SatisfyingType>` (`spec/compilation_model.md` Rule CM4.2). A call to `Cap.name(...)` that reaches this satisfying type, directly or through a witness, therefore panics.
 
 Static guarantees that the panic is unreachable are the user's responsibility, expressible as `prop` declarations on the surrounding code per `spec/properties.md`. For instance:
 
@@ -1003,7 +1021,7 @@ fn unwrap_right(x: AlwaysRight of (L, R)) -> R =
     x.fold((_) -> unreachable, (r) -> r)
 ```
 
-Why runtime panic rather than static rejection? Static reachability analysis across `satisfies` declarations is non-trivial — a closed-world reachability check would constrain how third-party `satisfies` declarations interact, and an open-world check requires whole-program analysis. Runtime panic gives the same operational guarantee (the impossible constructor never returns a real value) without forcing the typer into expensive reachability reasoning. Users who want a static guarantee can add a `prop` (`spec/properties.md`); a verified prop discharges the panic per Rule P9.2.
+Why runtime panic rather than static rejection? Static reachability analysis across `satisfies` declarations is non-trivial. Satisfactions are a closed world only per link unit (§8.4), so a static check would have to run when packages are linked, over calls made through witnesses. Runtime panic gives the same operational guarantee (the impossible constructor never returns a real value) without forcing the typer into expensive reachability reasoning. Users who want a static guarantee can add a `prop` (`spec/properties.md`); a verified prop discharges the panic per Rule P9.2.
 
 ### 8.3 Method-body form
 
@@ -1029,7 +1047,9 @@ use std.maybe.Maybe satisfies Optional
 
 This single declaration imports both `Maybe` (the type) and the satisfaction binding it to `Optional`. Without the `satisfies` clause, only the type is imported; satisfaction is invisible.
 
-There is **no global coherence requirement**. Different modules can map the same data type to different capabilities, or even map the same `Cap.ctor` differently — as long as no single use site has more than one resolution in scope (otherwise §8.5 ambiguity applies).
+**Visibility is scoped; the satisfaction is unique (Rule 8.4).** A satisfaction is usable only where a `use` brings it into scope, so different modules may see different sets of satisfying types for one capability, and `Cap.ctor` may resolve to different data types in different modules — as long as no single use site has more than one resolution in scope (otherwise §8.5 ambiguity applies).
+
+What may **not** differ is the satisfaction of one pair: within a link unit there is at most one `T satisfies C` for a given data type `T` and capability `C` with its `of` arguments (`spec/compilation_model.md` Rule CM6.6). Two packages that each declare one cannot be linked together. Without this, a value built under one satisfaction could be used under another — a set ordered by one `Ord` and searched by another — and values carry no record of the satisfaction they were built under. Earlier drafts had no coherence requirement at all.
 
 ### 8.5 Constructor resolution
 
@@ -1045,6 +1065,8 @@ A call `Cap.ctor(args...)` resolves to a concrete data constructor as follows:
 5. If multiple match, the typer halts with an ambiguity error and emits copy-pasteable disambiguation suggestions per `docs/plans/implementation-plan.md` §"Ambiguity resolution via compiler suggestions."
 
 Direct data construction (`Maybe.Just(42)`) bypasses resolution: it always produces a value of the named data type, regardless of which caps are in scope.
+
+**Results typed by a capability bound.** When the expected type in step 2 is a function's return type, the outcome decides who chooses the representation of the result: if every returned value comes from a constructor call that this section leaves unresolved, the caller chooses and passes the witness; if a call resolves here, or the body constructs data directly, the function chooses and returns the witness with the value (`spec/compilation_model.md` Rule CM4.5).
 
 #### 8.5.1 Refinement-narrowed expected types (Rule 8.5.1) — resolves X1, L1
 
@@ -1125,6 +1147,8 @@ Subtyping in Fixed is intentionally narrow:
 ## 11. Open questions
 
 (All OQ1–OQ6 from v0.1 are resolved in this version; their resolutions are folded into the relevant sections above. OQ7 is pre-resolved and deferred to `spec/properties.md`.)
+
+- **OQ-T2 — Type variables of variant fields.** Rule 4.1 lets a variant field introduce a type variable (`RGB(red: N is Numeric, green: N, blue: N)` in a `data Color` that has no `of` clause; `spec/stdlib.md` has fields with anonymous bounds). It is not stated whether such a variable is an implicit parameter of the data type or is chosen per value. If per value, each cell must store the witness of the variable (`spec/compilation_model.md` OQ-CM4), and Rules 5.9, 7.4.c and 7.4.d, which speak of parameters declared in `of`, need a second case.
 
 **Pre-resolved deferrals (lift into the indicated spec doc when drafted):**
 

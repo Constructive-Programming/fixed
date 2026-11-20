@@ -1,8 +1,16 @@
 # Fixed Quantities (QTT)
 
-**Status:** Draft v0.4
+**Status:** Draft v0.5
 **Specifies:** quantity and demand inference for Fixed v0.4.4 source.
 **Last revised:** 2026-11-20
+
+**Changes from v0.4.**
+- Demands are inferred on the **baseline version** of each function, which is polymorphic and shared (`spec/compilation_model.md` §3), and again on each clone. The statement that Core has one instance per type is withdrawn (§4).
+- Rule Q9.3 rewritten: the **shared** version is the function's baseline and always exists; an **exclusive** version is a clone, built when the clone budget allows. The version cap and the rule that a caller copies beyond it are withdrawn; OQ-Q7 is closed. Copying the demanded part remains only in the shared entry of a `fip fn`.
+- New Rule Q4.1.e: a capability method requirement has no body and so no inferred demand; calls through a capability table follow a fixed convention.
+- Cost props join `fip` as the ways a program states something about ownership (Rule Q4.1, `spec/cost.md`).
+- Rule Q5.12: a default body is analysed once; the per-satisfaction pass happens only in clones.
+- Stale statements corrected: the semiring table no longer says quantity 1 enables in-place update; the pass table in §4 describes the quantity pass only; the scope list and cross-references no longer say prop bodies are "checked at quantity 0".
 
 **Changes from v0.3.**
 - **Demands** (§4.1) decide ownership at runtime: `0`, `read`, `own` or `exclusive`, per part of a value. A parameter's demand is a contract. A caller that cannot pass an exclusively owned value to an `exclusive` parameter calls the callee's **shared version** instead (§9.3). Quantities (§3, §5) stay, but only count occurrences: erasure, closure call counts, `resume` and diagnostics.
@@ -26,19 +34,21 @@ This document specifies how the compiler assigns **QTT quantities** (0, 1, ω) t
 - What the three quantities are (§3) and how they compose (§9).
 - How quantity inference works as a compiler pass (§4).
 - What rule applies at every syntactic position where a binding is introduced (§5).
-- The runtime semantics of each quantity tier — erasure (§6), linearity (§7), unrestricted/RC (§8).
-- How default-bodied cap methods (Rule 6.1 in type_system.md) inherit and re-check quantities at satisfying types (§10).
+- What follows from them at run time — erasure (§6), exclusivity (§7), shared values (§8).
+- How default-bodied cap methods (Rule 6.1 in type_system.md) get their quantities (Rule Q5.12).
 
 It does **not** specify:
 
-- Placement (lifetime classes, regions), the Perceus RC algorithm, its dup/drop placement, and reuse analysis — see `spec/memory_management.md`. Quantity inference also computes the escape facts and lifetime classes that document needs (`spec/memory_management.md` §20); their rules live there.
+- Placement (lifetime classes, regions), the Perceus RC algorithm, its dup/drop placement, and reuse analysis — see `spec/memory_management.md`. Demand inference on Core (§4.1) also computes the escape facts and lifetime classes that document needs (`spec/memory_management.md` §20); their rules live there.
 - Effect-handler semantics in detail — see `spec/effects.md`. (Only `resume`'s quantity is specified here.)
-- Property-verification mechanics — see `spec/properties.md`. (Only that `prop` bodies are checked at quantity 0 is specified here.)
+- Property-verification mechanics — see `spec/properties.md`. (Only that `prop` bodies are excluded from the compiled artifact is specified here, Rule Q5.5.)
+- The baseline version, witnesses, clones and the clone budget — see `spec/compilation_model.md`. Cost contracts — see `spec/cost.md`.
 - Pattern-matching desugaring — see `spec/pattern_matching.md`.
 
 ## 2. Dependencies and theoretical basis
 
-- `spec/syntax_grammar.ebnf` v0.4.1 — every syntactic form referenced.
+- `spec/syntax_grammar.ebnf` v0.4.10 — every syntactic form referenced.
+- `spec/compilation_model.md` v0.1 — the baseline version on which demands are inferred, and the clones Rule Q9.3 refers to.
 - `spec/type_system.md` v0.4.1 — Rule 4.1 (typevar introduction), §5.9 (phantom inference), Rule 6.1 (default method bodies), §7.3.b (`of` value-params at the type level).
 - Atkey, *"Syntax and Semantics of Quantitative Type Theory"*, LICS 2018. The mathematical model.
 - Brady, *"Idris 2: Quantitative Type Theory in Practice"*, ECOOP 2021. A production implementation Fixed broadly follows for the inference shape.
@@ -55,7 +65,7 @@ Three quantities form a commutative **semiring** over `{0, 1, ω}`:
 | Symbol | Name | Runtime meaning |
 |---|---|---|
 | **0** | Erased | Generates no runtime code; exists only at the type level. |
-| **1** | Linear | Used exactly once; enables in-place mutation (FBIP) and skips RC. |
+| **1** | Linear | Used exactly once. This counts occurrences only: in-place reuse and the absence of RC depend on exclusive ownership (§4.1, Rule Q4.1.d), not on quantity 1. |
 | **ω** | Unrestricted | Freely shared; reference-counted only if its lifetime class is `Heap` or `Region` (`spec/memory_management.md` §3.2). |
 
 ### 3.1 Addition (combining usages)
@@ -99,9 +109,9 @@ Identity: `1`. `0` is annihilator.
 Two analyses run, with different inputs:
 
 - **Quantities** (§3, §5) count occurrences on the typed tree, after the typer. They give erasure, closure call counts (Rule Q5.7), the `resume` check (Rule Q5.11), linear effects and the unused-binding warning, all with source positions.
-- **Demands** (§4.1) are data flow over Core, the backend IR, after lowering and monomorphisation. Core sees every allocation and every compiler-generated member (derived `fold`, `unfold`, `map`), and one instance per type, which is where the shared versions of §9.3 are chosen. Lowering carries source spans into Core, so demand diagnostics (`E110`) still point at source. Representation selection consumes demands and therefore also runs on Core (`spec/memory_management.md` §20.3).
+- **Demands** (§4.1) are data flow over Core, the backend IR, after lowering. Core sees every allocation and every compiler-generated member (derived `fold`, `unfold`, `map`). Each function has one **baseline version** in Core, polymorphic in its type parameters (`spec/compilation_model.md` Rule CM3.1); demands are inferred on it, and inferred again on every clone the specialiser builds, where known types and ownership make them more precise (§9.3). Lowering carries source spans into Core, so demand diagnostics (`E110`) still point at source. Representation selection consumes demands and therefore also runs on Core (`spec/memory_management.md` §20.3).
 
-The rest of this section describes the quantity analysis as originally designed. Quantity inference is a **Recheck-style phase** (see `docs/references/scala3-compiler-reference.md` §5.4). It runs:
+The rest of this section describes the **quantity** analysis. Quantity inference is a **Recheck-style phase** (see `docs/references/scala3-compiler-reference.md` §5.4). It runs:
 
 | Runs after | Provides input |
 |---|---|
@@ -111,14 +121,12 @@ The rest of this section describes the quantity analysis as originally designed.
 
 | Runs before | Consumes output |
 |---|---|
-| Representation selection (§6.5) | Quantity context |
-| Match-to-fold desugaring | Quantity-aware desugar |
-| Perceus insertion | dup/drop sites driven by quantity ω vs 1 vs 0 |
-| Code generation | Erased bindings excluded |
+| Lowering to Core | Erased bindings (quantity 0) excluded; closure call counts (Rule Q5.7) |
+| Demand inference on Core (§4.1) | Occurrence counts; the demands, not the quantities, then drive representation selection, reuse and `dup` / `drop` placement (`spec/memory_management.md` §9) |
 
-The pass is **bidirectional**: the typer carries an *expected quantity* (a prototype) down the tree, and synthesises an *actual quantity* up. A binding's quantity is the actual quantity at the point of declaration. Mismatches between expected and actual yield typed errors per §6.1, §7.1, §8.1.
+The pass is **bidirectional**: the typer carries an *expected quantity* (a prototype) down the tree, and synthesises an *actual quantity* up. A binding's quantity is the actual quantity at the point of declaration. Mismatches between expected and actual yield typed errors per §6.1 and, for declared obligations, §7.1.
 
-The pass is **whole-function**: it sees a function's body in its entirety to compute usage counts. Cross-function quantity propagation goes through the function signature (each parameter has its inferred quantity baked into the signature; call sites consume arguments at that quantity).
+The pass is **whole-function**: it sees a function's body in its entirety to compute usage counts. Cross-function quantity propagation goes through the function signature: each parameter's inferred quantity is part of it. What a call site must hand over is the parameter's demand, not its quantity (Rule Q5.2).
 
 ### 4.1 Demands (Rule Q4.1)
 
@@ -147,7 +155,9 @@ and only until the first use that keeps it (`own`) while the binding stays live.
 
 **Rule Q4.1.d (relation to quantities).** Quantity 0 and demand `0` coincide. Otherwise the two are independent: a binding of quantity 1 may demand `read` (one comparison), and a binding of quantity ω may be passed to an `exclusive` parameter at its last use.
 
-Demands are inferred, never written; a function states a demand only through the `fip` contract (§7.5).
+**Rule Q4.1.e (members without a body).** A capability method requirement has no body, so no demand can be inferred for it. A call through a capability table, through a closure whose identity is unknown, or of an effect operation follows the fixed convention of `spec/compilation_model.md` Rule CM4.6: every argument is passed under `own` on the shared pointer, and the exclusive pointer may be used only by a caller that exclusively owns every argument in every part. A satisfying type's method keeps its own inferred demands for callers that know the type; the table entry adapts it to the convention.
+
+Demands are inferred, never written. A program states something about ownership only through a contract: `fip` (§7.5), which requires `exclusive` on the parts a function reuses, and the cost props of `spec/cost.md`, whose `releases` term is defined on `exclusive` parts.
 
 ## 5. Quantity inference rules
 
@@ -275,7 +285,7 @@ Multi-shot handlers (where `resume` may be called any number of times) are not s
 When a cap method carries a default body (Rule 6.1 in type_system.md), the body's quantity inference runs in two passes:
 
 1. **At the cap declaration:** the body is analysed against the cap's abstract `Self`, treating each `Self.fn` constructor *requirement* and abstract method *requirement* as a function with worst-case (quantity-ω) parameter quantities. This produces a *quantity skeleton* for the default body.
-2. **At each satisfying type:** the satisfying type's concrete method quantities are substituted into the skeleton, and the body is re-checked. If the satisfying type's methods have quantities tighter than ω, the default body may inherit tighter quantities for its captured arguments.
+2. **Once as a baseline version; again only in a clone:** the default body is compiled once, as a baseline version that calls the capability's requirements through the table of `Self` (`spec/compilation_model.md` Rule CM4.2). Its demands there are those of the convention (Rule Q4.1.e). Only when the specialiser clones the default body for a known satisfying type are the type's concrete method demands substituted and the body analysed again; the clone may then borrow or reuse where the baseline could not.
 
 If a satisfying type provides an explicit `satisfies`-block override (an `InstanceMethodDef`), the default body is not used; quantities are computed entirely from the override.
 
@@ -378,7 +388,7 @@ If OQ-Q5 closes the other way (effect rows do not participate in QTT quantity), 
 
 ### 7.5 Demanding exclusivity: `fip fn`
 
-Quantities and demands are inferred, so most programs never state one. A function that must run in place states that with the `fip fn` contract (`spec/memory_management.md` §18). The compiler then rejects the function (`error[E110]`) if inference finds an allocation on the heap, a reference-count operation or an unbounded data-stack use. Every parameter such a function reuses must be `exclusive` (Rule MM18.3), which is where Rule Q7.1.1 gets a declared obligation to check. A `fip` function has no shared version, so a caller holding a shared value copies the demanded part into it (§9.3). This resolves OQ-Q2.
+Quantities and demands are inferred, so most programs never state one. A function that must run in place states that with the `fip fn` contract (`spec/memory_management.md` §18). The compiler then rejects the function (`error[E110]`) if inference finds an allocation on the heap, a reference-count operation or an unbounded data-stack use. Every parameter such a function reuses must be `exclusive` (Rule MM18.3), which is where Rule Q7.1.1 gets a declared obligation to check. A `fip` function has one body and no shared body; a caller holding a shared value calls its shared entry, which copies the demanded part and then calls the body (§9.3). This resolves OQ-Q2.
 
 ## 8. Shared values
 
@@ -417,7 +427,9 @@ Arguments are evaluated **left to right**, and a call's receiver before its argu
 
 ### 9.3 Shared versions (Rule Q9.3)
 
-When a caller passes a shared value to an `exclusive` parameter, it calls the callee's **shared version** instead: an instance compiled for shared input on that parameter. The shared version allocates the cells it rebuilds, shares the parts it does not touch, and for `Heap` input may still reuse after a runtime `rc == 1` test (Rule Q7.2). The caller knows statically which kind of value it holds, so the choice is made at compile time.
+Every function has a **shared version**: its baseline version (`spec/compilation_model.md` Rule CM3.1), compiled for input the caller does not exclusively own. The shared version allocates the cells it rebuilds, shares the parts it does not touch, and for `Heap` input may still reuse after a runtime `rc == 1` test (Rule Q7.2). It is always a correct callee.
+
+An **exclusive version** is a clone of it, compiled for a caller that exclusively owns some of the `exclusive` parts: there reuse is unconditional. When a caller passes an exclusively owned value to an `exclusive` parameter and that clone exists, it calls the clone; otherwise it calls the shared version. The caller knows statically which kind of value it holds, so the choice is made at compile time. A call through a capability table or a closure makes the same choice between two code pointers (Rule Q4.1.e).
 
 ```
 fn bump(xs: List of u64) -> List of u64 =
@@ -431,13 +443,15 @@ fn main() -> () with Console =
     Console.print_line(a.show())
 ```
 
-Had `main` printed `a` before calling `bump`, the call would be `a`'s last use, `a` would still be exclusively owned, and the exclusive version would overwrite `a`'s cell in place.
+Had `main` printed `a` before calling `bump`, the call would be `a`'s last use, `a` would still be exclusively owned, and the exclusive version of `bump`, if built, would overwrite `a`'s cell in place.
 
-Versions are built only for the combinations of exclusive and shared parameters actually called, as monomorphisation builds only the type instances used. A function has at most a fixed number of versions (implementation-defined; 4 is the reference value). Beyond that cap, and for calls into a `fip fn` (which has no shared version), the caller **copies the demanded part** of a shared value and calls the exclusive version: the cells the demand covers are copied, the parts it does not cover are shared. Copying is the strategy Neut applies to every share (`spec/memory_management.md` §7.3); Fixed applies it only here. Values are immutable, so a copy is never observable. Every copy site is reported by `--explain-memory` (`spec/memory_management.md` §19).
+**Which exclusive versions exist.** An exclusive version is one axis of a clone key, beside known types and classes (`spec/compilation_model.md` Rule CM5.1). Clones are built for the combinations that call sites request, in the order of their score, while the function's clone budget lasts (Rules CM5.3, CM5.4). A package also exports the ownership combinations of its public functions within the same budget (Rule CM6.4). A combination that was not built costs nothing but the opportunity: the caller calls the shared version. Earlier drafts capped the number of versions at four and made the caller copy beyond the cap; both are withdrawn.
+
+**Copying.** A `fip fn` has no shared body, because a body that tested counts or allocated would not be `fip`. Its shared entry **copies the demanded part** of a shared argument and calls the one body: the cells the demand covers are copied, the parts it does not cover are shared (`spec/compilation_model.md` Rule CM5.5). Copying is the strategy Neut applies to every share (`spec/memory_management.md` §7.3); Fixed applies it only here. Values are immutable, so a copy is never observable. Every copy is reported by `--explain-memory` (`spec/memory_management.md` §19).
 
 ### 9.4 Aliasing (Rule Q9.4)
 
-An argument meets an `exclusive` demand only if no other argument or capture of the same call reaches the same value or a part of it. `f(a, a)`, `f(xs, xs.tail)`, and `f(a, () -> a.length())` with `f`'s first parameter `exclusive` all call the shared version: otherwise the callee could overwrite what it reads through the other argument.
+An argument meets an `exclusive` demand only if no other argument or capture of the same call reaches the same value or a part of it. `f(a, a)`, `f(xs, xs.tail)`, and `f(a, () -> a.length())` with `f`'s first parameter `exclusive` all call the shared version (or, through a table or closure, the shared pointer): otherwise the callee could overwrite what it reads through the other argument.
 
 ## 10. Worked examples (from `examples/*.fixed`)
 
@@ -502,8 +516,8 @@ let result = x.value + x.lo                     // x.value: runtime read; x.lo: 
 
 - **OQ-Q3 — Closure-of-closure quantities.** Rule Q5.7's multiplication composes through one closure layer. For nested closures (a closure that returns a closure that captures the outer scope), the composition is straightforward by induction, but worked examples will reveal corner cases. Add concrete worked examples in v0.2 of this doc once the typer is implemented.
 
-- **OQ-Q4 — Quantity polymorphism.** A truly generic `id : T -> T` could be quantity-polymorphic — the parameter's quantity equals the call site's. Idris 2 has limited quantity polymorphism; Fixed has so far inferred everything. Shared versions (Rule Q9.3) give ownership polymorphism by monomorphisation; whether anything beyond that is needed waits for benchmark code.
-- **OQ-Q7 — Version cap.** Rule Q9.3 caps versions per function (reference value 4) and copies beyond it. The right cap, and whether large functions should get only a shared version, are to be measured (`spec/memory_management.md` §21).
+- **OQ-Q4 — Quantity polymorphism.** A truly generic `id : T -> T` could be quantity-polymorphic — the parameter's quantity equals the call site's. Idris 2 has limited quantity polymorphism; Fixed has so far inferred everything. The shared baseline with exclusive clones (Rule Q9.3) gives ownership polymorphism without syntax; whether anything beyond that is needed waits for benchmark code.
+- ~~**OQ-Q7 — Version cap.**~~ Closed in v0.5. There is no version cap: exclusive versions are clones under the one size budget of `spec/compilation_model.md` Rule CM5.3, and a function larger than the budget has only its shared version. The budget's value is to be measured (OQ-CM3).
 
 - **OQ-Q5 — Effect operations and quantities.** Effect ops (e.g., `Console.print_line`) currently follow Rule Q5.2. Whether *effect rows* themselves participate in quantity (e.g., a "linear effect" that may be performed at most once) is a separate research question, related to OQ-Q1. The proposed semantics live in `spec/effects.md` §3.5 (re-opened OQ-E5 in v0.2.1) and stand non-normative pending closure of this question.
 
@@ -515,9 +529,11 @@ let result = x.value + x.lo                     // x.value: runtime read; x.lo: 
 |---|---|
 | `spec/syntax_grammar.ebnf` | Syntactic forms whose bindings are governed by these rules |
 | `spec/type_system.md` | Rule 4.1, §5.9, Rule 6.1, §7.3.b — type-level rules referenced here |
-| `spec/properties.md` (TBD) | Static-vs-PBT verification of `prop` bodies; this doc only states they're checked at quantity 0 (Rule Q5.5) |
-| `spec/effects.md` (TBD) | Effect-row composition; this doc fixes only `resume`'s quantity (Rule Q5.11) |
-| `spec/pattern_matching.md` (TBD) | Match desugaring; pattern bindings (Rule Q5.8) follow standard rules |
+| `spec/properties.md` | Static-vs-PBT verification of `prop` bodies; this doc only states they are excluded from the compiled artifact (Rule Q5.5) |
+| `spec/effects.md` | Effect-row composition; this doc fixes only `resume`'s quantity (Rule Q5.11) |
+| `spec/pattern_matching.md` | Match desugaring; pattern bindings (Rule Q5.8) follow standard rules |
 | `spec/memory_management.md` | Demand and exclusivity × lifetime class decide RC and reuse: exclusive → move and reuse in place; shared ∧ `Heap`/`Region` → dup/drop and `rc == 1` reuse; `0` → erased. M10 also computes the escape facts and classes of §20 there |
+| `spec/compilation_model.md` | The baseline version demands are inferred on; clones (Rule Q9.3); the table convention (Rule Q4.1.e) |
+| `spec/cost.md` | Cost props: `releases` is defined on `exclusive` parts |
 | `docs/references/scala3-compiler-reference.md` | The Recheck pattern (§5.4) that this pass adopts |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `qtt/QuantityChecker.scala` (Recheck phase) |

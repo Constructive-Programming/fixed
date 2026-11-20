@@ -34,7 +34,7 @@ Phase 3 is split into Part A (this plan) and Part B (separate sub-plans, sketche
 - **Perceus dup/drop insertion** — Phase 4.
 - **Standard library** (`library/src/main/fixed/`) — Phase 5. The Phase 3 typer must accept stdlib-shaped capability declarations (`Optional`, `List`, `Numeric`, …) but the actual library bodies don't ship until later.
 - **Inline expansion** — not a Fixed language feature; if needed at all, driven by PGO at Phase 6.
-- **TASTy-equivalent serialisation** — premature before multi-module compilation.
+- **Serialisation of compiled packages** — specified as the interface tier and the optional body tier of `spec/compilation_model.md` §7; not built yet. The typed tree itself is never serialised (Rule CM7.4).
 - **LSP integration** — Phase 2.1's `ParseResult` API is the seam; extending it to a typed-result API is left to a future phase once a concrete LSP consumer exists.
 
 ### 1.3 Milestones (ordered)
@@ -57,7 +57,7 @@ Phase 3 is split into two parts: **Part A — Base typer (M1–M5, this plan)** 
 
 | # | Milestone | Sub-plan | Sketch |
 |---|---|---|---|
-| M6 ✅ | Capability closure (obligations discharged after typing, not a recheck walk) | `phase-3.1-capability-closure.md` | `extends` chain computed; `satisfies` scope resolved at every use site; cross-module coherence per §7.4.1 |
+| M6 ✅ | Capability closure (obligations discharged after typing, not a recheck walk) | `phase-3.1-capability-closure.md` | `extends` chain computed; `satisfies` scope resolved at every use site; coherence within one compilation unit per §7.4.1 (per link unit once packages exist, `spec/compilation_model.md` Rule CM6.6) |
 | M7 ✅ | Effect inference (inline rows, not a recheck; see sub-plan) | `phase-3.2-effects.md` | With-clauses inferred; `do`/`handle` rows propagate; unhandled effect at `main` is `error[T015]` |
 | 4.0 ✅ | Naive backend slice. Not a typer milestone; listed here because it runs **before M10** (`implementation-plan.md` Phase 4.0) | `phase-4.0-backend-slice.md` | Examples `01` and `03` plus five benchmark programs compile to LLVM IR and run, everything boxed and reference-counted. `04` and `05` join as their blockers close; `02` and `06` are left out. Gives the baseline that M10 and M11 are measured against |
 | M9 | Property verifier recheck | `phase-3.3-properties.md` | Princess (per §5.6.1) discharges QF_LIA + propositional; rest queued as PBT obligations |
@@ -877,7 +877,7 @@ Per `spec/type_system.md` §6.5, every cap classifier (Sum / Product / Recursive
 - Sum cap → tagged union (small variants → 1 byte tag + variant payload; large → boxed).
 - Product cap → flat struct (field layout per spec §6.6).
 - Recursive cap → heap-allocated; auto-derived `fold` → tail-recursive C function.
-- Capability-only cap → vtable OR monomorphised (per call-site profiling input — initially monomorphised).
+- Capability-only cap → the baseline version passes witnesses (capability tables); clones for known types are chosen by the score under the per-function budget, later with profile data (`spec/compilation_model.md` §4–§5).
 - Marker / Refinement cap → zero-sized at runtime; type-only.
 
 Output: a `ReprMap: Map[SymbolId, Repr]`. Phase 4 codegen consumes it directly. Verification at M11 is via `RepresentationSelectorSuite` rather than a CLI flag — a `--print:X` family is a separate scoping question and not required for Phase 3.
@@ -963,23 +963,23 @@ Per `spec/type_system.md` §6.3.0, the same is allowed at any TypeExpr position 
 3. Module scope.
 4. Top-level / "prelude" scope.
 
-The first match wins. Multiple matches in the same scope are an ambiguity error (M6, T011). Unlike Scala implicit search, there is no global coherence check — a module can have its own conflicting satisfactions as long as they don't co-exist in the same use site's scope.
+The first match wins. Multiple matches in the same scope are an ambiguity error (M6, T011). Visibility is scoped: a satisfaction is usable only where a `use` brings it into scope. Uniqueness is per link unit: within one link unit there is at most one satisfaction per (data type, capability) pair (`spec/compilation_model.md` Rule CM6.6).
 
 #### 7.4.1 Soundness of local-scope satisfies
 
-The "no global coherence" choice is a real divergence from Scala/Haskell/Rust. Haskell's orphan-instance problem and Rust's coherence rules exist precisely because a value of type `Maybe[Int]` viewed through `Optional` in module A and viewed through a *different* `Optional` satisfaction in module B can satisfy different invariants — passing the value across the module boundary breaks reasoning. Fixed must address this; the choice is not free.
+Scoped visibility on its own would be a real divergence from Scala/Haskell/Rust. Haskell's orphan-instance problem and Rust's coherence rules exist precisely because a value of type `Maybe[Int]` viewed through `Optional` in module A and viewed through a *different* `Optional` satisfaction in module B can satisfy different invariants — passing the value across the module boundary breaks reasoning. Fixed must address this; the choice is not free.
 
 **The Fixed soundness model (v1):**
 
-1. **Public function signatures pin satisfactions at the boundary.** When a function with parameter type `M is Optional` is called from somewhere whose scope has a *different* in-scope `Optional` satisfaction, the *caller's* satisfaction is the one used for the call site's resolution. The callee body — typed under *its own* satisfaction — sees the same operations (constructors, methods) but the runtime mappings can differ. This is sound because every cap method's signature is fixed; the implementation is opaque to the caller.
+1. **A call uses the one satisfaction of its pair.** When a function with parameter type `M is Optional` is called, the caller passes the capability table of the argument's type for `Optional` (`spec/compilation_model.md` Rule CM4.2), and the callee uses the value through that table. Within a link unit there is one satisfaction per (data type, capability) pair (Rule CM6.6), so the caller and the callee cannot disagree about the mapping; scopes differ only in which satisfactions they can see. Earlier drafts allowed the two scopes to hold different satisfactions for the same pair and relied on signatures being fixed; that is withdrawn.
 
 2. **Value passing across satisfaction boundaries is by cap interface, not by satisfaction.** A `Maybe[Int]` value carries no "I was created under satisfaction S" tag; it's just data. If two reachable scopes within one compilation unit export the same `(T, C)` pair with different satisfactions, the importing scope gets `error[T012]: incoherent satisfaction of C for T from scopes A and B`. M6 enforces this within a compilation unit by walking the transitive `use` graph.
 
-3. **"No global coherence" is bounded**: within a single module's transitive imports, satisfactions must agree on shape. The "first match wins" rule in §7.4 applies only when multiple bindings give the *same* satisfaction (e.g. via different import paths) — not when they give different satisfactions.
+3. **Coherence is per link unit**: within one link unit, and therefore within a single module's transitive imports, there is at most one satisfaction per `(T, C)` pair. The "first match wins" rule in §7.4 applies only when multiple bindings give the *same* satisfaction (e.g. via different import paths) — not when they give different satisfactions.
 
 4. **What v1 actually checks** (single-module, no separate compilation): M6's coherence check operates on the in-memory `SatisfiesScope` graph built from the module's `use` declarations and stdlib prelude. With one source file in v1, the check fires on stdlib-import disagreements and on multiple `use ... satisfies ...` bindings within the same file. There are no compiled-module boundaries to traverse — this is **intra-compilation-unit coherence**, not cross-module coherence in the separate-compilation sense.
 
-5. **Separate compilation, deferred**: Phase 5+ adds separate compilation. At that point M6 will need either (a) to bake the satisfaction identity into the compiled cap-value representation (one bit per satisfaction binding per cap) so cross-module value flows can be checked at link time, or (b) to require all modules in a build to agree on a single satisfaction per `(T, C)` pair (Rust's choice). The decision is deferred. The v1 check above is the intra-unit substrate that will compose with whichever choice is made.
+5. **Separate compilation, decided**: separate compilation is by package (`spec/compilation_model.md` §6). Coherence is per link unit: all packages linked together must agree on a single satisfaction per `(T, C)` pair, otherwise `error[T012]` naming both (Rule CM6.6). The check reads the satisfactions each package's interface lists and needs no bodies; values carry no satisfaction identity. The v1 check above is the intra-unit part of that rule and is not built across packages yet.
 
 References: Haskell orphan-instance discussion (`OverlappingInstances`, `IncoherentInstances`); Rust RFC 1023 (Rebalancing Coherence); `spec/type_system.md` §6.2 on `extends` resolution.
 
@@ -1030,7 +1030,7 @@ Earlier Phase 2 + 2.1 milestones each took 1–2 weeks of calendar time when mea
 
 | Sub-plan | Estimate | Risk drivers |
 |---|---|---|
-| `phase-3.1-capability-closure.md` (M6) | 1.5–2 weeks | Cross-module coherence check (§7.4.1) is new design |
+| `phase-3.1-capability-closure.md` (M6) | 1.5–2 weeks | Coherence check within one compilation unit (§7.4.1); the per-link-unit check from package interfaces (Rule CM6.6) comes with packages |
 | `phase-3.2-effects.md` (M7) | 1.5–2 weeks | Effect-row unification + handler reentry semantics |
 | `phase-3.3-properties.md` (M9) | 2–3 weeks | Princess integration + counterexample formatting + the `forall (bindings). pre ==> body` translation |
 | `phase-3.4-qtt.md` (M10) | 1.5–2 weeks | Linearity + erasure check, 0-quantity inference for phantom params |

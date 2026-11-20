@@ -9,6 +9,8 @@ evaluation order, shared versions, aliasing), `spec/memory_management.md` v0.3 (
 §13, §14.1, §17, §18, §19, §20)
 **Measured against:** `docs/baselines/runtime-2026-11-19.md`
 
+**Superseded in part (2026-11-20).** This plan is a record of what 3.4 built, and some of its statements no longer describe the target. Demands inferred on monomorphic Core with "one instance per type" are replaced by a polymorphic baseline version per function (`spec/compilation_model.md` §3). The cap of 4 versions, with the caller copying beyond it, is replaced by the clone budget of Rule CM5.3; copying remains only in the shared entry of a `fip fn` (Rule CM5.5), and "no shared version for a `fip fn`" is replaced by that shared entry (Rule CM5.5). "Signature facts live in the unit" is replaced by the interface tier (Rule CM7.1). The plan that changes the code is `docs/plans/phase-4.1-baseline-specialiser.md`.
+
 ## 1. Goal
 
 After M10, every binding and every function of a checked unit has the record of

@@ -1,8 +1,10 @@
 # Fixed Memory Management
 
-**Status:** Draft v0.3
-**Specifies:** how the compiler places, frees and reference-counts runtime values for Fixed v0.4.4 source: lifetime classes, data-stack regions, counted regions, the Perceus heap, destinations, class witnesses, reuse (FBIP), borrowing, effect-handler memory, structured parallelism, the `fip` contract and the memory report.
+**Status:** Draft v0.4
+**Specifies:** how the compiler places, frees and reference-counts runtime values for Fixed v0.4.4 source: lifetime classes, data-stack regions, counted regions, the Perceus heap, destinations, value witnesses, reuse (FBIP), borrowing, effect-handler memory, structured parallelism, the `fip` contract and the memory report.
 **Last revised:** 2026-11-20
+
+**Changes from v0.3.** The compilation model is now `spec/compilation_model.md`: every function has a polymorphic **baseline** version that receives witnesses, and specialised **clones** are built on top of it under one size budget. In this document: the class witness of Rule MM7.3 becomes the value witness, gains `copy` and `kind`, and is the default instead of a boundary case; Rule MM7.4 defers to the clone rules; the cell header carries a reference map (Rule PR3.1); the version cap and copying beyond it are withdrawn (Rule PR5.5); a `fip fn` gains a copying shared entry and may be polymorphic (§18); `fip(n)` and `fip` on method requirements are specified (Rule MM18.5, resolving OQ-MM1); the signature facts of Rule MM20.2 are the core of the package interface. The callee, not the caller, evacuates at a floor entry (Rule MM5.5). Stale wording that still said "quantity" where ownership is meant was corrected.
 
 **Changes from v0.2.** Reference-count traffic and reuse are decided by **demands** and **exclusive ownership** (`spec/quantities.md` §4.1), not by quantity 1: a binding used once is not necessarily a value owned once. Reuse is hybrid: unconditional for exclusively owned values, after a runtime `rc == 1` test for shared `Heap` values (Rule PR6.3). A caller holding a shared value calls the callee's shared version, or copies the demanded part beyond the version cap and into `fip` functions (`spec/quantities.md` Rule Q9.3). Borrowing is the `read` demand (§13). Closures whose parameter is `exclusive` carry two code pointers (Rule PR5.6). Escape facts, classes and demands are computed on Core after lowering (§20.3).
 
@@ -12,12 +14,12 @@
 
 This document specifies:
 
-- The lifetime classes and the quantity × class matrix (§3).
+- The lifetime classes and the ownership × class matrix (§3).
 - The region-containment invariant that keeps every pointer valid (§4).
 - How the compiler assigns a class to every allocation, including the definition of "long-lived" and evacuation (§5).
 - The region runtime: chunked data stacks, counted regions, the number of stacks (§6).
-- Destinations, calling convention and class witnesses (§7).
-- The Perceus heap: header, `dup` / `drop`, last use (§8), quantity-driven simplification (§9), RC insertion (§10), reuse (§11), drop specialization (§12), borrowing (§13).
+- Destinations, calling convention and value witnesses (§7).
+- The Perceus heap: header, `dup` / `drop`, last use (§8), demand-driven simplification (§9), RC insertion (§10), reuse (§11), drop specialization (§12), borrowing (§13).
 - Effect-handler memory: handler kinds, abort, fiber stacks (§14).
 - Mutually recursive data (§15) and packed aggregates (§16).
 - Structured parallelism (§17).
@@ -33,9 +35,11 @@ It does **not** specify:
 
 ## 2. Dependencies and theoretical basis
 
-- `spec/syntax_grammar.ebnf` v0.4.4. (`fip fn` needs a grammar addition; see OQ-MM1.)
+- `spec/syntax_grammar.ebnf` v0.4.10 (`FipModifier` on functions, method requirements and `satisfies` methods).
 - `spec/type_system.md` v0.4.1 — §6.5 (representation selection), §6.6 (built-in candidates), §7.5 (mutual recursion / SCC).
-- `spec/quantities.md` v0.2 — Rule Q5.X family, Rule Q6.1 (erasure soundness), Rule Q7.2 (FBIP hook). The parallel composition rule referenced in §17 is pending there.
+- `spec/quantities.md` v0.5 — demands and exclusive ownership (§4.1), Rule Q6.1 (erasure soundness), Rule Q7.2 (FBIP), Rule Q9.3 (shared and exclusive versions), Rule Q5.13 (parallel composition, §17).
+- `spec/compilation_model.md` v0.1 — the baseline version, witnesses, clones and the package ABI. §7 and §20.2 of this document are its memory side.
+- `spec/cost.md` v0.1 — cost contracts, of which `fip` is the zero case (§18).
 - `spec/effects.md` v0.2 — §6 handler semantics, §7 evidence passing, Rule E3.5 (linear effects).
 - `spec/pattern_matching.md` v0.2 — §8 match compilation.
 - `spec/properties.md` v0.2 — §9 (`proved` props, Rule P7.7, inform reuse and bounds-check elision).
@@ -49,7 +53,7 @@ Theoretical basis and prior art (facts checked against the sources in November 2
 - Tofte, Talpin and the MLKit retrospective (Tofte, Birkedal, Elsman, Hallenberg, HOSC 2004); Hallenberg, Elsman, Tofte, *Combining Region Inference and Garbage Collection*, PLDI 2002 — the region leak in tail-recursive loops that Rule MM5.2(b) is designed to avoid, and the case for a collector behind regions.
 - van Oortmerssen, Goose (`docs/goose_spec.md`, v4 draft) — data stacks, roots, destination construction, one growable on top, `return … from`.
 - Vollmer et al., Gibbon (ECOOP 2017) and LoCal (PLDI 2019); Koparkar et al., parallel Gibbon (arXiv 2107.00522) — location calculus, chunked regions that double, per-region reference counts with outsets, indirections for sharing (§6, §16).
-- vekatze, Neut — types compiled to closed resource functions `exp(selector, v)`; the model for class witnesses (§7.3).
+- vekatze, Neut — types compiled to closed resource functions `exp(selector, v)`; the model for value witnesses (§7.3).
 - Jane Street OxCaml locality — separate locals stack, regions per function and loop body, `exclave_`, a tail call closes the region (§5.1).
 - van Oortmerssen, Lobster — compile-time ownership with borrows, ownership specialization with a single fallback for large functions (§7.4).
 - Westrick, Yadav, Fluet, Acar, *Disentanglement in Nested-Parallel Programs*, POPL 2020 — per-task heaps; Fixed is disentangled by construction (§17).
@@ -131,7 +135,7 @@ A value is **long-lived** iff at least one of these holds:
 - stored into a `Heap` value;
 - captured by a closure that escapes the scope the closure was created in;
 - reachable from a continuation that escapes its `handle` (§14.3);
-- passed across a separate-compilation boundary whose interface records escape `unbounded` for that parameter (§20.2);
+- passed to an exported version of a function of another package whose interface records escape `unbounded` for that parameter (§20.2). A call of a **floor entry** does not make the argument long-lived: there the callee evacuates what it stores (`spec/compilation_model.md` Rule CM6.3);
 - shared with a lane and outliving the fork (§17).
 
 **(b) Non-garbage-free churn.** It is the carried value of a `fold` or `unfold` (the accumulator or the seed) and the step is not **garbage-free** for it.
@@ -141,6 +145,8 @@ A step that turns old carried value `c` into new carried value `c'` is garbage-f
 If the step leaves garbage, putting the carried value on a data stack would keep every dead version alive until the loop ends. That is the MLKit tail-recursion leak. Such a carried value is long-lived and goes to `Heap`, so Perceus frees dead versions as they die.
 
 The garbage-free check runs at constructor and variant level, the way FP² checks `fip` at source level. It does not need representation sizes; M11 only refines the reuse fingerprints (§11.2).
+
+In a baseline version the check cannot see inside a value of parameter type. A step is garbage-free for a carried value of parameter type only if the capability member that rebuilds it carries an in-place contract (`constructs − releases ≤ 0`, `spec/cost.md` Rule CT3.4); otherwise the carried value is long-lived. A clone for a known type repeats the check on the type.
 
 Duration is never a criterion. Totality guarantees termination, not short running time.
 
@@ -172,10 +178,12 @@ A cohesive group is allocated in a fresh counted region `r` (§6.4). Typical cas
 Values are immutable and have no identity, so the compiler may **copy** a value from one class to another without changing the meaning of the program. This is **evacuation**. The compiler inserts it where a value's assigned class turns out too short for a use that the analysis could not foresee at the allocation point, for example:
 
 - a `Frame` value passed to a parameter whose interface escape is `unbounded`;
-- a shared value passed to a `fip` function's `exclusive` parameter, or to any `exclusive` parameter once the callee's version cap is reached (§18.3, `spec/quantities.md` Rule Q9.3);
+- a value of parameter type that a baseline version stores into a longer-lived value: the callee evacuates it through the value witness (§7.3). This is also how a floor entry treats every owned parameter;
 - a subtree extracted from a packed blob to outlive it (§16.2).
 
 Evacuation makes analysis imprecision a performance cost, never a soundness hole. It is reported per site (§19).
+
+Copying the demanded part of a shared value in the shared entry of a `fip fn` (§18.3) is a different operation: it produces a second, exclusively owned value in the same class, through the witness operation `copy`. It is reported with the evacuations and warned by W110 in the same way.
 
 **Warning W110 (evacuation in hot code).** The compiler warns when it inserts an evacuation in hot code. Without profile data, hot means inside a `fold` / `unfold` step, or inside a handler clause that runs inside one. With profile data (Phase 6), the profile decides.
 
@@ -243,37 +251,46 @@ A function whose result escapes only by being returned takes a hidden **destinat
 
 Constructors in tail position fill a destination hole (tail modulo constructor), so `map` over a list writes each cell straight into its final place.
 
+A result of parameter type in a baseline version is returned as a slot (`spec/compilation_model.md` Rule CM3.3): an immediate in the slot itself, a reference as a pointer to a value built in the destination.
+
 ### 7.2 Borrowed parameters are uniform (Rule MM7.2)
 
 A borrowed parameter (§13) needs no RC operation and is never stored beyond the call, so the argument's class does not matter in the callee. Borrowed parameters use one calling convention for every class.
 
-### 7.3 Class witnesses (Rule MM7.3)
+### 7.3 Value witnesses (Rule MM7.3)
 
-An owned parameter whose class is not fixed by the callee's signature facts (§20.2) receives a hidden **class witness**: the pair (type, class) compiled into a closed function, after Neut's types-as-functions.
+A baseline version (`spec/compilation_model.md` §3) receives a hidden **value witness** for each of its non-phantom type parameters, and for each owned parameter whose class its signature facts (§20.2) do not fix. The value witness is the pair (type, class) compiled into a closed function, after Neut's types-as-functions. Earlier drafts called it the class witness and passed it only at higher-order and separate-compilation boundaries; it is now the default, and it disappears only in a clone (§7.4).
 
 ```
-witness(op, v, dest)    op ∈ { drop, dup, reuse_test, evacuate, size }
+witness(op, v, dest)    op ∈ { drop, dup, reuse_test, evacuate, copy, size, kind }
 ```
 
 | op | `Frame` / stack `Dest` | `Region` | `Heap` | `Static` |
 |---|---|---|---|---|
 | `drop` | no-op | region decrement | Perceus decrement | no-op |
 | `dup` | identity | region increment | Perceus increment | identity |
-| `reuse_test` | true iff exclusively owned (static) | false | true if exclusively owned (static), else `rc == 1` | false |
+| `reuse_test` | true iff exclusively owned (static) | true iff exclusively owned (static) | true if exclusively owned (static), else `rc == 1` | false |
 | `evacuate(dest)` | copy into `dest` | copy into `dest` unless `dest` is this region | identity if `dest` is the heap, else copy | identity |
+| `copy(dest)` | a new exclusively owned value in `dest` | the same | the same | the same |
 | `size` | byte size | byte size | byte size | byte size |
+| `kind` | reference | reference | reference | reference |
 
-- A witness is passed per type parameter or per class-polymorphic owned parameter, not per value. A container's witness covers its elements, because Rule MM4.1 lets a `Frame` container hold `Heap` elements but fixes the element class per instantiation.
+The witness of an immediate type (`spec/compilation_model.md` Rule CM3.3) is the same for every class: `drop` is a no-op, `dup`, `evacuate` and `copy` return the 64 bits, `reuse_test` is false, `size` is 8 and `kind` is immediate.
+
+- A witness is passed per type parameter or per class-polymorphic owned parameter, not per value. A container's witness covers its elements, because Rule MM4.1 lets a `Frame` container hold `Heap` elements but fixes the element class for the whole container.
+- `reuse_test` follows Rule PR6.3: exclusively owned cells are reusable in every class except `Static`.
+- `copy` copies the whole value: a witness describes a type and cannot know which part a callee demands. The shared entry of a `fip fn` (§18.3) copies a demanded part of known type with code for that type and that part, and uses the witness's `copy` only for a part of parameter type. `evacuate` cannot serve, because it is the identity when the value already lives where `dest` is.
+- `kind` fills the reference map of a cell that a baseline version builds (Rule PR3.1).
 - Witnesses replace any address-range test for "is this on a stack". Chunked regions (§6.1) have no fixed address range, so a test would need tag bits; the witness does not.
 - Neut copies on every share. Fixed copies only on evacuation and keeps reference counting for `Heap` values.
 
 ### 7.4 Specialization (Rule MM7.4)
 
-1. If M10 knows the class at a call site (the common case under whole-program compilation), the callee is monomorphized for it and no witness exists.
-2. If the class is unknown (higher-order code, separate compilation), a witness is passed and its operations are indirect calls.
-3. With profile data (Phase 6), call sites where one witness dominates become guarded direct code, for example `if w == FRAME_W { /* no-op */ } else { w(drop, v) }`, or full specializations. This extends the plan's "dynamic dispatch → monomorphized" item to classes.
+1. A baseline version always takes its witnesses, and their operations are indirect calls.
+2. A **clone** (`spec/compilation_model.md` Rule CM5.1) compiled for a known class has no witness for it: `drop` of a `Frame` value is nothing, `drop` of a `Heap` value is the inline Perceus decrement.
+3. Which clones exist is decided by the score within the clone budget (Rules CM5.3, CM5.4). With profile data (Phase 6) the measured request counts replace the static weights, and a baseline version may also test for a dominant witness inline, for example `if w == FRAME_W { /* no-op */ } else { w(drop, v) }`.
 
-Large functions get one witness-taking version instead of per-class copies, as Lobster does for large and dynamically dispatched functions. The size threshold is implementation-defined.
+A function larger than the budget has no clones and keeps its one witness-taking version. This is the rule Lobster applies to large and dynamically dispatched functions, now a consequence of the budget instead of a separate threshold.
 
 ## 8. The Perceus heap
 
@@ -284,11 +301,14 @@ Every `Heap` value carries a header:
 ```
 {
     rc: i64,            // refcount
-    tag: i8,            // variant discriminator for sum types; 0 for product types
+    tag,                // variant discriminator for sum types; 0 for product types
+    refs: <map>,        // which payload slots hold counted references
     pad: [N x i8],      // padding to natural alignment
-    payload: <variant fields>
+    payload: <variant fields, one 64-bit slot each>
 }
 ```
+
+**Reference map.** `drop` must free a cell without knowing which type instance built it, so the header says which payload slots hold counted references (`spec/compilation_model.md` Rule CM3.4). A slot of a known type has a fixed entry. A slot of parameter type gets its entry from the value witness (`kind`, Rule MM7.3) when a baseline version builds the cell, and a constant in a clone. The widths of `tag` and `refs` and the encoding of the map are implementation-defined. A count of leading reference slots is not enough once a cell has a slot of parameter type, because the order of fields would then depend on the type instance.
 
 `Frame`, `Dest` on a stack, `Static`, `Inline` and `Erased` values have **no header**. `Region` values have no per-value header; the region descriptor carries the count (§6.4). Sum-type values outside the heap carry their tag as part of their representation, chosen by representation selection.
 
@@ -329,7 +349,7 @@ A `read` demand costs nothing at the call (§13). Exclusivity removes RC operati
 
 ## 10. RC insertion algorithm
 
-The compiler implements the Reinking et al. (2021) algorithm, restricted to bindings of class `Heap` or `Region` and with the quantity simplifications above.
+The compiler implements the Reinking et al. (2021) algorithm, restricted to bindings of class `Heap` or `Region` and with the demand simplifications above. On a value of parameter type in a baseline version, `dup` and `drop` are calls of the value witness (Rule MM7.3).
 
 ### 10.1 Input form (Rule PR5.1)
 
@@ -381,9 +401,10 @@ At a call `g(a, b, …)`, arguments evaluated left to right and moved when the c
 
 - For a `read` parameter (§13): no `dup` / `drop` transfer.
 - For an `own` parameter: at the argument's last use, ownership transfers (no `dup`); otherwise `dup` at this position.
-- For an `exclusive` parameter: if the argument is exclusively owned, this is its last use, and no other argument or capture of the call reaches it (Rule Q9.4), it is moved into the exclusive version of `g`. Otherwise the call goes to `g`'s shared version, or, beyond the version cap and for a `fip` callee, the demanded part is copied first (Rule Q9.3).
+- For an `exclusive` parameter: if the argument is exclusively owned, this is its last use, no other argument or capture of the call reaches it (Rule Q9.4), and the exclusive version of `g` was built (`spec/compilation_model.md` Rule CM5.3), it is moved into that version. Otherwise the call goes to `g`'s baseline version, which is the shared one. For a `fip` callee the shared entry copies the demanded part first (Rule CM5.5). No caller copies.
+- For a call through a capability table or a closure whose identity is unknown: every argument is passed under `own` (Rule CM4.6).
 - For a `0` parameter: no value is passed; an effectful argument is still evaluated.
-- If the parameter's interface escape is `unbounded` and the argument is not `Heap`, `Region` or `Static`: evacuate (Rule MM5.5).
+- If the callee is an exported version of another package whose interface records escape `unbounded` for the parameter, and the argument is not `Heap`, `Region` or `Static`: evacuate (Rule MM5.5). A floor entry needs nothing from the caller: it evacuates in the callee.
 
 ### 10.6 Closures (Rule PR5.6)
 
@@ -397,7 +418,9 @@ A closure whose environment does not escape its creation scope is itself `Frame`
 
 An exclusively owned capture stays exclusive only if the closure is called at most once; otherwise it is downgraded to `own` and shared (`spec/quantities.md` Rule Q5.7).
 
-**Two entry points.** A closure whose parameter is `exclusive` carries two code pointers: the closure body compiled for exclusive input, and compiled for shared input. A call through a closure whose identity is unknown at compile time (a function-typed parameter, a closure taken from a data structure) picks the pointer statically from what the caller holds, exactly as a direct call picks the version. There is no runtime test. Because a caller cannot tell from a closure it did not create whether it has a second entry, **every** closure carries both pointers; they are the same function unless a parameter is `exclusive`. The cost is one word per closure (closures without captures are static objects) and the second body where it differs.
+**Two entry points.** A closure whose parameter is `exclusive` carries two code pointers: the closure body compiled for exclusive input, and compiled for shared input. A call through a closure whose identity is unknown at compile time (a function-typed parameter, a closure taken from a data structure) picks the pointer statically from what the caller holds. It may take the exclusive pointer only when it exclusively owns every argument in every part, because it cannot see which parameters the closure's body reuses (`spec/compilation_model.md` Rule CM4.6); otherwise it takes the shared pointer. There is no runtime test. Because a caller cannot tell from a closure it did not create whether it has a second entry, **every** closure carries both pointers. The **shared** pointer is the primary one; the exclusive pointer is the same function unless an exclusive version of the body was built (`spec/compilation_model.md` Rule CM5.3). The cost is one word per closure (closures without captures are static objects) and the second body where it exists.
+
+The same two-pointer rule governs every entry of a capability table (Rule CM4.2). A closure created in a baseline version captures the witnesses its body uses.
 
 ## 11. Reuse analysis (FBIP)
 
@@ -425,11 +448,13 @@ For an exclusively owned `x`, `drop_to_reuse` returns the memory unconditionally
 
 Two shapes match for reuse iff they have the same byte size after padding, the same alignment and the same field kind sequence. Matching is by fingerprint, not nominal type, so variants of different types can reuse each other's memory.
 
+A slot of parameter type is a field kind of its own: it matches only another slot of parameter type. Fingerprints therefore do not depend on the type instance, and a baseline version reuses cells as its clones do.
+
 ### 11.3 Ownership-driven reuse (Rule PR6.3)
 
 Reuse is **hybrid**: static where exclusivity is proved, dynamic for shared heap values.
 
-- Exclusively owned (`spec/quantities.md` Rule Q4.1.b): reuse is unconditional, in any class. Exclusivity is proved statically, through `exclusive` demands and the shared versions of Rule Q9.3. Quantity 1 alone is not enough.
+- Exclusively owned (`spec/quantities.md` Rule Q4.1.b): reuse is unconditional, in any class except `Static` (static data is never written). Exclusivity is proved statically, through `exclusive` demands and the exclusive versions of Rule Q9.3. Quantity 1 alone is not enough.
 - Shared, `Heap`: reuse is conditional on `rc == 1` at runtime.
 - Shared, `Frame` or `Region`: no reuse. Without a count, uniqueness is unknown, and the memory is freed with its region anyway.
 
@@ -476,7 +501,7 @@ drop_T_list(t)      // recursive call (tail call eligible)
 free(x)
 ```
 
-Where the type or class is unknown, the drop goes through the class witness (§7.3).
+In a baseline version, and wherever else the type or class is not known, the drop goes through the value witness (§7.3).
 
 ### 12.3 Recursive drops as tail calls (Rule PR7.3)
 
@@ -643,7 +668,7 @@ If unstructured concurrency is ever added, values that cross between threads nee
 A function declared `fip fn` is rejected unless inference shows that the function and everything it calls:
 
 1. perform no `Heap` or `Region` allocation;
-2. perform no RC operation (`dup`, `drop`, `reuse_test`, region count update);
+2. perform no RC operation (`dup`, `drop`, `reuse_test`, region count update). A witness call for any of these on a value of parameter type counts as one (`spec/compilation_model.md` Rule CM4.7);
 3. insert no evacuation;
 4. register nothing on a drop list;
 5. use **bounded** data-stack space: the number of bytes bumped per call has a static upper bound. Bumps inside a `fold` / `unfold` step count once, because they reset per step (Rule MM5.1).
@@ -659,7 +684,9 @@ The FP² meaning. In addition to Rule MM18.1:
 
 ### 18.3 Arguments of `fip` functions (Rule MM18.3)
 
-A parameter that a `fip` function reuses must be `exclusive` in its signature (`spec/quantities.md` §4.1), so reuse is unconditional and needs no count test. Koka checks uniqueness at runtime and falls back to allocating; for `fip` functions Fixed proves it statically. A `fip` function has no shared version, so a caller holding a shared value copies the demanded part at the call site (an evacuation, `spec/quantities.md` Rule Q9.3). The caller is then not `fip` itself, and the evacuation is reported (and warned in hot code, W110).
+A parameter that a `fip` function reuses must be `exclusive` in its signature (`spec/quantities.md` §4.1), so reuse is unconditional and needs no count test. Koka checks uniqueness at runtime and falls back to allocating; for `fip` functions Fixed proves it statically.
+
+A `fip fn` has **one body**: the version in which every part it reuses is exclusively owned. It has no shared body. Its **shared entry** is an adapter that copies the demanded part of each shared argument (the witness operation `copy`, `spec/quantities.md` Rule Q9.3) and then calls the body (`spec/compilation_model.md` Rule CM5.5). A caller holding a shared value calls that entry; it does not copy at the call site. The adapter is not `fip`, so such a caller is not `fip` either, and the copy is reported (and warned in hot code, W110).
 
 ### 18.4 Diagnostics (Rule MM18.4)
 
@@ -675,6 +702,14 @@ error[E110]: fip contract violated: heap allocation (Rule MM18.1(1))
    = note: the result is `Heap` because it is stored into `cache` (Heap) at src/tree.fixed:12:9
 ```
 
+### 18.5 Polymorphic `fip`, `fip(n)` and `fip` on members (Rule MM18.5)
+
+- **Polymorphic.** `fip` is checked on the function's one body, with every witness operation on a value of parameter type counted as an RC operation (Rule MM18.1(2)). A `fip fn` is therefore in place for every instantiation: it may move values of parameter type and may not duplicate or discard them. A call through a capability table is allowed only if the requirement is itself `fip`. Clones inherit the result.
+- **`fip(n) fn`.** As `fip fn`, except that item 1 of Rule MM18.1 allows at most `n` fresh `Heap` or `Region` cells per call, for a literal `n`. This is FP²'s `fip(n)`.
+- **On members.** The modifiers may be written on a capability method requirement, where they oblige every satisfying type, and on a `satisfies` method.
+
+`fip` is the zero case of the allocation contract of `spec/cost.md` (Rule CT4.3), which also states bounds that depend on sizes. This resolves OQ-MM1.
+
 ## 19. The memory report
 
 `fixed compile --explain-memory` prints, per binding and per allocation site:
@@ -683,6 +718,8 @@ error[E110]: fip contract violated: heap allocation (Rule MM18.1(1))
 - a **reason chain** for every class other than `Frame` and `Inline`, for example: "`Heap`: reachable from a continuation that escapes `handle` at 08:187 via `remaining.push`";
 - evacuation sites, drop lists, counted regions and their roots;
 - per function: the signature facts of §20.2 and the verified `fip` level;
+- per function: the size of its baseline version, every clone built with its key, score and charge, and every candidate not built with the reason (`spec/compilation_model.md` Rule CM5.8);
+- per function: the inferred `steps`, `constructs` and `releases`, and the status of each cost prop (`spec/cost.md` Rule CT6.4);
 - per `fold` / `unfold`: whether it is a fork site and, when it is not, the reason (`spec/quantities.md` Rule Q5.13.d).
 
 `--format json` gives the same data machine-readably (implementation plan, "Agent-Friendly CLI"). An AI agent reads the reason chains directly instead of reverse-engineering placement from generated code.
@@ -705,13 +742,14 @@ Escape facts are data flow and do not depend on representation, so all of the ab
 
 ### 20.2 Signature facts (Rule MM20.2)
 
-These facts appear in every function signature, and in module interfaces for separate compilation:
+These facts appear in every function signature. For a public function they are stated for its floor entry and for each exported version, and they are the core of the package's interface tier (`spec/compilation_model.md` Rules CM6.3, CM6.4, CM7.1):
 
 - **Per parameter:** demand per part (`0`, `read`, `own`, `exclusive`; `spec/quantities.md` Rule Q4.1.a), which replaces the separate quantity and borrowed/owned mode; escape ∈ {`none`, `into-result`, `unbounded`}; class-polymorphic or fixed (decides whether a witness is passed, §7.3).
-- **Versions:** which combinations of exclusive and shared input have a compiled version, and the call sites that copy because the cap was reached (`spec/quantities.md` Rule Q9.3).
-- **Result:** destination-polymorphic or a fixed class.
+- **Versions:** the clones built, each with its key (`spec/compilation_model.md` Rule CM5.1); for a public function, the exported versions and whether each is a body, an alias or an adapter (Rule CM6.4).
+- **Witnesses:** the hidden parameters and their order (Rule CM4.3).
+- **Result:** destination-polymorphic or a fixed class; representation caller-chosen or callee-chosen (Rule CM4.5).
 - **Stack demand:** the maximum number of growable stacks in use at once, and the static bound on scratch bumps if one exists.
-- **`fip` level:** none, `fip` or `fip(strict)`.
+- **Contracts:** the `fip` level (none, `fip(n)`, `fip` or `fip(strict)`) and the cost props with their statuses (`spec/cost.md`).
 
 Lean ships borrow annotations in its interface files in the same way.
 
@@ -720,9 +758,10 @@ Lean ships borrow annotations in its interface files in the same way.
 | Runs after | Provides |
 |---|---|
 | Quantity inference (`spec/quantities.md` §4), on the typed tree | Occurrence quantities; `E072`, `T021` |
-| Lowering to Core, carrying source spans | Monomorphic ANF with every allocation and generated member visible |
-| Demand and memory inference, M10, on Core | Demands, ownership, versions, escape sets, lifetime classes, signature facts (§20) |
-| Representation selection, M11 (`spec/type_system.md` §6.5), on Core | Representations, `Inline` demotions, N, copy-out sites, fingerprints |
+| Lowering to Core, carrying source spans | Polymorphic ANF: one baseline version per function, witnesses explicit, every allocation and generated member visible |
+| Demand and memory inference, M10, on Core | Demands, ownership, escape sets, lifetime classes, signature facts (§20), for each baseline version |
+| Representation selection, M11 (`spec/type_system.md` §6.5), on Core | Representations at origination sites and their witnesses, `Inline` demotions, N, copy-out sites, fingerprints. Decided on the facts of baseline versions; never repeated for a clone |
+| Specialisation (`spec/compilation_model.md` §5) | Clones, by score within the budget and the mandatory ones; M10 runs again on each clone |
 | Match desugaring (`spec/pattern_matching.md` §8) | Decision-tree IR |
 | Property verification (`spec/properties.md` §7) | Verified facts (informs reuse) |
 
@@ -744,7 +783,9 @@ Fixed has no backend yet. Every performance statement in this document is a hypo
 - Relocation-on-growth waste versus a larger N (§6.3).
 - Retention by counted regions and blobs, and the copy-out volume (§6.4, §16.2).
 - Deferred dups in lanes (§17.3).
-- How many versions per function shared input produces (`spec/quantities.md` Rule Q9.3), how often the cap forces a copy, and the code-size cost.
+- Baseline overhead: run time and reference-count traffic with `--no-specialise` against the default build, per benchmark (`spec/compilation_model.md` Rule CM5.7).
+- How much of that overhead the score recovers under the reference budget `B = 512` and weight base `W = 8`, how many clones a function gets, how often a function exceeds `B`, and the code-size cost (OQ-CM3).
+- The cost of calls through capability tables, which cannot borrow (Rule CM4.6, OQ-CM8).
 - How often the dynamic `rc == 1` path (§11.1) reuses a cell that static exclusivity missed. If it is rare, the shared version could drop the test.
 
 ## 22. Worked examples
@@ -768,7 +809,7 @@ fn map(list: List of A, f: A -> B) -> List of B =
         List.Nil => List.Nil
 ```
 
-`map` demands `exclusive` on the list cells and `own` on the elements. A caller passing an exclusively owned list gets the exclusive version: each `Cons` cell is reused unconditionally in whatever class it lives in, provided the new fields satisfy Rule MM11.4. A caller passing a shared list gets the shared version: for a `Heap` list, reuse is conditional on `rc == 1`; for a `Frame` list, the result is built in the destination and the old cells die with their region.
+`map` demands `exclusive` on the list cells and `own` on the elements. A caller passing an exclusively owned list gets the exclusive version, where the clone budget built it (`spec/compilation_model.md` Rule CM5.3): each `Cons` cell is reused unconditionally in whatever class it lives in, provided the new fields satisfy Rule MM11.4. A caller passing a shared list gets the shared version: for a `Heap` list, reuse is conditional on `rc == 1`; for a `Frame` list, the result is built in the destination and the old cells die with their region.
 
 ### 22.3 Fold with per-step temporaries
 
@@ -799,7 +840,7 @@ fn critical_section(work: () -> () with Lock) -> () =
     Lock.release
 ```
 
-The `Lock` handler is installed once and consumed by `Lock.release`. Its continuation is quantity 1, with no `dup`, consumed by `resume`. The frame is freed right after `Lock.release` returns. No RC traffic.
+The `Lock` handler is installed once and consumed by `Lock.release`. Its continuation is exclusively owned, with no `dup`, consumed by `resume`. The frame is freed right after `Lock.release` returns. No RC traffic.
 
 ## 23. Open questions
 
@@ -809,19 +850,21 @@ The `Lock` handler is installed once and consumed by `Lock.release`. Its continu
 - **OQ-PR4 — Borrow leakage through closures.** A borrowed parameter captured by a closure must not outlive the borrow. Rule MM5.2(a) and Rule PR5.6 cover escaping closures; the details belong to the borrow analyzer.
 - **OQ-PR5 — Tail-call guarantees.** Rule PR7.3 requires TCO for drop functions, and `fip(strict)` needs loops for list-shaped folds. The contract for general code is still open.
 - **OQ-PR6 — Reuse fingerprint algorithm.** Implementation-defined until a second compiler exists.
-- **OQ-MM1 — Grammar for `fip`.** `fip fn` and `fip(strict) fn` are in `spec/syntax_grammar.ebnf` v0.4.9 (`FipModifier` on `FnDecl`). Still open: FP²'s `fip(n)` (at most n allocations), and whether a capability method requirement or a `satisfies` method may carry the modifier.
+- ~~**OQ-MM1 — Grammar for `fip`.**~~ Resolved in v0.4. `fip`, `fip(n)` and `fip(strict)` are in `spec/syntax_grammar.ebnf` v0.4.10 (`FipModifier`), on function declarations, capability method requirements and `satisfies` methods (Rule MM18.5).
 - **OQ-MM2 — Chunk sizes and pools.** First-chunk size, the growth factor and fiber/lane pool policy are implementation-defined until measured.
 - **OQ-MM3 — N versus relocation.** Whether the compiler should prefer more growable stacks or relocation with holes (§6.3).
 - **OQ-MM4 — Cohesive-group detection.** Rule MM5.4 states the conditions; how far M10 searches for groups (one function, one call tree, across modules) is open.
-- **OQ-MM5 — Region and witness facts across modules.** Separate compilation needs §20.2 in interface files; their format is open.
+- **OQ-MM5 — Region and witness facts across packages.** What the interface carries is settled (`spec/compilation_model.md` Rule CM7.1). Its on-disk encoding is open there (OQ-CM2).
 
 ## 24. Cross-references
 
 | Document | Relationship |
 |---|---|
-| `spec/syntax_grammar.ebnf` | `fip fn` needs a grammar addition (OQ-MM1); otherwise this pass runs on lowered IR |
+| `spec/syntax_grammar.ebnf` | `FipModifier` on functions, method requirements and `satisfies` methods; otherwise this pass runs on lowered IR |
+| `spec/compilation_model.md` | The baseline version and its witnesses (§7.3), clones (§7.4), `fip` entries (§18), the interface tier built on §20.2 |
+| `spec/cost.md` | `fip` is the zero case of the allocation contract; §19 carries the cost report |
 | `spec/type_system.md` | §6.5 consumes quantity and escape facts and decides `Inline`; §6.5.4 scoring uses class eligibility and copy-out volume; §7.5 SCCs (§15) |
-| `spec/quantities.md` | Demands and exclusive ownership (§4.1) drive §9–§11; shared versions and copying (Rule Q9.3); evaluation order (Rule Q9.2); M10 also computes the facts in §20; the parallel composition rule underlies §17 |
+| `spec/quantities.md` | Demands and exclusive ownership (§4.1) drive §9–§11; shared and exclusive versions (Rule Q9.3); evaluation order (Rule Q9.2); M10 also computes the facts in §20; the parallel composition rule underlies §17 |
 | `spec/effects.md` | §6 and §7 drive §14; Rule E3.5 drives §14.5; §7.5 drives §14.6 |
 | `spec/pattern_matching.md` | §8 decision trees are the input to §10 |
 | `spec/properties.md` | `proved` props (Rule P7.7) inform reuse and bounds-check elision |

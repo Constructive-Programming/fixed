@@ -468,7 +468,7 @@ The compiler is designed to produce clear, structured output for **humans** — 
 
 ### The CLI
 
-Everything starts from the CLI. Four commands, composable:
+Everything starts from the CLI. Three commands, and one composition of two of them:
 
 | Command | What it does |
 |---|---|
@@ -476,6 +476,10 @@ Everything starts from the CLI. Four commands, composable:
 | `fixed verify` | Validates all `prop` invariants — static proofs where possible, property-based tests otherwise |
 | `fixed ship` | Builds a static executable (compile → `llc`/`clang` → binary) |
 | `fixed verify + ship` | Incrementally does all three: verify props, compile to LLVM IR, build static binary |
+
+What exists today: `fixed <file>` (check a file and print its diagnostics), `fixed compile`, `fixed ship` and `fixed compile --explain-memory`. What is planned: `fixed verify` (and with it `verify + ship` and `verify --coverage`) and `fixed compile --explain-cardinality` (`spec/reports.md`).
+
+Build mode: `--no-specialise` on `compile` and `ship` builds only the mandatory specialisations and no clones by score, which compiles faster and gives the reference behaviour clones are compared against (`spec/compilation_model.md` Rule CM5.7). It is planned with Phase 4.1.
 
 The `+` operator composes commands. Each stage is incremental — if source hasn't changed since the last run, that stage is skipped. `fixed verify + ship` is the standard development loop: prove your properties, then produce a binary.
 
@@ -555,7 +559,7 @@ This is the central compiler innovation. The programmer never names a data struc
 
 ### How it works
 
-1. The compiler collects all capability bounds on a value across its entire lifetime
+1. The compiler collects all capability bounds on a value across its entire lifetime. The bound set is closed over the package and the signatures it imports, so the representation is chosen where the value originates, and code that receives the value as a type parameter uses it through its witness (`spec/compilation_model.md` Rule CM3.4)
 2. It builds a **capability set** — the intersection of all representations that satisfy those bounds
 3. It selects the optimal representation from that set, considering performance characteristics
 
@@ -567,7 +571,7 @@ This is the central compiler innovation. The programmer never names a data struc
 | `Sequencing + Folding` | Linked list or array (both support cons/fold) |
 | `RandomAccess + Sized` | Contiguous array (linked list cannot satisfy RandomAccess efficiently) |
 | `Sequencing + RandomAccess + Sized + Functor + Filtering` | Resizable contiguous array (all constraints force this) |
-| `Folding` with PGO showing sequential-only access | Contiguous array (PGO narrows further) |
+| `Folding` with PGO showing sequential-only access | Contiguous array (PGO narrows further, through representation selection at the value's origin, never by cloning code; `spec/compilation_model.md` Rule CM3.4) |
 
 ### The key insight
 
@@ -628,7 +632,7 @@ Formal specification documents that pin down semantics before implementation.
 - **Linearity and FBIP**: quantity-1 bindings enable guaranteed in-place mutation, replacing the heuristic reuse analysis with a type-level guarantee
 - **Effect handler linearity**: `resume` is quantity 1 (single-shot). Multi-shot handlers (if supported) would need quantity ω
 - **No explicit `self`**: instance methods don't declare a self parameter; the compiler infers it
-- **Coherence rules**: how orphan rules work when there are no concrete types. Satisfaction declarations (`Type satisfies Cap`) are modular — they must be brought into scope via `use Type satisfies Cap` to be visible. No global coherence requirement.
+- **Coherence rules**: how orphan rules work when there are no concrete types. Satisfaction declarations (`Type satisfies Cap`) are modular — they must be brought into scope via `use Type satisfies Cap` to be visible, and are visible only where a `use` imports them. Within one link unit there is at most one satisfaction per (data type, capability) pair (`spec/compilation_model.md` Rule CM6.6).
 - **Recursive capability detection**: Self in constructor parameter position
 - **`satisfies` semantics**: How `Type satisfies Cap:` + indented `Variant as name` declarations map data constructors to capability constructor *requirements* (caps declare requirements; types provide constructors — see spec/type_system.md §8). How `impossible as name` records that the satisfying type provides no implementation, lowering to a runtime panic per Rule 8.2. How `use Type satisfies Cap` brings satisfaction mappings into scope.
 - **Constructor resolution**: How the compiler selects among in-scope `satisfies` declarations when a `Self.fn` constructor is called on a capability. Context-based resolution via return types and assignment targets. Ambiguity errors with copy-pasteable suggestions.
@@ -740,7 +744,7 @@ Implementation note: capability closure, prop verification, quantity checking, a
 | **Sum** | Multiple `Self.fn(...) -> Self` constructors + `fold` method | Tagged union |
 | **Product** | Single `Self.fn(...) -> Self` constructor + accessor methods | Flat struct |
 | **Recursive** | `Self` appears in constructor parameter types | Heap-allocated (optimizable) |
-| **Capability-only** | No constructors returning `Self` (only instance methods) | Vtable / monomorphized |
+| **Capability-only** | No constructors returning `Self` (only instance methods) | Witness passing in the baseline version; direct code in a clone |
 | **Marker** | No methods at all | Zero-sized, compile-time only |
 | **Refinement** | No methods, has `prop` + value params | Zero-sized, compile-time only (subtype of Marker) |
 
@@ -766,7 +770,7 @@ Key design rules:
 - **Satisfaction declarations are separate** from data definitions — they can live in the same module or a different one. Third parties can write them.
 - **Brought into scope via `use`**: `use std.maybe.Maybe satisfies Optional` makes the satisfaction mapping available at the use site.
 - **Multiple satisfactions possible**: different modules can map the same data to different caps.
-- **No orphan surprises**: satisfactions don't leak across module boundaries.
+- **No orphan surprises**: a satisfaction is visible only where a `use` imports it, and within one link unit there is at most one satisfaction per (data type, capability) pair (`spec/compilation_model.md` Rule CM6.6).
 
 ### Constructor resolution
 
@@ -851,7 +855,7 @@ Runs after M7 and **before** M10. Fixed's memory model (`spec/memory_management.
 
 Sub-plan: `docs/plans/phase-4.0-backend-slice.md`.
 
-Programs compile to LLVM IR, link and run with correct output. The required set is examples `01` and `03` plus a small set of benchmark programs. Examples `01`–`06` all type-check with no diagnostics (`docs/Phase3Conformance.md`), but `02`, `04`, `05` and `06` cannot run as written: each calls a member that no rule defines yet (sub-plan §3). `04` and `05` join the slice as their blockers close and do not hold up M10. `06` and `02` are left out: `06` pending a decision on `Monad` members for sum data, `02` until M11.
+Programs compile to LLVM IR, link and run with correct output. The required set is examples `01` and `03` plus a small set of benchmark programs. Examples `01`–`06` all type-check with no diagnostics (`docs/Phase3Conformance.md`), but `02`, `04`, `05` and `06` could not run as written: each called a member that no rule defined yet (sub-plan §3). `04` and `05` joined the slice when their blockers closed and run since 4.0.M6. `06` and `02` are left out: `06` pending a decision on `Monad` members for sum data, `02` until M11.
 
 The slice is deliberately naive, and does not conform to the spec's guarantees:
 
@@ -882,13 +886,22 @@ The slice is deliberately naive, and does not conform to the spec's guarantees:
 
 ---
 
+## Phase 4.1: Polymorphic Baseline and Specialiser
+
+The goal is a compiler that complies with `spec/compilation_model.md`. Every function reachable from a root gets one polymorphic baseline version that receives witnesses for its type parameters (value witnesses, capability tables, evidence) and operates on values of parameter type through them. Specialised clones, keyed by known type, ownership, lifetime class and handler, are built on top of the baseline under one size budget per function and in the order of their score, and the `--no-specialise` build mode builds only the mandatory specialisations. The monomorphic lowering of Phase 4.0 is replaced.
+
+The detailed plan and milestones are in `docs/plans/phase-4.1-baseline-specialiser.md`. The milestone: every example that ran before still produces the same output in both build modes, and the runtime benchmarks are re-measured against the previous baseline in `docs/baselines/`.
+
+---
+
 ## Phase 4: Code Generation (to LLVM IR)
 
 ### Compilation pipeline
 
 ```
 Typed + capability-closed + quantity-checked + representation-selected AST
-  → Monomorphization (specialize generic functions per concrete representation)
+  → Lowering to polymorphic baseline Core (one version per function, witnesses as hidden parameters)
+  → Specialisation (mandatory specialisations, then clones by score under the per-function budget; `spec/compilation_model.md` §5)
   → Match desugaring (match → fold calls)
   → Fold specialization and fusion (guaranteed; `spec/type_system.md` Rules 7.4.b.1, 7.4.b.2)
   → Perceus insertion (dup/drop/reuse token placement, guided by quantities and lifetime classes)
@@ -898,15 +911,16 @@ Typed + capability-closed + quantity-checked + representation-selected AST
   → llc / clang → native binary
 ```
 
-Phase 4 strictly follows Phase 3's recheck phases. Capability sets, quantities, and representations are already pinned by the time codegen starts; this phase consumes them.
+Phase 4 strictly follows Phase 3's recheck phases. Capability sets and quantities are pinned by the time codegen starts, and each value's representation is selected where the value originates; the representation of a value of parameter type travels by witness (`spec/compilation_model.md` Rule CM3.4). This phase consumes them.
 
 ### Deliverables
 
 | Component | Description |
 |---|---|
-| **Monomorphizer** (`backend/Monomorphizer.scala`) | Specialize generic functions for concrete representations chosen in Phase 3 |
+| **Baseline lowering** | Lower each function reachable from a root (Rule CM3.2) to one polymorphic baseline version in Core, with value witnesses, capability tables and evidence as hidden parameters (`spec/compilation_model.md` §3–§4). Built in Phase 4.1 |
+| **Specialiser** | Build clones of baseline versions by key, in score order and within the per-function budget, plus the mandatory specialisations (`spec/compilation_model.md` §5). Built in Phase 4.1 |
 | **Match desugarer** (`transform/MatchDesugar.scala`) | Convert `match` to `fold` calls, `if` to `bool.fold`. Implemented as a `MiniPhase` |
-| **Fold specializer** (`transform/FoldSpecializer.scala`) | Guaranteed by the spec, not an optimization level. Inlines lambda and statically known function arguments of auto-derived `fold` / `unfold` (Rule 7.4.b.2), and fuses an `unfold` consumed by exactly one `fold` into a loop with no intermediate structure (Rule 7.4.b.1). `to_nat(n).fold(...)` compiles to a counted loop. Runs after match desugaring, because desugaring produces more `fold` calls, and before Perceus, so the fused structure never gets reference counts |
+| **Fold specializer** (`transform/FoldSpecializer.scala`) | Guaranteed by the spec, not an optimization level: a mandatory specialisation, outside the clone budget and built in every build mode (`spec/compilation_model.md` Rule CM5.5). Inlines lambda and statically known function arguments of auto-derived `fold` / `unfold` (Rule 7.4.b.2), and fuses an `unfold` consumed by exactly one `fold` into a loop with no intermediate structure (Rule 7.4.b.1). `to_nat(n).fold(...)` compiles to a counted loop. Runs after match desugaring, because desugaring produces more `fold` calls, and before Perceus, so the fused structure never gets reference counts |
 | **Perceus inserter** (`perceus/PerceusInserter.scala`) | Insert `dup`/`drop` operations guided by quantity × lifetime class (`spec/memory_management.md` §3.2). 0-quantity bindings: erased. 1-quantity bindings: no RC, direct reuse. ω-quantity bindings: Perceus RC only when `Heap` or `Region`; other classes are freed by their region |
 | **Region lowering** (`backend/Regions.scala`) | Chunked data stacks, scope marks and resets, drop lists, counted regions, destinations, class witnesses and evacuations per `spec/memory_management.md` §6–§7 |
 | **Evidence passer** (`effects/EvidencePasser.scala`) | Compile effects to evidence vector lookups |
@@ -916,10 +930,8 @@ Phase 4 strictly follows Phase 3's recheck phases. Capability sets, quantities, 
 
 | Fixed concept | LLVM IR representation |
 |---|---|
-| Sum capability (e.g., `Optional`) | `{ i8, [N x i8] }` — tag + payload bytes; payload accessed via `bitcast` to the variant's struct type |
-| Data type (e.g., `Color`, `Expr`) | Same shape as sum capability; `data` declarations name the variants |
-| Product capability (e.g., `Config`) | LLVM literal struct: `{ field1_t, field2_t, ... }` |
-| Recursive capability (e.g., `Sequencing` backed by linked list) | `ptr` (LLVM opaque pointer) to the payload; `{ rc_header, payload }` only when the value is `Heap` (`spec/memory_management.md` §3.1) |
+| Value of at most 64 bits (`bool`, `char`, `()`, integers up to 64 bits, `f32`, `f64`) | Immediate in a 64-bit slot (`spec/compilation_model.md` Rule CM3.3) |
+| Data cell (sum, product or recursive: `Optional`, `Color`, `Expr`, `Config`, a list cell) | `ptr` to a cell: a header (count, tag, reference map recording which payload slots hold counted references; today the number of leading pointer slots, since boxed fields are placed first) followed by 8-byte payload slots, one per field (`spec/compilation_model.md` Rule CM3.3, `spec/memory_management.md` Rule PR3.1). The layout is the same in the baseline version and in every clone (Rule CM3.4) |
 | Capability satisfied by contiguous array (e.g., `RandomAccess + Sized`) | `{ i64 len, i64 cap, ptr data }` |
 | Closure | `{ ptr code, ptr env }` (opaque pointers, LLVM 15+) |
 | Block lambda | Same as closure (syntactic difference only) |
@@ -964,14 +976,15 @@ Profile-guided optimization for representation selection.
 |---|---|
 | **Instrumented mode** | Compiler flag that inserts profiling counters into generated LLVM IR (or delegates to LLVM's built-in PGO instrumentation pass) |
 | **Profile reader** | Reads profile data and feeds it back into compilation |
-| **Representation optimizer** | Narrows representation choices further based on profile data |
+| **Representation optimizer** | Narrows representation choices further based on profile data. A representation change driven by a profile goes through representation selection at the value's origin, never through code cloning (`spec/compilation_model.md` Rule CM3.4) |
+| **Profile-weighted specialiser** | Profile data replaces the static weight in the clone score with the measured number of calls that requested each key, and multiplies the clone budget for functions the profile shows to be hot (`spec/compilation_model.md` Rules CM5.3, CM5.4) |
 | **Hot-path specializer** | Inline frequently-called closures, eliminate dynamic dispatch on hot paths. Covers only what Phase 4's guaranteed fold specialization does not: closures passed to user-defined higher-order functions and calls whose target is known only from a profile |
 
 ### PGO-driven decisions
 
 - Sequential-only fold access → contiguous array (even if capabilities didn't require it)
 - Heap allocation → stack allocation (when lifetime is short and bounded)
-- Dynamic dispatch → monomorphized (when callee is statically known in practice)
+- Dynamic dispatch → a clone for the known type, within the budget (when callee is statically known in practice)
 - Class witness → guarded direct code or specialization (when one lifetime class dominates a call site, `spec/memory_management.md` §7.4)
 - Hot-code evacuation (warning W110) judged by profile instead of the static fold-step heuristic
 - Closure allocation → inlined (when closure is called exactly once)
@@ -1010,7 +1023,7 @@ Profile-guided optimization for representation selection.
 ## Verification Plan
 
 1. Parse all 11 example programs → AST
-2. Type-check all 16 programs (capability classification, representation selection, effect tracking)
+2. Type-check all 11 example programs (capability classification, representation selection, effect tracking)
 3. Verify QTT quantity inference: 0-quantity bindings in type/prop/inferred-phantom positions only, 1-quantity bindings used exactly once, ω-quantity bindings get RC
 4. Verify pattern match exhaustiveness on sum capabilities
 5. Verify effect tracking catches unhandled effects

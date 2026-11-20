@@ -1,8 +1,16 @@
 # Fixed Properties
 
-**Status:** Draft v0.2.2
+**Status:** Draft v0.2.3
 **Specifies:** `prop` declarations, `forall` / `implies` / `suchThat` constructs, the verification strategy (static-then-PBT), property-based test generation, and how verified properties feed compiler optimization for Fixed v0.4.5 source.
-**Last revised:** 2026-11-19
+**Last revised:** 2026-11-20
+
+**Changes from v0.2.2.**
+- **Cost props** (new Rule P3.5): a prop whose left side is a cost term states a cost contract (`spec/cost.md`). An asymptotic bound can be `proved` or `assumed`, never `tested`.
+- **Prop bodies travel with a package** (§4.1): they are excluded from the binary but are part of the interface tier, because a package that satisfies an imported capability must verify its props (Rule P7.7.a).
+- **Rule P5.3.c**: a test build may run a prop against the baseline version and a clone and compare.
+- **Rule P7.4**: the cache key is the transitive content hash. The earlier key did not change when a function called by the prop body changed, so a `tested` result could be stale.
+- **Rule P8.5**: a prop whose binders have few enough values is checked for all of them, and is then `proved`.
+- New OQ-P7 (generators for types whose constructors are not public).
 
 **Changes from v0.2.1.**
 - **Verification status** (new Rule P7.7). Every accepted prop carries one of three statuses: `proved`, `tested` or `assumed`. `fixed verify` reports the count of each in one verdict line, and the new `--require-proved` flag rejects a build that has any prop below `proved`.
@@ -125,6 +133,15 @@ Implicit bindings inside the body:
 
 The body of a `fn -> cap` is the *only* fn body in which a non-prop expression at the trailing position would be unusual — a refinement cap's body is, in effect, a list of obligations. (Other fn bodies may carry `prop` postconditions but always end in a value-producing expression per Rule M9.1's logic; refinement-cap bodies do not produce a value.)
 
+### 3.5 Cost props (Rule P3.5)
+
+A prop in a `cap` or `data` declaration whose body is a comparison with a cost term on the left (`steps(m)`, `constructs(m)`, `releases(m)`, or `constructs(m) - releases(m)`, for a member `m` of the declaration) is a **cost prop**. It states a cost contract, defined in `spec/cost.md` §4.
+
+A cost prop is a prop in every other respect: it is excluded from the compiled artifact (§4.1), inherited through `extends` (§10), verified per satisfying type, and given a status (Rule P7.7). Two things differ:
+
+- Its body is not evaluated as an expression. `steps`, `constructs`, `releases`, `size`, `O`, `log` and `max` denote the cost vocabulary of `spec/cost.md` Rules CT4.1 and CT4.2, and the bound is compared with the member's inferred cost (`spec/cost.md` §6).
+- A bound written with `O(…)` cannot be refuted by testing, so it is `proved`, rejected because the inferred cost exceeds it, or `assumed`; it is never `tested` (`spec/cost.md` Rule CT6.2). An exact bound can be `tested`: the test build counts the member's steps and constructions and compares.
+
 ## 4. Prop body expressions
 
 ### 4.1 Prop bodies are excluded from the compiled artifact (recap)
@@ -132,6 +149,10 @@ The body of a `fn -> cap` is the *only* fn body in which a non-prop expression a
 Per `spec/quantities.md` Rule Q5.5 (v0.2), prop bodies are **not included in the compiled artifact** (the program binary). References to bindings inside a prop body therefore do not contribute to the binding's runtime quantity in the artifact — if a binding is used only inside props, it has quantity 0 in the artifact and is erased.
 
 Property verification, when it requires running the body (§7's PBT path), compiles the body separately into a **test build** — a distinct compilation context from the program binary. Inside the test build, bindings have their normal quantities determined by all uses (the body genuinely runs at test time). The test build is not part of the production binary; it is the artifact a `fixed verify` invocation produces, separate from `fixed compile`.
+
+**Excluded from the binary, present in the interface.** A package's prop bodies are part of its interface tier, stored as typed expressions (`spec/compilation_model.md` Rule CM7.2). A package that declares a satisfaction for an imported capability needs them to verify the capability's props for its own type (Rule P7.7.a). The code a prop body calls is reached by linking against the declaring package; its bodies are not needed.
+
+**What the test build compiles.** The test build compiles the same baseline versions as the program and, unless `--no-specialise` is given, the same clones (`spec/compilation_model.md` §5), each with region counters (`spec/reports.md` Rule RP3.3).
 
 The earlier draft's wording "checked at quantity 0" was a shorthand. The v0.2 framing makes the artifact distinction explicit because PBT-driven verification involves actual runtime evaluation.
 
@@ -205,7 +226,9 @@ A refinement-only binder type (a `forall` binder whose type is *only* refinement
 
 For nested polymorphic binders (e.g., `is Sequencing of (N is Numeric)` with N satisfactions for `Sequencing` and M satisfactions for `Numeric`), the cross-product is `N × M` candidate type combinations; uniform sampling picks one such combination per iteration. The total iteration budget (Rule P7.6) is applied to *iterations*, not to satisfaction-pairs — so increasing the satisfaction count thins the per-pair coverage.
 
-This sampling strategy is the same one used by Hypothesis (Python) and Hedgehog (Haskell) for polymorphic property tests; users seeking deterministic per-pair coverage can pin a specific satisfaction via type annotation or via a custom generator when OQ-P2 is resolved.
+This sampling strategy is the same one used by Hypothesis (Python) and Hedgehog (Haskell) for polymorphic property tests; users seeking deterministic per-pair coverage can pin a specific satisfaction via type annotation or via a custom generator when OQ-P2 is resolved. The coverage report shows how many iterations each combination received (`spec/reports.md` Rule RP3.4).
+
+**Rule P5.3.c (Baseline against clone).** A clone of a function must behave as its baseline version (`spec/compilation_model.md` Rule CM5.2). Where the code a prop body calls has clones, a test build may evaluate the prop body twice per generated input — once calling baseline versions only, once calling the clones the program would call — and compare the two results. A difference is a compiler fault, reported as an internal error with the input, not a failed prop. This is a comparison of two results on one input, not a second sampling dimension: it does not divide the iteration budget.
 
 A future weighting hint (`@sampling(weights = ...)` or similar attribute) is anticipated for cases where one satisfying type matters more than others — deferred until use cases motivate it.
 
@@ -312,10 +335,11 @@ Property verification can be expensive — SMT calls and PBT iterations scale wi
 
 The cache key for each prop is the tuple of:
 
-- The canonical hash (Blake3 or equivalent) of the prop body's typed AST.
-- The relevant in-scope obligations: refinement caps applied to binder types, `satisfies` declarations referenced, inherited props (via `extends`).
+- The **content hash** of the prop (`spec/compilation_model.md` Rule CM7.1): a canonical hash (Blake3 or equivalent) of the prop body's typed expression and, transitively, of everything its meaning depends on — the functions it calls and the functions those call, the satisfactions it resolves, the generators of its binder types, refinement caps applied to binder types, and inherited props (via `extends`).
 - The configured PBT iteration count and time budget (Rule P7.6 below).
 - The prover version / SMT solver version (so prover upgrades invalidate cache).
+
+The hash is transitive on purpose. A `tested` result depends on the bodies of the functions the prop calls, so a key over the prop body alone would return a stale result after one of them changed. A `proved` result does not depend on those bodies (Rule P7.2), so the transitive key invalidates it more often than necessary; an implementation may keep a narrower key for `proved` results.
 
 A cached result stores the prop's verification status (Rule P7.7). A cache hit skips both static proof and PBT entirely. A cache miss runs the full verification. Cache invalidation occurs when any key component changes.
 
@@ -358,6 +382,8 @@ Every accepted prop has exactly one **verification status**:
 A prop that fails (Rule P7.1 step 3) is an error and has no status.
 
 **Rule P7.7.a (inheritance).** A prop inherited through `extends` (§10) is verified per satisfying type, so its status is recorded per (prop, satisfying type) pair. An override (Rule P10.3) has its own status; proving the override proves the parent's version, because the override implies it.
+
+The pair is verified in the package that declares the satisfaction, which may not be the package that declares the capability. The status is recorded in that package's interface (`spec/compilation_model.md` Rule CM7.1). An importer takes a recorded status as it stands and does not verify the prop again. `--require-proved` applies to the props verified in the package being built; the verdict line of Rule P7.7.b counts the statuses recorded by dependencies separately.
 
 **Rule P7.7.b (verdict).** `fixed verify` ends with one verdict line giving the count of each status and of failures:
 
@@ -422,6 +448,12 @@ When a counterexample is found, the error message includes:
 - A suggestion to either fix the prop or fix the implementation that violated it.
 
 The format of this error message follows the project-wide "Agent-Friendly CLI and Compiler Output" guidelines from `docs/plans/implementation-plan.md` — structured (parseable as JSON via `--format json`), with explicit error codes.
+
+### 8.5 Enumeration (Rule P8.5)
+
+When every binder of a prop has a finite number of values and the product of those numbers (`spec/reports.md` Rule RP4.1) is no larger than the iteration budget, the driver evaluates the prop for **every** combination instead of sampling. Values excluded by `suchThat` are skipped. If no combination fails, the prop holds for every value of its binders, and its status is `proved`.
+
+For a polymorphic binder (Rule P5.3.b) enumeration is per combination of satisfying types: a combination whose values were all checked is `proved` for that combination, and the status is recorded per (prop, satisfying type) pair as Rule P7.7.a already requires. A satisfaction another package adds later is a new pair with its own status.
 
 ## 9. Verified props as compiler assumptions
 
@@ -558,6 +590,7 @@ fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String =
 - **OQ-P3 — Per-prop verification annotations.** §8.3 mentions "per-prop annotation" for iteration count and timeout. Concrete syntax not yet specified; candidates include attribute-style markers (`@iterations(1000)`) or a structured `prop` modifier (`prop ... limits { iterations: 1000 }`). Defer until iterations matter in practice.
 - **OQ-P4 — User-supplied static proofs.** When the prover reports `unknown` and PBT is unsuitable (e.g., the binder type has no generator), the user could supply an explicit proof. Mechanism deferred until needed.
 - **OQ-P5 — `result` in non-postcondition contexts.** Moot in v0.2.1 — fn-body postconditions themselves are deferred (§3.3). When postconditions are re-enabled, the question of `result` in `cap`-method postconditions resurfaces and OQ-P5 will be revisited.
+- **OQ-P7 — Generators for types whose constructors are not public.** Rule P8.1 derives a generator for a `data` type from its fields. An importer sees the variants of a public `data` type (`spec/compilation_model.md` Rule CM6.7), so derivation works across packages today, when every top-level declaration is public (OQ-CM1). Once a package can hide constructors, it must export a generator for such a type or the importer cannot test props over it.
 - **OQ-P6 — Temporal / safety properties.** Properties about traces of operations (e.g., "every `acquire` is eventually followed by `release`") are out of scope for v0.4.3. Linear effects (`spec/effects.md` §3.5) provide a partial alternative for resource lifecycles. Revisit when language matures.
 
 ## 13. Cross-references
@@ -567,6 +600,9 @@ fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String =
 | `spec/syntax_grammar.ebnf` | `PropDecl`, `PropExpr`, `ForallExpr`, `ImpliesExpr` syntax |
 | `spec/type_system.md` | §5.3 (`Part`), §5.4 (`Self`), §6.4 (Marker class — refinement caps), §7.4.a (auto-derived `fold`); OQ7 deferred per §3.3 |
 | `spec/quantities.md` | Rule Q5.5 (prop bodies at quantity 0), Q5.9 / Q5.10 (semiring usage) |
+| `spec/cost.md` | Cost props (Rule P3.5): the contract language, inference and the statuses an asymptotic bound can have |
+| `spec/compilation_model.md` | Prop bodies in the interface tier (Rule CM7.2); the content hash (Rule CM7.1) behind Rule P7.4; Rule CM5.2 behind Rule P5.3.c |
+| `spec/reports.md` | Coverage statuses built on Rule P7.7; enumeration (Rule P8.5) uses the cardinality count |
 | `spec/effects.md` | Effects forbidden in props (§4.2 here); linear effects (§3.5 there) as resource-lifecycle alternative to OQ-P6 |
 | `spec/pattern_matching.md` | Rule M6.2 (refinement-aided exhaustiveness) shares prop-evidence machinery |
 | `spec/memory_management.md` | `proved` props (Rule P7.7) inform reuse decisions and bounds-check elision |
