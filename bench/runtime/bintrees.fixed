@@ -20,4 +20,4 @@ fn count(t: Tree) -> u64 =
     t.fold(() -> 1, (l, r) -> l + r + 1)
 
 fn main() -> () with Console =
-    Console.print_line(count(make(20)).show())
+    Console.printLine(count(make(20)).show())

@@ -274,14 +274,14 @@ class ParserRecoverySuite extends FunSuite with ParserTestSupport:
       else "\n" + errors.map(rep.format).mkString("\n")
     assert(errors.isEmpty, s"01_basics.fixed produced ${errors.size} parse errors:$errorReport")
 
-    /** Top-level: 1 use + 4 fns (greet, fib_iter, print_fibs, main). */
+    /** Top-level: 1 use + 4 fns (greet, fibIter, printFibs, main). */
     tree match
       case Trees.CompilationUnit(items, _) =>
         val uses = items.collect { case u: Trees.UseDecl => u }
         val fns = items.collect { case f: Trees.FnDecl => f }
         assertEquals(uses.length, 1, s"expected 1 use, got ${uses.length}")
         assertEquals(fns.length, 4, s"expected 4 fns, got ${fns.length}")
-        assertEquals(fns.map(_.name), List("greet", "fib_iter", "print_fibs", "main"))
+        assertEquals(fns.map(_.name), List("greet", "fibIter", "printFibs", "main"))
       case _ => fail(s"expected CompilationUnit, got $tree")
 
 end ParserRecoverySuite

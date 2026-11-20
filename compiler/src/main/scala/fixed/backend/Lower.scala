@@ -179,11 +179,11 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
         ctype(t, l.span) match
           case f: CType.Float => k(Atom.FloatC(BigDecimal(l.value), f))
           case _: CType.Slot  =>
-            tableCall(t, "Numeric", "from_i64", List(Atom.IntC(l.value, CType.Int(64, signed = true))), l, sc)(k)
+            tableCall(t, "Numeric", "fromI64", List(Atom.IntC(l.value, CType.Int(64, signed = true))), l, sc)(k)
           case c => k(Atom.IntC(l.value, c))
       case l: Trees.FloatLit =>
         ctype(typeOf(l, sc), l.span) match
-          case _: CType.Slot => unsupported(l.span, "a float literal of parameter type (no `from_f64`)", k)
+          case _: CType.Slot => unsupported(l.span, "a float literal of parameter type (no `fromF64`)", k)
           case c             => k(Atom.FloatC(l.value, c))
       case Trees.BoolLit(v, _)       => k(Atom.BoolC(v))
       case Trees.CharLit(c, _)       => k(Atom.IntC(BigInt(c.toInt), CType.Int(32, signed = false)))
@@ -624,13 +624,13 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
             case _ => None
         }
 
-  /** `builtin.parse_u64(s)`: the C side parses; the result is built with the constructors that
+  /** `builtin.parseU64(s)`: the C side parses; the result is built with the constructors that
     * `Result.ok` and `Result.err` map to on the representing data type.
     */
   private def intrinsic(m: Trees.MethodCall, sc: Scope)(k: K): Expr =
     val result = typeOf(m, sc)
     (m.method, m.args.getOrElse(Nil), dataOf(result), symbols.scope.get("Result")) match
-      case ("parse_u64", List(arg), Some((data, _)), Some(cap)) =>
+      case ("parseU64", List(arg), Some((data, _)), Some(cap)) =>
         val tagOf = (ctor: String) =>
           symbols.constructorsOf(cap, ctor).find(_._1 == symbols(data).name)
             .map(c => symbols.variantsOf(data).indexWhere(_.name == c._2)).getOrElse(0)
@@ -701,9 +701,9 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
     val owner = symbols.scope.get(s.qualifier)
     val resolved = unit.typing.flatMap(_.constructors.find(_._1 eq s)).map((_, d, v) => (d, v))
     (s.qualifier, s.method, args) match
-      case ("Console", "print_line", List(arg)) => expr(arg, sc)(a => runtime("fx_print_line", List(a), s, sc)(k))
-      case ("Console", "read_line", Nil)        => runtime("fx_read_line", Nil, s, sc)(k)
-      case _                                    =>
+      case ("Console", "printLine", List(arg)) => expr(arg, sc)(a => runtime("fx_print_line", List(a), s, sc)(k))
+      case ("Console", "readLine", Nil)        => runtime("fx_read_line", Nil, s, sc)(k)
+      case _                                   =>
         owner.filter(symbols(_).kind == SymKind.Data).map(d => d -> s.method).orElse(resolved) match
           case Some((data, "unfold")) if !hasVariant(data, "unfold") =>
             val seed = args.headOption.fold(Type.UnitType)(typeOf(_, sc))

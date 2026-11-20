@@ -17,7 +17,7 @@ Stack satisfies Sequencing:
         Stack.Empty => Stack.Empty
 Stack satisfies Folding:
     fn fold(init: R, f: (R, Part) -> R) = self.fold((h, rest: R -> R) -> (acc) -> rest(f(acc, h)), () -> (acc) -> acc)(init)
-    fn fold_right(init: R, f: (Part, R) -> R) = self.fold((h, acc) -> f(h, acc), () -> init)
+    fn foldRight(init: R, f: (Part, R) -> R) = self.fold((h, acc) -> f(h, acc), () -> init)
     fn find(pred: Part -> bool) = self.fold((x, found) -> if pred(x): Optional.some(x) else: found, () -> Optional.none)
 
 fn total(s: Stack of u64) -> u64 = s.fold(0, (a, x) -> a + x)
@@ -34,7 +34,7 @@ fn main() -> () with Console =
     let a = Stack.Push(1, Stack.Push(2, Stack.Empty))
     let b = Stack.Push(5, Stack.Empty)
     let s = Stack.Push(b, Stack.Push(a, Stack.Push(b, Stack.Empty)))
-    Console.print_line(tt(s).show())
-    Console.print_line(len(s).show())
-    Console.print_line(glen(s).show())
-    Console.print_line(pick(s).show())
+    Console.printLine(tt(s).show())
+    Console.printLine(len(s).show())
+    Console.printLine(glen(s).show())
+    Console.printLine(pick(s).show())

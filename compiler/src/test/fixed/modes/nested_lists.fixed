@@ -16,9 +16,9 @@ fn good(xs: List of String) -> u64 = lens([xs, xs])
 
 fn main() -> () with Console =
     let a = [1, 2]
-    Console.print_line(lens([a, a, a]).show())
-    Console.print_line(total([a, [3]]).show())
-    Console.print_line(len2([a, a]).show())
-    Console.print_line(inner([a, [5, 6]]).fold("", (s, x) -> s.concat(x.show())))
-    Console.print_line(total(nested(4)).show())
-    Console.print_line(good(["a".concat("b"), "c"]).show())
+    Console.printLine(lens([a, a, a]).show())
+    Console.printLine(total([a, [3]]).show())
+    Console.printLine(len2([a, a]).show())
+    Console.printLine(inner([a, [5, 6]]).fold("", (s, x) -> s.concat(x.show())))
+    Console.printLine(total(nested(4)).show())
+    Console.printLine(good(["a".concat("b"), "c"]).show())

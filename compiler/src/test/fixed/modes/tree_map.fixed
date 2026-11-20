@@ -17,6 +17,6 @@ fn gmap(t: Tree of A, f: A -> B) -> Tree of B = t.map(f)
 
 fn main() -> () with Console =
     let t = Tree.Node(Tree.Leaf, leaf1(2), Tree.Node(Tree.Leaf, Tree.Node(leaf1(3), 4, Tree.Leaf), Tree.Leaf))
-    Console.print_line(inner(sums(t)).show())
-    Console.print_line(inner(gmap(t, (v) -> inner(v) + 1)).show())
-    Console.print_line(inner(gmap(t, (v) -> 1)).show())
+    Console.printLine(inner(sums(t)).show())
+    Console.printLine(inner(gmap(t, (v) -> inner(v) + 1)).show())
+    Console.printLine(inner(gmap(t, (v) -> 1)).show())

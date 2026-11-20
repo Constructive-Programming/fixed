@@ -10,7 +10,7 @@ fn wrap(x: A) -> List of A = [x]
 fn good(xs: is Folding of String) -> u64 = count(wrap(xs))
 
 fn main() -> () with Console =
-    Console.print_line(count(twice("a".concat("b"))).show())
-    Console.print_line(count(twice(7)).show())
-    Console.print_line(count([[[1]], [[2]]]).show())
-    Console.print_line(good(["a".concat("b"), "c"]).show())
+    Console.printLine(count(twice("a".concat("b"))).show())
+    Console.printLine(count(twice(7)).show())
+    Console.printLine(count([[[1]], [[2]]]).show())
+    Console.printLine(good(["a".concat("b"), "c"]).show())

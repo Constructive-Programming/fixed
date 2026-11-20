@@ -9,6 +9,6 @@ fn pick(xss: List of List of u64) -> u64 =
 fn first(xss: List of A, p: A -> bool) -> u64 = xss.find(p).fold((x) -> 1, () -> 0)
 
 fn main() -> () with Console =
-    Console.print_line(pick([[1], [2, 3], [4, 5]]).show())
-    Console.print_line(pick([[1], [7]]).show())
-    Console.print_line(first([[1], [2, 3]], (xs) -> xs.length() == 2).show())
+    Console.printLine(pick([[1], [2, 3], [4, 5]]).show())
+    Console.printLine(pick([[1], [7]]).show())
+    Console.printLine(first([[1], [2, 3]], (xs) -> xs.length() == 2).show())

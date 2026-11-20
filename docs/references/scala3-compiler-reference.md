@@ -217,8 +217,8 @@ def normalizedCompatible(tp: Type, pt: Type, keepConstraint: Boolean)(using Cont
 ```
 
 Why this matters for Fixed:
-- **`is` bounds at parameter sites are exactly prototypes.** When typing `let n = some_expr` where `some_expr` flows into a parameter `n: N is Numeric`, the prototype "must satisfy `Numeric`" travels into the typing of `some_expr`.
-- **`fn -> cap` arguments need symbolic prototypes.** When `between(lo, hi)` is called with `lo` and `hi` whose values are not yet known, the prototype carries `lo` and `hi` as *symbolic terms* so the cap body's `prop in_range: min <= Self && Self <= max` can be checked against the actual call site.
+- **`is` bounds at parameter sites are exactly prototypes.** When typing `let n = someExpr` where `someExpr` flows into a parameter `n: N is Numeric`, the prototype "must satisfy `Numeric`" travels into the typing of `someExpr`.
+- **`fn -> cap` arguments need symbolic prototypes.** When `between(lo, hi)` is called with `lo` and `hi` whose values are not yet known, the prototype carries `lo` and `hi` as *symbolic terms* so the cap body's `prop inRange: min <= Self && Self <= max` can be checked against the actual call site.
 - **Implicit/synthesizer search uses prototypes.** Fixed's `satisfies` resolution at constructor-call sites (`Optional.some(x)` → `Maybe.Just(x)`) is structurally the same problem as Scala's implicit search: given a prototype, find an in-scope satisfaction that matches.
 
 The implicit-search machinery (`typer/Implicits.scala`, `typer/Synthesizer.scala`) is worth reading as a model for how Fixed will resolve `satisfies` declarations.

@@ -292,7 +292,7 @@ class WitnessSuite extends munit.FunSuite:
     assert("call \\S+ @\"fx_u_u8\\.add\"".r.findFirstIn(ir).isEmpty, ir)
     assert(ir.contains("@\"fx_t_u8:Numeric\" = private unnamed_addr constant [11 x { ptr, ptr }]"), ir)
 
-  test("Eq, lt, le, from_i64 and negate at primitive types, and String's Eq, Concat and Show, through tables"):
+  test("Eq, lt, le, fromI64 and negate at primitive types, and String's Eq, Concat and Show, through tables"):
     val lower = Lower(unit)
     val bools = tableOf(lower, prim("bool"), "Show")
     val strings = (cap: String) => tableOf(lower, data("String"), cap)
@@ -311,7 +311,7 @@ class WitnessSuite extends munit.FunSuite:
         "le",
         List(Atom.FloatC(BigDecimal("2.5"), CType.Float(64)), Atom.FloatC(BigDecimal("2.5"), CType.Float(64)))
       ),
-      ("u8", u8, "from_i64", List(Atom.IntC(300, i64))),
+      ("u8", u8, "fromI64", List(Atom.IntC(300, i64))),
       ("i64", i64, "negate", List(Atom.IntC(7, i64)))
     )
     val lets = checks.zipWithIndex.flatMap { case ((t, rt, member, args), i) =>
@@ -488,13 +488,13 @@ class WitnessSuite extends munit.FunSuite:
     val order = (cap: String) => Tables.members(symbols, symbols.scope(cap))
     assertEquals(
       order("Numeric"),
-      List("from_i64", "add", "sub", "mul", "div", "rem", "negate", "eq", "compare", "lt", "le")
+      List("fromI64", "add", "sub", "mul", "div", "rem", "negate", "eq", "compare", "lt", "le")
     )
     assertEquals(order("Ord"), List("compare", "eq", "lt", "le"))
-    assertEquals(order("Optional"), List("some", "none", "fold", "map", "fold_right", "find"))
-    assertEquals(order("Folding"), List("fold", "fold_right", "find"))
+    assertEquals(order("Optional"), List("some", "none", "fold", "map", "foldRight", "find"))
+    assertEquals(order("Folding"), List("fold", "foldRight", "find"))
     assertEquals(order("Show"), List("show"))
-    assertEquals(Lower(unit).table(prim("bool"), "Numeric"), Left("`bool` does not define `Numeric.from_i64`"))
+    assertEquals(Lower(unit).table(prim("bool"), "Numeric"), Left("`bool` does not define `Numeric.fromI64`"))
     assertEquals(Lower(unit).table(data("List", prim("u64")), "Eq"), Left("`List of u64` does not define `Eq.eq`"))
     val a = fixed.core.Type.TypeRef(symbols.typeParamsOf(symbols.scope("List")).head, Nil)
     assert(Lower(unit).table(data("List", a), "Folding").left.exists(_.contains("run time")))

@@ -32,10 +32,10 @@ class CompilerSuite extends munit.FunSuite:
     val stmts = main.body.collect { case Trees.Block(ss, _) => ss }.get
     val call = stmts.last match
       case a: Trees.Apply => a
-      case other          => fail(s"expected `print_fibs(20)`, got $other")
+      case other          => fail(s"expected `printFibs(20)`, got $other")
     assertEquals(unit.typeOf(call), Some(Type.UnitType))
 
-    /** `print_fibs(20)`: the literal's variable is solved to the parameter's type. */
+    /** `printFibs(20)`: the literal's variable is solved to the parameter's type. */
     val literal = call.args.head
     assertEquals(unit.typeOf(literal), Some(Type.PrimType("u64")))
 

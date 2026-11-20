@@ -13,5 +13,5 @@ fn mk(a: u64, b: String) -> M of (u64, String) = M.Y(b, M.Y(b.concat("w"), M.Nil
 fn mk2(a: u64, b: u64) -> M of (u64, u64) = M.X(a, M.Y(b, M.X(a, M.Nil)))
 
 fn main() -> () with Console =
-    Console.print_line(size(mk(1, "x".concat("y"))).show())
-    Console.print_line(size(mk2(1, 2)).show())
+    Console.printLine(size(mk(1, "x".concat("y"))).show())
+    Console.printLine(size(mk2(1, 2)).show())

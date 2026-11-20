@@ -30,20 +30,20 @@ cap Sorted of (Part is Ord) extends Sequencing:
 
 // A NonEmpty collection guarantees at least one element.
 cap NonEmpty extends Sequencing + Sized:
-    prop non_empty: size > 0
+    prop nonEmpty: size > 0
 
 // A Stack with properties relating push/pop to size.
 cap Stack extends Sequencing + Sized:
     fn push(value: Part) -> Self
     fn pop -> Self
 
-    prop push_increments: forall (s: Self, x: Part) ->
+    prop pushIncrements: forall (s: Self, x: Part) ->
         s.push(x).size == s.size + 1
 
-    prop pop_decrements: forall (s: Self) suchThat s.size > 0 ->
+    prop popDecrements: forall (s: Self) suchThat s.size > 0 ->
         s.pop().size == s.size - 1
 
-    prop push_pop_identity: forall (s: Self, x: Part) ->
+    prop pushPopIdentity: forall (s: Self, x: Part) ->
         s.push(x).pop == s
 
 // =========================================================================
@@ -56,7 +56,7 @@ cap Stack extends Sequencing + Sized:
 data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
     Bounded(value: N)
 
-    prop in_range: forall (b: Self) ->
+    prop inRange: forall (b: Self) ->
         b.lo <= b.value && b.value <= b.hi
 
 // =========================================================================
@@ -67,12 +67,12 @@ data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
 data NonEmptyList of A (head: A, tail: List of A)
 
 cap Pushed:
-    Self.fn push_on(top: Part, rest: List of Part) -> Self
+    Self.fn pushOn(top: Part, rest: List of Part) -> Self
     Self.fn empty -> Self
     fn top -> Part
 
 NonEmptyList satisfies Pushed:
-    NonEmptyList as push_on
+    NonEmptyList as pushOn
     impossible as empty
     fn top = self.head
 
@@ -80,10 +80,10 @@ NonEmptyList satisfies Pushed:
 // Part 4: Sorted-collection invariants live on the *result type*
 // =========================================================================
 //
-// Function-result postconditions (a `prop result_*: ...` at the top of a
+// Function-result postconditions (a `prop result*: ...` at the top of a
 // fn body) are deferred to a future release of Fixed. The sortedness and
 // size invariants that would otherwise be expressed as postconditions on
-// `sort` / `insert_sorted` are instead carried by the result type's
+// `sort` / `insertSorted` are instead carried by the result type's
 // capability bound — `C is Sorted` already obligates sortedness, and
 // `Sized` props on the cap (§Part 1) carry size-relation invariants.
 
@@ -92,7 +92,7 @@ NonEmptyList satisfies Pushed:
 // so the typer enforces it at the call site without a separate
 // postcondition on this fn.
 fn sort(collection: C is Sequencing + Sized of (A is Ord)) -> C is Sorted =
-    collection.fold_right(C.empty, (x, acc) -> insert_sorted(acc, x))
+    collection.foldRight(C.empty, (x, acc) -> insertSorted(acc, x))
 
 // insert into a sorted collection preserves sortedness — again carried
 // by the result type `C is Sorted`. A size-grows-by-one postcondition
@@ -103,7 +103,7 @@ fn sort(collection: C is Sequencing + Sized of (A is Ord)) -> C is Sorted =
 // On each element we either insert `value` before it (if not yet inserted
 // and `value <= e`), or simply append `e` to the prefix. After the fold,
 // if `value` was never inserted (it is the largest), append it.
-fn insert_sorted(
+fn insertSorted(
     sorted: C is Sorted of (A is Ord),
     value: A
 ) -> C is Sorted =
@@ -128,15 +128,15 @@ fn insert_sorted(
 // as `Bounded of (i64, 0, 100)`). Construction passes only the variant's
 // runtime fields; the bounds are fixed at the type-application site.
 //
-// `clamp_default` uses the data type's default bounds [16, 24].
-fn clamp_default(value: N is Numeric + Ord) -> Bounded of N =
+// `clampDefault` uses the data type's default bounds [16, 24].
+fn clampDefault(value: N is Numeric + Ord) -> Bounded of N =
     if value < 16: Bounded.Bounded(16)
     else if value > 24: Bounded.Bounded(24)
     else: Bounded.Bounded(value)
 
-// `clamp_unit` uses non-default compile-time bounds [0, 10] — a different
+// `clampUnit` uses non-default compile-time bounds [0, 10] — a different
 // `Bounded` type.
-fn clamp_unit(value: N is Numeric + Ord) -> Bounded of (N, 0, 10) =
+fn clampUnit(value: N is Numeric + Ord) -> Bounded of (N, 0, 10) =
     if value < 0: Bounded.Bounded(0)
     else if value > 10: Bounded.Bounded(10)
     else: Bounded.Bounded(value)
@@ -151,13 +151,13 @@ fn clamp_unit(value: N is Numeric + Ord) -> Bounded of (N, 0, 10) =
 
 // SortedNonEmpty combines both invariants
 cap SortedNonEmpty of (Part is Ord) extends Sorted + NonEmpty
-    // Both `sorted` and `non_empty` props are inherited
+    // Both `sorted` and `nonEmpty` props are inherited
 
 fn median(collection: C is SortedNonEmpty of (N is Numeric)) -> N =
     let mid = collection.size / 2
     collection.get(mid).fold(
         (v) -> v,
-        () -> unreachable  // compiler knows this via `non_empty`
+        () -> unreachable  // compiler knows this via `nonEmpty`
     )
 
 // =========================================================================
@@ -167,26 +167,26 @@ fn median(collection: C is SortedNonEmpty of (N is Numeric)) -> N =
 // A function that returns a capability. The returned cap constrains
 // values of type N to lie within [min, max].
 fn between(min: N is Ord, max: N) -> cap of N =
-    prop in_range: min <= Self && Self <= max
+    prop inRange: min <= Self && Self <= max
 
 fn positive() -> cap of (N is Numeric + Ord) =
     prop positive: Self > 0
 
-fn non_zero() -> cap of (N is Numeric) =
-    prop non_zero: Self != 0
+fn nonZero() -> cap of (N is Numeric) =
+    prop nonZero: Self != 0
 
-fn max_length(limit: u64) -> cap extends Sized =
+fn maxLength(limit: u64) -> cap extends Sized =
     prop bounded: size <= limit
 
-fn min_length(limit: u64) -> cap extends Sized =
+fn minLength(limit: u64) -> cap extends Sized =
     prop bounded: size >= limit
 
-fn multiple_of(divisor: N is Numeric) -> cap of N =
+fn multipleOf(divisor: N is Numeric) -> cap of N =
     prop multiple: Self % divisor == 0
 
 // Sugar form — `cap Name(params)` desugars to `fn name(params) -> cap`
 cap Between(min: N is Ord, max: N) of N:
-    prop in_range: min <= Self && Self <= max
+    prop inRange: min <= Self && Self <= max
 
 // =========================================================================
 // Part 7: Type aliases with cap-generating functions
@@ -194,19 +194,19 @@ cap Between(min: N is Ord, max: N) of N:
 
 type Port = u16 + between(1, 65535)
 type Percentage = f64 + between(0.0, 100.0)
-type Username = String + min_length(3) + max_length(32)
-type EvenNumber = i64 + multiple_of(2)
+type Username = String + minLength(3) + maxLength(32)
+type EvenNumber = i64 + multipleOf(2)
 
 // Parameterized type aliases
 type PortRange(min: u16, max: u16) = u16 + between(min, max)
-type BoundedString(max: u64) = String + max_length(max)
+type BoundedString(max: u64) = String + maxLength(max)
 type Clamped(lo: N is Numeric + Ord, hi: N) = N + between(lo, hi)
 
 // =========================================================================
 // Part 8: Using cap generators in function signatures
 // =========================================================================
 
-fn validate_age(age: N is Numeric + between(0, 150)) -> N =
+fn validateAge(age: N is Numeric + between(0, 150)) -> N =
     age
 
 fn clamp(value: N is Numeric + Ord, lo: N, hi: N) -> N is between(lo, hi) =
@@ -214,13 +214,13 @@ fn clamp(value: N is Numeric + Ord, lo: N, hi: N) -> N is between(lo, hi) =
     else if value > hi: hi
     else: value
 
-fn safe_divide(
+fn safeDivide(
     numerator: N is Numeric,
-    denominator: N is non_zero(),
+    denominator: N is nonZero(),
 ) -> N =
     numerator / denominator
 
-fn sum_bounded(
+fn sumBounded(
     numbers: C is Folding of (N is Numeric + between(0, 100)),
 ) -> N =
     numbers.fold(0, (acc, x) -> acc + x)
@@ -228,14 +228,14 @@ fn sum_bounded(
 fn abs(n: N is Numeric + Ord) -> N is positive() =
     if n < 0: -n else: n
 
-fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String =
-    let n = parse_u16(s)
+fn parsePort(s: String) -> N is PortRange(1024, 49151) with Fail of String =
+    let n = parseU16(s)
     if n < 1024: Fail.fail("port too low")
     else if n > 49151: Fail.fail("port too high")
     else: n
 
-fn read_username() -> S is BoundedString(32) with Console + Fail of String =
-    let name = Console.read_line()
+fn readUsername() -> S is BoundedString(32) with Console + Fail of String =
+    let name = Console.readLine()
     if name.size > 32: Fail.fail("too long")
     else: name
 
@@ -243,7 +243,7 @@ fn read_username() -> S is BoundedString(32) with Console + Fail of String =
 // Part 9: First-class cap generators
 // =========================================================================
 
-fn validate_with(
+fn validateWith(
     value: N is Numeric,
     constraint: (N, N) -> cap of N,
     lo: N,
@@ -253,10 +253,10 @@ fn validate_with(
     else if value > hi: Fail.fail("too high")
     else: value
 
-fn strict_between(min: N is Ord, max: N) -> cap of N =
-    prop in_range: min < Self && Self < max    // strict inequality
+fn strictBetween(min: N is Ord, max: N) -> cap of N =
+    prop inRange: min < Self && Self < max    // strict inequality
 
-fn bounded_positive(lo: N is Numeric + Ord, hi: N) -> cap of N =
+fn boundedPositive(lo: N is Numeric + Ord, hi: N) -> cap of N =
     prop lower: lo <= Self
     prop upper: Self <= hi
     prop pos: Self > 0
@@ -269,35 +269,35 @@ fn main() -> () with Console =
     // --- Properties ---
     let numbers = [5, 2, 8, 1, 9, 3]
     let sorted = sort(numbers)
-    Console.print_line("Sorted: ".concat(sorted.show()))
+    Console.printLine("Sorted: ".concat(sorted.show()))
 
-    let bounded = clamp_default(42)
-    Console.print_line("Clamped 42 to default [16,24]: ".concat(bounded.value.show()))
+    let bounded = clampDefault(42)
+    Console.printLine("Clamped 42 to default [16,24]: ".concat(bounded.value.show()))
 
-    let bounded2 = clamp_unit(15)
-    Console.print_line("Clamped 15 to [0,10]: ".concat(bounded2.value.show()))
+    let bounded2 = clampUnit(15)
+    Console.printLine("Clamped 15 to [0,10]: ".concat(bounded2.value.show()))
 
     let nat5 = Nat.Succ(Nat.Succ(Nat.Succ(Nat.Succ(Nat.Succ(Nat.Zero)))))
-    Console.print_line("Nat 5 to u64: ".concat(nat5.fold(() -> 0, (n) -> n + 1).show()))
+    Console.printLine("Nat 5 to u64: ".concat(nat5.fold(() -> 0, (n) -> n + 1).show()))
 
     // --- Refinement types ---
-    let age = validate_age(25)
-    Console.print_line("Valid age: ".concat(age.show()))
+    let age = validateAge(25)
+    Console.printLine("Valid age: ".concat(age.show()))
 
     let clamped = clamp(42, 0, 10)
-    Console.print_line("Clamped 42 to [0,10]: ".concat(clamped.show()))
+    Console.printLine("Clamped 42 to [0,10]: ".concat(clamped.show()))
 
-    let result = safe_divide(100, 7)
-    Console.print_line("100 / 7 = ".concat(result.show()))
+    let result = safeDivide(100, 7)
+    Console.printLine("100 / 7 = ".concat(result.show()))
 
-    let positive_val = abs(-5)
-    Console.print_line("abs(-5) = ".concat(positive_val.show()))
+    let positiveVal = abs(-5)
+    Console.printLine("abs(-5) = ".concat(positiveVal.show()))
 
     // Pass a cap generator as an argument
-    handle validate_with(42, between, 0, 100):
-        Fail.fail(e) => Console.print_line("Error: ".concat(e))
-        return(v) => Console.print_line("Validated: ".concat(v.show()))
+    handle validateWith(42, between, 0, 100):
+        Fail.fail(e) => Console.printLine("Error: ".concat(e))
+        return(v) => Console.printLine("Validated: ".concat(v.show()))
 
-    handle validate_with(50, strict_between, 0, 100):
-        Fail.fail(e) => Console.print_line("Error: ".concat(e))
-        return(v) => Console.print_line("Strict validated: ".concat(v.show()))
+    handle validateWith(50, strictBetween, 0, 100):
+        Fail.fail(e) => Console.printLine("Error: ".concat(e))
+        return(v) => Console.printLine("Strict validated: ".concat(v.show()))

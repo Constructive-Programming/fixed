@@ -8,10 +8,10 @@
 Type-checking signatures with cap-generator applications requires evaluating their value-args at compile time:
 
 ```
-fn use_it(x: u64 is weird(loop_const(5))) -> u64 = x
+fn useIt(x: u64 is weird(loopConst(5))) -> u64 = x
 ```
 
-If `loop_const(5)` involves `fold` over recursive data, the typer must evaluate it. What's the termination story?
+If `loopConst(5)` involves `fold` over recursive data, the typer must evaluate it. What's the termination story?
 
 ## Options
 
@@ -43,7 +43,7 @@ This is the same totality requirement Fixed already imposes on user-written `fn`
 
 ### Option 4 — Lazy evaluation with caching
 
-Don't evaluate during type-check; instead, evaluate on demand at prop-verification time and cache. The typer treats `weird(loop_const(5))` as a symbolic cap until verification needs the value.
+Don't evaluate during type-check; instead, evaluate on demand at prop-verification time and cache. The typer treats `weird(loopConst(5))` as a symbolic cap until verification needs the value.
 
 **Pros:** doesn't force eager evaluation; allows complex expressions.
 

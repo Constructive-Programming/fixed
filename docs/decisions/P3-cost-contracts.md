@@ -17,7 +17,7 @@ The proposal was a plugin that derives algorithmic complexity from the type syst
 
 ## Settled while writing the spec
 
-- **Surface.** A cost prop names the member: `prop get_steps: steps(get) <= O(1)`. No grammar change. Provisional (OQ-CT1).
+- **Surface.** A cost prop names the member: `prop getSteps: steps(get) <= O(1)`. No grammar change. Provisional (OQ-CT1).
 - **Statuses.** Testing cannot refute an asymptotic bound, so a bound written with `O(…)` is `proved` or `assumed`. An exact bound can be `tested`.
 - **Size index.** `size(x)` is the number of elements a `fold` visits. It is erased.
 - **Callbacks.** The cost of a function argument is a symbolic term (`steps(f)`), not a row: cost is additive and scales with the number of calls.

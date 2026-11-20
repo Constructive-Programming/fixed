@@ -11,7 +11,7 @@ A cap may declare a default body for an instance method, e.g.
 cap Optional:
     Self.fn some(value: Part) -> Self
     Self.fn none -> Self
-    fn fold(on_some: Part -> R, on_none: () -> R) -> R
+    fn fold(onSome: Part -> R, onNone: () -> R) -> R
     fn isDefined -> bool = self.fold((_) -> true, () -> false)   // default body
     fn orElse(other: Self) -> Self = self.fold((_) -> self, () -> other)
 ```

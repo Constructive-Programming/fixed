@@ -18,14 +18,14 @@ use std.io.Console
 cap Optional extends Functor + Folding:
     Self.fn some(value: Part) -> Self
     Self.fn none -> Self
-    fn fold(on_some: Part -> R, on_none: () -> R) -> R
+    fn fold(onSome: Part -> R, onNone: () -> R) -> R
     fn isDefined -> Boolean
     fn orElse(e: Self) -> Self
 
 cap Result of (E, A):
     Self.fn ok(value: A) -> Self
     Self.fn err(error: E) -> Self
-    fn fold(on_ok: A -> R, on_err: E -> R) -> R
+    fn fold(onOk: A -> R, onErr: E -> R) -> R
 
 // --- Data types are concrete providers via `satisfies` ---
 
@@ -45,7 +45,7 @@ MyMaybe satisfies Optional:
     fn orElse(other: MyMaybe of Part) = match self:
         MyMaybe.Nothing => other
         _ => self
-    fn fold_right(init: R, f: (Part, R) -> R) = match self:
+    fn foldRight(init: R, f: (Part, R) -> R) = match self:
         MyMaybe.Just(a) => f(a, init)
         MyMaybe.Nothing => init
     fn find(pred: Part -> bool) = match self:
@@ -77,20 +77,20 @@ effect Fail of E:
 // Construction via cap constructors (Optional.some, Optional.none) is valid —
 // resolved to MyMaybe.Just / MyMaybe.Nothing via the satisfaction mapping.
 
-fn unwrap_or(opt: is Optional of A, default: A) -> A =
+fn unwrapOr(opt: is Optional of A, default: A) -> A =
     opt.fold((value) -> value, () -> default)
 
-fn map_optional(opt: is Optional of A, f: A -> B) -> is Optional of B =
+fn mapOptional(opt: is Optional of A, f: A -> B) -> is Optional of B =
     opt.fold((value) -> Optional.some(f(value)), () -> Optional.none)
 
-fn and_then(opt: is Optional of A, f: A -> is Optional of B) -> is Optional of B =
+fn andThen(opt: is Optional of A, f: A -> is Optional of B) -> is Optional of B =
     opt.fold((value) -> f(value), () -> Optional.none)
 
 // --- Propagating errors with fold + Fail ---
 
-fn parse_u64(s: String) -> is Result of (String, u64) =
+fn parseU64(s: String) -> is Result of (String, u64) =
     // (builtin parsing — placeholder)
-    builtin.parse_u64(s)
+    builtin.parseU64(s)
 
 fn divide(a: u64, b: u64) -> is Result of (String, u64) =
     if b == 0:
@@ -101,7 +101,7 @@ fn divide(a: u64, b: u64) -> is Result of (String, u64) =
 // Chain multiple fallible operations using fold + Fail
 fn compute(input: String) -> is Result of (String, u64) =
     fn inner(input: String) -> u64 with Fail of String =
-        let n = parse_u64(input).fold((v) -> v, (e) -> Fail.fail(e))
+        let n = parseU64(input).fold((v) -> v, (e) -> Fail.fail(e))
         let doubled = n * 2
         let result = divide(doubled, 3).fold((v) -> v, (e) -> Fail.fail(e))
         result
@@ -118,14 +118,14 @@ cap Map of (K, V):
     fn insert(key: K, value: V) -> Self
     fn get(key: K) -> is Optional of V
 
-fn lookup_user_age(users: is Map of (String, u64), name: String)
+fn lookupUserAge(users: is Map of (String, u64), name: String)
     -> is Optional of u64 =
     users.get(name)
 
 // Combine Optional and Fail: convert "not found" to an error
-fn require_user_age(users: is Map of (String, u64), name: String)
+fn requireUserAge(users: is Map of (String, u64), name: String)
     -> u64 with Fail of String =
-    lookup_user_age(users, name).fold(
+    lookupUserAge(users, name).fold(
         (age) -> age,
         () -> Fail.fail("user not found: ".concat(name)),
     )
@@ -133,6 +133,6 @@ fn require_user_age(users: is Map of (String, u64), name: String)
 fn main() -> () with Console =
     let result = compute("42")
     result.fold(
-        (v) -> Console.print_line("Result: ".concat(v.show())),
-        (e) -> Console.print_line("Error: ".concat(e)),
+        (v) -> Console.printLine("Result: ".concat(v.show())),
+        (e) -> Console.printLine("Error: ".concat(e)),
     )

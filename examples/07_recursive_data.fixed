@@ -58,7 +58,7 @@ fn eval(expr: Expr) -> f64 =
         (inner) -> -inner,                // Neg: child already folded to f64
     )
 
-fn show_expr(expr: Expr) -> String =
+fn showExpr(expr: Expr) -> String =
     expr.fold(
         (v) -> v.show(),
         (l, r) -> "(".concat(l).concat(" + ").concat(r).concat(")"),
@@ -66,7 +66,7 @@ fn show_expr(expr: Expr) -> String =
         (inner) -> "(-".concat(inner).concat(")"),
     )
 
-fn count_nodes(expr: Expr) -> u64 =
+fn countNodes(expr: Expr) -> u64 =
     expr.fold(
         (_) -> 1,
         (l, r) -> 1 + l + r,
@@ -74,7 +74,7 @@ fn count_nodes(expr: Expr) -> u64 =
         (inner) -> 1 + inner,
     )
 
-fn expr_depth(expr: Expr) -> u64 =
+fn exprDepth(expr: Expr) -> u64 =
     expr.fold(
         (_) -> 1,
         (l, r) -> 1 + max(l, r),
@@ -90,31 +90,31 @@ fn expr_depth(expr: Expr) -> u64 =
 // recursion lives entirely in the data type's fold.
 
 // In-order: left, root, right (gives sorted order for BST)
-fn in_order(tree: Tree of A) -> List of A =
+fn inOrder(tree: Tree of A) -> List of A =
     tree.fold(
         (v) -> List.Cons(v, List.Nil),                          // Leaf
-        (left_list, v, right_list) ->                            // Branch
-            concat(left_list, List.Cons(v, right_list)),
+        (leftList, v, rightList) ->                            // Branch
+            concat(leftList, List.Cons(v, rightList)),
         () -> List.Nil,                                          // Empty
     )
 
 // Pre-order: root, left, right
-fn pre_order(tree: Tree of A) -> List of A =
+fn preOrder(tree: Tree of A) -> List of A =
     tree.fold(
         (v) -> List.Cons(v, List.Nil),                          // Leaf
-        (left_list, v, right_list) ->                            // Branch
-            List.Cons(v, concat(left_list, right_list)),
+        (leftList, v, rightList) ->                            // Branch
+            List.Cons(v, concat(leftList, rightList)),
         () -> List.Nil,                                          // Empty
     )
 
-fn tree_depth(tree: Tree of A) -> u64 =
+fn treeDepth(tree: Tree of A) -> u64 =
     tree.fold(
         (_) -> 1,                                                // Leaf
         (ld, _, rd) -> 1 + (if ld > rd: ld else: rd),            // Branch
         () -> 0,                                                 // Empty
     )
 
-fn tree_size(tree: Tree of A) -> u64 =
+fn treeSize(tree: Tree of A) -> u64 =
     tree.fold(
         (_) -> 1,                                                // Leaf
         (ls, _, rs) -> 1 + ls + rs,                              // Branch
@@ -140,11 +140,11 @@ fn insert(tree: Tree of (A is Ord), value: A) -> Tree of A =
                 () -> Tree.Branch(Tree.Empty, v, Tree.Leaf(value)),  // gt
             ),
         // Branch: each recursive field is paired (original, inserted).
-        (left, left_ins, v, right, right_ins) ->
+        (left, leftIns, v, right, rightIns) ->
             value.compare(v).fold(
-                () -> Tree.Branch(left_ins, v, right),    // lt: rebuild left, keep right verbatim
+                () -> Tree.Branch(leftIns, v, right),    // lt: rebuild left, keep right verbatim
                 () -> Tree.Branch(left, v, right),        // eq: no change
-                () -> Tree.Branch(left, v, right_ins),    // gt: keep left verbatim, rebuild right
+                () -> Tree.Branch(left, v, rightIns),    // gt: keep left verbatim, rebuild right
             ),
         () -> Tree.Leaf(value),                            // Empty
     )
@@ -158,17 +158,17 @@ fn insert(tree: Tree of (A is Ord), value: A) -> Tree of A =
 fn search(tree: Tree of (A is Ord), target: A) -> bool =
     tree.para(
         (v) -> v == target,                                // Leaf
-        (_, left_found, v, _, right_found) ->              // Branch
+        (_, leftFound, v, _, rightFound) ->              // Branch
             target.compare(v).fold(
-                () -> left_found,    // lt: search left
+                () -> leftFound,    // lt: search left
                 () -> true,           // eq: found
-                () -> right_found,   // gt: search right
+                () -> rightFound,   // gt: search right
             ),
         () -> false,                                       // Empty
     )
 
-fn from_list(items: List of (A is Ord)) -> Tree of A =
-    fold_left(items, Tree.Empty, (tree, item) -> insert(tree, item))
+fn fromList(items: List of (A is Ord)) -> Tree of A =
+    foldLeft(items, Tree.Empty, (tree, item) -> insert(tree, item))
 
 // =========================================================================
 // Anamorphism (unfold): build a recursive structure from a seed
@@ -177,7 +177,7 @@ fn from_list(items: List of (A is Ord)) -> Tree of A =
 // The dual of fold. unfold takes a seed and a step function that returns
 // one "layer" of the data type, with seeds in place of recursive children.
 
-fn to_nat(n: u64) -> Nat =
+fn toNat(n: u64) -> Nat =
     Nat.unfold(
         n,
         (remaining) ->
@@ -187,32 +187,32 @@ fn to_nat(n: u64) -> Nat =
                 Nat.Succ(remaining - 1)
     )
 
-fn to_u64(n: Nat) -> u64 =
+fn toU64(n: Nat) -> u64 =
     n.fold(
         () -> 0,            // Zero
         (pred) -> 1 + pred  // Succ: pred is already folded to u64
     )
 
-fn nat_add(a: Nat, b: Nat) -> Nat =
+fn natAdd(a: Nat, b: Nat) -> Nat =
     a.fold(
         () -> b,
-        (folded_pred) -> Nat.Succ(folded_pred)
+        (foldedPred) -> Nat.Succ(foldedPred)
     )
 
-fn nat_mul(a: Nat, b: Nat) -> Nat =
+fn natMul(a: Nat, b: Nat) -> Nat =
     a.fold(
         () -> Nat.Zero,
-        (folded_pred) -> nat_add(folded_pred, b)
+        (foldedPred) -> natAdd(foldedPred, b)
     )
 
 // Build a balanced sum tree from a range — anamorphism on Expr
-fn balanced_sum(start: u64, end: u64) -> Expr =
+fn balancedSum(start: u64, end: u64) -> Expr =
     Expr.unfold(
         (start, end),
         (pair) ->
             let (lo, hi) = pair
             if lo == hi:
-                Expr.Lit(lo.to_f64())
+                Expr.Lit(lo.toF64())
             else:
                 let mid = lo + (hi - lo) / 2
                 Expr.Add((lo, mid), (mid + 1, hi))
@@ -241,7 +241,7 @@ fn factorial(n: u64) -> u64 =
 
 // Fibonacci as fold over a Nat with a pair accumulator
 fn fibonacci(n: u64) -> u64 =
-    let chain = to_nat(n)
+    let chain = toNat(n)
     let result = chain.fold(
         () -> (0, 1),
         (pair) ->
@@ -266,47 +266,47 @@ fn optimize(expr: Expr) -> Expr =
         (v) -> Expr.Lit(v),
 
         // Add: check for x + 0 and 0 + x
-        (left_orig, left_opt, right_orig, right_opt) ->
-            match (left_opt, right_opt):
-                (Expr.Lit(0.0), _) => right_opt
-                (_, Expr.Lit(0.0)) => left_opt
-                _ => Expr.Add(left_opt, right_opt),
+        (leftOrig, leftOpt, rightOrig, rightOpt) ->
+            match (leftOpt, rightOpt):
+                (Expr.Lit(0.0), _) => rightOpt
+                (_, Expr.Lit(0.0)) => leftOpt
+                _ => Expr.Add(leftOpt, rightOpt),
 
         // Mul: check for x * 0, x * 1, 0 * x, 1 * x
-        (left_orig, left_opt, right_orig, right_opt) ->
-            match (left_opt, right_opt):
+        (leftOrig, leftOpt, rightOrig, rightOpt) ->
+            match (leftOpt, rightOpt):
                 (Expr.Lit(0.0), _) => Expr.Lit(0.0)
                 (_, Expr.Lit(0.0)) => Expr.Lit(0.0)
-                (Expr.Lit(1.0), _) => right_opt
-                (_, Expr.Lit(1.0)) => left_opt
-                _ => Expr.Mul(left_opt, right_opt),
+                (Expr.Lit(1.0), _) => rightOpt
+                (_, Expr.Lit(1.0)) => leftOpt
+                _ => Expr.Mul(leftOpt, rightOpt),
 
         // Neg: check for double negation using the ORIGINAL subtree
-        (inner_orig, inner_opt) ->
-            match inner_orig:
-                Expr.Neg(inner_inner) => inner_inner  // --x => x (use original!)
-                _ => Expr.Neg(inner_opt),
+        (innerOrig, innerOpt) ->
+            match innerOrig:
+                Expr.Neg(innerInner) => innerInner  // --x => x (use original!)
+                _ => Expr.Neg(innerOpt),
     )
 
 // --- Fold-based map on tree (structural, not BST-preserving) ---
 
-fn map_tree(tree: Tree of A, f: A -> B) -> Tree of B =
+fn mapTree(tree: Tree of A, f: A -> B) -> Tree of B =
     tree.fold(
         (v) -> Tree.Leaf(f(v)),
         (left, v, right) -> Tree.Branch(left, f(v), right),
         () -> Tree.Empty,
     )
 
-fn show_tree(tree: Tree of (A is Show)) -> String =
+fn showTree(tree: Tree of (A is Show)) -> String =
     match tree:
         Tree.Empty => "."
         Tree.Leaf(v) => v.show()
         Tree.Branch(left, v, right) =>
-            "(".concat(show_tree(left))
+            "(".concat(showTree(left))
                .concat(" ")
                .concat(v.show())
                .concat(" ")
-               .concat(show_tree(right))
+               .concat(showTree(right))
                .concat(")")
 
 // =========================================================================
@@ -314,55 +314,55 @@ fn show_tree(tree: Tree of (A is Show)) -> String =
 // =========================================================================
 
 fn main() -> () with Console =
-    Console.print_line("=== Catamorphism (fold) ===")
+    Console.printLine("=== Catamorphism (fold) ===")
     let expr = Expr.Add(
         Expr.Mul(Expr.Lit(3.0), Expr.Lit(4.0)),
         Expr.Neg(Expr.Lit(2.0))
     )
-    Console.print_line("Expression: ".concat(show_expr(expr)))
-    Console.print_line("Eval:       ".concat(eval(expr).show()))
-    Console.print_line("Nodes:      ".concat(count_nodes(expr).show()))
-    Console.print_line("Depth:      ".concat(expr_depth(expr).show()))
+    Console.printLine("Expression: ".concat(showExpr(expr)))
+    Console.printLine("Eval:       ".concat(eval(expr).show()))
+    Console.printLine("Nodes:      ".concat(countNodes(expr).show()))
+    Console.printLine("Depth:      ".concat(exprDepth(expr).show()))
 
-    Console.print_line("")
-    Console.print_line("=== Binary Search Tree ===")
-    let tree = from_list([5, 3, 7, 1, 4, 6, 8, 2])
-    Console.print_line("Tree: ".concat(show_tree(tree)))
-    Console.print_line("In-order: ".concat(in_order(tree).show()))
-    Console.print_line("Pre-order: ".concat(pre_order(tree).show()))
-    Console.print_line("Depth: ".concat(tree_depth(tree).show()))
-    Console.print_line("Size: ".concat(tree_size(tree).show()))
-    Console.print_line("Contains 4? ".concat(search(tree, 4).show()))
-    Console.print_line("Contains 9? ".concat(search(tree, 9).show()))
+    Console.printLine("")
+    Console.printLine("=== Binary Search Tree ===")
+    let tree = fromList([5, 3, 7, 1, 4, 6, 8, 2])
+    Console.printLine("Tree: ".concat(showTree(tree)))
+    Console.printLine("In-order: ".concat(inOrder(tree).show()))
+    Console.printLine("Pre-order: ".concat(preOrder(tree).show()))
+    Console.printLine("Depth: ".concat(treeDepth(tree).show()))
+    Console.printLine("Size: ".concat(treeSize(tree).show()))
+    Console.printLine("Contains 4? ".concat(search(tree, 4).show()))
+    Console.printLine("Contains 9? ".concat(search(tree, 9).show()))
 
-    let doubled = map_tree(tree, (x) -> x * 2)
-    Console.print_line("Doubled: ".concat(show_tree(doubled)))
+    let doubled = mapTree(tree, (x) -> x * 2)
+    Console.printLine("Doubled: ".concat(showTree(doubled)))
 
-    Console.print_line("")
-    Console.print_line("=== Anamorphism (unfold) ===")
-    let nat3 = to_nat(3)
-    let nat4 = to_nat(4)
-    Console.print_line("3 as Nat -> u64: ".concat(to_u64(nat3).show()))
-    Console.print_line("3 + 4 = ".concat(to_u64(nat_add(nat3, nat4)).show()))
-    Console.print_line("3 * 4 = ".concat(to_u64(nat_mul(nat3, nat4)).show()))
+    Console.printLine("")
+    Console.printLine("=== Anamorphism (unfold) ===")
+    let nat3 = toNat(3)
+    let nat4 = toNat(4)
+    Console.printLine("3 as Nat -> u64: ".concat(toU64(nat3).show()))
+    Console.printLine("3 + 4 = ".concat(toU64(natAdd(nat3, nat4)).show()))
+    Console.printLine("3 * 4 = ".concat(toU64(natMul(nat3, nat4)).show()))
 
-    Console.print_line("")
-    Console.print_line("=== Hylomorphism (unfold then fold) ===")
-    Console.print_line("5! = ".concat(factorial(5).show()))
-    Console.print_line("fib(10) = ".concat(fibonacci(10).show()))
-    let balanced = balanced_sum(1, 8)
-    Console.print_line("balanced_sum(1,8): ".concat(show_expr(balanced)))
-    Console.print_line("eval: ".concat(eval(balanced).show()))
+    Console.printLine("")
+    Console.printLine("=== Hylomorphism (unfold then fold) ===")
+    Console.printLine("5! = ".concat(factorial(5).show()))
+    Console.printLine("fib(10) = ".concat(fibonacci(10).show()))
+    let balanced = balancedSum(1, 8)
+    Console.printLine("balancedSum(1,8): ".concat(showExpr(balanced)))
+    Console.printLine("eval: ".concat(eval(balanced).show()))
 
-    Console.print_line("")
-    Console.print_line("=== Paramorphism (fold with original subtree) ===")
+    Console.printLine("")
+    Console.printLine("=== Paramorphism (fold with original subtree) ===")
     let unopt = Expr.Add(
         Expr.Lit(0.0),
         Expr.Mul(Expr.Lit(3.0), Expr.Lit(1.0))
     )
-    Console.print_line("Before: ".concat(show_expr(unopt)))
-    Console.print_line("After:  ".concat(show_expr(optimize(unopt))))
+    Console.printLine("Before: ".concat(showExpr(unopt)))
+    Console.printLine("After:  ".concat(showExpr(optimize(unopt))))
 
-    let double_neg = Expr.Neg(Expr.Neg(Expr.Lit(42.0)))
-    Console.print_line("Before: ".concat(show_expr(double_neg)))
-    Console.print_line("After:  ".concat(show_expr(optimize(double_neg))))
+    let doubleNeg = Expr.Neg(Expr.Neg(Expr.Lit(42.0)))
+    Console.printLine("Before: ".concat(showExpr(doubleNeg)))
+    Console.printLine("After:  ".concat(showExpr(optimize(doubleNeg))))

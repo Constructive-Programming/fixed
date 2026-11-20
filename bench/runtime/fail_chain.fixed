@@ -26,4 +26,4 @@ fn attempt() -> u64 =
         return(v) => v
 
 fn main() -> () with Console =
-    Console.print_line(upto(200).fold(0, (acc, _) -> acc + attempt()).show())
+    Console.printLine(upto(200).fold(0, (acc, _) -> acc + attempt()).show())

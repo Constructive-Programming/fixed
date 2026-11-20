@@ -91,24 +91,24 @@ class BaselineSuite extends munit.FunSuite:
     val fn = named(fns, f)
     fn :: Core.lets(fn.body).collect { case (_, Rhs.Closure(code, _, _)) => code }.flatMap(withClosures(fns, _))
 
-  test("fib_iter has one version, its N a slot; its arithmetic, literals and == are table calls"):
+  test("fibIter has one version, its N a slot; its arithmetic, literals and == are table calls"):
     val u = unit("01_basics", file("examples/01_basics"))
     val lower = Lower(u)
     val fns = lower.program.fold(ds => fail(s"${ds.map(_.message)}"), identity)
-    assert(lower.baselines("fib_iter"), lower.baselines)
-    assertEquals(fns.map(_.name).filter(_.startsWith("fib_iter")), List("fib_iter"))
-    val fib = named(fns, "fib_iter")
+    assert(lower.baselines("fibIter"), lower.baselines)
+    assertEquals(fns.map(_.name).filter(_.startsWith("fibIter")), List("fibIter"))
+    val fib = named(fns, "fibIter")
     val (w, t) = (fib.params(0), fib.params(1))
     assertEquals(fib.params.map(_.ctype), List(CType.Witness, CType.Table, CType.Slot(w.name)))
     assertEquals(fib.ret, CType.Slot(w.name))
-    val rhss = withClosures(fns, "fib_iter").flatMap(f => Core.lets(f.body).map(_._2))
+    val rhss = withClosures(fns, "fibIter").flatMap(f => Core.lets(f.body).map(_._2))
     assert(!rhss.exists { case _: Rhs.Prim => true; case _ => false }, rhss)
     val entries = Tables.members(u.symbols, u.symbols.scope("Numeric"))
     val called = rhss.collect { case Rhs.CallTable(`t`, i, _, _) => entries(i) }
-    assertEquals(called.toSet, Set("from_i64", "eq", "sub", "add"))
+    assertEquals(called.toSet, Set("fromI64", "eq", "sub", "add"))
     assertEquals(
-      specialised("01_basics", file("examples/01_basics")).map(_.name).filter(_.startsWith("fib_iter")).sorted,
-      List("fib_iter", "fib_iter[u64]")
+      specialised("01_basics", file("examples/01_basics")).map(_.name).filter(_.startsWith("fibIter")).sorted,
+      List("fibIter", "fibIter[u64]")
     )
 
   test("a call at a type without a full table of the bound calls an instance; another call shares the baseline"):
@@ -137,8 +137,8 @@ class BaselineSuite extends munit.FunSuite:
     val body = Core.lets(join.body).map(_._2)
     assert(body.exists { case Rhs.CallTable(`t`, 0, _, _) => true; case _ => false }, body)
     assert(!Core.callees(join.body).exists(_.contains("foldLeft")), Core.callees(join.body))
-    assert(lower.baselines("map_optional"), lower.baselines)
-    assertEquals(named(fns, "map_optional").ret, CType.Boxed, "`Optional.none` is typed apart: the callee chooses")
+    assert(lower.baselines("mapOptional"), lower.baselines)
+    assertEquals(named(fns, "mapOptional").ret, CType.Boxed, "`Optional.none` is typed apart: the callee chooses")
 
   test("count and sum over `is Folding of ...` have one version each, called at three list types"):
     val (lower, fns) = lowered("anonymous", BaselineSuite.anonymous)
@@ -158,16 +158,16 @@ class BaselineSuite extends munit.FunSuite:
     )
 
   test("a table entry the backend does not build is never called: the call is an instance, here B005"):
-    val src = "fn right(xs: is Folding of u8) -> u64 = xs.fold_right(0, (x, n) -> n + 1)\n\n" +
+    val src = "fn right(xs: is Folding of u8) -> u64 = xs.foldRight(0, (x, n) -> n + 1)\n\n" +
       "fn byte(x: u8) -> u8 = x\n\nfn main() -> () =\n    let n = right([byte(1), byte(2)])\n    ()\n"
     val lower = Lower(unit("right", src))
     val ds = lower.program.fold(identity, fns => fail(s"lowered: ${fns.map(_.name)}"))
-    assert(ds.exists(_.message.contains("fold_right")), ds)
-    assert(lower.instances("right[List of u8]").contains("no `Folding.fold_right` the backend builds"), lower.instances)
+    assert(ds.exists(_.message.contains("foldRight")), ds)
+    assert(lower.instances("right[List of u8]").contains("no `Folding.foldRight` the backend builds"), lower.instances)
 
   test("05: a phantom type parameter gets no witness; a result built by a constructor requirement is the caller's"):
     val (_, fns) = lowered("05_phantom_types", file("examples/05_phantom_types"))
-    List("inspect", "show_quantity").foreach { f =>
+    List("inspect", "showQuantity").foreach { f =>
       val fn = named(fns, f)
       assertEquals(fn.params.map(_.ctype).take(3), List(CType.Witness, CType.Table, CType.Slot(fn.params.head.name)), f)
       assert(!fn.params.exists(_.name.startsWith("w.S.")) && !fn.params.exists(_.name.startsWith("w.U.")), fn.params)
@@ -201,35 +201,35 @@ object BaselineSuite:
     "fn swap(p: (A, B)) -> (B, A) =\n    let (a, b) = p\n    (b, a)\n\n" +
     "fn byte(x: i8) -> i8 = x\n\n" +
     "fn main() -> () with Console =\n" +
-    "    Console.print_line(last(pair(\"a\".concat(\"b\"), \"c\".concat(\"d\")), \"none\"))\n" +
-    "    Console.print_line(last(pair(byte(-3), byte(-100)), byte(0)).show())\n" +
+    "    Console.printLine(last(pair(\"a\".concat(\"b\"), \"c\".concat(\"d\")), \"none\"))\n" +
+    "    Console.printLine(last(pair(byte(-3), byte(-100)), byte(0)).show())\n" +
     "    let p = swap((byte(-7), \"x\".concat(\"y\")))\n" +
-    "    Console.print_line(p.first.concat(p.second.show()))\n"
+    "    Console.printLine(p.first.concat(p.second.show()))\n"
 
   /** `same` at `i64`, which has an `Ord` table, and at `String`, which has none (no `lt`). */
   val partial = "use std.io.Console\n\nfn same(a: N is Ord, b: N) -> bool = a == b\n\n" +
-    "fn main() -> () with Console =\n    Console.print_line(same(\"x\", \"x\").show())\n" +
-    "    Console.print_line(same(3, 4).show())\n"
+    "fn main() -> () with Console =\n    Console.printLine(same(\"x\", \"x\").show())\n" +
+    "    Console.printLine(same(3, 4).show())\n"
 
   /** `half`'s baseline attempt calls `ident`, then fails on the float literal: `half` is an instance. */
   val failedAttempt = "use std.io.Console\n\nfn ident(x: A) -> A = x\n\n" +
     "fn half(x: N is Numeric) -> N =\n    let y = ident(x)\n    y * 0.5\n\n" +
-    "fn main() -> () with Console =\n    Console.print_line(half(3.0).show())\n"
+    "fn main() -> () with Console =\n    Console.printLine(half(3.0).show())\n"
 
   /** Functions over an anonymous `Folding` bound, at `List of String`, `List of u8` and `List of i64`. */
   val anonymous = "use std.io.Console\n\nfn count(xs: is Folding of A) -> u64 = xs.fold(0, (n, x) -> n + 1)\n\n" +
     "fn sum(zero: N is Numeric, xs: is Folding of N) -> N = xs.fold(zero, (a, x) -> a + x)\n\n" +
     "fn byte(x: u8) -> u8 = x\n\nfn main() -> () with Console =\n" +
-    "    Console.print_line(count([\"a\".concat(\"b\"), \"c\".concat(\"d\")]).show())\n" +
-    "    Console.print_line(count([byte(1), byte(2), byte(3)]).show())\n" +
-    "    Console.print_line(sum(byte(0), [byte(200), byte(100)]).show())\n" +
-    "    Console.print_line(sum(0, [200, 100]).show())\n" +
-    "    Console.print_line(join([\"x\".concat(\"y\"), \"z\"], \", \"))\n"
+    "    Console.printLine(count([\"a\".concat(\"b\"), \"c\".concat(\"d\")]).show())\n" +
+    "    Console.printLine(count([byte(1), byte(2), byte(3)]).show())\n" +
+    "    Console.printLine(sum(byte(0), [byte(200), byte(100)]).show())\n" +
+    "    Console.printLine(sum(0, [200, 100]).show())\n" +
+    "    Console.printLine(join([\"x\".concat(\"y\"), \"z\"], \", \"))\n"
 
   /** `two` at one type for both parameters and at two: each anonymous bound is a type parameter of
     * its own (`spec/type_system.md` §5.1), so one baseline version serves both calls.
     */
   val unshared = "use std.io.Console\n\nfn two(a: is Show, b: is Show) -> String = a.show().concat(b.show())\n\n" +
     "fn byte(x: u8) -> u8 = x\n\nfn main() -> () with Console =\n" +
-    "    Console.print_line(two(byte(7), \"x\".concat(\"y\")))\n" +
-    "    Console.print_line(two(byte(1), byte(2)))\n"
+    "    Console.printLine(two(byte(7), \"x\".concat(\"y\")))\n" +
+    "    Console.printLine(two(byte(1), byte(2)))\n"

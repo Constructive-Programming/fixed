@@ -74,7 +74,7 @@ These choices are the typer's own. Each should become a spec rule or be changed.
 - **`builtin.f(...)`** placeholders (host intrinsics in the examples) type their arguments and
   leave the result to inference.
 - **The signature-only stdlib** (`compiler/src/main/resources/stdlib/`) adds members the examples
-  need that `spec/stdlib.md` does not list: `Sequencing.length`, `Folding.find`, `repeat_str`,
+  need that `spec/stdlib.md` does not list: `Sequencing.length`, `Folding.find`, `repeatStr`,
   `join` and `Concat.concat`.
 
 ## Performance

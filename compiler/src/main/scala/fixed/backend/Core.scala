@@ -65,7 +65,7 @@ extension (rhs: Rhs)
       case other                => other
 
 /** Scalar operations. `Widen` converts to the result variable's wider type of the same kind;
-  * `Convert` converts an `i64` to the result's narrower integer or float type (`Numeric.from_i64`).
+  * `Convert` converts an `i64` to the result's narrower integer or float type (`Numeric.fromI64`).
   */
 enum PrimOp:
   case Add, Sub, Mul, Div, Rem, Eq, Ne, Lt, Le, Gt, Ge, Neg, Not, Widen, Convert

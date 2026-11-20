@@ -20,4 +20,4 @@ fn steps(n: u64) -> u64 =
     ).fold(() -> 0, (acc) -> acc + 1)
 
 fn main() -> () with Console =
-    Console.print_line(upto(200).fold(0, (acc, _) -> acc + steps(10000)).show())
+    Console.printLine(upto(200).fold(0, (acc, _) -> acc + steps(10000)).show())

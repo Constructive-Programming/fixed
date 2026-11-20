@@ -55,16 +55,16 @@ A capability with value parameters is already a function from values to a constr
 
 ```
 fn between(min: N is Ord, max: N) -> cap of N =
-    prop in_range: min <= Self && Self <= max
+    prop inRange: min <= Self && Self <= max
 ```
 
 At use sites, a cap-generating function is called wherever a capability name would appear:
 
 ```
-fn validate_age(age: N is Numeric + between(0, 150)) -> N
+fn validateAge(age: N is Numeric + between(0, 150)) -> N
 
 type Port = u16 + between(1, 65535)
-type Username = String + min_length(3) + max_length(32)
+type Username = String + minLength(3) + maxLength(32)
 ```
 
 Constraints are declared at first use of the type variable (same rule as function params). `of N` names the type being refined. Bare `Self` in props refers to the constrained value (sugar for `forall (v: Self) -> v > 0`).
@@ -86,15 +86,15 @@ fn validate(
     else: value
 
 // Compose cap generators
-fn strict_between(min: N is Ord, max: N) -> cap of N =
-    prop in_range: min < Self && Self < max    // strict inequality
+fn strictBetween(min: N is Ord, max: N) -> cap of N =
+    prop inRange: min < Self && Self < max    // strict inequality
 
 // Return a cap generator from a function
-fn range_for(unit: String) -> fn(f64, f64) -> cap of f64 =
+fn rangeFor(unit: String) -> fn(f64, f64) -> cap of f64 =
     match unit:
         "celsius" => between
         "kelvin" => (lo, hi) ->
-            prop in_range: lo <= Self && Self <= hi
+            prop inRange: lo <= Self && Self <= hi
             prop absolute: Self >= 0.0
 ```
 
@@ -116,10 +116,10 @@ A named capability with value params is sugar for a cap-generating function:
 ```
 // These are equivalent:
 cap Between(min: N is Ord, max: N) of N:
-    prop in_range: min <= Self && Self <= max
+    prop inRange: min <= Self && Self <= max
 
 fn between(min: N is Ord, max: N) -> cap of N =
-    prop in_range: min <= Self && Self <= max
+    prop inRange: min <= Self && Self <= max
 ```
 
 The `cap` form is convenient for simple, named refinements. The `fn` form is the general mechanism — use it when you need first-class cap generation, composition, or conditional logic.
@@ -261,7 +261,7 @@ Used in signatures just like any capability:
 
 ```
 fn take(collection: C is ArrayLike, n: u64) -> C
-fn binary_search(sorted: C is ArrayLike of (A is Ordered), target: A) -> ...
+fn binarySearch(sorted: C is ArrayLike of (A is Ordered), target: A) -> ...
 ```
 
 #### Parameterized type aliases
@@ -270,15 +270,15 @@ Type aliases can take value parameters, making them functions from values to cap
 
 ```
 type PortRange(min: u16, max: u16) = u16 + between(min, max)
-type BoundedString(max: u64) = String + max_length(max)
+type BoundedString(max: u64) = String + maxLength(max)
 type Clamped(lo: N is Numeric + Ord, hi: N) = N + between(lo, hi)
 ```
 
 At use sites, they are called like cap-generating functions:
 
 ```
-fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String: ...
-fn read_name() -> S is BoundedString(255) with Console: ...
+fn parsePort(s: String) -> N is PortRange(1024, 49151) with Fail of String: ...
+fn readName() -> S is BoundedString(255) with Console: ...
 ```
 
 This is consistent with the `fn -> cap` story: `type Name(params) = expr` is sugar for a function that returns a capability set. The compiler expands it at every use site, just like plain type aliases.
@@ -358,7 +358,7 @@ Use `satisfies` to **bridge** between data and capabilities — mapping data con
 
 Rules:
 1. **`match` cases may only use data-qualified patterns** — `Json.Null`, `List.Cons(h, t)`, `Direction.North`, `Tuple(a, b)`, etc.
-2. **Capability destruction uses `fold`** — `opt.fold(on_some, on_none)`, `expr.fold(on_lit, on_var, ...)`, `result.fold(on_ok, on_err)`, `ord.fold(on_lt, on_eq, on_gt)`
+2. **Capability destruction uses `fold`** — `opt.fold(onSome, onNone)`, `expr.fold(onLit, onVar, ...)`, `result.fold(onOk, onErr)`, `ord.fold(onLt, onEq, onGt)`
 3. **Construction through a cap's constructor *requirement* is valid** — `Optional.some(x)` is resolved via `satisfies` to a satisfying type's actual constructor (e.g., `Maybe.Just(x)`) at compile time
 4. **Data constructors are Capitalized** — `List.Cons`, `List.Nil`, `Tuple`, `Json.Null`
 5. **Cap constructors are lowercase** — `Optional.some(x)`, `Expr.lit(v)`, `Result.ok(v)`, `Ordering.lt`, `Pair.pair(a, b)` (these are `Self.fn` names)
@@ -383,7 +383,7 @@ let y = x + 1
 y * 2              // this block evaluates to 12
 
 // `if` is an expression
-let abs_n = if n < 0: 0 - n else: n
+let absN = if n < 0: 0 - n else: n
 
 // `match` is an expression
 let name = match direction:
@@ -407,9 +407,9 @@ This is a deliberate design choice:
 
 // Instead, use fold on a recursive data structure:
 fn factorial(n: u64) -> u64 =
-    to_nat(n).fold(
+    toNat(n).fold(
         () -> 1,
-        (acc) -> (acc_index + 1) * acc
+        (acc) -> (accIndex + 1) * acc
     )
 ```
 
@@ -455,10 +455,10 @@ cap Sorted extends Sequencing:
     prop sorted: fold(true, (acc, prev, curr) -> acc && prev <= curr)
 
 cap Stack extends Sequencing + Sized:
-    prop push_increments: forall (s: Self, x: Part) ->
+    prop pushIncrements: forall (s: Self, x: Part) ->
         s.push(x).size == s.size + 1
 
-    prop pop_decrements: forall (s: Self) ->
+    prop popDecrements: forall (s: Self) ->
         s.size > 0 implies s.pop().size == s.size - 1
 ```
 
@@ -476,14 +476,14 @@ data Nat:
     Zero
     Succ(pred: Nat)
 
-    prop non_negative: fold(() -> true, (inner) -> inner)
+    prop nonNegative: fold(() -> true, (inner) -> inner)
 ```
 
 And on functions, as postconditions:
 
 ```
 fn sort(collection: C is Sequencing) -> C is Sorted =
-    prop result_same_size: result.size == collection.size
+    prop resultSameSize: result.size == collection.size
     ...
 ```
 
@@ -743,7 +743,7 @@ spec/                      — Phase 1 deliverables
 ### AST node types needed
 
 - **Items**: `CapDef`, `EffectDef`, `DataDef`, `TypeAlias` (optionally with `ValueParams`), `FnDef`, `PropDef`, `UseDecl`, `ModDecl`, `SatisfactionDecl`
-- **Satisfaction**: `SatisfactionDecl` (`Type satisfies Cap:` followed by indented mappings), `ConstructorMapping` (`Variant as cap_constructor`), `ImpossibleMapping` (`impossible as cap_constructor`)
+- **Satisfaction**: `SatisfactionDecl` (`Type satisfies Cap:` followed by indented mappings), `ConstructorMapping` (`Variant as capConstructor`), `ImpossibleMapping` (`impossible as capConstructor`)
 - **Cap members**: `InstanceMethod`, `StaticMethod` (the `Self.fn` distinction)
 - **Capability refs**: `IsCap` (anonymous), `NamedAlias` (`N is Numeric`), `OfApp` (`Folding of i64`), `SelfOf` (`Self of B`), `CapCall` (`between(10, 30)` — cap-generating function applied to args), `UseSatisfaction` (`use Type satisfies Cap` — satisfaction import)
 - **Cap generation**: `CapReturnType` (`cap of N` as return type), `ValueParams` (definition-site `(min: N is Ord, max: N)`), `ValueArgs` (use-site `(10, 30)`)
@@ -1020,7 +1020,7 @@ Capability sets and quantities are pinned by the time codegen starts. The repres
 | **Baseline lowering** | Lower each function reachable from a root (Rule CM3.2) to one polymorphic baseline version in Core, with value witnesses, capability tables and evidence as hidden parameters (`spec/compilation_model.md` §3–§4). Built in Phase 4.1 |
 | **Specialiser** | Build clones of baseline versions by key, in score order and within the per-function budget, plus the mandatory specialisations (`spec/compilation_model.md` §5). Built in Phase 4.1 |
 | **Match desugarer** (`transform/MatchDesugar.scala`) | Convert `match` to `fold` calls, `if` to `bool.fold`. Implemented as a `MiniPhase` |
-| **Fold specializer** (`transform/FoldSpecializer.scala`) | Guaranteed by the spec, not an optimization level: a mandatory specialisation, outside the clone budget and built in every build mode (`spec/compilation_model.md` Rule CM5.5). Inlines lambda and statically known function arguments of auto-derived `fold` / `unfold` (Rule 7.4.b.2), and fuses an `unfold` consumed by exactly one `fold` into a loop with no intermediate structure (Rule 7.4.b.1). `to_nat(n).fold(...)` compiles to a counted loop. Runs after match desugaring, because desugaring produces more `fold` calls, and before Perceus, so the fused structure never gets reference counts |
+| **Fold specializer** (`transform/FoldSpecializer.scala`) | Guaranteed by the spec, not an optimization level: a mandatory specialisation, outside the clone budget and built in every build mode (`spec/compilation_model.md` Rule CM5.5). Inlines lambda and statically known function arguments of auto-derived `fold` / `unfold` (Rule 7.4.b.2), and fuses an `unfold` consumed by exactly one `fold` into a loop with no intermediate structure (Rule 7.4.b.1). `toNat(n).fold(...)` compiles to a counted loop. Runs after match desugaring, because desugaring produces more `fold` calls, and before Perceus, so the fused structure never gets reference counts |
 | **Perceus inserter** (`perceus/PerceusInserter.scala`) | Insert `dup`/`drop` operations guided by demand × lifetime class (`spec/memory_management.md` §3.2). 0-quantity bindings: erased. `read` borrows; exclusively owned values are reused without a test; Perceus RC only when `Heap` or `Region`; other classes are freed by their region |
 | **Region lowering** (`backend/Regions.scala`) | Chunked data stacks, scope marks and resets, drop lists, counted regions, destinations, class witnesses and evacuations per `spec/memory_management.md` §6–§7 |
 | **Evidence passer** (`effects/EvidencePasser.scala`) | Compile effects to evidence vector lookups |

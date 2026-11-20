@@ -13,6 +13,6 @@ fn rr(r: Rose of Rose of u64) -> u64 = r.fold((v, ks) -> ks.fold(sz(v), (n, k) -
 fn main() -> () with Console =
     let leaf = Rose.Rose(1, [])
     let r = Rose.Rose(Rose.Rose(5, [leaf]), [Rose.Rose(leaf, []), Rose.Rose(leaf, [])])
-    Console.print_line(count(r).show())
-    Console.print_line(count(leaf).show())
-    Console.print_line(rr(r).show())
+    Console.printLine(count(r).show())
+    Console.printLine(count(leaf).show())
+    Console.printLine(rr(r).show())

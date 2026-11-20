@@ -68,7 +68,7 @@ class EffectsSuite extends munit.FunSuite:
     )
 
   test("main performs only effects the runtime handles (Rule E5.4)"):
-    assertEquals(codes("use std.io.Console\nfn main() -> () with Console = Console.print_line(\"hi\")\n"), Nil)
+    assertEquals(codes("use std.io.Console\nfn main() -> () with Console = Console.printLine(\"hi\")\n"), Nil)
     assertEquals(codes("fn main() -> () with Fail of String = Fail.fail(\"x\")\n"), List(DiagCode.T016))
 
   test("a row variable carries a callback's other effects to the receiver's row (Rule E8.2)"):

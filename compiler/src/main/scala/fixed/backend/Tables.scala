@@ -192,10 +192,10 @@ private[backend] trait Tables extends Generated:
     val binary = (op: PrimOp, rt: CType) => of(List(self, other), Rhs.Prim(op, List(self, other)), rt)
     val runtime = (f: String, as: List[Atom.Var]) => of(as, Rhs.Call(f, as, runtime = true), CType.Boxed)
     val body = (member, c) match
-      case ("from_i64", CType.Int(64, _)) =>
+      case ("fromI64", CType.Int(64, _)) =>
         val n: Atom.Var = Atom.Var("n", c)
         Some((List(n), c, Expr.Ret(n)))
-      case ("from_i64", _) if numeric =>
+      case ("fromI64", _) if numeric =>
         val n: Atom.Var = Atom.Var("n", CType.Int(64, signed = true))
         Some(of(List(n), Rhs.Prim(PrimOp.Convert, List(n)), c))
       case ("negate", _) if numeric => Some(of(List(self), Rhs.Prim(PrimOp.Neg, List(self)), c))
@@ -226,7 +226,7 @@ object Tables:
     * prelude's `Order` (P6 D17), and the others, which are not derived (`find` only for list-shaped
     * data).
     */
-  private val unbuilt = Set("compare", "fold_right", "head", "tail", "find")
+  private val unbuilt = Set("compare", "foldRight", "head", "tail", "find")
 
   /** The hidden entries every table of a capability that extends `Ord` ends with (plan §2): the
     * comparison operators. They mean what `compare` means through `Order`: `lt(a, b)` is

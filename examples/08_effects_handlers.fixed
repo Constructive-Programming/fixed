@@ -30,46 +30,46 @@ effect Log:
 
 data Config(host: String, port: u16, debug: bool)
 
-fn read_config(path: String) -> Config
+fn readConfig(path: String) -> Config
     with FileSystem + Fail of String =
-    let contents = FileSystem.read_file(path).fold(
+    let contents = FileSystem.readFile(path).fold(
         (v) -> v,
         (e) -> Fail.fail(e),
     )
-    parse_config(contents)
+    parseConfig(contents)
 
-fn parse_config(text: String) -> Config
+fn parseConfig(text: String) -> Config
     with Fail of String =
-    let lines = split_lines(text)
-    let host = find_value(lines, "host").fold(
+    let lines = splitLines(text)
+    let host = findValue(lines, "host").fold(
         (v) -> v,
         () -> Fail.fail("missing config key: host"),
     )
-    let port_str = find_value(lines, "port").fold(
+    let portStr = findValue(lines, "port").fold(
         (v) -> v,
         () -> Fail.fail("missing config key: port"),
     )
-    let port = parse_u16(port_str).fold(
+    let port = parseU16(portStr).fold(
         (v) -> v,
         (e) -> Fail.fail(e),
     )
-    let debug = find_value(lines, "debug")
-        |> map_optional((v) -> v == "true")
-        |> unwrap_or(false)
+    let debug = findValue(lines, "debug")
+        |> mapOptional((v) -> v == "true")
+        |> unwrapOr(false)
     Config(host, port, debug)
 
 // Pure helper — no effects needed, no `with` clause
-fn find_value(
+fn findValue(
     lines: List of String,
     key: String,
 ) -> is Optional of String =
-    find(lines, (line) -> starts_with(line, key))
-        |> map_optional((line) -> after_char(line, '='))
-        |> map_optional((value) -> trim(value))
+    find(lines, (line) -> startsWith(line, key))
+        |> mapOptional((line) -> afterChar(line, '='))
+        |> mapOptional((value) -> trim(value))
 
-fn run_server(config: Config) -> () with Console + Log =
+fn runServer(config: Config) -> () with Console + Log =
     Log.log("info", "Starting server...")
-    Console.print_line(
+    Console.printLine(
         "Server running on "
             .concat(config.host)
             .concat(":")
@@ -78,7 +78,7 @@ fn run_server(config: Config) -> () with Console + Log =
 
     if config.debug:
         Log.log("debug", "Debug mode enabled")
-        Console.print_line("[DEBUG] Verbose output on")
+        Console.printLine("[DEBUG] Verbose output on")
     else:
         ()
 
@@ -94,7 +94,7 @@ effect Channel of A:
 // Spawning concurrent tasks
 effect Async:
     fn spawn(task: () -> () with Async + E) -> () with E
-    fn yield_now -> ()
+    fn yieldNow -> ()
 
 // --- A chat message ---
 
@@ -110,18 +110,18 @@ ChatMessage satisfies Message:
 
 // --- Chat room logic ---
 //
-// Functions in Fixed are total — chat_loop and listen_loop cannot
+// Functions in Fixed are total — chatLoop and listenLoop cannot
 // self-recurse on an unbounded effect-driven loop. We bound each by a
-// `max_messages` parameter and fold a Nat of that depth, propagating an
+// `maxMessages` parameter and fold a Nat of that depth, propagating an
 // "already terminated" flag when "quit" arrives so further iterations
 // no-op. (A future codata story — see implementation-plan.md OQ12 — would
 // admit truly unbounded conversational loops without an iteration cap.)
 
-fn participant(name: String, max_messages: u64) -> ()
+fn participant(name: String, maxMessages: u64) -> ()
     with Console + Channel of (is Message) + Async =
-    Console.print_line(name.concat(" joined the chat"))
+    Console.printLine(name.concat(" joined the chat"))
 
-    Nat.unfold(max_messages, (k) ->
+    Nat.unfold(maxMessages, (k) ->
         if k == 0: Nat.Zero
         else: Nat.Succ(k - 1)
     ).fold(
@@ -130,31 +130,31 @@ fn participant(name: String, max_messages: u64) -> ()
             if terminated:
                 true
             else:
-                Console.print_line(name.concat("> "))
-                let input = Console.read_line()
+                Console.printLine(name.concat("> "))
+                let input = Console.readLine()
                 if input == "quit":
-                    Console.print_line(name.concat(" left the chat"))
+                    Console.printLine(name.concat(" left the chat"))
                     true
                 else:
                     Channel.send(Message.new(name, input))
-                    Async.yield_now
+                    Async.yieldNow
                     false
     )
     ()
 
-fn listener(max_messages: u64) -> ()
+fn listener(maxMessages: u64) -> ()
     with Console + Channel of (is Message) + Async =
-    Nat.unfold(max_messages, (k) ->
+    Nat.unfold(maxMessages, (k) ->
         if k == 0: Nat.Zero
         else: Nat.Succ(k - 1)
     ).fold(
         () -> (),
         (_) ->
             let msg = Channel.receive
-            Console.print_line(
+            Console.printLine(
                 "[".concat(msg.sender).concat("]: ").concat(msg.body)
             )
-            Async.yield_now
+            Async.yieldNow
             ()
     )
 
@@ -166,47 +166,47 @@ cap TaskQueue:
     Self.fn empty -> Self
     fn push(task: () -> () with Async) -> Self
     fn pop -> is Optional of (is Pair of (() -> () with Async, Self))
-    fn is_empty -> bool
+    fn isEmpty -> bool
 
 data SimpleQueue(tasks: List of (() -> () with Async) = List.Nil)
 
 SimpleQueue satisfies TaskQueue:
     SimpleQueue as empty
     fn push(task: () -> () with Async) =
-        SimpleQueue.SimpleQueue(self.tasks.fold_right(List.Cons(task, List.Nil), (t, rest) -> List.Cons(t, rest)))
+        SimpleQueue.SimpleQueue(self.tasks.foldRight(List.Cons(task, List.Nil), (t, rest) -> List.Cons(t, rest)))
     fn pop = match self.tasks:
         List.Cons(task, rest) => Optional.some(Pair.pair(task, SimpleQueue.SimpleQueue(rest)))
         List.Nil => Optional.none
-    fn is_empty = match self.tasks:
+    fn isEmpty = match self.tasks:
         List.Cons(_, _) => false
         List.Nil => true
 
-// run_scheduler: total schedulers also need an iteration bound (max_steps).
+// runScheduler: total schedulers also need an iteration bound (maxSteps).
 // Each fold step pops one task from the queue, runs one effect, and updates
-// the queue. After max_steps or when the queue empties, the scheduler stops.
-fn run_scheduler(task: () -> () with Async + E, max_steps: u64) -> () with E =
-    let initial_queue = TaskQueue.empty.push(() ->
+// the queue. After maxSteps or when the queue empties, the scheduler stops.
+fn runScheduler(task: () -> () with Async + E, maxSteps: u64) -> () with E =
+    let initialQueue = TaskQueue.empty.push(() ->
         handle task():
             Async.spawn(t) => resume(())
-            Async.yield_now() => resume(())
+            Async.yieldNow() => resume(())
     )
 
-    Nat.unfold(max_steps, (k) ->
+    Nat.unfold(maxSteps, (k) ->
         if k == 0: Nat.Zero
         else: Nat.Succ(k - 1)
     ).fold(
-        () -> initial_queue,
+        () -> initialQueue,
         (queue) ->
             queue.pop.fold(
                 (pair) ->
-                    let next_task = pair.first
+                    let nextTask = pair.first
                     let remaining = pair.second
-                    handle next_task():
-                        Async.spawn(new_task) =>
-                            let q = remaining.push(new_task)
+                    handle nextTask():
+                        Async.spawn(newTask) =>
+                            let q = remaining.push(newTask)
                             resume(())
                             q
-                        Async.yield_now() =>
+                        Async.yieldNow() =>
                             let q = remaining.push(() -> resume(()))
                             q,
                 () -> queue,    // empty queue: idempotent
@@ -214,10 +214,10 @@ fn run_scheduler(task: () -> () with Async + E, max_steps: u64) -> () with E =
     )
     ()
 
-// run_with_channel: same shape — bound the dispatcher with max_steps.
+// runWithChannel: same shape — bound the dispatcher with maxSteps.
 // State is (buffer, current task). Each step intercepts one Channel op.
-fn run_with_channel(task: () -> () with Channel of A + E, max_steps: u64) -> () with E =
-    Nat.unfold(max_steps, (k) ->
+fn runWithChannel(task: () -> () with Channel of A + E, maxSteps: u64) -> () with E =
+    Nat.unfold(maxSteps, (k) ->
         if k == 0: Nat.Zero
         else: Nat.Succ(k - 1)
     ).fold(
@@ -246,41 +246,41 @@ fn main() -> () with FileSystem =
     handle (do:
         handle (do:
             handle (do:
-                let config = read_config("server.conf")
-                run_server(config)
+                let config = readConfig("server.conf")
+                runServer(config)
             ):
                 Fail.fail(e) =>
-                    builtin.stderr_write("Fatal: ".concat(e))
+                    builtin.stderrWrite("Fatal: ".concat(e))
                     builtin.exit(1)
         ):
             Log.log(level, msg) =>
-                builtin.stderr_write("[".concat(level).concat("] ").concat(msg).concat("\n"))
+                builtin.stderrWrite("[".concat(level).concat("] ").concat(msg).concat("\n"))
                 resume(())
     ):
-        Console.print_line(msg) =>
-            builtin.stdout_write(msg.concat("\n"))
+        Console.printLine(msg) =>
+            builtin.stdoutWrite(msg.concat("\n"))
             resume(())
-        Console.read_line() =>
-            resume(builtin.stdin_read_line())
+        Console.readLine() =>
+            resume(builtin.stdinReadLine())
 
     // Example 2: Concurrency effects with nested handlers
     //
-    // All four "loops" (participant, listener, run_scheduler, run_with_channel)
+    // All four "loops" (participant, listener, runScheduler, runWithChannel)
     // are bounded by max-iteration parameters per the totality discussion at
     // the participant/listener definitions. The numbers below are
     // demonstration-scale; a real program with a codata-based loop story
     // (deferred per implementation-plan.md OQ12) would not need them.
     handle (do:
-        run_scheduler(() ->
-            run_with_channel(() ->
+        runScheduler(() ->
+            runWithChannel(() ->
                 Async.spawn(() -> participant("Alice", 32))
                 Async.spawn(() -> participant("Bob", 32))
                 Async.spawn(() -> listener(64))
-            , 256),     // run_with_channel max_steps
-            256)        // run_scheduler max_steps
+            , 256),     // runWithChannel maxSteps
+            256)        // runScheduler maxSteps
     ):
-        Console.print_line(msg) =>
-            builtin.stdout_write(msg.concat("\n"))
+        Console.printLine(msg) =>
+            builtin.stdoutWrite(msg.concat("\n"))
             resume(())
-        Console.read_line() =>
-            resume(builtin.stdin_read_line())
+        Console.readLine() =>
+            resume(builtin.stdinReadLine())

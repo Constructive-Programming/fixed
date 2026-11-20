@@ -255,7 +255,7 @@ fx_string *fx_read_line(void) {
     return s;
 }
 
-/* ---- parsing (builtin.parse_u64) ---- */
+/* ---- parsing (builtin.parseU64) ---- */
 
 static bool parse_ok;
 

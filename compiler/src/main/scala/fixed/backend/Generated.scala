@@ -51,7 +51,7 @@ private[backend] trait Generated:
   /** A closure over `body` taking `params` (see `Lower.closure`). */
   protected def closure(params: List[Var], body: => Expr, ret: CType)(k: VarK): Expr
 
-  /** Rule 7.4.a: `x.fold(on_v1, ..., on_vn)`, recursive fields folded first; Rule 7.4.a.1: a field
+  /** Rule 7.4.a: `x.fold(onV1, ..., onVn)`, recursive fields folded first; Rule 7.4.a.1: a field
     * `F of ... Self` is mapped through `F`'s derived `map`, so the callback receives `F of ... R`.
     */
   protected def derivedFold(data: SymbolId, args: List[Type], r: Type, span: Span): String =
@@ -60,7 +60,7 @@ private[backend] trait Generated:
     instance(name) {
       val x = typed(fresh("x", CType.Boxed), Type.TypeRef(data, args), span)
       val self = selfType(data, args)
-      val callbacks = symbols.variantsOf(data).toList.map(v => fresh(s"on_${v.name}", CType.Boxed))
+      val callbacks = symbols.variantsOf(data).toList.map(v => fresh(s"on${v.name}", CType.Boxed))
       val rt = ctype(r, span)
       def through(t: Type, v: Atom)(k: K): Expr =
         t match

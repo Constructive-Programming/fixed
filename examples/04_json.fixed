@@ -47,10 +47,10 @@ fn pretty(json: Json, indent: u64) -> String =
                 if elements.length == 0:
                     "[]"
                 else:
-                    let pad = repeat_str(" ", i)
-                    let inner_pad = repeat_str(" ", i + 2)
+                    let pad = repeatStr(" ", i)
+                    let innerPad = repeatStr(" ", i + 2)
                     let parts = elements.map((p: u64 -> String) ->
-                        inner_pad.concat(p(i + 2))
+                        innerPad.concat(p(i + 2))
                     )
                     "[\n".concat(join(parts, ",\n")).concat("\n").concat(pad).concat("]"),
         (fields: List of (Tuple of (String, u64 -> String))) ->               // Object
@@ -58,27 +58,27 @@ fn pretty(json: Json, indent: u64) -> String =
                 if fields.length == 0:
                     "{}"
                 else:
-                    let pad = repeat_str(" ", i)
-                    let inner_pad = repeat_str(" ", i + 2)
+                    let pad = repeatStr(" ", i)
+                    let innerPad = repeatStr(" ", i + 2)
                     let parts = fields.map((kv) ->
                         let key = kv.first
-                        let value_p = kv.second
-                        inner_pad
+                        let valueP = kv.second
+                        innerPad
                             .concat("\"").concat(key).concat("\": ")
-                            .concat(value_p(i + 2))
+                            .concat(valueP(i + 2))
                     )
                     "{\n".concat(join(parts, ",\n")).concat("\n").concat(pad).concat("}"),
     )(indent)
 
-fn map_optional(opt: is Optional of A, f: A -> B) -> is Optional of B =
+fn mapOptional(opt: is Optional of A, f: A -> B) -> is Optional of B =
     opt.fold((value) -> Optional.some(f(value)), () -> Optional.none)
 
 // Look up a key in a JSON object
-fn get_field(json: Json, key: String) -> is Optional of Json =
+fn getField(json: Json, key: String) -> is Optional of Json =
     match json:
         Json.Object(fields) =>
             fields.find((pair) -> pair.first == key)
-                |> map_optional((pair) -> pair.second)
+                |> mapOptional((pair) -> pair.second)
         _ => Optional.none
 
 // Navigate a path like ["users", "0", "name"]
@@ -90,7 +90,7 @@ fn get_field(json: Json, key: String) -> is Optional of Json =
 fn navigate(json: Json, path: List of String) -> is Optional of Json =
     path.fold(Optional.some(json), (acc, key) ->
         acc.fold(
-            (current) -> get_field(current, key),
+            (current) -> getField(current, key),
             () -> Optional.none,
         )
     )
@@ -108,10 +108,10 @@ fn main() -> () with Console =
         ("address", Json.Null),
     ])
 
-    Console.print_line(pretty(user, 0))
+    Console.printLine(pretty(user, 0))
 
     // Navigate into the structure
     navigate(user, ["tags"]).fold(
-        (tags) -> Console.print_line("Tags: ".concat(pretty(tags, 0))),
-        () -> Console.print_line("No tags found"),
+        (tags) -> Console.printLine("Tags: ".concat(pretty(tags, 0))),
+        () -> Console.printLine("No tags found"),
     )

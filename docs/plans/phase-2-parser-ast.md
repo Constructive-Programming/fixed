@@ -30,7 +30,7 @@
 |---|-----------|--------------|
 | M1 | Project compiles, `sbt test` passes empty test suite. | `sbt compile && sbt test` returns 0. |
 | M2 | Scanner produces tokens for every `examples/*.fixed`. | A test dumps tokens for each example; no `ERROR` tokens; `INDENT`/`DEDENT` balanced. |
-| M3 | Parser succeeds on `examples/01_basics.fixed` → produces an `untpd.Tree`. | Smallest example parses; `Tree` shape matches expected for `fn main`, `fn greet`, `fn fib_iter`, `fn print_fibs`. |
+| M3 | Parser succeeds on `examples/01_basics.fixed` → produces an `untpd.Tree`. | Smallest example parses; `Tree` shape matches expected for `fn main`, `fn greet`, `fn fibIter`, `fn printFibs`. |
 | M4 | Parser succeeds on examples 02–06. | Adds: data declarations, satisfaction decls, `match`/`fold`, do-notation, generic type params. |
 | M5 | Parser succeeds on examples 07–11. | Adds: paramorphism (`para`), effects + handlers, refinement caps, `prop` declarations, parameterized type aliases. |
 | M6 | Parser produces structurally identical ASTs across whitespace-equivalent inputs. | Property test: re-indented inputs that respect grammar produce isomorphic trees. |
@@ -362,12 +362,12 @@ Example:
 ```
 handle (do:
     let x = compute()
-    use_x(x)
+    useX(x)
 ):
-    Console.print_line(msg) => ...
+    Console.printLine(msg) => ...
 ```
 
-The parser sees: `LPAREN do COLON INDENT let ... DEDENT RPAREN COLON INDENT Console.print_line ... DEDENT`.
+The parser sees: `LPAREN do COLON INDENT let ... DEDENT RPAREN COLON INDENT Console.printLine ... DEDENT`.
 
 ### 6.2 Multi-line lambdas
 
@@ -505,7 +505,7 @@ Minimum: every grammar production is exercised by at least one example or test. 
 ### 9.2 Parser risks
 
 - **`fn f(x) = body` body delimitation**: `=` opens a body; the body is either same-line (single Expr) or NEWLINE-then-INDENT-block. The lexer detects which by peeking at the next non-space token. Track explicitly to avoid premature NEWLINE emission.
-- **Nested cap-generators in is-bound**: `is between(0, 100) + multiple_of(2)` — both elements are RefinementCall. The `+` here is is-bound composition. Parser tracks "is-bound mode" and treats `+` accordingly.
+- **Nested cap-generators in is-bound**: `is between(0, 100) + multipleOf(2)` — both elements are RefinementCall. The `+` here is is-bound composition. Parser tracks "is-bound mode" and treats `+` accordingly.
 - **`Self of B'` substitution at parse time**: parser does not perform substitution; it produces a `SelfType` node with the of-arg unsubstituted. Substitution happens in the typer.
 
 ### 9.3 Spec dependencies

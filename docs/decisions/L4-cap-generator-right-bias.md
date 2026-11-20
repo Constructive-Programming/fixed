@@ -8,11 +8,11 @@
 Rule 7.4.c says auto-derived Functor maps over the rightmost type parameter of a *named* `data T of (X1, ..., Xn)`. But cap-generators may return multi-parameter caps:
 
 ```
-fn pair_constraint(lo: i64, hi: i64) -> cap of (i64, i64) =
+fn pairConstraint(lo: i64, hi: i64) -> cap of (i64, i64) =
     prop bounded: Self.first >= lo && Self.second <= hi
 ```
 
-The cap returned by `pair_constraint(0, 100)` is anonymous and has two type params. If a user later writes `is pair_constraint(0, 100)`, can the compiler auto-derive a Functor instance? Over which parameter?
+The cap returned by `pairConstraint(0, 100)` is anonymous and has two type params. If a user later writes `is pairConstraint(0, 100)`, can the compiler auto-derive a Functor instance? Over which parameter?
 
 ## Options
 
@@ -22,7 +22,7 @@ Cap-generator returns are refinement caps (Marker class per §6.4) — they carr
 
 **Pros:** simplest. Matches the existing Marker classification: refinement caps add obligations, not methods.
 
-**Cons:** programmer who tries to use `is pair_constraint(0, 100)` polymorphically gets an error and must declare a named cap.
+**Cons:** programmer who tries to use `is pairConstraint(0, 100)` polymorphically gets an error and must declare a named cap.
 
 ### Option 2 — Apply right-bias by position
 
@@ -37,7 +37,7 @@ The rightmost parameter of `cap of (X1, ..., Xn)` is "active." Auto-derived Func
 Generator declares which param is "active":
 
 ```
-fn pair_constraint(lo, hi) -> cap of (X, Y) functor_over Y =
+fn pairConstraint(lo, hi) -> cap of (X, Y) functor_over Y =
     prop bounded: ...
 ```
 
@@ -57,4 +57,4 @@ Rationale:
 
 Spec edits if Option 1 chosen:
 - `type_system.md` Rule 7.4.c: clarify "applies to named caps and named data types only. Auto-derivation does not apply to anonymous caps produced by cap-generator calls; refinement obligations on a base type do not change which auto-derivations apply to that base type."
-- Add example showing `is Functor of (i64 + bounded(0, 10))` works (Functor over `i64`), and `is pair_constraint(0, 100)` does not auto-derive Functor (anonymous).
+- Add example showing `is Functor of (i64 + bounded(0, 10))` works (Functor over `i64`), and `is pairConstraint(0, 100)` does not auto-derive Functor (anonymous).

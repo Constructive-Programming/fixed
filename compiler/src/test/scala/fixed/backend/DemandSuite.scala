@@ -15,7 +15,7 @@ class DemandSuite extends munit.FunSuite:
 
   /** The demands of every function instance of `code` whose `main` prints `body`. */
   private def demands(code: String, body: String): DemandTable =
-    val src = code + s"fn main() -> () with Console =\n    Console.print_line(($body).show())\n"
+    val src = code + s"fn main() -> () with Console =\n    Console.printLine(($body).show())\n"
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString("<unit>", src)))
     assert(!unit.hasErrors, unit.diagnostics)
     val lower = Lower(unit)
@@ -61,7 +61,7 @@ class DemandSuite extends munit.FunSuite:
       "    List.unfold(0, (i) ->\n        if i >= n:\n            List.Nil\n        else:\n" +
       "            List.Cons(i, i + 1)\n    )\n\n"
     val src = code +
-      "fn main() -> () with Console =\n    Console.print_line((upto(3).map((x) -> x + 1).fold(0, (a, x) -> a + x)).show())\n"
+      "fn main() -> () with Console =\n    Console.printLine((upto(3).map((x) -> x + 1).fold(0, (a, x) -> a + x)).show())\n"
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString("<unit>", src)))
     val t = Backend.analyse(unit).fold(ds => fail(s"lowering failed: $ds"), _.demands)
     val map = t.params.get("List of u64.map[u64]").map(_.head).getOrElse(fail(s"${t.params.keys}"))

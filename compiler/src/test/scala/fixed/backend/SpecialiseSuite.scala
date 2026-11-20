@@ -41,8 +41,8 @@ class SpecialiseSuite extends munit.FunSuite:
 
   /** `pick` at `String` from `main`, and at `i64`, whose key text sorts after, inside a fold step. */
   private val hot = header + "fn main() -> () with Console =\n" +
-    "    Console.print_line(pick([\"a\".concat(\"b\")], \"c\"))\n" +
-    "    Console.print_line([1, 2].fold(0, (s, i) -> pick([i], s)).show())\n"
+    "    Console.printLine(pick([\"a\".concat(\"b\")], \"c\"))\n" +
+    "    Console.printLine([1, 2].fold(0, (s, i) -> pick([i], s)).show())\n"
 
   test("with room for one clone, the request inside a fold step is the clone and the other calls the baseline"):
     val a = analyse(hot, size(hot, "pick"))
@@ -60,12 +60,12 @@ class SpecialiseSuite extends munit.FunSuite:
 
   test("equal scores are built in key order"):
     val src = header + "fn main() -> () with Console =\n" +
-      "    Console.print_line(pick([1, 2], 0).show())\n    Console.print_line(pick([\"a\"], \"b\"))\n"
+      "    Console.printLine(pick([1, 2], 0).show())\n    Console.printLine(pick([\"a\"], \"b\"))\n"
     assertEquals(outcome(analyse(src, size(src, "pick")), "pick"), List("String" -> "", "i64" -> "budget exhausted"))
 
   test("a function whose baseline version has nothing for a key to resolve is not cloned"):
     val src = "use std.io.Console\n\nfn same(x: A) -> A = x\n\n" +
-      "fn main() -> () with Console =\n    Console.print_line(same(\"a\"))\n"
+      "fn main() -> () with Console =\n    Console.printLine(same(\"a\"))\n"
     val a = analyse(src)
     assertEquals(outcome(a, "same"), List("String" -> "removed = 0"))
     assertEquals(a.fns.map(_.name).filter(_.startsWith("same")), List("same"))
@@ -74,7 +74,7 @@ class SpecialiseSuite extends munit.FunSuite:
   private val nested = "use std.io.Console\n\n" +
     "fn inner(xs: List of A, d: A) -> A = xs.fold(xs.fold(d, (a, x) -> x), (a, x) -> a)\n\n" +
     "fn outer(xs: List of A, d: A) -> A = inner(xs, d)\n\n" +
-    "fn main() -> () with Console =\n    Console.print_line(outer([1, 2], 3).show())\n"
+    "fn main() -> () with Console =\n    Console.printLine(outer([1, 2], 3).show())\n"
 
   test("a clone calls a clone of its callee if one was built, else the callee's baseline version"):
     assert(size(nested, "inner") > size(nested, "outer"))
@@ -88,7 +88,7 @@ class SpecialiseSuite extends munit.FunSuite:
   test("a fip body forces the clones it requests, whatever the budget, uncharged"):
     val src = "use std.io.Console\n\ndata L:\n    E\n    C(h: u64, t: L)\n\n" +
       "fn left(x: A, y: A) -> A = x\n\nfip fn outer(xs: L) -> L = left(xs, L.E)\n\n" +
-      "fn main() -> () with Console =\n    Console.print_line(match outer(L.C(1, L.E)):\n" +
+      "fn main() -> () with Console =\n    Console.printLine(match outer(L.C(1, L.E)):\n" +
       "        L.C(h, _) => h.show()\n        L.E => \"\")\n"
     val a = analyse(src, budget = 0)
     assertEquals(FipCheck(a), Nil)
@@ -97,7 +97,7 @@ class SpecialiseSuite extends munit.FunSuite:
 
   test("the report has a score for a function with no let, whose only site is a witness drop"):
     val src = "use std.io.Console\n\nfn left(x: A, y: A) -> A = x\n\n" +
-      "fn main() -> () with Console =\n    Console.print_line(left(\"a\", \"b\"))\n"
+      "fn main() -> () with Console =\n    Console.printLine(left(\"a\", \"b\"))\n"
     val report = MemoryReport.json(unit(src), analyse(src))
     assert(report.contains("\"key\":\"String\",\"removed\":1,\"weight\":1,\"score\":1"), report)
 
@@ -105,7 +105,7 @@ class SpecialiseSuite extends munit.FunSuite:
     val src = "use std.io.Console\n\ndata L:\n    E\n    C(h: u64, t: L)\n\ndata W of A:\n    W(a: A)\n\n" +
       "fn grow(x: A, n: L) -> L =\n    match n:\n        L.E => n\n        L.C(_, t) => grow(W.W(x), t)\n\n" +
       "fip fn outer(xs: L) -> L = grow(xs, xs)\n\n" +
-      "fn main() -> () with Console =\n    Console.print_line(match outer(L.E):\n" +
+      "fn main() -> () with Console =\n    Console.printLine(match outer(L.E):\n" +
       "        L.C(h, _) => h.show()\n        L.E => \"e\")\n"
     val a = analyse(src, budget = 0)
     assertEquals(a.fns.map(_.name).filter(_.startsWith("grow[")), List("grow[L]"))

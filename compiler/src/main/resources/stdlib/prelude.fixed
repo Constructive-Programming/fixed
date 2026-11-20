@@ -35,7 +35,7 @@ cap Functor:
 
 cap Folding:
     fn fold(init: R, f: (R, Part) -> R) -> R
-    fn fold_right(init: R, f: (Part, R) -> R) -> R
+    fn foldRight(init: R, f: (Part, R) -> R) -> R
     fn find(pred: Part -> bool) -> is Optional of Part
 
 cap Sequencing:
@@ -60,12 +60,12 @@ cap Map of (K, V):
 cap Optional extends Functor + Folding:
     Self.fn some(value: Part) -> Self
     Self.fn none -> Self
-    fn fold(on_some: Part -> R, on_none: () -> R) -> R
+    fn fold(onSome: Part -> R, onNone: () -> R) -> R
 
 cap Result of (E, A):
     Self.fn ok(value: A) -> Self
     Self.fn err(error: E) -> Self
-    fn fold(on_ok: A -> R, on_err: E -> R) -> R
+    fn fold(onOk: A -> R, onErr: E -> R) -> R
 
 cap Pair of (A, B):
     Self.fn pair(a: A, b: B) -> Self
@@ -76,12 +76,12 @@ cap Ordering:
     Self.fn lt -> Self
     Self.fn eq -> Self
     Self.fn gt -> Self
-    fn fold(on_lt: () -> R, on_eq: () -> R, on_gt: () -> R) -> R
+    fn fold(onLt: () -> R, onEq: () -> R, onGt: () -> R) -> R
 
 cap Boolean:
     Self.fn yes -> Self
     Self.fn no -> Self
-    fn fold(on_yes: () -> R, on_no: () -> R) -> R
+    fn fold(onYes: () -> R, onNo: () -> R) -> R
 
 cap Eq:
     fn eq(other: Self) -> bool
@@ -90,7 +90,7 @@ cap Ord extends Eq:
     fn compare(other: Self) -> is Ordering
 
 cap Numeric extends Eq + Ord:
-    Self.fn from_i64(n: i64) -> Self
+    Self.fn fromI64(n: i64) -> Self
     fn add(other: Self) -> Self
     fn sub(other: Self) -> Self
     fn mul(other: Self) -> Self
@@ -109,7 +109,7 @@ cap Concat:
 
 // String helpers the examples use; Phase 5 decides where they live. They have bodies, so the
 // backend slice can compile them (docs/plans/phase-4.0-backend-slice.md §4.4).
-fn repeat_str(s: String, times: u64) -> String =
+fn repeatStr(s: String, times: u64) -> String =
     Nat.unfold(times, (k: u64) ->
         if k == 0:
             Nat.Zero
@@ -145,7 +145,7 @@ List satisfies Sequencing:
         List.Nil => List.Nil
 List satisfies Folding:
     fn fold(init: R, f: (R, Part) -> R) = self.fold((h, rest: R -> R) -> (acc) -> rest(f(acc, h)), () -> (acc) -> acc)(init)
-    fn fold_right(init: R, f: (Part, R) -> R) = self.fold((h, acc) -> f(h, acc), () -> init)
+    fn foldRight(init: R, f: (Part, R) -> R) = self.fold((h, acc) -> f(h, acc), () -> init)
     fn find(pred: Part -> bool) = self.fold((x, found) -> if pred(x): Optional.some(x) else: found, () -> Optional.none)
 List satisfies Functor
 List satisfies Filtering:
@@ -153,7 +153,7 @@ List satisfies Filtering:
 Maybe satisfies Optional:
     Just as some
     Nothing as none
-    fn fold_right(init: R, f: (Part, R) -> R) = match self:
+    fn foldRight(init: R, f: (Part, R) -> R) = match self:
         Maybe.Just(v) => f(v, init)
         Maybe.Nothing => init
     fn find(pred: Part -> bool) = match self:

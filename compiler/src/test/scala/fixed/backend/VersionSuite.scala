@@ -15,7 +15,7 @@ class VersionSuite extends munit.FunSuite:
 
   /** The analysed Core of `code` whose `main` prints `body`, with clone budget `budget`. */
   private def analyse(code: String, body: String, budget: Int = Versions.budget, ownership: Boolean = true): Analysed =
-    val src = code + s"fn main() -> () with Console =\n    Console.print_line(($body).show())\n"
+    val src = code + s"fn main() -> () with Console =\n    Console.printLine(($body).show())\n"
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString("<unit>", src)))
     assert(!unit.hasErrors, unit.diagnostics)
     Backend.analyse(unit, budget, ownership).fold(ds => fail(s"lowering failed: $ds"), identity)

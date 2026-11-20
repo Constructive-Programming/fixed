@@ -14,6 +14,6 @@ fn wrap(x: A) -> List of A = [x]
 fn outer(xss: is Folding of (A is Folding of u64)) -> u64 = xss.fold(0, (a, xs) -> a + sum(xs))
 
 fn main() -> () with Console =
-    Console.print_line(keep([n(1), n(2)], [n(3), n(4)]).show())
-    Console.print_line(outer([[n(1), n(2)], [n(3)]]).show())
-    Console.print_line(outer(wrap(wrap(n(5)))).show())
+    Console.printLine(keep([n(1), n(2)], [n(3), n(4)]).show())
+    Console.printLine(outer([[n(1), n(2)], [n(3)]]).show())
+    Console.printLine(outer(wrap(wrap(n(5)))).show())

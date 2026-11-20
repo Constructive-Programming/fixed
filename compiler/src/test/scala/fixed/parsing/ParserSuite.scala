@@ -178,7 +178,7 @@ class ParserSuite extends FunSuite with ParserTestSupport:
       "<test>",
       """fn f() -> u64 = handle task():
         |    Async.spawn(t) => resume(())
-        |    Async.yield_now() => resume(())
+        |    Async.yieldNow() => resume(())
         |""".stripMargin
     )
     val pr = Parser.parse(src)
@@ -187,9 +187,9 @@ class ParserSuite extends FunSuite with ParserTestSupport:
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(h: Trees.HandleExpr), _)), _) =>
         assertEquals(h.operationClauses.length, 2)
         h.operationClauses.last match
-          case Trees.OperationClause("Async", "yield_now", params, _, _) =>
+          case Trees.OperationClause("Async", "yieldNow", params, _, _) =>
             assertEquals(params, Nil)
-          case other => fail(s"expected OperationClause Async.yield_now, got $other")
+          case other => fail(s"expected OperationClause Async.yieldNow, got $other")
       case other => fail(s"expected HandleExpr, got $other")
 
   test("M4.8: handle with multi-line block body for an clause"):
@@ -214,8 +214,8 @@ class ParserSuite extends FunSuite with ParserTestSupport:
     val src = SourceFile.fromString(
       "<test>",
       """fn f() -> u64 = do:
-        |    x <- safe_divide(100.0, 3.0)
-        |    y <- safe_divide(x, 2.0)
+        |    x <- safeDivide(100.0, 3.0)
+        |    y <- safeDivide(x, 2.0)
         |    Optional.pure(x + y)
         |""".stripMargin
     )
@@ -363,10 +363,10 @@ class ParserSuite extends FunSuite with ParserTestSupport:
       """data Bounded of (lo: u64, hi: u64):
         |    Bounded(value: u64)
         |
-        |    prop in_range: lo <= Self && Self <= hi
+        |    prop inRange: lo <= Self && Self <= hi
         |
         |fn between(min: u64, max: u64) -> cap of u64 =
-        |    prop in_range: min <= Self && Self <= max
+        |    prop inRange: min <= Self && Self <= max
         |""".stripMargin
     ))
     assert(!pr.hasErrors, pr.diagnostics.toString)
@@ -375,7 +375,7 @@ class ParserSuite extends FunSuite with ParserTestSupport:
     val pr = Parser.parse(SourceFile.fromString(
       "<test>",
       """cap Between(min: u64, max: u64) of u64:
-        |    prop in_range: min <= Self && Self <= max
+        |    prop inRange: min <= Self && Self <= max
         |""".stripMargin
     ))
     assert(!pr.hasErrors, pr.diagnostics.toString)
@@ -395,7 +395,7 @@ class ParserSuite extends FunSuite with ParserTestSupport:
     val pr = Parser.parse(SourceFile.fromString(
       "<test>",
       """cap Stack:
-        |    prop pop_dec: forall (s: Self) suchThat s.size > 0 ->
+        |    prop popDec: forall (s: Self) suchThat s.size > 0 ->
         |        s.pop().size == s.size - 1
         |""".stripMargin
     ))

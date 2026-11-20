@@ -122,7 +122,7 @@ class TyperSuite extends munit.FunSuite:
 
   test("M4: members through satisfies, fields of single-variant data, and effect operations"):
     val s = typedUnit(
-      "use std.io.Console\nfn f(n: u64, p: Tuple of (u64, String)) -> () with Console =\n    Console.print_line(n.show().concat(p.second))\n"
+      "use std.io.Console\nfn f(n: u64, p: Tuple of (u64, String)) -> () with Console =\n    Console.printLine(n.show().concat(p.second))\n"
     )
     assertEquals(s.diags, Nil)
     assertEquals(codes(typedUnit("fn f(n: u64) -> String = n.nope()\n")), List(DiagCode.T001))
@@ -138,7 +138,7 @@ class TyperSuite extends munit.FunSuite:
 
   test("M4: a wrong argument inside 01_basics-style code is caught"):
     val s = typedUnit(
-      "use std.io.Console\nfn greet(name: String) -> () with Console =\n    Console.print_line(\"Hi \".concat(name))\nfn main() -> () with Console =\n    greet(42)\n"
+      "use std.io.Console\nfn greet(name: String) -> () with Console =\n    Console.printLine(\"Hi \".concat(name))\nfn main() -> () with Console =\n    greet(42)\n"
     )
     assertEquals(codes(s), List(DiagCode.T002))
 
@@ -180,10 +180,10 @@ class TyperSuite extends munit.FunSuite:
     )
 
   test("M5: handle binds operation parameters; resume takes the operation's result"):
-    val eff = "effect Ask:\n    fn ask(prompt: String) -> u64\nfn ignore_len(s: String) -> u64 = 0\n"
+    val eff = "effect Ask:\n    fn ask(prompt: String) -> u64\nfn ignoreLen(s: String) -> u64 = 0\n"
     val ok = typedUnit(
       eff +
-        "fn run(f: () -> u64 with Ask) -> u64 =\n    handle f():\n        Ask.ask(p) => resume(p.show().concat(\"!\") |> ignore_len)\n        return(v) => v + 1\n"
+        "fn run(f: () -> u64 with Ask) -> u64 =\n    handle f():\n        Ask.ask(p) => resume(p.show().concat(\"!\") |> ignoreLen)\n        return(v) => v + 1\n"
     )
     assertEquals(ok.diags.filter(_.isError), Nil)
     val bad =
@@ -200,7 +200,7 @@ class TyperSuite extends munit.FunSuite:
 
   test("M5: cap statics, do-notation and higher-kinded type variables"):
     val s = typedUnit(
-      "cap Box of A:\n    Self.fn wrap(value: A) -> Self\n    fn flat_map(f: A -> Self of B) -> Self of B\n" +
+      "cap Box of A:\n    Self.fn wrap(value: A) -> Self\n    fn flatMap(f: A -> Self of B) -> Self of B\n" +
         "fn twice(b: M is Box of u64) -> M of u64 =\n    do:\n        x <- b\n        M.wrap(x * 2)\n"
     )
     assertEquals(s.diags.filter(_.isError), Nil)
@@ -338,23 +338,23 @@ class TyperSuite extends munit.FunSuite:
     assertEquals(codes(typedUnit(show + "fn bad(f: Fn1) -> String = render(f)\n")), List(DiagCode.T010))
 
   test("3.1.M2: capability arguments are checked; bounded variables keep their own bounds"):
-    val decls = "fn first_u64(xs: is Folding of u64) -> u64 = xs.fold(0, (a, x) -> x)\n"
-    assertEquals(codes(typedUnit(decls + "fn bad(xs: List of String) -> u64 = first_u64(xs)\n")), List(DiagCode.T010))
+    val decls = "fn firstU64(xs: is Folding of u64) -> u64 = xs.fold(0, (a, x) -> x)\n"
+    assertEquals(codes(typedUnit(decls + "fn bad(xs: List of String) -> u64 = firstU64(xs)\n")), List(DiagCode.T010))
     val chain =
-      "fn make() -> R is Folding + Functor = make()\nfn need_folding(x: is Folding) -> () = ()\nfn need_functor(x: is Functor) -> () = ()\n"
+      "fn make() -> R is Folding + Functor = make()\nfn needFolding(x: is Folding) -> () = ()\nfn needFunctor(x: is Functor) -> () = ()\n"
     assertEquals(
-      typedUnit(chain + "fn use_both() -> () =\n    let x = make()\n    need_functor(x)\n    need_folding(x)\n").diags,
+      typedUnit(chain + "fn useBoth() -> () =\n    let x = make()\n    needFunctor(x)\n    needFolding(x)\n").diags,
       Nil
     )
 
   test("3.1.M2: a type variable passed where its bound does not reach the capability is T010"):
     assertEquals(
-      codes(typedUnit("fn need_num(x: is Numeric) -> () = ()\nfn bad(c: C is Show) -> () = need_num(c)\n")),
+      codes(typedUnit("fn needNum(x: is Numeric) -> () = ()\nfn bad(c: C is Show) -> () = needNum(c)\n")),
       List(DiagCode.T010)
     )
     assertEquals(
       typedUnit(
-        "cap Ring extends Numeric\nfn need_num(x: is Numeric) -> () = ()\nfn ok(c: C is Ring) -> () = need_num(c)\n"
+        "cap Ring extends Numeric\nfn needNum(x: is Numeric) -> () = ()\nfn ok(c: C is Ring) -> () = needNum(c)\n"
       ).diags,
       Nil
     )
@@ -401,7 +401,7 @@ class TyperSuite extends munit.FunSuite:
 
   test("P6 D17: derivation defines members: fold, accessors, Functor.map, field-wise Show"):
     val folds =
-      "cap Sum2:\n    Self.fn a -> Self\n    Self.fn b -> Self\n    fn fold(on_a: () -> R, on_b: () -> R) -> R\n" +
+      "cap Sum2:\n    Self.fn a -> Self\n    Self.fn b -> Self\n    fn fold(onA: () -> R, onB: () -> R) -> R\n" +
         "data AB:\n    A\n    B\nAB satisfies Sum2:\n    A as a\n    B as b\n"
     assertEquals(typedUnit(folds).diags, Nil)
     val acc = "cap Named:\n    fn name -> String\ndata P(name: String, n: u64)\nP satisfies Named\n"
@@ -447,7 +447,7 @@ class TyperSuite extends munit.FunSuite:
     val ab = "data AB:\n    A\n    B\n"
     assertEquals(
       typedUnit(ab + "AB satisfies Folding\n").diags.map(_.message),
-      List("AB does not satisfy Folding: missing find, fold, fold_right")
+      List("AB does not satisfy Folding: missing find, fold, foldRight")
     )
     assertEquals(
       typedUnit(ab + "cap K:\n    fn fold(x: u64) -> bool\nAB satisfies K\n").diags.map(_.message),

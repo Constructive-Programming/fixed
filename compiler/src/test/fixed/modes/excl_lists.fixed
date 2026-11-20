@@ -13,10 +13,10 @@ fn fresh(n: u64) -> List of u64 = [n, n + 1]
 fn main() -> () with Console =
     let xs = fresh(1)
     let xss = [xs, fresh(10), xs]
-    Console.print_line(totals(incs(xss)).show())
-    Console.print_line(total(xs).show())
-    Console.print_line(totals(xss).show())
-    Console.print_line(totals(incs([fresh(5), fresh(7)])).show())
+    Console.printLine(totals(incs(xss)).show())
+    Console.printLine(total(xs).show())
+    Console.printLine(totals(xss).show())
+    Console.printLine(totals(incs([fresh(5), fresh(7)])).show())
     let tl = [fresh(5), fresh(7)]
-    Console.print_line(totals(incs(List.Cons(fresh(1), tl))).show())
-    Console.print_line(totals(tl).show())
+    Console.printLine(totals(incs(List.Cons(fresh(1), tl))).show())
+    Console.printLine(totals(tl).show())

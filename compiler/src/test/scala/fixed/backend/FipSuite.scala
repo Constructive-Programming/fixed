@@ -23,7 +23,7 @@ class FipSuite extends munit.FunSuite:
 
   /** The `fip` violations of `code` whose `main` prints `body`, as their rule items. */
   private def violations(code: String, body: String): List[String] =
-    val u = unit(code + s"fn main() -> () with Console =\n    Console.print_line(($body).show())\n")
+    val u = unit(code + s"fn main() -> () with Console =\n    Console.printLine(($body).show())\n")
     Backend.compile(u) match
       case Right(_) => Nil
       case Left(ds) =>
@@ -53,7 +53,7 @@ class FipSuite extends munit.FunSuite:
   test("a caller holding a shared value calls the fip function's copying shared entry; a fip caller may not"):
     val twice = "fn twice(xs: L) -> u64 = first(bump(xs)) + first(xs)\n\n"
     val fns = Backend.core(unit(list + "fip " + bump + twice + "fn main() -> () with Console =\n" +
-      "    Console.print_line(twice(L.C(1, L.E)).show())\n")).fold(ds => fail(s"$ds"), identity)
+      "    Console.printLine(twice(L.C(1, L.E)).show())\n")).fold(ds => fail(s"$ds"), identity)
     val callees = (f: String) => fns.find(_.name == f).fold(Set.empty[String])(g => Core.callees(g.body))
     assertEquals(callees("twice").filter(_.startsWith("bump")), Set("bump#shared"))
     assert(callees("bump#shared").exists(_.contains(".copy[")), callees("bump#shared"))

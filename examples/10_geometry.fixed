@@ -24,7 +24,7 @@ data Point of N(x: N, y: N)
 // N is Numeric constrains all coordinates/dimensions to the same type.
 data Shape of N:
     Circle(center: Point of N, radius: N)
-    Rectangle(top_left: Point of N, width: N, height: N)
+    Rectangle(topLeft: Point of N, width: N, height: N)
     Triangle(a: Point of N, b: Point of N, c: Point of N)
 
 // A bounding box — always axis-aligned
@@ -66,10 +66,10 @@ fn area(shape: Shape of (N is Numeric)) -> f64 =
             w * h
         Shape.Triangle(a, b, c) =>
             // Shoelace formula: |x_a(y_b - y_c) + x_b(y_c - y_a) + x_c(y_a - y_b)| / 2
-            let double_area = a.x * (b.y - c.y)
+            let doubleArea = a.x * (b.y - c.y)
                             + b.x * (c.y - a.y)
                             + c.x * (a.y - b.y)
-            builtin.abs(double_area) / 2.0
+            builtin.abs(doubleArea) / 2.0
 
 // =========================================================================
 // Operation 2: Perimeter
@@ -88,7 +88,7 @@ fn perimeter(shape: Shape of (N is Numeric)) -> f64 =
 // Operation 3: Bounding box
 // =========================================================================
 
-fn bounding_box(shape: Shape of (N is Numeric)) -> BoundingBox of N =
+fn boundingBox(shape: Shape of (N is Numeric)) -> BoundingBox of N =
     match shape:
         Shape.Circle(center, r) =>
             BoundingBox(
@@ -106,7 +106,7 @@ fn bounding_box(shape: Shape of (N is Numeric)) -> BoundingBox of N =
                 point(max3(a.x, b.x, c.x), max3(a.y, b.y, c.y)),
             )
 
-fn show_bbox(bb: BoundingBox of (N is Numeric + Show)) -> String =
+fn showBbox(bb: BoundingBox of (N is Numeric + Show)) -> String =
     match bb:
         BoundingBox(mn, mx) =>
             "BBox[("
@@ -131,12 +131,12 @@ fn main() -> () with Console =
     let shapes = [circle, rectangle, triangle]
     let names  = ["Circle", "Rectangle", "Triangle"]
 
-    fn print_shape(name: String, shape: Shape of f64) -> () with Console =
-        Console.print_line(name.concat(":"))
-        Console.print_line("  Area:      ".concat(area(shape).show()))
-        Console.print_line("  Perimeter: ".concat(perimeter(shape).show()))
-        Console.print_line("  ".concat(show_bbox(bounding_box(shape))))
+    fn printShape(name: String, shape: Shape of f64) -> () with Console =
+        Console.printLine(name.concat(":"))
+        Console.printLine("  Area:      ".concat(area(shape).show()))
+        Console.printLine("  Perimeter: ".concat(perimeter(shape).show()))
+        Console.printLine("  ".concat(showBbox(boundingBox(shape))))
 
-    print_shape("Circle",    circle)
-    print_shape("Rectangle", rectangle)
-    print_shape("Triangle",  triangle)
+    printShape("Circle",    circle)
+    printShape("Rectangle", rectangle)
+    printShape("Triangle",  triangle)

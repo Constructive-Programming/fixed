@@ -48,13 +48,13 @@ class QuantityPhaseSuite extends munit.FunSuite:
 
   private def codes(code: String): List[DiagCode] = compile(code).diagnostics.map(_.code)
 
-  test("Rule Q5.2: a parameter's quantity is its use count; §10.1 fib_iter's go is (ω, 1, ω)"):
+  test("Rule Q5.2: a parameter's quantity is its use count; §10.1 fibIter's go is (ω, 1, ω)"):
     assertEquals(params("fn double(x: i64) -> i64 = x + x\n", "double"), List("ω"))
     assertEquals(params("fn identity(x: i64) -> i64 = x\n", "identity"), List("1"))
-    val fib = "fn fib_iter(n: N is Numeric) -> N =\n    fn go(i: N, a: N, b: N) -> N =\n" +
+    val fib = "fn fibIter(n: N is Numeric) -> N =\n    fn go(i: N, a: N, b: N) -> N =\n" +
       "        if i == 0:\n            a\n        else:\n            go(i - 1, b, a + b)\n    go(n, 0, 1)\n"
     assertEquals(params(fib, "go"), List("ω", "1", "ω"))
-    assertEquals(params(fib, "fib_iter"), List("ω"))
+    assertEquals(params(fib, "fibIter"), List("ω"))
 
   test("Rule Q5.1 and Q5.10: a let binder sums its uses in the rest of the block"):
     assertEquals(binder("fn f(x: i64) -> i64 =\n    let y = x + 1\n    y * 2\n", "y"), "1")
@@ -67,7 +67,7 @@ class QuantityPhaseSuite extends munit.FunSuite:
     assertEquals(params(code.replace("x + 1", "x + x"), "f"), List("ω", "1"))
 
   test("§9: a call scales each argument by the callee's parameter quantity"):
-    val code = "fn pair_double(x: i64) -> i64 = x + x\nfn caller(y: i64) -> i64 = pair_double(y)\n"
+    val code = "fn pairDouble(x: i64) -> i64 = x + x\nfn caller(y: i64) -> i64 = pairDouble(y)\n"
     assertEquals(params(code, "caller"), List("ω"))
     assertEquals(params("fn k(x: i64, _y: i64) -> i64 = x\nfn c(z: i64) -> i64 = k(1, z)\n", "c"), List("0"))
 

@@ -9,7 +9,7 @@
 
 ```
 fn sort(c: C is Sequencing) -> C is Sorted =
-    prop result_same_size: result.size == c.size
+    prop resultSameSize: result.size == c.size
     ...
 ```
 
@@ -17,7 +17,7 @@ In a cap-method postcondition, `result` is currently "a regular identifier" (per
 
 ```
 cap Optional:
-    fn fold(on_some: Part -> R, on_none: () -> R) -> R
+    fn fold(onSome: Part -> R, onNone: () -> R) -> R
         prop ???   // is `result` available here?
 ```
 
@@ -39,8 +39,8 @@ User declares a return-value binder explicitly:
 
 ```
 cap Optional:
-    fn fold(on_some, on_none) -> R as r
-        prop r_is_R: ...      // explicit binder name
+    fn fold(onSome, onNone) -> R as r
+        prop rIsR: ...      // explicit binder name
 ```
 
 Idris-like / Lean-like. The `as` clause names the result.

@@ -73,18 +73,18 @@ fn sums(xs: List of List of u64) -> u64 =
 
 fn main() -> () with Console =
     let xs = build(1)
-    Console.print_line(totals(incs([build(10), xs])).show())
-    Console.print_line(total(xs).show())
+    Console.printLine(totals(incs([build(10), xs])).show())
+    Console.printLine(total(xs).show())
     let ys = build(1)
-    Console.print_line(totals(incs([ys, ys])).show())
+    Console.printLine(totals(incs([ys, ys])).show())
     let s = [1, 2, 3]
-    Console.print_line(sum(inc(cons1(0, s))).show())
-    Console.print_line(sum(s).show())
+    Console.printLine(sum(inc(cons1(0, s))).show())
+    Console.printLine(sum(s).show())
     match mk(0, s):
-        Box.Bx(_, l) => Console.print_line(sum(inc(l)).show())
-    Console.print_line(sum(s).show())
-    Console.print_line(untag(tag(s)).show())
-    Console.print_line(sum(s).show())
+        Box.Bx(_, l) => Console.printLine(sum(inc(l)).show())
+    Console.printLine(sum(s).show())
+    Console.printLine(untag(tag(s)).show())
+    Console.printLine(sum(s).show())
     let ss = [[1], [2], [3]]
-    Console.print_line(sums(swapT(List.Cons([0], ss))).show())
-    Console.print_line(sums(ss).show())
+    Console.printLine(sums(swapT(List.Cons([0], ss))).show())
+    Console.printLine(sums(ss).show())

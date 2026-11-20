@@ -18,7 +18,7 @@ fn spine(n: u64) -> Tree of Tree of u64 =
 
 fn main() -> () with Console =
     let t = Tree.Node(Tree.Leaf, leaf1(2), Tree.Node(Tree.Leaf, leaf1(3), Tree.Leaf))
-    Console.print_line(size(t).show())
-    Console.print_line(size(leaf1(4)).show())
-    Console.print_line(sum(t).show())
-    Console.print_line(spine(2).fold(() -> 0, (l, v, r) -> l + inner(v) + r).show())
+    Console.printLine(size(t).show())
+    Console.printLine(size(leaf1(4)).show())
+    Console.printLine(sum(t).show())
+    Console.printLine(spine(2).fold(() -> 0, (l, v, r) -> l + inner(v) + r).show())

@@ -32,4 +32,4 @@ fn upto(n: u64) -> List of u64 =
     )
 
 fn main() -> () with Console =
-    Console.print_line(upto(100).fold(0.0, (acc, _) -> acc + round()).show())
+    Console.printLine(upto(100).fold(0.0, (acc, _) -> acc + round()).show())

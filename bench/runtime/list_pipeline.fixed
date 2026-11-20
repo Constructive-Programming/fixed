@@ -15,4 +15,4 @@ fn pipeline(n: u64) -> u64 =
     upto(n).map((x) -> x * 3).map((x) -> x + 1).fold(0, (acc, x) -> acc + x)
 
 fn main() -> () with Console =
-    Console.print_line(upto(200).fold(0, (acc, _) -> acc + pipeline(10000)).show())
+    Console.printLine(upto(200).fold(0, (acc, _) -> acc + pipeline(10000)).show())

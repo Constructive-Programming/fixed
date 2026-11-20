@@ -18,7 +18,7 @@ use std.io.Console
 // --- Hello, world ---
 
 fn greet(name: String) -> () with Console =
-    Console.print_line("Hello, ".concat(name).concat("!"))
+    Console.printLine("Hello, ".concat(name).concat("!"))
 
 // --- Fibonacci ---
 
@@ -32,7 +32,7 @@ fn greet(name: String) -> () with Console =
 // All parameters typed `N` must share the same concrete type.
 // The return type `N` is also constrained — the caller gets back
 // whatever numeric type they passed in.
-fn fib_iter(n: N is Numeric) -> N =
+fn fibIter(n: N is Numeric) -> N =
     // Build a Nat of depth n (anamorphism), then fold it with a (prev, curr)
     // accumulator. After n steps, the .first projection holds fib(n).
     Nat.unfold(n, (k: N) ->
@@ -49,7 +49,7 @@ fn fib_iter(n: N is Numeric) -> N =
 
 // Print the first `count` Fibonacci numbers.
 // `count` is a concrete `u64` — concrete types are just well-known capabilities.
-fn print_fibs(count: u64) -> () with Console =
+fn printFibs(count: u64) -> () with Console =
     // Fold a Nat of depth `count`, threading the next index in the accumulator.
     // Nat.fold dispatches inside-out, so we count *down* from count to produce
     // prints in 0,1,...,count-1 order: each step's print fires from outer Succ
@@ -67,15 +67,15 @@ fn print_fibs(count: u64) -> () with Console =
     ).fold(
         (),
         (_, i) ->
-            let val = fib_iter(i)
-            Console.print_line("fib(".concat(i.show()).concat(") = ").concat(val.show()))
+            let val = fibIter(i)
+            Console.printLine("fib(".concat(i.show()).concat(") = ").concat(val.show()))
     )
 
 fn main() -> () with Console =
-    Console.print_line("What is your name?")
-    let name = Console.read_line()
+    Console.printLine("What is your name?")
+    let name = Console.readLine()
     greet(name)
 
-    Console.print_line("")
-    Console.print_line("First 20 Fibonacci numbers:")
-    print_fibs(20)
+    Console.printLine("")
+    Console.printLine("First 20 Fibonacci numbers:")
+    printFibs(20)

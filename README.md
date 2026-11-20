@@ -52,12 +52,12 @@ This is the tagless final encoding applied to an entire language: programs are w
 use std.io.Console
 
 fn greet(name: String) -> () with Console {
-    Console.print_line("Hello, ".concat(name).concat("!"))
+    Console.printLine("Hello, ".concat(name).concat("!"))
 }
 
 fn main() -> () with Console {
-    Console.print_line("What is your name?")
-    let name = Console.read_line()
+    Console.printLine("What is your name?")
+    let name = Console.readLine()
     greet(name)
 }
 ```
@@ -78,7 +78,7 @@ fn sum(numbers: is Folding of (N is Numeric)) -> N {
 type ArrayLike = Sequencing + RandomAccess + Sized + Empty
 
 // Requires index based access — compiler SHOULD choose a contiguous representation
-fn binary_search(
+fn binarySearch(
     sorted: C is ArrayLike of (A is Ordered),
     target: A,
 ) -> R is Optional of u64 + Empty {
@@ -129,7 +129,7 @@ effect Fail of E {
 }
 
 fn compute(input: String) -> u64 with Fail of (NotANumber | DivisionByZero) { //explictly specifying the Parts of the Fail are not necessary
-    let n = parse_u64(input) // Fail of NotANumber
+    let n = parseU64(input) // Fail of NotANumber
     divide(n * 2, 3) // Fail of DivisionByZero
 }
 
@@ -152,7 +152,7 @@ cap Sorted extends Sequencing {
 }
 
 cap NonEmpty extends Sequencing {
-    prop non_empty: size > 0
+    prop nonEmpty: size > 0
 }
 
 fn insert(sorted: S is Sorted, value: Part) -> S is Sorted {
@@ -165,10 +165,10 @@ Properties live where the capability is defined — not in a separate test file.
 
 ```
 cap Stack extends Sequencing + Sized {
-    prop push_increments: forall (s: Self, x: Part) ->
+    prop pushIncrements: forall (s: Self, x: Part) ->
         s.push(x).size == s.size + 1
 
-    prop pop_decrements: forall (s: Self) ->
+    prop popDecrements: forall (s: Self) ->
         s.size > 0 implies s.pop().size == s.size - 1
 }
 ```
@@ -180,19 +180,19 @@ Functions can return capabilities, making type refinement first-class:
 ```
 // A function that generates a capability
 fn between(min: N is Ord, max: N) -> cap of N {
-    prop in_range: min <= Self && Self <= max
+    prop inRange: min <= Self && Self <= max
 }
 
-fn validate_age(age: N is Numeric + between(0, 150)) -> N { age }
+fn validateAge(age: N is Numeric + between(0, 150)) -> N { age }
 
 type Port = u16 + between(1, 65535)
-type Username = String + min_length(3) + max_length(32)
+type Username = String + minLength(3) + maxLength(32)
 ```
 
 Cap generators are first-class — pass them as arguments, return them from functions, compose them:
 
 ```
-fn validate_with(
+fn validateWith(
     value: N is Numeric,
     constraint: fn(N, N) -> cap of N,
     lo: N, hi: N,
@@ -207,9 +207,9 @@ Type aliases can take value parameters too, bundling refinements into reusable n
 
 ```
 type PortRange(min: u16, max: u16) = u16 + between(min, max)
-type BoundedString(max: u64) = String + max_length(max)
+type BoundedString(max: u64) = String + maxLength(max)
 
-fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String { ... }
+fn parsePort(s: String) -> N is PortRange(1024, 49151) with Fail of String { ... }
 ```
 
 Refinement capabilities are zero-cost: compile-time only, no wrapping, the value stays its original type. `cap Name(params)` is sugar for `fn name(params) -> cap`.

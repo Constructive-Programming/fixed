@@ -18,7 +18,7 @@ class MemorySuite extends munit.FunSuite:
     u
 
   private def analysed(code: String, body: String): Analysed =
-    val u = unit(code + s"fn main() -> () with Console =\n    Console.print_line(($body).show())\n")
+    val u = unit(code + s"fn main() -> () with Console =\n    Console.printLine(($body).show())\n")
     Backend.analyse(u).fold(ds => fail(s"lowering failed: $ds"), identity)
 
   /** The classes of `fn`'s allocations, in order. */

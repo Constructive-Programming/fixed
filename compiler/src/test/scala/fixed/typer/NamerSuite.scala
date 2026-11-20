@@ -26,8 +26,8 @@ class NamerSuite extends munit.FunSuite:
       triples(table),
       List(
         ("greet", SymKind.Fn, "String -> () with Console"),
-        ("fib_iter", SymKind.Fn, "N -> N"),
-        ("print_fibs", SymKind.Fn, "u64 -> () with Console"),
+        ("fibIter", SymKind.Fn, "N -> N"),
+        ("printFibs", SymKind.Fn, "u64 -> () with Console"),
         ("main", SymKind.Fn, "() -> () with Console"),
         ("name", SymKind.ValueParam, "String"),
         ("N", SymKind.TypeParam, "is Numeric"),
