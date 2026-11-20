@@ -208,7 +208,7 @@ The writers of the specs and the reviewer left thirteen questions for the owner.
 - **L. The sixth resolution level is removed.** It could never decide.
 - **M. Derived and named satisfactions.** No preference: a pair with a derived or unnamed satisfaction and a named one in scope is ambiguous until a `using` chooses (`E061`). *(Author's consequence:)* a `using` must then be able to name an unnamed or derived satisfaction, so `SatisfactionRef` also takes the pair form, `using Money satisfies Ord`.
 
-Still not decided: the error code of an unbounded `show`, `==` or `clone` (the spec says `E064`, the typer branch uses `T022`); the exit code of `fixed verify`; how a release build is requested; minors 7, 8 and 14 of the review.
+The error for an unbounded `show`, `==` or `clone` is `T022`: the compiler's catalogue numbers typer errors `T0xx`, and the spec's first choice, `E064`, was withdrawn. Still not decided: the exit code of `fixed verify`; how a release build is requested; minors 7, 8 and 14 of the review.
 
 ## Corrections to statements made in this debate
 

@@ -351,6 +351,13 @@ pub bool satisfies Boolean              // built in: `yes` is `true`, `no` is `f
                                         // `fold` branches on the value
 
 pub Nat satisfies Folding               // auto-derived from Zero + Succ
+
+pub String satisfies Clone              // Clone is derived only on request (§4.11):
+pub List satisfies Clone                // each declaration, without a body, asks for the
+pub Maybe satisfies Clone               // derived `clone`. `Json` declares none until its
+pub Tuple satisfies Clone               // fields carry `+ Clone`.
+pub Order satisfies Clone
+pub Nat satisfies Clone
 ```
 
 `bool` has no variants, so no mapping can implement `Boolean`'s constructor requirements, and a `satisfies` block admits no `Self.fn` definition (`spec/syntax_grammar.ebnf` §9). The satisfaction is therefore built in, like the `Numeric` satisfactions of the primitive numeric types (§4.9). (Earlier drafts wrote `bool satisfies Boolean of Self` with `Self` mapped to both `yes` and `no`. `Boolean` has no `of` parameter, and one subject cannot implement two requirements.)
