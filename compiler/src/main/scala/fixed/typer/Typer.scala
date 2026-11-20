@@ -34,6 +34,11 @@ object TypeTable:
   def empty: TypeTable =
     TypeTable(java.util.IdentityHashMap[Tree, Type](1024), java.util.IdentityHashMap[Tree, Resolution](256))
 
+/** `op` on a value of type `value`, typed in `owner`, needs capability `cap` if `value` is abstract
+  * (P6 D10).
+  */
+final case class BoundCheck(value: Type, cap: SymbolId, op: String, span: Span, owner: SymbolId)
+
 /** Threaded typer state (`docs/plans/phase-3-typer.md` §3.4): the type side table, the symbol
   * table (local bindings join it), the unifier and the diagnostics so far (newest first).
   */
@@ -47,7 +52,8 @@ final case class TyperState(
     obligations: List[(Type, Type, Span)],
     constructors: List[(Trees.StaticCall, SymbolId, String)],
     row: List[(EffectBound, Span)],
-    rowChecks: List[RowCheck]
+    rowChecks: List[RowCheck],
+    boundChecks: List[BoundCheck]
 ):
   def record(tree: Tree, t: Type): TyperState = copy(types = types.updated(tree, t))
 
@@ -69,8 +75,8 @@ final case class TyperState(
   def typeOf(tree: Tree): Option[Type] = types.get(tree).map(unifier.zonk)
 
   /** Report an error once: a prototype re-checked by an enclosing node repeats the same finding. */
-  def error(code: DiagCode, span: Span, message: String): TyperState =
-    val d = Diagnostic(Severity.Error, code, span, message)
+  def error(code: DiagCode, span: Span, message: String, hint: Option[String] = None): TyperState =
+    val d = Diagnostic(Severity.Error, code, span, message, hint)
     if diags.contains(d) then this else copy(diags = d :: diags, errors = errors + 1)
 
   /** Merge diagnostics produced outside the typer (the Namer's), in source order. */
@@ -97,7 +103,8 @@ final case class TyperState(
     val checked = obligations.reverse.foldLeft(defaulted) { case (si, (value, bound, span)) =>
       Satisfaction.discharge(si, value, bound, span)
     }
-    checked.copy(diags = checked.diags.reverse)
+    val bounded = boundChecks.reverse.foldLeft(checked.copy(boundChecks = Nil))(Typer.requireBound(_, _, last = true))
+    bounded.copy(diags = bounded.diags.reverse)
 
 object TyperState:
   def apply(symbols: SymbolTable): TyperState =
@@ -108,6 +115,7 @@ object TyperState:
       Nil,
       0,
       MemberTables(symbols),
+      Nil,
       Nil,
       Nil,
       Nil,
@@ -204,7 +212,7 @@ object Typer:
   private def typedAll(s: TyperState, trees: List[Tree])(using Context): (TyperState, List[Type]) =
     mapAccum(s, trees)(typedExpr(_, _, Proto.Wildcard))
 
-  private def typedBinOp(s: TyperState, t: Trees.BinOp, pt: Proto)(using Context): (TyperState, Type) =
+  private def typedBinOp(s: TyperState, t: Trees.BinOp, pt: Proto)(using ctx: Context): (TyperState, Type) =
     import Trees.BinOperator.*
     t.op match
       case Add | Sub | Mul | Div | Mod =>
@@ -215,7 +223,8 @@ object Typer:
       case Lt | Le | Gt | Ge | Eq | Neq =>
         val (s1, l) = typedExpr(s, t.lhs, Proto.Wildcard)
         val (s2, _) = typedExpr(s1, t.rhs, Proto.ExpectedType(l))
-        (s2, bool)
+        val eq = s2.symbols.scope.get("Eq").filter(_ => t.op == Eq || t.op == Neq)
+        (eq.fold(s2)(cap => requireBound(s2, BoundCheck(l, cap, t.op.symbol, t.span, ctx.owner))), bool)
       case And | Or =>
         val (s1, _) = typedExpr(s, t.lhs, Proto.ExpectedType(bool))
         val (s2, _) = typedExpr(s1, t.rhs, Proto.ExpectedType(bool))
@@ -310,16 +319,20 @@ object Typer:
         s1.unifier.resolve(recv) match
           case Type.NeverType => (s1, Type.NeverType)
           case resolved       =>
+            val needs = (cap: SymbolId) => BoundCheck(resolved, cap, s".${t.method}", t.span, ctx.owner)
             Members.candidates(s1, resolved, t.method) match
               case Nil =>
                 resolved match
                   case Type.TypeVar(id) if s1.unifier.boundsOf(id).isEmpty =>
                     (s1.unsupported(t.span, s"`.${t.method}` on a receiver of unknown type"), Type.NeverType)
                   case _ =>
-                    (
-                      s1.error(DiagCode.T001, t.span, s"not found: member ${t.method} of ${show(s1, resolved)}"),
-                      Type.NeverType
-                    )
+                    (if Members.abstractType(s1, resolved) then Members.autoDerivedCap(s1, t.method) else None) match
+                      case Some(cap) => (requireBound(s1, needs(cap)), Type.NeverType)
+                      case None      =>
+                        (
+                          s1.error(DiagCode.T001, t.span, s"not found: member ${t.method} of ${show(s1, resolved)}"),
+                          Type.NeverType
+                        )
               case first :: rest =>
                 val errors = s1.errors
                 def attempt(c: Members.Candidate) =
@@ -331,7 +344,49 @@ object Typer:
                   else
                     rest.iterator.map(c => (c, attempt(c))).find(_._2._1.errors == errors)
                       .getOrElse((first, firstAttempt))
-                (s2.copy(types = s2.types.resolved(t, winner.origin)), result)
+                val s3 = winner.origin match
+                  case Resolution.CapMember(cap, _) if Members.autoDerivedCap(s2, t.method).contains(cap) =>
+                    requireBound(s2, needs(cap))
+                  case _ => s2
+                (s3.copy(types = s3.types.resolved(t, winner.origin)), result)
+
+  /** P6 D10: `c.op` needs `c.cap` when `c.value` is abstract ([[Members.abstractType]]). A value of a
+    * still unsolved variable may turn out abstract: it is checked again when the unit finishes.
+    */
+  private[typer] def requireBound(s: TyperState, c: BoundCheck, last: Boolean = false): TyperState =
+    s.unifier.resolve(c.value) match
+      case Type.TypeVar(_) | Type.AppliedVar(_, _) if !last => s.copy(boundChecks = c :: s.boundChecks)
+      case t if Members.abstractType(s, t) && Satisfaction.holds(s, t, c.cap, Nil).isEmpty =>
+        missingBound(s, c.copy(value = t))
+      case _ => s
+
+  /** `T022`, with the bound written out as the hint: on the type parameter or anonymous bound, or,
+    * for `self` in a capability's own default body, on the capability's `extends` clause.
+    */
+  private def missingBound(s: TyperState, c: BoundCheck): TyperState =
+    val r = s.symbols.render
+    def written(bounds: List[Type]) = (bounds :+ Type.CapRef(c.cap, Nil)).map(r).mkString(" + ")
+    def declared(id: SymbolId) = s.symbols(id).info match
+      case Type.IsBound(bs) => bs
+      case _                => Nil
+    val hint = c.value match
+      case Type.TypeRef(id, _) =>
+        val (param, owner) = (s"${s.symbols(id).name} is ${written(declared(id))}", s.symbols(s.symbols(id).owner))
+        owner.kind match
+          case SymKind.Data                          => s"`data ${owner.name} of ($param)`"
+          case SymKind.Method | SymKind.StaticMethod =>
+            s"`$param` in the signature of `${s.symbols(owner.owner).name}.${owner.name}`"
+          case _ => s"`$param`"
+      case Type.IsBound(List(Type.CapRef(cap, _))) if cap == c.owner =>
+        s"`cap ${s.symbols(cap).name} extends ${written(declared(cap))}`"
+      case Type.IsBound(bs) => s"`is ${written(bs)}`"
+      case other            => s"`is ${written(List(other))}`"
+    s.error(
+      DiagCode.T022,
+      c.span,
+      s"`${c.op}` on a value of type ${show(s, c.value)} needs the bound `${s.symbols(c.cap).name}`",
+      Some(s"write the bound: $hint")
+    )
 
   /** `x |> f(a, ...)` is `f(x, a, ...)`; `x |> f` is `f(x)`. The spec gives `|>` only a grammar
     * (`spec/syntax_grammar.ebnf` PipeExpr); first-argument insertion is the typer's reading.

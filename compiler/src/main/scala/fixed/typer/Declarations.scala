@@ -134,19 +134,18 @@ object Declarations:
       case Trees.CapRef(name, _, _) => s.symbols.scope.get(name).filter(s.symbols(_).kind == SymKind.Cap)
       case _                        => None
     target.fold(s) { cap =>
-      val (s0, self) = s.symbols.dataNamed(d.typeName) match
-        case Some(data) =>
-          val (si, args) = Members.freshArgs(s, data)
-          (si, Type.TypeRef(data, args))
-        case None => (s, Type.PrimType(d.typeName))
+      /** Rigid, like a capability's default body: the body is compiled once for every argument. */
+      val self = s.symbols.dataNamed(d.typeName) match
+        case Some(data) => Type.TypeRef(data, s.symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil)))
+        case None       => Type.PrimType(d.typeName)
       val part = self match
         case Type.TypeRef(_, args) => args.lastOption
         case _                     => None
-      withBodies(s0, d.mappings) { (si, fn, kind) =>
+      withBodies(s, d.mappings) { (si, fn, kind) =>
         si.members.lookup(cap, kind, fn.name).headOption match
           case None    => si.error(DiagCode.T014, fn.span, s"${si.symbols(cap).name} has no member ${fn.name}")
           case Some(e) =>
-            val sub = Members.Subst(Members.Subst.of(Nil, Nil), Set(e.member.id, e.cap), Some(self), part)
+            val sub = Members.Subst(Members.Subst.of(Nil, Nil), Set(e.cap), Some(self), part)
             val (si1, sig) = Members.instantiate(si, e.member.info, sub)
             method(si1, fn, sig, cap, Nil, Option.when(kind == SymKind.Method)(self))
       }

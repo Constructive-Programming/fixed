@@ -327,15 +327,18 @@ class EmitSuite extends munit.FunSuite:
   test("a function bounded by Ord runs at String through an instance and at i64 through its baseline version"):
     val _ = check("partial", BaselineSuite.partial, "true\nfalse\n")
 
-  test("a closure in a baseline version captures the witness of a slot it binds; a failed attempt keeps no callee"):
+  test("a closure in a baseline version captures the witness of a slot it binds"):
     val src = header + "data Pair of (A, B):\n    P(a: A, b: B)\n\n" +
       "fn later(p: Pair of (A, B)) -> () -> u64 =\n    () -> match p:\n        Pair.P(x, y) => 7\n\n" +
       "fn ident(x: A) -> A = x\n\n" +
-      "fn shown(x: A) -> String =\n    let y = ident(x)\n    y.show()\n\n" +
+      "fn shown(x: A is Show) -> String =\n    let y = ident(x)\n    y.show()\n\n" +
       "fn main() -> () with Console =\n" +
       "    Console.print_line(later(Pair.P(\"a\".concat(\"b\"), 3))().show())\n" +
       "    Console.print_line(shown(\"c\".concat(\"d\")))\n"
     val _ = check("captured_witness", src, "7\ncd\n")
+
+  test("a failed baseline attempt keeps no callee: the instance that replaces it runs"):
+    val _ = check("failed_attempt", BaselineSuite.failedAttempt, "1.5\n")
 
   /** `P of u8` has a scalar in slot 0 and a reference in slot 1; `P of String` has references in
     * both, and its cell reuses the `P of u8` one. A wrong reference map leaks or frees a scalar.

@@ -210,6 +210,88 @@ class TyperSuite extends munit.FunSuite:
   test("M5: a bounded type variable's missing member is an error, not a gap"):
     assertEquals(codes(typedUnit("fn f(c: C is Empty) -> u64 = c.size\n")), List(DiagCode.T001))
 
+  test("P6 D10: show, ==, != and clone on an unbounded type parameter are T022"):
+    List(
+      "fn f(x: T) -> String = x.show()\n",
+      "fn f(x: T, y: T) -> bool = x == y\n",
+      "fn f(x: T, y: T) -> bool = x != y\n",
+      "fn f(x: T, y: T) -> bool = x.eq(y)\n",
+      "fn f(x: T) -> T = x.clone()\n",
+      "fn f(x: T is Numeric) -> String = x.show()\n",
+      "fn f(x: is Folding of u64) -> String = x.show()\n",
+      "fn f(x: is Folding of u64, y: is Folding of u64) -> bool = x == y\n",
+      "fn f(x: is Folding of u64) -> is Folding of u64 = x.clone()\n",
+      "fn f(xs: F of u64) -> String = xs.show()\n",
+      "type Printable = Show + Eq\nfn f(x: T is Printable) -> T = x.clone()\n",
+      "cap Named:\n    fn name -> String\n    fn label -> String = self.show()\n"
+    ).foreach(code => assertEquals(codes(typedUnit(code)), List(DiagCode.T022), code))
+
+  test("P6 D10: a receiver whose type is solved to a type parameter later is checked when the unit finishes"):
+    List(
+      "fn f(x: T) -> String = ((z) -> z.show())(x)\n",
+      "fn f(x: T, y: T) -> bool = ((a, b) -> a == b)(x, y)\n",
+      "fn app(f: A -> String, x: A) -> String = f(x)\nfn g(x: T) -> String = app((y) -> y.show(), x)\n"
+    ).foreach(code => assertEquals(codes(typedUnit(code)), List(DiagCode.T022), code))
+    assertEquals(typedUnit("fn f(x: T is Show) -> String = ((z) -> z.show())(x)\n").diags, Nil)
+    assertEquals(typedUnit("fn f(x: u64) -> String = ((z) -> z.show())(x)\n").diags, Nil)
+
+  test("P6 D10: a satisfies body is typed against the data type's own parameters, unbounded"):
+    val decls = "cap Desc:\n    fn describe -> String\ndata Box of A:\n    B(value: A)\n"
+    val body = "Box satisfies Desc:\n    fn describe = match self:\n        Box.B(v) => v.show()\n"
+    assertEquals(codes(typedUnit(decls + body)), List(DiagCode.T022))
+    assertEquals(typedUnit(decls + body).diags.head.suggestion, Some("write the bound: `data Box of (A is Show)`"))
+    val fold = "cap Folder:\n    fn fold(init: R, f: (R, u64) -> R) -> R\ndata Nums:\n    Nums(n: u64)\n" +
+      "Nums satisfies Folder:\n    fn fold(init: R, f: (R, u64) -> R) = init.clone()\n"
+    assertEquals(
+      typedUnit(fold).diags.map(_.suggestion),
+      List(Some("write the bound: `R is Clone` in the signature of `Folder.fold`"))
+    )
+    val bounded = decls.replace("data Box of A:", "data Box of (A is Show):")
+    assertEquals(typedUnit(bounded + body).diags, Nil)
+
+  test("P6 D10: the T022 message names the missing bound and the hint writes it out"):
+    val d = typedUnit("fn f(x: T is Numeric) -> String = x.show()\n").diags.head
+    assert(d.message.contains("`Show`"), d.message)
+    assertEquals(d.suggestion, Some("write the bound: `T is Numeric + Show`"))
+    val eq = typedUnit("fn f(x: T, y: T) -> bool = x == y\n").diags.head
+    assertEquals(eq.suggestion, Some("write the bound: `T is Eq`"))
+    val anon = typedUnit("fn f(x: is Folding of u64) -> String = x.show()\n").diags.head
+    assertEquals(anon.suggestion, Some("write the bound: `is Folding of u64 + Show`"))
+    val ne = typedUnit("fn f(x: T, y: T) -> bool = x != y\n").diags.head
+    assertEquals(ne.message, "`!=` on a value of type T needs the bound `Eq`")
+    val dotEq = typedUnit("fn f(x: T, y: T) -> bool = x.eq(y)\n").diags.head
+    assertEquals(dotEq.message, "`.eq` on a value of type T needs the bound `Eq`")
+    val clone = typedUnit("fn f(x: T) -> T = x.clone()\n").diags.head
+    assertEquals(clone.message, "`.clone` on a value of type T needs the bound `Clone`")
+    assertEquals(clone.suggestion, Some("write the bound: `T is Clone`"))
+    val alias = typedUnit("type NC = Numeric + Concat\nfn f(x: T is NC) -> String = x.show()\n").diags.head
+    assertEquals(alias.suggestion, Some("write the bound: `T is NC + Show`"))
+    val inCap = typedUnit("cap Named extends Eq:\n    fn label -> String = self.show()\n").diags.head
+    assertEquals(inCap.suggestion, Some("write the bound: `cap Named extends Eq + Show`"))
+
+  test("P6 D10: bounded parameters and concrete types keep show, == and clone"):
+    List(
+      "fn f(x: T is Show) -> String = x.show()\n",
+      "fn f(x: T is Eq, y: T) -> bool = x == y\n",
+      "fn f(x: T is Eq, y: T) -> bool = x != y\n",
+      "fn f(x: T is Ord, y: T) -> bool = x == y\n",
+      "fn f(x: T is Numeric, y: T) -> bool = x != y\n",
+      "fn f(x: T is Clone) -> T = x.clone()\n",
+      "fn f(x: T is Eq, y: T) -> bool = x.eq(y)\n",
+      "cap Pretty extends Show\nfn f(x: T is Pretty) -> String = x.show()\n",
+      "cap Pretty extends Eq\nfn f(x: T is Pretty, y: T) -> bool = x == y\n",
+      "type Printable = Show + Eq\nfn f(x: T is Printable, y: T) -> bool = x != y\n",
+      "type Printable = Show + Eq\nfn f(x: T is Printable) -> String = x.show()\n",
+      "fn f(x: is Show) -> String = x.show()\n",
+      "cap Pretty:\n    fn show -> String\nfn f(x: T is Pretty) -> String = x.show()\n",
+      "cap Named extends Show:\n    fn label -> String = self.show()\n",
+      "fn f(x: is Folding of u64 + Show) -> String = x.show()\n",
+      "fn f(x: u64, y: u64) -> bool = x == y\n",
+      "fn f(x: String) -> String = x.clone()\n",
+      "fn f(xs: List of u64) -> String = xs.show()\n",
+      "data P(a: u64)\nfn f(x: P, y: P) -> bool = x == y\n"
+    ).foreach(code => assertEquals(typedUnit(code).diags, Nil, code))
+
   test("3.1.M2: values flowing into `is` bounds must satisfy them (T010)"):
     val sum = "fn total(xs: is Folding of (N is Numeric)) -> N = xs.fold(0, (a, x) -> a + x)\n"
     assertEquals(typedUnit(sum + "fn ok(xs: List of u64) -> u64 = total(xs)\n").diags, Nil)

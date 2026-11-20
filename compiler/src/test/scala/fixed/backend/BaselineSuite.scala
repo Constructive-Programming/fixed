@@ -118,6 +118,16 @@ class BaselineSuite extends munit.FunSuite:
     assert(lower.instances("same[String]").contains("`String` does not define `Ord.lt`"), lower.instances)
     assertEquals(fns.map(_.name).filter(_.startsWith("same")).sorted, List("same", "same[String]"))
 
+  test("a failed baseline attempt keeps none of what it built: the function is an instance, its callee a baseline"):
+    val (lower, fns) = lowered("failed_attempt", BaselineSuite.failedAttempt)
+    assertEquals(lower.instances.keySet.toSet, Set("half[f64]"))
+    assert(lower.instances("half[f64]").contains("float literal"), lower.instances)
+    assertEquals(lower.baselines.toSet, Set("ident"))
+    assertEquals(
+      fns.map(_.name).filter(n => n.startsWith("half") || n.startsWith("ident")).sorted,
+      List("half[f64]", "ident")
+    )
+
   test("join has one version: its parts a slot of an implicit type parameter, folded through its Folding table"):
     val (lower, fns) = lowered("04_json", file("examples/04_json"))
     assertEquals(fns.map(_.name).filter(_.startsWith("join")), List("join"))
@@ -196,6 +206,11 @@ object BaselineSuite:
   val partial = "use std.io.Console\n\nfn same(a: N is Ord, b: N) -> bool = a == b\n\n" +
     "fn main() -> () with Console =\n    Console.print_line(same(\"x\", \"x\").show())\n" +
     "    Console.print_line(same(3, 4).show())\n"
+
+  /** `half`'s baseline attempt calls `ident`, then fails on the float literal: `half` is an instance. */
+  val failedAttempt = "use std.io.Console\n\nfn ident(x: A) -> A = x\n\n" +
+    "fn half(x: N is Numeric) -> N =\n    let y = ident(x)\n    y * 0.5\n\n" +
+    "fn main() -> () with Console =\n    Console.print_line(half(3.0).show())\n"
 
   /** Functions over an anonymous `Folding` bound, at `List of String`, `List of u8` and `List of i64`. */
   val anonymous = "use std.io.Console\n\nfn count(xs: is Folding of A) -> u64 = xs.fold(0, (n, x) -> n + 1)\n\n" +

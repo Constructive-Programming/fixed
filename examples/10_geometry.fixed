@@ -106,7 +106,7 @@ fn bounding_box(shape: Shape of (N is Numeric)) -> BoundingBox of N =
                 point(max3(a.x, b.x, c.x), max3(a.y, b.y, c.y)),
             )
 
-fn show_bbox(bb: BoundingBox of (N is Numeric)) -> String =
+fn show_bbox(bb: BoundingBox of (N is Numeric + Show)) -> String =
     match bb:
         BoundingBox(mn, mx) =>
             "BBox[("

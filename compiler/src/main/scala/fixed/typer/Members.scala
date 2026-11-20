@@ -118,10 +118,24 @@ object Members:
   def typeParamsOf(s: TyperState, owner: SymbolId): List[SymbolId] =
     s.symbols.typeParamsOf(owner)
 
-  /** Capabilities every type has: auto-derived per `spec/stdlib.md` §4.7, §4.10, §4.11. Whether a
-    * representation can actually derive them is checked at representation selection (M11).
+  /** Capabilities every concrete type has: auto-derived per `spec/stdlib.md` §4.7, §4.10, §4.11.
+    * Whether a representation can actually derive them is checked at representation selection
+    * (M11).
     */
   private val autoDerived = List("Show", "Eq", "Clone")
+
+  /** A value of type `t` is used through a witness and its bound set only (a type parameter, or an
+    * anonymous `is ...` bound), so it has no auto-derived member (P6 D10, Rule CM4.3).
+    */
+  def abstractType(s: TyperState, t: Type): Boolean =
+    t match
+      case Type.TypeRef(id, _)              => s.symbols(id).kind == SymKind.TypeParam
+      case _: Type.IsBound | _: Type.CapRef => true
+      case _                                => false
+
+  /** The capability among [[autoDerived]] that declares `member`: what an abstract receiver lacks. */
+  def autoDerivedCap(s: TyperState, member: String): Option[SymbolId] =
+    autoDerived.flatMap(s.symbols.scope.get).find(s.symbols.membersOf(_).exists(_.name == member))
 
   /** Every instance member `name` on `recv`, best first: a data type's own field, then its
     * capabilities, then its derived `fold`. Calls with several candidates pick by argument shape.
@@ -150,7 +164,7 @@ object Members:
       case Type.TypeVar(id)       => capMember(s, s.unifier.boundsOf(id), resolved, name)
       case Type.AppliedVar(id, _) => capMember(s, s.unifier.boundsOf(id), resolved, name)
       case _                      => Nil
-    if own.nonEmpty then own
+    if own.nonEmpty || abstractType(s, resolved) then own
     else capMember(s, autoDerived.flatMap(s.symbols.scope.get).map(Type.CapRef(_, Nil)), resolved, name)
 
   /** A field of a single-variant data type, as a zero-argument member. */

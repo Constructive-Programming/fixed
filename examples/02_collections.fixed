@@ -139,7 +139,7 @@ fn count(collection: is Folding) -> u64 =
     collection.fold(0, (acc, _) -> acc + 1)
 
 // --- Needs Functor: transform elements ---
-fn double(numbers: is Functor of (N is Numeric)) -> is Functor =
+fn double(numbers: is Functor of (N is Numeric) + Show) -> is Functor + Show =
     numbers.map((x) -> x * 2)
 
 // --- Needs Functor: transform elements ---
@@ -210,7 +210,7 @@ fn take(collection: C is ArrayLike, n: u64) -> C =
 //
 // Anamorphism on List: unfold the index counter into a List of u64,
 // then fold-right into the target representation R.
-fn range(start: u64, end: u64) -> R is Sequencing + Folding + Empty =
+fn range(start: u64, end: u64) -> R is Sequencing + Folding + Empty + Show =
     List.unfold(start, (i) ->
         if i >= end: List.Nil
         else: List.Cons(i, i + 1)
