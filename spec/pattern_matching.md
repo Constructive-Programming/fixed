@@ -1,8 +1,10 @@
 # Fixed Pattern Matching
 
-**Status:** Draft v0.3
+**Status:** Draft v0.3.1
 **Specifies:** pattern syntax, type rules, exhaustiveness/redundancy checking, and match-expression semantics for Fixed v0.4.3 source.
 **Last revised:** 2026-11-20
+
+**Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): in generic code a `match` reads the variant through the accessor `T.variant` (§8.4); examples destructure the data type `Tuple`, not the capability `Pair`.
 
 **Changes from v0.2.** §8.1's example no longer has a function call itself (functions cannot); it folds the raw subtrees. The or-pattern binder error of Rule M5.5.a is renumbered `E095`: `E093` stays the handler-coverage error of Rule M6.4.c and `spec/effects.md` §5.3. §8.4 says how a `match` reads the variant of a cell and of an immediate under decision P6 (`spec/compilation_model.md` Rules CM3.5, CM8.8). The cross-reference to `spec/memory_management.md` notes that an immediate has no cell to reuse.
 
@@ -56,7 +58,7 @@ match opt:
     Maybe.Nothing => 0
 ```
 
-A binder shadows enclosing-scope names of the same identifier inside the case body. **Rule M3.2 (Binder uniqueness):** within a single pattern, the same binder name may not appear twice (`Maybe.Pair(x, x)` is a compile error). Linearity within a single pattern forces this.
+A binder shadows enclosing-scope names of the same identifier inside the case body. **Rule M3.2 (Binder uniqueness):** within a single pattern, the same binder name may not appear twice (`Tuple.Tuple(x, x)` is a compile error). Linearity within a single pattern forces this.
 
 ### 3.3 Literal patterns
 
@@ -114,7 +116,7 @@ match triple:
 `StructDestructurePattern` destructures a value of a single-variant `data` type by field name:
 
 ```
-let Pair { first: x, second: y } = p
+let Tuple { first: x, second: y } = p
 let Config { host, port, debug: d } = cfg     // shorthand: `host` ≡ `host: host`
 ```
 
@@ -372,7 +374,7 @@ For non-recursive data, the compiler is free to compile `match` via the auto-der
 
 The compiler's `MatchDesugar` pass (per `docs/plans/implementation-plan.md` Phase 4) compiles `match` via Maranget's decision-tree algorithm. For non-recursive `data`, this strategy is equivalent to a fold-based switch and the implementation may choose either lowering. For recursive data, the decision-tree compilation preserves raw subtree access (per §8.1) — `match` is **not** desugared to `fold` in that case. (The implementation plan's "match → fold" terminology is shorthand for this lowering; it does not imply catamorphic pre-folding.)
 
-Dispatch reads the variant from the value's representation. A cell's tag is unique in the link unit, so a `match` on a cell subtracts the type's base, a link-time constant, before it switches (`spec/compilation_model.md` Rule CM8.8, `spec/memory_management.md` Rule PR3.1). An immediate has no cell: its tag is the low byte of the slot, and a single-variant type has no tag (`spec/compilation_model.md` Rule CM3.5).
+Dispatch reads the variant from the value's representation. A cell's tag is unique in the link unit, so a `match` on a cell subtracts the type's base, a link-time constant, before it switches (`spec/compilation_model.md` Rule CM8.8, `spec/memory_management.md` Rule PR3.1). An immediate has no cell: its tag is the low byte of the slot, and a single-variant type has no tag (`spec/compilation_model.md` Rule CM3.5). In generic code, where an instance of a parameterised type may be an immediate or a cell depending on its argument witnesses, the `match` reads the variant through the type's accessor `T.variant(x, witnesses)` (`spec/compilation_model.md` Rule CM3.7).
 
 ## 9. Pattern bindings in `let`
 
@@ -382,7 +384,7 @@ Dispatch reads the variant from the value's representation. A cell's tag is uniq
 
 - Binder: `let x = expr`
 - Tuple: `let (a, b) = pair`
-- Struct destructure: `let Pair { first: key, second: value } = pair`
+- Struct destructure: `let Tuple { first: key, second: value } = pair`
 
 For refutable patterns, use `match`:
 
@@ -394,7 +396,7 @@ match opt:
 
 // IRREFUTABLE — let is fine:
 let (key, value) = pair
-let Pair { first: key, second: value } = pair
+let Tuple { first: key, second: value } = pair
 ```
 
 **Rule M9.2.** A `let Pat = Expr` binding's quantities are inferred per Rule Q5.8 in `spec/quantities.md`: each binder's quantity is the sum of its usages in the rest of the block.

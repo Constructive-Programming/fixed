@@ -1,8 +1,10 @@
 # Fixed Reports: Coverage, Cardinality and the Tool Interface
 
-**Status:** Draft v0.2
+**Status:** Draft v0.2.1
 **Specifies:** two analyses the compiler runs and reports — coverage of code by verification, and cardinality of types — the report of what the link step chose, the files a build reads besides its sources, and the interface external tools use.
 **Last revised:** 2026-11-20
+
+**Changes from v0.2.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the link report shows props tested under another binding, decisions resting on `assumed` props and each satisfier's claims beside the contract (Rule RP5.4); the lock file's deferred satisfaction sites (Rule RP5.3); layout uses no count, since a tag is one byte and each type has one layout (Rule RP4.3); "per satisfaction" replaces "per satisfying type".
 
 **Changes from v0.1** (`docs/decisions/P6-resolution-round-2026-11-20.md`, D4, D6, D10).
 - **Counters are the measurement lane's input** (Rule RP3.3). Region and request counters are the demand side of `spec/properties.md` Rule P7.9; they go to the profile file and never license a fact.
@@ -108,8 +110,9 @@ Counting inhabitants is one service with several users inside the compiler:
 
 - exhaustiveness of `match` and of handler clauses (`spec/pattern_matching.md` §6);
 - generators: when the product of a prop's binder cardinalities is no larger than the iteration budget, the driver enumerates every combination instead of sampling (`spec/properties.md` Rule P8.5);
-- layout: a sum with `n` variants needs `⌈log₂ n⌉` bits of tag, and a field whose type has unused bit patterns can hold the tag of an enclosing sum (representation selection, `spec/type_system.md` §6.5);
 - the report below.
+
+Layout does not use the count. A type with more than one variant has a one-byte tag when it is an immediate (`spec/compilation_model.md` Rule CM3.5) and a link-unique tag in its descriptor when it is a cell, and each type has one layout (`spec/memory_management.md` Rule PR3.1): no tag is narrowed to `⌈log₂ n⌉` bits or shared with a field.
 
 ### 4.4 The report (Rule RP4.4)
 
@@ -137,7 +140,7 @@ A way for a library to add a checked discipline to the type system (a third grad
 
 Two files besides the sources are inputs of an application build:
 
-- The **lock file** (`spec/compilation_model.md` Rule CM8.5) holds, per choice point bound at link, the satisfaction chosen, its score, and any pin the user wrote. It is checked in.
+- The **lock file** (`spec/compilation_model.md` Rule CM8.5) holds, per choice point bound at link, the satisfaction chosen, its score, and any pin the user wrote, and per deferred satisfaction site (`spec/type_system.md` Rule 8.4.b) the satisfaction it was bound to. It is checked in.
 - The **profile file** (Rule CM8.6), one per target, holds the measurements of `spec/properties.md` Rule P7.9: the supply side (cost of one call per capability method, satisfaction, size class and target; machine facts) and the demand side (region, request and usage counters). Each record carries its source (production or test run) and its target label.
 
 A build **reads** these files; it never measures. Measurement is a separate step (a test build, or a production run of an instrumented binary) that writes the profile file. A build is therefore a function of its sources, its dependencies, the lock file and the profile file: two machines with the same four inputs make the same choices and the same clones. A profile whose target label differs from the build's target is ignored, and the build uses static data (`spec/cost.md` Rule CT8.2). Continuous integration builds from the checked-in lock file and does not re-measure.
@@ -151,18 +154,20 @@ Tools read both files as they read the reports. A tool that rewrites the lock fi
 `fixed link --explain-selection` (and the same flag on `fixed compile` and `fixed ship` of an application) prints, and with `--format json` emits, per choice point bound at link:
 
 - the choice point: its declaration, the bound set and the usage vector the link step summed (Rule CM8.3), with the source of each usage number (production profile, test run or static weight);
-- each candidate satisfaction: viable or not, and for a non-viable one the cost prop it failed (`spec/cost.md` Rule CT8.1); for a viable one its score and, per used method, the cost of one call, each marked **measured** (with the profile's target label) or **static** (from the bound-class table);
+- each candidate satisfaction: viable or not, and for a non-viable one the cost prop it failed (`spec/cost.md` Rule CT8.1); for a viable one its score and, per used method, the cost of one call, each marked **measured** (with the profile's target label) or **static** (from the bound-class table), and the satisfier's own cost claims beside the capability's contract (`spec/cost.md` Rule CT6.1);
 - the chosen satisfaction and the **disambiguation rule that decided** (`spec/type_system.md` Rule 6.5.5): a pin, the choice recorded in the lock file within `ε`, the highest score, the capability's own package, or declaration order;
 - whether the choice differs from the one in the lock file before this link;
 - the cardinality of the chosen type (Rule RP4.2);
-- deferred satisfaction sites bound at link (`spec/type_system.md` Rule 8.4), as notes.
+- deferred satisfaction sites bound at link (`spec/type_system.md` Rule 8.4.b), as notes;
+- props whose `tested` status was obtained under another binding of a choice point than this link's (`spec/properties.md` Rule P7.4);
+- the facts-lane decisions that rest on `assumed` props (`spec/properties.md` Rule P7.8.a), with the props.
 
 The report is the place to see why a representation was chosen; it is not needed to reproduce the choice, which the lock file records.
 
 ## 6. Open questions
 
 - **OQ-RP1 — Typed-tree access for tools.** A tool that needs the typed tree of a package's own source has no format to read (`spec/compilation_model.md` Rule CM7.4 serialises none). A JSON dump is the obvious candidate; wait for a tool that needs it.
-- **OQ-RP2 — Specification status through capability tables.** A prop that calls a capability method constrains the requirement. Whether it also constrains each satisfying type's implementation is counted per (prop, satisfying type) pair when the prop is inherited (Rule P7.7.a), and not otherwise.
+- **OQ-RP2 — Specification status through capability tables.** A prop that calls a capability method constrains the requirement. Whether it also constrains each satisfying type's implementation is counted per (prop, satisfaction) pair when the prop is inherited (Rule P7.7.a), and not otherwise.
 - **OQ-RP3 — Counter cost.** Region counters in fused loops cost a load and a store per step. Whether test builds need sampling instead is to be measured.
 - **OQ-RP4 — Counting refinements.** Which refinement shapes the prover can count (intervals, finite sets) and which fall back to the base type.
 - **OQ-RP5 — Format and merging of the profile file.** How several runs (test runs on several machines of one target, production samples) are merged, and how old records age out, is not specified.
@@ -176,6 +181,6 @@ The report is the place to see why a representation was chosen; it is not needed
 | `spec/cost.md` | Rule CT8.2 reads the counters as usage; Rule CT8.1 viability is shown in the link report |
 | `spec/diagnostics.md` | Rule DG3.3 keeps diagnostics out of the parametric count |
 | `spec/pattern_matching.md` | §6 exhaustiveness shares the inhabitant count |
-| `spec/type_system.md` | §6.5 uses the count for tags and packing; Rule 6.5.5 names the disambiguation rule the link report shows |
+| `spec/type_system.md` | §6.4 refinement capabilities lower the count; Rule 6.5.5 names the disambiguation rule the link report shows |
 | `spec/memory_management.md` | §19 is the first report of the family |
 | `docs/decisions/P5-reports-and-tools.md` | The decision and the alternatives rejected |

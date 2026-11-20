@@ -99,10 +99,10 @@ A package that constructs or reads a data type whose layout depends on a choice 
 
 The convention of a requirement is derived from its signature, not from any body:
 
-- a parameter is `own` if a type variable of its type occurs in the result type, and `read` otherwise;
+- a parameter is `own` iff a value of the parameter's type can become part of the result, and `read` otherwise; for this test a value of type `Self` contains values of its capability's `of` parameters, a type variable contains only itself, and a function type is contained in nothing but a function type or a data type with a function field (corrected after the consistency review; the earlier wording, "a type variable of its type occurs in the result type", made `push`'s `x` `read`);
 - the exclusive pointer of a table entry requires exclusive ownership only of the `own` parameters whose type is `Self`.
 
-So `size(self) -> u64` and `compare(self, other) -> is Ordering` borrow; `push(self, x: Part) -> Self` owns both and updates `self` in place through the exclusive pointer while `x` stays shared; `get(self, i) -> Part` borrows `self` and `dup`s the part. A satisfier that must keep a `read` argument `dup`s it; one that ignores an `own` argument drops it. Before the convention is frozen, a benchmark with capability-bounded parameters measures it against `own` everywhere.
+So `size(self) -> u64` and `compare(self, other) -> is Ordering` borrow; `push(self, x: Part) -> Self` owns both and updates `self` in place through the exclusive pointer while `x` stays shared; `get(self, i) -> Part` borrows `self` and `dup`s the part; `fold(init: R, f) -> R` borrows `self` and `f` and owns `init`. The rule is stated once, in `spec/compilation_model.md` Rule CM4.6. A satisfier that must keep a `read` argument `dup`s it; one that ignores an `own` argument drops it. Before the convention is frozen, a benchmark with capability-bounded parameters measures it against `own` everywhere.
 
 ### D10. `show`, `==` and `clone` need a bound
 
@@ -126,7 +126,7 @@ trace("balance = {b}, acct = {a}")
 Coherence per link unit is withdrawn. A package may declare a satisfaction for a type and a capability it does not own, and a link unit may hold several satisfactions of one (type, capability).
 
 - **Names.** A satisfaction may be named: `Money satisfies Ord named ByAmount:` *(the keyword `named` is the author's choice)*.
-- **Resolution**, innermost first: `using` at the call site (`sort(xs) using ByAmount`); `using` in a type (`Set of Money using ByAmount`); `using` at file or package scope; the one satisfaction imported by `use`; `using` in the application root, as the default of the link unit; the only one in the link unit. Otherwise it is an error.
+- **Resolution**, innermost first: `using` at the call site (`sort(xs) using ByAmount`); `using` in a type (`Set of Money using ByAmount`); `using` at file or package scope; the one satisfaction of the pair in scope, by `use`, by declaration in the site's package, or because it is always in scope (corrected after the consistency review); `using` in the application root, as the default of the link unit; the only one in the link unit. Otherwise it is an error.
 - **The error halts on purpose.** Two satisfactions of the same pair differ in results, not in speed, so the score, the lock file and declaration order never choose between them. The message states the level at which the ambiguity arose and suggests a named `using`, with the satisfactions in scope as examples.
 - **Deferred sites** *(author's choice)*. A site in a library that sees several satisfactions and has no `using` is not an error in the library: it is bound at link by the last two rules, and reported as a note. A site that sees none is a type error, as today.
 - **The satisfaction is part of the type.** For a bound declared on a type's own parameter (`data Tree of K is Ord`), the elaborated type records the satisfaction: `Tree of Money[Ord = ByAmount]`. It is invisible when there is only one. Mixing two is a type error that names both and suggests `using`. This is what keeps a set built under one order from being searched under another.
@@ -158,6 +158,37 @@ The 6–8% cost of the reference-map header was a call, not the map: the child w
 ### D17. Prelude and typer repairs (not debated)
 
 `data Order: Less | Equal | Greater` satisfies `Ordering`; the typer rejects a satisfaction that does not define every member without a default; the malformed prelude text listed in P0 §3 is corrected; the compiler faults of P0 §4 are fixed.
+
+## Amendments after the consistency review
+
+An independent consistency review of the specs (2026-11-20, after this record was written into them) found contradictions that these decisions left open. The coordinator's rulings, as written into the specs:
+
+- **B1 (refines D9).** The table convention is one containment test: a parameter is `own` iff a value of its type can become part of the result (`Self` contains its capability's `of` parameters; a type variable contains only itself; a function type only a function type or a data type with a function field). It is stated once, with a table of examples, in Rule CM4.6, and stays provisional (OQ-CM18).
+- **B2 (refines D6).** The viability of a refinement-capability candidate is a facts-lane decision: only `proved` and `assumed` props count (Rules P7.7.c, P7.8.a).
+- **B5 (refines D6).** Cost props skip the static prover; the cost checker runs on Core and makes its own solver call (Rules P7.1, CT6.2).
+- **B6 (refines D11).** A use in `inspect` or `trace` is an ordinary use (quantity counted, demand `read`) in a build that keeps diagnostics; a build that strips them removes them before quantity inference, so erasure and reuse may differ while results do not. The compile error for a diagnostic use after the last use is withdrawn (Rule DG3.5, `spec/quantities.md` §4).
+- **B7 (refines D7).** An `Inline` value that is not an immediate is copied out to a cell with a descriptor where it meets code that does not know its type (Rule MM3.1).
+- **B8 (refines D11).** Interpolation exists only in the message of a diagnostic sink, as a name or field path; there is no general string interpolation (Rule DG3.2, grammar note at `STRING_LITERAL`).
+- **B9 (refines D12).** A comma-separated `using` list is admitted bare only in the top-level `using` declaration; after a call or a type it needs parentheses (grammar v0.4.12).
+- **M2 (refines D12).** Derived, built-in and prelude satisfactions are always in scope; a site *sees* a satisfaction that is in scope there (Rule 8.4).
+- **M3 (refines D12).** Level 4 is "the one satisfaction of the pair in scope, by `use`, by declaration in the site's package, or because it is always in scope" (Rule 8.4, Rule CM6.6); D12 above is corrected to match.
+- **M4 (refines D5, D12).** The satisfaction that enters the selector's pool for a data type is resolved at the site that created the choice point, by levels 1–4 there, and by levels 5–6 at link if that leaves several (§6.5.2, Rules CM8.4, CT8.1).
+- **M5 (refines D12, D13).** A private satisfaction is visible only in its package: not for levels 5–6, not for other packages' deferred sites, and a type that records it may not appear in a `pub` signature (Rule 8.6.a).
+- **M6, M7 (refine D4).** Rule CM8.4 cites the score of Rule 6.5.4 instead of restating it. The cost-prop check at link catches version skew and implicit (derived, built-in) satisfactions, since a declared one that fails is rejected at package compile; an open prop does not make a candidate non-viable (Rule CT8.1).
+- **M9, M10 (refine D6).** The static prover gives no `assumed` status (`--no-pbt` belongs to `fixed verify`). A `proved` status obtained by enumeration in the test build is a proof, recorded in the interface when `fixed verify` has run, and reaches importers only (Rule P8.5, `spec/quantities.md` §4, `spec/memory_management.md` §20.3). Whether other test-build results reach importers is left to the owner.
+- **M11 (refines D9).** Effect operations keep `own` on every argument; table calls follow Rule CM4.6 (Rule E7.7).
+- **M12 (refines D16).** A `Static` cell carries a count word holding the immortal sentinel, which `dup` and `drop` leave alone; a `Heap` cell never holds a counted reference to a cell of a class without a count (Rules PR3.1, PR7.3).
+- **M13 (refines D11).** The type table has a row for every kind of cell (data variant, closure, string, flat container, blob), each saying what `copy`, `size` and the printer read (Rule CM8.8).
+- **M14 (refines D8).** Generic code reads the variant of a value that may be an immediate through the accessor `T.variant(x, witnesses)` (Rule CM3.7, `spec/pattern_matching.md` §8.4).
+- **M15 (refines D14).** Every evidence entry, passed or captured, has one layout holding the handler's marker, through which the frame is found (`spec/effects.md` §7.1, Rule E7.2).
+- **M16, M17 (refine D11).** `inspect` and `trace` are declared in the prelude, and a user declaration of the same name shadows them. The sinks are `inspect`, `trace` and the optional message of `unreachable`; there is no panic construct, and the failure report of a prop is printed by the test driver with the same printer, not written as a string literal (Rules DG3.1, DG3.2, `spec/stdlib.md` §5).
+- **M18.** The grammar is not extended to `let x: T = …`; examples use parameter types (Rule 8.4, §8.5).
+- **M20 (refines D6, D12).** The test build of a package uses that package's `package.fixed` as its application root (`spec/compilation_model.md` §8, Rule 8.4).
+- **M21 (refines D6, D12).** A status is per (prop, satisfaction); a satisfaction that received no run is open for that prop; the prop's reported status is the weakest over the satisfactions that ran, and the report lists the others (Rule P7.7.a).
+- **M22, M23.** The link report adds props tested under another binding, decisions resting on `assumed` props and each satisfier's claims beside the contract; the lock file records deferred sites (Rules RP5.3, RP5.4). Rule RP4.3 no longer narrows or shares tags.
+- **Minors.** Built-in candidates count as declared in the standard library package, before its source declarations, and rule 4 of Rule 6.5.5 names the first capability of the bound set in canonical bound order. A test build keeps diagnostics (OQ-DG3 closed). A choice-point immediate prints with its chosen type where the choice point is known at the site, and as the raw slot through generic code (Rule DG3.4). Deferred sites are bound by level 5 only, since the link unit holds every satisfaction such a site sees (Rule 8.4.b).
+
+Items B3, B4, M1, M8, M19 and the remaining part of M10 wait for the owner.
 
 ## Corrections to statements made in this debate
 

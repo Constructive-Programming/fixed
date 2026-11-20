@@ -3,9 +3,19 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4.11
+   Status:        DRAFT v0.4.12
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
    Last revised:  2026-11-20
+
+   Refinements in v0.4.12
+   ----------------------
+   Consistency review of 2026-11-20 (amendments in docs/decisions/P6):
+   a `using` clause in postfix position (call site, type) names one
+   satisfaction or a parenthesised list, so `f(sort(xs) using A, Nil)`
+   is not ambiguous; only the top-level `UsingDecl` takes a bare comma
+   list. `unreachable` takes an optional string-literal message
+   (`AtomExpr`). Interpolation exists only in the message of a
+   diagnostic sink (`trace`, `unreachable`), as a name or field path.
 
    Refinements in v0.4.11
    ----------------------
@@ -348,12 +358,13 @@ STRING_LITERAL  = (* '"' { strchar | escape } '"' *) ;
 (* Interpolation is not lexical. `{` and `}` are ordinary characters in
    every string literal (examples/04_json.fixed writes "{}"). When a
    string literal is the message of a diagnostic sink — the argument of
-   `trace`, the message of a panic or of `unreachable`, the failure
-   report of a prop (spec/diagnostics.md) — the compiler reads
+   `trace` or the message of `unreachable` (spec/diagnostics.md Rule
+   DG3.2) — the compiler reads
    `{ LOWER_IDENT ( "." LOWER_IDENT )* }` inside it as an interpolated
    name or field path, and `{{` and `}}` as literal braces. Only a path
    is admitted, not a general Expr, so that a string literal never
-   needs nested lexing. *)
+   needs nested lexing. There is no other string interpolation: in any
+   other string literal `{x}` is three characters. *)
 CHAR_LITERAL    = (* "'" ( char | escape ) "'"  *) ;
 BOOL_LITERAL    = "true" | "false" ;
 UNIT_LITERAL    = "(" ")" ;
@@ -777,7 +788,10 @@ PrimitiveType
    TypeRef, so the line above parses as `Set of (Money using ByAmount)`.
    The position does not change the meaning: each name determines its
    (type, capability) pair, and the clause covers the whole type
-   expression it is written in (spec/type_system.md Rule 8.4). *)
+   expression it is written in (spec/type_system.md Rule 8.4). Since
+   v0.4.12 a list of names here needs parentheses, so that
+   `Tuple of (Money using A, Money)` names one satisfaction and has two
+   arguments. *)
 TypeRef
     = UPPER_IDENT ( "of" OfArg )? UsingClause?
     | PrimitiveType
@@ -985,19 +999,25 @@ UnaryExpr
    start an expression, so the clause is not ambiguous with a following
    argument or statement.
 
-   `inspect(x)`, `trace("…")` and `unreachable("…")` need no production.
-   `inspect` and `trace` are LOWER_IDENT atoms applied by AppSuffix;
-   the prelude binds them, the compiler knows them, and a user
-   declaration of the same name shadows them (examples/05_phantom_types
-   .fixed declares its own `fn inspect`). `unreachable("…")` parses as
-   the atom `unreachable` applied by AppSuffix. Their meaning is given
-   by spec/diagnostics.md. *)
+   A list of satisfactions in this position needs parentheses
+   (`sort(xs) using (ByAmount, ByLen)`): a bare comma would be read as
+   the next argument or tuple element (`f(sort(xs) using A, Nil)`).
+
+   `inspect(x)` and `trace("…")` need no production. `inspect` and
+   `trace` are LOWER_IDENT atoms applied by AppSuffix; the prelude
+   declares them (spec/stdlib.md), the compiler knows those two
+   declarations, and a user declaration of the same name shadows them
+   and is an ordinary function (examples/05_phantom_types.fixed
+   declares its own `fn inspect`). `unreachable` has its own production
+   in AtomExpr, with an optional string-literal message. Their meaning
+   is given by spec/diagnostics.md. *)
 AppExpr
     = AtomExpr AppSuffix* UsingClause?
     ;
 
 UsingClause
-    = "using" SatisfactionRef ( "," SatisfactionRef )*
+    = "using" ( SatisfactionRef
+              | "(" SatisfactionRef ( "," SatisfactionRef )* ","? ")" )
     ;
 
 (* Block lambdas removed in v0.3. Trailing-block style replaced by
@@ -1021,7 +1041,7 @@ AtomExpr
     = LiteralExpr
     | UNIT_LITERAL
     | "Self"
-    | "unreachable"
+    | "unreachable" ( "(" STRING_LITERAL ")" )?
     | "resume" "(" Expr? ")"
     | LOWER_IDENT
     | UPPER_IDENT

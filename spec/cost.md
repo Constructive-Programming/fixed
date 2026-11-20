@@ -1,8 +1,10 @@
 # Fixed Cost Contracts
 
-**Status:** Draft v0.2
+**Status:** Draft v0.2.1
 **Specifies:** what a cost contract bounds (steps, constructions, releases), how one is written (cost props, `fip`), the size index, how cost is inferred and verified, when a change to a contract is an ABI change, and how representation selection uses contracts and measured costs.
 **Last revised:** 2026-11-20
+
+**Changes from v0.2.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the cost checker makes its own solver call and cost props skip the static prover (Rule CT6.2); the pool's satisfaction is resolved at the site that created the choice point, the link check is said to catch version skew and implicit satisfactions, and an open prop does not make a candidate non-viable (Rule CT8.1); "per satisfaction" replaces "per satisfying type".
 
 **Changes from v0.1** (`docs/decisions/P6-resolution-round-2026-11-20.md`, D4, D5, D6, D10, D12).
 - **The selector's score is usage × cost** (Rule CT8.2, rewritten). Usage per capability method and the cost of one call are measured where data exists (`spec/properties.md` Rule P7.9, `spec/compilation_model.md` Rule CM8.6); the bound-class table (Rule CT8.3) and the static weights are the fallback. `K < ε` now holds for the fallback only; measured changes are covered by the lock file's hysteresis (`spec/type_system.md` Rule 6.5.5). A tie no longer halts.
@@ -139,7 +141,7 @@ The **class** of a bound is the first of these that contains it: `O(1)`, `O(log 
 
 `fip fn` (`spec/memory_management.md` §18) states, among its other conditions, `constructs − releases ≤ 0` with every reused part exclusively owned. `fip(n) fn` states `constructs − releases ≤ n` for a literal `n`, and is otherwise `fip`. Cost props are the symbolic generalisation: a bound that depends on sizes, and bounds on steps.
 
-The `fip` modifiers may be written on a capability **method requirement** and on a `satisfies` **method**, not only on a function declaration (`spec/syntax_grammar.ebnf` `FipModifier`). On a requirement it obliges every satisfying type. It is also what lets a `fip fn` call that method through a capability table (`spec/compilation_model.md` Rule CM4.7). This resolves `spec/memory_management.md` OQ-MM1.
+The `fip` modifiers may be written on a capability **method requirement** and on a `satisfies` **method**, not only on a function declaration (`spec/syntax_grammar.ebnf` `FipModifier`). On a requirement it obliges every satisfaction. It is also what lets a `fip fn` call that method through a capability table (`spec/compilation_model.md` Rule CM4.7). This resolves `spec/memory_management.md` OQ-MM1.
 
 ### 4.4 Where a contract may be stated (Rule CT4.4)
 
@@ -208,7 +210,7 @@ The size of a result is known where the member that built it says so (a `map` ke
 
 A cost prop is verified like any prop (`spec/properties.md` §7) and gets a status (Rule P7.7):
 
-1. **Static.** The inferred cost is compared with the declared bound symbolically; if that does not decide, the comparison goes to the static prover.
+1. **Static.** The cost checker, on Core, compares the inferred cost with the declared bound symbolically; if that does not decide, it passes the comparison to the solver in a call of its own. Cost props do not go through the static prover of `spec/properties.md` Rule P7.1.
    - The inferred cost is within the bound: `proved`.
    - The inferred cost is known and exceeds the bound: the prop **fails**, `error[E120]: cost bound not met`, with the inferred cost and the construct that produced the excess. The inferred cost is an upper bound, so this can reject an implementation whose real cost is within the bound; the author then restructures it or states a weaker bound.
    - The inferred cost is unknown (`?`, Rule CT6.1): continue with step 2.
@@ -221,7 +223,7 @@ A failed exact bound is an error with a counterexample, as for any prop (Rule P8
 
 ### 6.3 Obligations of a satisfaction (Rule CT6.3)
 
-When `T satisfies C` is processed, each member of `T` that implements a member of `C` must meet every cost prop `C` declares for it, and must be `fip` where the requirement is. The inferred cost of `T`'s member is checked against the bound by §6.2, per (prop, satisfying type) pair (Rule P7.7.a).
+When `T satisfies C` is processed, each member of `T` that implements a member of `C` must meet every cost prop `C` declares for it, and must be `fip` where the requirement is. The inferred cost of `T`'s member is checked against the bound by §6.2, per (prop, satisfaction) pair (Rule P7.7.a).
 
 This check replaces the per-satisfaction re-check of default bodies for cost: a default body is compiled once against the capability's contracts (`spec/type_system.md` Rule 6.1.1).
 
@@ -253,14 +255,14 @@ Contracts are part of a package's interface (`spec/compilation_model.md` Rule CM
 
 ### 8.1 Viability (Rule CT8.1)
 
-The selector's **candidates** at a choice point (`spec/compilation_model.md` Rule CM8.1) are satisfactions. For each data type that satisfies the bound set, the one satisfaction that the resolution order of `spec/type_system.md` Rule 8.4 picks is the candidate; two satisfactions of the same (type, capability) are never ranked against each other, because they differ in results and not in speed.
+The selector's **candidates** at a choice point (`spec/compilation_model.md` Rule CM8.1) are satisfactions. For each data type that satisfies the bound set, the one satisfaction that the resolution order of `spec/type_system.md` Rule 8.4 picks is the candidate: at the site that created the choice point, by levels 1–4 there; if that leaves several, by levels 5–6 at link. Two satisfactions of the same (type, capability) are never ranked against each other, because they differ in results and not in speed.
 
-A candidate that fails a cost prop of a capability in the bound set (Rule CT6.2, step 1) is **not viable**. A candidate whose cost prop is `tested` or `assumed` meets it: a wrong cost is a performance fault, not an unsound program (Rule CT6.5).
+A candidate that fails a cost prop of a capability in the bound set (Rule CT6.2, step 1) is **not viable**. A candidate whose cost prop is `tested` or `assumed` meets it, and an open prop (`spec/properties.md` Rule P7.1, step 3) does not make a candidate non-viable: a wrong cost is a performance fault, not an unsound program (Rule CT6.5).
 
 Viability is decided where the choice is made:
 
 - **At package compile**, for a choice point whose values never leave the package (`spec/compilation_model.md` Rule CM8.4).
-- **At application link**, for every other choice point. The link step checks each candidate against the cost props that the interface tier records for the requirements of the capabilities in the bound set, with the status the candidate's package recorded. It reads no bodies.
+- **At application link**, for every other choice point. The link step checks each candidate against the cost props that the interface tier records for the requirements of the capabilities in the bound set, with the status the candidate's package recorded. It reads no bodies. A declared satisfaction that fails a cost prop is already rejected when its package is compiled (Rule CT6.3, `E120`), so the check at link catches what no package compile could: version skew (a candidate compiled against another version of the capability than the one linked) and implicit satisfactions (derived and built-in) that no package compile checked against these props.
 
 Zero viable candidates at a choice point bound at link is a **link error** that names the choice point, the bound set and, per candidate, the cost prop it failed. It is the only error selection can produce (`spec/type_system.md` Rule 6.5.5).
 

@@ -1,8 +1,10 @@
 # Fixed Quantities (QTT)
 
-**Status:** Draft v0.6
+**Status:** Draft v0.6.1
 **Specifies:** quantity and demand inference for Fixed v0.4.4 source.
 **Last revised:** 2026-11-20
+
+**Changes from v0.6.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): Rule Q4.1.e cites the table convention of `spec/compilation_model.md` Rule CM4.6 instead of restating it, and an effect operation has one pointer; a use in `inspect` or `trace` counts as an ordinary use where diagnostics are kept (§4); §4 and Rule Q5.5 say where a `proved` status obtained by enumeration in the test build reaches; wrong references to P7.9 and §6.2 corrected.
 
 **Changes from v0.5.** Applies decision P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`, D6, D9, D15).
 - §4: property verification is no longer one pass that runs before quantity inference. The static prover runs after the typer and before quantity inference; the cost checker runs on Core; property-based testing is a separate test build whose results never enter the facts lane (`spec/properties.md` Rule P7.8). This resolves the phase-order contradiction with `spec/memory_management.md` §20.3.
@@ -116,17 +118,17 @@ Identity: `1`. `0` is annihilator.
 
 Two analyses run, with different inputs:
 
-- **Quantities** (§3, §5) count occurrences on the typed tree, after the typer. They give erasure, closure call counts (Rule Q5.7), the `resume` check (Rule Q5.11), linear effects and the unused-binding warning, all with source positions.
+- **Quantities** (§3, §5) count occurrences on the typed tree, after the typer. They give erasure, closure call counts (Rule Q5.7), the `resume` check (Rule Q5.11), linear effects and the unused-binding warning, all with source positions. In a build that keeps diagnostics, a use in `inspect` or `trace` is an ordinary use: it counts for quantity, and its demand is `read`. A build that strips diagnostics removes them before this pass (`spec/diagnostics.md` Rule DG3.5).
 - **Demands** (§4.1) are data flow over Core, the backend IR, after lowering. Core sees every allocation and every compiler-generated member (derived `fold`, `unfold`, `map`). Each function has one **baseline version** in Core, polymorphic in its type parameters (`spec/compilation_model.md` Rule CM3.1); demands are inferred on it, and inferred again on every clone the specialiser builds, where known types and ownership make them more precise (§9.3). Lowering carries source spans into Core, so demand diagnostics (`E110`) still point at source. Representation selection consumes demands and therefore also runs on Core (`spec/memory_management.md` §20.3).
 
-Property verification is three things, placed where their inputs exist (P6 D6, `spec/memory_management.md` §20.3): the **static prover** on the typed tree, right after the typer and before quantity inference; the **cost checker** on Core, after demand inference; and **property-based testing** in a separate test build. A decision that is wrong if a claim is false (reuse justified by a prop, a parallel fork site) is in the **facts lane** and never takes a `tested` prop; results of the test build never enter it (`spec/properties.md` Rule P7.8). Decisions among alternatives that are all correct (fork granularity, clone weights) are in the measurement lane (Rule P7.9).
+Property verification is three things, placed where their inputs exist (P6 D6, `spec/memory_management.md` §20.3): the **static prover** on the typed tree, right after the typer and before quantity inference; the **cost checker** on Core, after demand inference; and **property-based testing** in a separate test build. A decision that is wrong if a claim is false (reuse justified by a prop, a parallel fork site) is in the **facts lane** and never takes a `tested` prop; results of the test build never enter the facts lane of the package compile that preceded it (`spec/properties.md` Rule P7.8.c). A `proved` status that the test build obtains by enumeration (`spec/properties.md` Rule P8.5) is a proof: it is recorded in the interface when `fixed verify` has run, and it reaches the facts lane of importers only. Decisions among alternatives that are all correct (fork granularity, clone weights) are in the measurement lane (Rule P7.8.b).
 
 The rest of this section describes the **quantity** analysis. Quantity inference runs on the typed tree and is a **Recheck-style phase** (see `docs/references/scala3-compiler-reference.md` §5.4). Demand inference is a pass over Core and is not. Quantity inference runs:
 
 | Runs after | Provides input |
 |---|---|
 | Base typer | Typed AST |
-| Capability closure (§6.2) | Bound sets |
+| Capability closure (`spec/type_system.md` §6.2) | Bound sets |
 | Static prover (`spec/properties.md` §7) | `proved` props, available to every later pass (fork site 3, Rule Q5.13.a) |
 
 | Runs before | Consumes output |
@@ -165,7 +167,7 @@ and only until the first use that keeps it (`own`) while the binding stays live.
 
 **Rule Q4.1.d (relation to quantities).** Quantity 0 and demand `0` coincide. Otherwise the two are independent: a binding of quantity 1 may demand `read` (one comparison), and a binding of quantity ω may be passed to an `exclusive` parameter at its last use.
 
-**Rule Q4.1.e (members without a body).** A capability method requirement has no body, so no demand can be inferred for it. A call through a capability table follows the convention derived from the requirement's signature (`spec/compilation_model.md` Rule CM4.6): a parameter is `own` if a type variable of its type occurs in the result type, and `read` otherwise; the exclusive pointer requires exclusive ownership only of the `own` parameters whose type is `Self`. So `size(self) -> u64` borrows, and `push(self, x: Part) -> Self` owns both and may update `self` in place while `x` stays shared. A satisfier that must keep a `read` argument `dup`s it; one that ignores an `own` argument drops it. A call through a closure whose identity is unknown, and a call of an effect operation (`spec/effects.md` Rule E7.7), pass every argument under `own` on the shared pointer, and the exclusive pointer may be used only by a caller that exclusively owns every argument in every part. A satisfying type's method keeps its own inferred demands for callers that know the type; the table entry adapts it to the convention. The reason for a convention read off the signature: it is the only thing a caller and every satisfier, possibly in different packages, both see.
+**Rule Q4.1.e (members without a body).** A capability method requirement has no body, so no demand can be inferred for it. A call through a capability table follows the convention derived from the requirement's signature (`spec/compilation_model.md` Rule CM4.6, which states it and gives its examples). A satisfier that must keep a `read` argument `dup`s it; one that ignores an `own` argument drops it. A call through a closure whose identity is unknown passes every argument under `own` on the shared pointer, and may use the exclusive pointer only when the caller exclusively owns every argument in every part (`spec/memory_management.md` Rule PR5.6). A call of an effect operation goes through the single pointer of its evidence entry and passes every argument under `own` (`spec/effects.md` §7.1, Rule E7.7). A satisfying type's method keeps its own inferred demands for callers that know the type; the table entry adapts it to the convention. The reason for a convention read off the signature: it is the only thing a caller and every satisfier, possibly in different packages, both see.
 
 Demands are inferred, never written. A program states something about ownership only through a contract: `fip` (§7.5), which requires `exclusive` on the parts a function reuses, and the cost props of `spec/cost.md`, whose `releases` term is defined on `exclusive` parts.
 
@@ -213,7 +215,7 @@ A type parameter inferred phantom per type_system.md §5.9 is **always quantity 
 
 Prop bodies are **excluded from the compiled artifact** (the program binary). References to bindings inside a prop body therefore do **not contribute to the binding's runtime quantity** in the compiled artifact. If a binding is used only inside prop bodies, it has runtime quantity 0 in the artifact and is erased.
 
-Property-based testing (`spec/properties.md` §7) compiles prop bodies separately into a **test build** — for example, a PBT driver that runs the prop body on generated inputs. Inside that test build, bindings have their normal quantities determined by all uses (including the prop body itself); the test build genuinely runs the body and is subject to standard quantity arithmetic. The test build is **not** part of the program binary, and its results never enter the facts lane (`spec/properties.md` Rule P7.8).
+Property-based testing (`spec/properties.md` §7) compiles prop bodies separately into a **test build** — for example, a PBT driver that runs the prop body on generated inputs. Inside that test build, bindings have their normal quantities determined by all uses (including the prop body itself); the test build genuinely runs the body and is subject to standard quantity arithmetic. The test build is **not** part of the program binary, and its results never enter the facts lane of the package compile that preceded it (`spec/properties.md` Rule P7.8.c); a `proved` status it obtains by enumeration reaches importers only (§4).
 
 Operationally: when computing a binding's runtime quantity in the compiled artifact, the typer ignores uses inside prop bodies. Property verification is then handled separately, with its own compilation pipeline.
 

@@ -1,8 +1,10 @@
 # Fixed Properties
 
-**Status:** Draft v0.3.0
+**Status:** Draft v0.3.1
 **Specifies:** `prop` declarations, `forall` / `implies` / `suchThat` constructs, the three verifiers (static prover, cost checker, property-based testing) and where each runs, verification statuses and the two lanes they feed, measurement during testing, property-based test generation, and how verified properties feed compiler decisions for Fixed v0.4.5 source.
 **Last revised:** 2026-11-20
+
+**Changes from v0.3.0.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): cost props skip the static prover and go to the cost checker (Rule P7.1); the viability of a refinement-capability candidate is a facts-lane decision (Rules P7.7.c, P7.8); a status is per (prop, satisfaction), and the reported status is the weakest over the satisfactions that ran (Rule P7.7.a); the failure report of a prop is printed by the diagnostic printer and is not a string literal (Rule P8.4); the test build keeps diagnostics (§4.2); "per satisfaction" replaces "per satisfying type".
 
 **Changes from v0.2.3** (`docs/decisions/P6-resolution-round-2026-11-20.md`, D4, D6, D11, D12).
 - **Three verifiers, placed where their inputs exist** (Rule P7.1, rewritten): the static prover on the typed tree right after the typer, the cost checker on Core, and property-based testing in the test build that `fixed verify` runs. A prop the package compile leaves undecided is *open*, which is not a status. `fixed compile` no longer runs property-based testing; the testing flags of Rule P7.6 belong to `fixed verify`.
@@ -151,7 +153,7 @@ The body of a `fn -> cap` is the *only* fn body that consists of `prop` declarat
 
 A prop in a `cap` or `data` declaration whose body is a comparison with a cost term on the left (`steps(m)`, `constructs(m)`, `releases(m)`, or `constructs(m) - releases(m)`, for a member `m` of the declaration) is a **cost prop**. It states a cost contract, defined in `spec/cost.md` §4.
 
-A cost prop is a prop in every other respect: it is excluded from the compiled artifact (§4.1), inherited through `extends` (§10), verified per satisfying type, and given a status (Rule P7.7). Two things differ:
+A cost prop is a prop in every other respect: it is excluded from the compiled artifact (§4.1), inherited through `extends` (§10), verified per satisfaction, and given a status (Rule P7.7). Two things differ:
 
 - Its body is not evaluated as an expression. `steps`, `constructs`, `releases`, `size`, `O`, `log` and `max` denote the cost vocabulary of `spec/cost.md` Rules CT4.1 and CT4.2, and the bound is compared with the member's inferred cost (`spec/cost.md` §6).
 - A bound written with `O(…)` cannot be refuted by testing, so it is `proved`, rejected because the inferred cost exceeds it, or `assumed`; it is never `tested` (`spec/cost.md` Rule CT6.2). An exact bound can be `tested`: the test build counts the member's steps and constructions and compares. A `tested` cost prop is a measurement. Every cost prop, whatever its status, is used only in the measurement lane (Rule P7.8.b; `spec/cost.md` Rule CT6.5).
@@ -174,7 +176,7 @@ A prop body's effect row must be **empty**. Calls to effect operations (`Console
 
 A prop body is a statement about values, and its truth must not depend on a handler: the static prover sees no handler, and the program binary does not contain the body at all (§4.1), so an effect in it would have no meaning in either place. The typer enforces effect-row emptiness as a separate check for clearer error messages.
 
-`inspect` and `trace` are not effects (`spec/diagnostics.md` Rule DG3.3) and are allowed in a prop body. The static prover reads `inspect(e)` as `e` and `trace(…)` as `()`; whether the test build keeps them is `spec/diagnostics.md` OQ-DG3.
+`inspect` and `trace` are not effects (`spec/diagnostics.md` Rule DG3.3) and are allowed in a prop body. The static prover reads `inspect(e)` as `e` and `trace(…)` as `()`; the test build keeps them (`spec/diagnostics.md` Rule DG3.5).
 
 ### 4.3 `forall` and `implies` are reachable only inside prop bodies (Rule P4.3)
 
@@ -244,7 +246,7 @@ Users seeking deterministic per-pair coverage can name one satisfaction with `us
 
 **Rule P5.3.c (Baseline against clone).** A clone of a function must behave as its baseline version (`spec/compilation_model.md` Rule CM5.2). Where the code a prop body calls has clones, a test build may evaluate the prop body twice per generated input — once calling baseline versions only, once calling the clones the program would call — and compare the two results. A difference is a compiler fault, reported as an internal error with the input, not a failed prop. This is a comparison of two results on one input, not a second sampling dimension: it does not divide the iteration budget.
 
-A future weighting hint (`@sampling(weights = ...)` or similar attribute) is anticipated for cases where one satisfying type matters more than others — deferred until use cases motivate it.
+A future weighting hint (`@sampling(weights = ...)` or similar attribute) is anticipated for cases where one satisfaction matters more than others — deferred until use cases motivate it.
 
 **Rule P5.3.d (Generator availability).** If a `forall` binder's type has no generator and the static prover left the prop open, `fixed verify` halts: `error[E101]: cannot verify <prop> — no generator for <type>`. The user resolves by providing a custom generator (mechanism deferred — see OQ-P2) or by restricting the binder's domain via a refinement cap.
 
@@ -324,14 +326,14 @@ Property verification is three things, each placed where its input exists. The s
 
 | Verifier | Input | Runs in | Results |
 |---|---|---|---|
-| **Static prover** | the typed tree | the package compile, right after the typer and before quantity inference | `proved`; falsified (`E102`); open |
+| **Static prover** | the typed tree | the package compile, right after the typer and before quantity inference | props other than cost props: `proved`; falsified (`E102`); open |
 | **Cost checker** | the Core of baseline versions | the package compile, after demand and memory inference (`spec/cost.md` Rule CT6.2) | cost props only: `proved`; failed (`E120`); open |
 | **Property-based testing** | the test build (§4.1) | `fixed verify` | `tested`; `proved` by enumeration (Rule P8.5); counterexample (`E102`) |
 
 For each prop:
 
-1. **Static proof.** The static prover (choice deferred to OQ-P1) gets the prop with a bounded time budget (default 5 seconds per prop, configurable). `proved` gives the status `proved`. A counterexample is `error[E102]: prop failed: <name>`, reported by Rule P8.4.
-2. **Cost check.** A cost prop the prover did not decide goes to the cost checker (`spec/cost.md` Rule CT6.2, step 1).
+1. **Static proof.** The static prover (choice deferred to OQ-P1) gets every prop that is not a cost prop, with a bounded time budget (default 5 seconds per prop, configurable). `proved` gives the status `proved`. A counterexample is `error[E102]: prop failed: <name>`, reported by Rule P8.4.
+2. **Cost check.** A cost prop skips the static prover. The cost checker decides it on Core and makes its own solver call (`spec/cost.md` Rule CT6.2, step 1).
 3. **Open.** A prop that steps 1 and 2 leave undecided is **open** when the package compile ends. Open is not a status: an open prop is not a fact (Rule P7.8), and `fixed compile` reports the number of open props.
 4. **Testing.** The test build runs property-based testing (§8) on every open prop for at least 100 non-discarded iterations. A counterexample is `E102`. Otherwise the prop is `tested`, or `proved` when Rule P8.5 enumerated every value. A cost prop with an asymptotic bound is not tested (`spec/cost.md` Rule CT6.2) and becomes `assumed`.
 5. **No testing.** With `fixed verify --no-pbt` step 4 is skipped and every open prop becomes `assumed` (`W107`).
@@ -413,7 +415,9 @@ By what they guarantee the statuses are ordered `assumed` < `tested` < `proved`.
 
 **Rule P7.7.a (inheritance and satisfactions).** A prop inherited through `extends` (§10) is verified per satisfaction (`spec/type_system.md` Rule 8.4), so its status is recorded per (prop, satisfaction) pair. A link unit may hold several satisfactions of one (type, capability); each is its own pair. An override (Rule P10.3) has its own status; proving the override proves the parent's version, because the override implies it.
 
-The pair is verified in the package that declares the satisfaction, which may not be the package that declares the capability. The status is recorded in that package's interface (`spec/compilation_model.md` Rule CM7.1). An importer takes a recorded status as it stands and does not verify the prop again. `--require-proved` applies to the props verified in the package being built; the verdict line of Rule P7.7.b counts the statuses recorded by dependencies separately.
+The pair is verified in the package that declares the satisfaction, which may not be the package that declares the capability. The status is recorded in that package's interface (`spec/compilation_model.md` Rule CM7.1). An importer takes a recorded status as it stands and does not verify the prop again.
+
+A satisfaction that received no run for a prop (one that sampling never picked, Rule P5.3.b, or one added after the run) is open for that prop. The status reported for the prop as a whole is the weakest over the satisfactions that were run, and the report (Rule P7.7.b) lists the satisfactions that were not. `--require-proved` applies to the props verified in the package being built; the verdict line of Rule P7.7.b counts the statuses recorded by dependencies separately.
 
 **Rule P7.7.b (verdict).** `fixed verify` ends with one verdict line giving the count of each status and of failures:
 
@@ -423,7 +427,7 @@ props: 41 proved, 6 tested, 1 assumed, 0 failed
 
 With `--format json` the same counts appear together with one record per prop: name, location, status and, for `tested`, the iteration count and the satisfactions it ran under. The exit code is `2` when any prop failed, or when `--require-proved` is set and any prop is `tested` or `assumed`.
 
-**Rule P7.7.c (what a status licenses).** A status decides which lane a prop may enter (Rule P7.8): `proved` and `assumed` props enter the facts lane, `tested` props do not. Every accepted prop, whatever its status, is still an obligation on satisfying types and still makes a refinement-cap candidate viable (`spec/type_system.md` §6.5.3), because viability is a choice among correct alternatives.
+**Rule P7.7.c (what a status licenses).** A status decides which lane a prop may enter (Rule P7.8): `proved` and `assumed` props enter the facts lane, `tested` props do not. Every accepted prop, whatever its status, is still an obligation on every satisfaction. A refinement relies on its props, since later code takes them as true of the value; so a refinement-cap candidate is viable only by `proved` and `assumed` props (`spec/type_system.md` §6.5.3), a facts-lane decision (Rule P7.8.a).
 
 ### 7.8 Two lanes (Rule P7.8)
 
@@ -433,11 +437,12 @@ A decision the compiler makes from a prop belongs to one of two lanes.
 
 - reuse or in-place update justified by a prop;
 - discharge of `unreachable` (Rule P9.2) and every other optimisation of §9.1;
-- a parallel fork site that relies on a prop (`spec/quantities.md` Rule Q5.13.a).
+- a parallel fork site that relies on a prop (`spec/quantities.md` Rule Q5.13.a);
+- the viability of a candidate by refinement caps (`spec/type_system.md` §6.5.3).
 
 A `tested` prop is excluded because it looks like evidence while guaranteeing nothing: nobody chose to trust it, and a false one would turn a passing test suite into undefined behaviour without anyone having decided anything. An `assumed` prop is admitted because it is an explicit, visible act of trust. It is the only way a property that no prover and no generator can reach (OQ-P4) can drive an optimisation; whoever ran the build accepted it (`--no-pbt`, Rule P7.6); the verdict line counts it; the link report lists the decisions that rest on it; and `--require-proved` rejects it.
 
-**Rule P7.8.b (measurement lane).** A decision **among alternatives that are all correct** takes anything measured while code runs, and every status. The decisions in this lane are candidate selection (`spec/cost.md` §8), clone weights (`spec/compilation_model.md` Rule CM5.4), the clone budget (Rule CM5.3), fork granularity, and the viability of a candidate by refinement caps and cost contracts. A wrong input makes the program slower, not wrong. Cost props are used only here (`spec/cost.md` Rule CT6.5).
+**Rule P7.8.b (measurement lane).** A decision **among alternatives that are all correct** takes anything measured while code runs, and every status. The decisions in this lane are candidate selection (`spec/cost.md` §8), clone weights (`spec/compilation_model.md` Rule CM5.4), the clone budget (Rule CM5.3), fork granularity, and the viability of a candidate by cost contracts. A wrong input makes the program slower, not wrong. Cost props are used only here (`spec/cost.md` Rule CT6.5).
 
 **Rule P7.8.c (which statuses a decision can see).** A facts-lane decision uses the statuses known where it is made:
 
@@ -510,7 +515,7 @@ If the time budget elapses before `N` non-discarded cases, the driver warns: `wa
 When a counterexample is found, the error message includes:
 
 - The prop name and source location.
-- The shrunken counterexample input — concrete values for every binder, and for a polymorphic binder the satisfaction it ran under. The failure report is a diagnostic sink (`spec/diagnostics.md` Rule DG3.2): values are printed as represented by `spec/diagnostics.md` Rule DG3.4, so a value whose type is an unbounded parameter needs no `Show`, and a choice-point value shows its chosen type.
+- The shrunken counterexample input — concrete values for every binder, and for a polymorphic binder the satisfaction it ran under. The failure report is not a string literal: the test driver prints it with the diagnostic printer, values as represented by `spec/diagnostics.md` Rule DG3.4, so a value whose type is an unbounded parameter needs no `Show`, and a choice-point value shows its chosen type.
 - A copy-pasteable snippet that the user can place in a test file to reproduce the failure deterministically.
 - A suggestion to either fix the prop or fix the implementation that violated it.
 
@@ -560,7 +565,7 @@ Per `prop non_empty: size > 0` on `NonEmpty`, the typer proves `collection.get(m
 
 ## 10. Inheritance through `extends`
 
-When `cap A extends B`, every prop of `B` becomes an obligation on `A`'s satisfying types in addition to `A`'s own props. The full obligation set is the union of all transitively inherited props.
+When `cap A extends B`, every prop of `B` becomes an obligation on every satisfaction of `A` in addition to `A`'s own props. The full obligation set is the union of all transitively inherited props.
 
 ### 10.1 Simple inheritance (Rule P10.1)
 

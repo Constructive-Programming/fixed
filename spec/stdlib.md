@@ -1,8 +1,10 @@
 # Fixed Standard Library — Core Types and Capabilities
 
-**Status:** Draft v0.3
+**Status:** Draft v0.3.1
 **Specifies:** the core data types and capabilities Fixed's stdlib provides; the cap-vs-data classification each one takes; the auto-derived satisfactions.
 **Last revised:** 2026-11-20
+
+**Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the prelude declares the diagnostic sinks `inspect` and `trace` (§5); the reference to struct-destructure patterns names Rule M3.6.b; a cost prop binds a satisfaction, not a satisfying type (§4.12).
 
 **Changes from v0.2.** Applies decision record P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`). New §3.6: `data Order` (`Less`, `Equal`, `Greater`) satisfies `Ordering` and is an immediate (D17). §4.11: `clone` returns an equal value; the satisfier chooses whether it shares or copies, and says which in a cost prop; a type that must not be duplicated does not satisfy `Clone` (D10). The unexplained "deep copy or count increment" alternative is gone. §5: "canonical satisfaction" now means only disambiguation rule 4 of `spec/type_system.md` Rule 6.5.5. `Maybe satisfies Optional` and `Order satisfies Ordering` are canonical in that sense, and the old sentence that `Optional` and `Ordering` have none is withdrawn. Every declaration of the prelude is `pub` (§1). Malformed prelude text corrected: `bool satisfies Boolean of Self` is now a built-in satisfaction with no mapping, `!=` desugars to `!a.eq(b)`, the `Optional` member is spelled `orElse` (as in §4.1; `spec/type_system.md` §6.1 now agrees), and satisfactions list the members they need. `Json`'s fields carry `Show + Eq`, without which its derived `Show` and `Eq` would have nothing to call (`spec/type_system.md` Rule 5.1.3).
 
@@ -287,7 +289,7 @@ In current example code, `.clone()` was used defensively in places where borrow 
 
 ### 4.12 Cost contracts (provisional)
 
-The core capabilities carry cost props (`spec/cost.md` §4). A satisfying type must meet them (Rule CT6.3), and representation selection uses them (`spec/cost.md` §8). `n` is `size(self)` (`spec/cost.md` Rule CT5.1); `f` is the function argument, and `steps(f)` the cost of one call of it. The table is provisional until the library is written in Fixed (implementation plan, Phase 5).
+The core capabilities carry cost props (`spec/cost.md` §4). Every satisfaction must meet them (Rule CT6.3), and representation selection uses them (`spec/cost.md` §8). `n` is `size(self)` (`spec/cost.md` Rule CT5.1); `f` is the function argument, and `steps(f)` the cost of one call of it. The table is provisional until the library is written in Fixed (implementation plan, Phase 5).
 
 | Capability | Member | `steps` | `constructs` | In place when exclusively owned |
 |---|---|---|---|---|
@@ -353,7 +355,16 @@ The right-bias commitment for `Tuple satisfies Functor` is **normative** (not co
 
 **Canonical satisfaction.** A satisfaction is *canonical* when it is declared in its capability's own package. The term means exactly rule 4 of the disambiguation in `spec/type_system.md` Rule 6.5.5: when representation selection finds two candidates of different data types with equal scores, the canonical one wins. It gives no other preference. A program that declares its own satisfying type competes with the canonical one on score. In the prelude, `Maybe` is canonical for `Optional`, `Order` for `Ordering` and `Tuple` for `Pair`. `Result` has no canonical satisfaction: a program that constructs a `Result` through the capability must declare a satisfying data type (`examples/03_option_result.fixed` shows the pattern), or the choice point has no viable candidate (`spec/type_system.md` §6.5.3).
 
-Canonicity never chooses between two satisfactions of the same type and capability. Those differ in results, and only `using` and the scope decide between them (`spec/type_system.md` Rule 8.4).
+Canonicity never chooses between two satisfactions of the same type and capability. Those differ in results, and only `using` and the scope decide between them (`spec/type_system.md` Rule 8.4). The prelude's satisfactions are always in scope (Rule 8.4).
+
+**Diagnostic sinks.** The prelude also declares the two diagnostic sinks:
+
+```
+pub fn inspect(x: T) -> T = ...           // body supplied by the compiler
+pub fn trace(message: String) -> () = ... // body supplied by the compiler
+```
+
+Being a sink is a property of these two declarations (`spec/diagnostics.md` Rules DG3.1, DG3.2): `inspect` takes a value of any type with no bound, and the argument of `trace` must be a string literal, whose names in braces are interpolated. A program that declares its own `inspect` or `trace` shadows the prelude's and gets an ordinary function.
 
 ## 6. Migration from earlier drafts
 
@@ -368,7 +379,7 @@ Earlier drafts (`docs/plans/implementation-plan.md` line 352) classified `List`,
 
 ### 6.1 What changes in user code
 
-- **`Pair { first: a, second: b }` destructure patterns.** These are struct-destructure patterns (Rule M3.6) and require a single-variant data type. Replace with `Tuple { first: a, second: b }` if the pair is a `data Tuple` value. If the binding is `is Pair of (A, B)` (a cap-bound), use the accessor methods instead: `let a = p.first` and `let b = p.second`.
+- **`Pair { first: a, second: b }` destructure patterns.** These are struct-destructure patterns (`spec/pattern_matching.md` Rule M3.6.b) and require a single-variant data type. Replace with `Tuple { first: a, second: b }` if the pair is a `data Tuple` value. If the binding is `is Pair of (A, B)` (a cap-bound), use the accessor methods instead: `let a = p.first` and `let b = p.second`.
 - **`Pair(a, b)` construction.** Replace with `Tuple(a, b)` for direct construction. To construct via the cap (so the compiler can pick the representation), write `Pair.pair(a, b)`.
 - **`is Pair of (A, B)`.** Continues to work — `Pair` is now a cap, so `is Pair` is the natural form.
 - **`match ord: Ordering.Less => ... | Ordering.Equal => ... | Ordering.Greater => ...`.** No longer valid on a cap. Rewrite as `ord.fold((_) -> ..., (_) -> ..., (_) -> ...)` or, on a value whose type is `Order`, match on `Order.Less`, `Order.Equal` and `Order.Greater`.

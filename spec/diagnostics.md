@@ -1,8 +1,10 @@
 # Fixed Diagnostics: `inspect`, `trace` and Printing Values
 
-**Status:** Draft v0.1
-**Specifies:** the diagnostic channel, the two built-ins that write to it (`inspect`, `trace`), interpolation of values into a diagnostic message, what a printed value looks like, how build modes treat diagnostics, and where the printer gets the names it prints.
+**Status:** Draft v0.1.1
+**Specifies:** the diagnostic channel, the two prelude declarations that write to it (`inspect`, `trace`), interpolation of values into a diagnostic message, what a printed value looks like, how build modes treat diagnostics, and where the printer gets the names it prints.
 **Last revised:** 2026-11-20
+
+**Changes from v0.1.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): `inspect` and `trace` are declared in the prelude, and a user declaration of the same name shadows them (Rule DG3.1); the sinks are `inspect`, `trace` and the message of `unreachable`, and interpolation exists only in a sink's message, as a name or field path (Rule DG3.2); a use in `inspect` or `trace` is an ordinary use where diagnostics are kept, and the compile error for a diagnostic use after the last use is withdrawn (Rule DG3.5); the test build keeps diagnostics (OQ-DG3 closed); an immediate of a choice point known at the site prints with the chosen type (Rule DG3.4); OQ-DG4 closed.
 
 **Why this document exists.** A programmer debugging generic code needs to see a value whose type is a parameter with no bound. Fixed cannot give that value a universal `show`: `show` on an unbounded type parameter is a type error (`docs/decisions/P6-resolution-round-2026-11-20.md` D10), because a universal `show` would let a program observe the representation the selector chose. Diagnostics resolve the conflict by being a **sink**: they print any value, and nothing they print comes back into the program. The decision is recorded in P6, D11.
 
@@ -11,7 +13,7 @@
 This document specifies:
 
 - `inspect(x)` and `trace("…")` (§3, Rules DG3.1 and DG3.2);
-- where interpolation of a value of unbounded type is allowed (Rule DG3.2);
+- the diagnostic sinks, and interpolation in their messages (Rule DG3.2);
 - why diagnostics are not observable, and what order of output is guaranteed (Rule DG3.3);
 - the printed form of a value (Rule DG3.4);
 - release and development builds (Rule DG3.5);
@@ -30,8 +32,10 @@ It does **not** specify:
 - `spec/effects.md` — rows, Rule E5.5.b, Rule E7.8.
 - `spec/properties.md` — Rule P8.4 (the failure report of a prop), Rule P7.8 (the facts lane).
 - `spec/compilation_model.md` — Rule CM3.5 (immediates), Rule CM8.1 (choice points), Rule CM8.8 (link-unique tags and the type table).
-- `spec/memory_management.md` — Rule PR3.1 (the cell header).
+- `spec/memory_management.md` — Rule PR3.1 (the cell descriptor).
 - `spec/cost.md` — Rule CT3.5 (what a contract does not count).
+- `spec/stdlib.md` — §5 (the prelude declares `inspect` and `trace`).
+- `spec/quantities.md` — §4 (how uses are counted).
 
 ## 3. Rules
 
@@ -43,7 +47,7 @@ inspect(x)
 
 `inspect` takes one value of any type, with no bound on the type, writes a description of it to the **diagnostic channel** (Rule DG3.4), and returns `x` unchanged. Its type is that of `x`.
 
-`inspect` is a built-in, not a function that can be written in Fixed: a Fixed function of type `T -> T` with `T` unbounded cannot look at its argument. It may stand wherever its argument could:
+`inspect` is declared in the prelude (`spec/stdlib.md` §5), and so is `trace`. Being a sink is a property of those two declarations: the compiler supplies their bodies, which cannot be written in Fixed, because a Fixed function of type `T -> T` with `T` unbounded cannot look at its argument. A program that declares its own `inspect` or `trace` shadows the name and gets an ordinary function (`spec/syntax_grammar.ebnf` §13). `inspect` may stand wherever its argument could:
 
 ```
 let total = inspect(xs).fold(0, (acc, x) -> acc + x)
@@ -57,19 +61,19 @@ let total = inspect(xs).fold(0, (acc, x) -> acc + x)
 trace("balance = {b}, acct = {a}")
 ```
 
-`trace` takes one string literal, which may interpolate expressions between braces, writes the resulting text to the diagnostic channel, and returns `()`.
+`trace` takes one string literal, which may interpolate names, writes the resulting text to the diagnostic channel, and returns `()`.
 
-Interpolating a value of unbounded type is allowed only inside a **diagnostic sink**:
+The **diagnostic sinks** are:
 
-1. the argument of `trace`;
-2. the message of a panic, including the message of `unreachable`;
-3. the failure report of a prop (`spec/properties.md` Rule P8.4).
+1. `inspect`, whose argument is a value (Rule DG3.1);
+2. `trace`, whose argument is a message;
+3. the optional message of `unreachable` (`unreachable("…")`, `spec/type_system.md` §5.6), printed when it is reached.
 
-In a sink an interpolated `{e}` is printed by Rule DG3.4 whatever the type of `e`, bounded or not, so the text of a sink does not depend on which `Show` satisfaction is in scope. A program that wants its `Show` text in a sink writes `{e.show()}`, which is then an ordinary `String`.
+There is no `panic` construct and so no panic message. The failure report of a prop is not a sink and not a string literal: the test driver prints it with the printer of Rule DG3.4 (`spec/properties.md` Rule P8.4).
 
-Outside a sink an interpolated value must have a type with `Show`, and the literal is an ordinary `String` built from `show`. Interpolating a value of unbounded type outside a sink is a type error, the same as calling `show` on it (P6, D10).
+**Interpolation.** Interpolation exists only inside the message of a sink, and only as a name or field path, `{b}` or `{acct.owner.name}` (`spec/syntax_grammar.ebnf`, the note at `STRING_LITERAL`). There is no general string interpolation: in every other string literal `{` and `}` are ordinary characters. An interpolated path is printed by Rule DG3.4 whatever its type, bounded or not, so the text of a sink does not depend on which `Show` satisfaction is in scope. A program that wants its `Show` text in a diagnostic binds `let s = e.show()` and interpolates `{s}`.
 
-A sink is the only context in which text about an unbounded value exists, and it is a context whose text the program cannot read (Rule DG3.3). That is what keeps the exception from breaking parametricity.
+A sink is the only context in which text about an unbounded value exists, and it is a context whose text the program cannot read (Rule DG3.3). That is what keeps it from breaking parametricity.
 
 ### 3.3 Not observable (Rule DG3.3)
 
@@ -93,7 +97,7 @@ A value is printed **as represented**:
 | A value of a choice point (Rule CM8.1) | the value as above, preceded by the concrete type the link step chose: `Vec: [1, 2, 3]` for a choice point bound to `Vec` |
 | An immediate (Rule CM3.5) reached through generic code | a raw number: the 64-bit slot, in hexadecimal |
 
-Where the compiler knows the type of an immediate at the print site, it prints the value by its type, not as a raw number. A generic function does not know, and an immediate carries no header (Rule DG3.6), so the number is all it has.
+Where the compiler knows the type of an immediate at the print site, it prints the value by its type, not as a raw number. For an immediate that is a value of a choice point, that holds where the choice point is known at the site: the printer names the chosen type. A generic function does not know, and an immediate carries no descriptor (Rule DG3.6), so through generic code the raw slot is all it has.
 
 Names are the declared names, qualified only where two printed types share a name. Fields whose type is a type parameter are printed by the same rule, through the type table (Rule DG3.6).
 
@@ -101,17 +105,17 @@ Names are the declared names, qualified only where two printed types share a nam
 
 - A **release build** strips every `inspect` and `trace`: `inspect(e)` becomes `e`, and `trace(…)` becomes `()`. A flag (`--keep-diagnostics`) keeps them.
 - A **development build** and a **test build** keep them.
-- The messages of panics and of `unreachable`, and the failure reports of props, are kept in every mode; they are printed only when the program is already failing.
+- The message of `unreachable` and the failure reports of props are kept in every mode; they are printed only when the program is already failing.
 
-Stripping must not change a program's result; by Rule DG3.3 it cannot. Stripping must also not keep a value alive, and keeping a diagnostic must not either: a diagnostic use of a value reads it, but it is not a use for ownership. It adds no `dup`, moves no last use, and changes no demand (`spec/quantities.md`), so the cells freed and reused are the same with diagnostics and without. A diagnostic use of a value placed after the value's last ordinary use is a compile error in every build mode (the value is no longer there to read); the error does not depend on the mode, so a program that compiles in one mode compiles in all.
+In a build that keeps diagnostics, a use in `inspect` or `trace` is an ordinary use: it counts for quantity, and its demand is `read` (`spec/quantities.md` §4). A value used only there is computed and printed. In a build that strips diagnostics they are removed before quantity inference, so such a value may be erased, and reuse may differ between the two builds. Results are identical in both builds (Rule DG3.3).
 
 ### 3.6 Where the names come from (Rule DG3.6)
 
 - **Where the type is known** at the print site, the compiler generates the printer for it, as it generates any derived member.
 - **In generic baseline code** the type is a parameter and the printer reads the value:
-  - A cell is self-describing (`spec/memory_management.md` Rule PR3.1). The tag in its header is unique in the link unit and indexes the **type table** of `spec/compilation_model.md` Rule CM8.8, which gives the type name, the variant name, the kind of each field (reference, immediate of a width, or scalar) and the size. The printer walks the fields with that table and recurses through references.
-  - An immediate has no header, so generic code cannot name it (Rule DG3.4).
-  - A function value carries a pointer to its code; the type table, or a table beside it, maps that to `name @ file:line`.
+  - A cell is self-describing (`spec/memory_management.md` Rule PR3.1). The tag in its descriptor is unique in the link unit and indexes the **type table** of `spec/compilation_model.md` Rule CM8.8, whose row for each kind of cell (data variant, closure, string, flat container, blob) says what the printer reads. For a data variant that is the type name, the variant name and the kind of each field; the printer walks the fields with it and recurses through references.
+  - An immediate has no descriptor, so generic code cannot name it (Rule DG3.4). An `Inline` value that is not an immediate reaches generic code only as a copied-out cell (`spec/memory_management.md` Rule MM3.1).
+  - A function value is a closure cell; its row gives `name @ file:line`.
   - A value of a choice point is printed with the type the link step chose; the type table entry of its cell gives the name.
 
 The table is built at link, the time when the tags are assigned (Rule CM8.8). A release build that strips diagnostics still needs the table for the witness operation `copy` (P6, D11); the location table of functions may be dropped with the diagnostics.
@@ -128,8 +132,8 @@ The table is built at link, the time when the tags are assigned (Rule CM8.8). A 
 
 - **OQ-DG1 — Structured output for tools.** Rule DG3.4 specifies text. A tool may want each record as JSON (location, value tree, chosen types). The format and a flag (`--diagnostics-format json`) are not specified.
 - **OQ-DG2 — Depth and size limits.** A long list or a deep tree prints without end in practice. A default limit on depth and on elements, with an elision mark, and a flag to change it, are not specified.
-- **OQ-DG3 — `inspect` in a `prop` body.** The static prover reads `inspect(e)` as `e` and `trace(…)` as `()`, so a proof does not change. Whether the test build keeps them while it runs a prop (every iteration would print) or strips them is open.
-- **OQ-DG4 — Grammar.** Interpolation in string literals, a message for `unreachable` and a panic form with a message are not in `spec/syntax_grammar.ebnf` yet.
+- ~~**OQ-DG3 — `inspect` in a `prop` body.**~~ Closed in v0.1.1: the test build keeps diagnostics (Rule DG3.5). The static prover reads `inspect(e)` as `e` and `trace(…)` as `()`.
+- ~~**OQ-DG4 — Grammar.**~~ Closed in v0.1.1: interpolation in a sink's message and the message of `unreachable` are in `spec/syntax_grammar.ebnf` v0.4.12; there is no panic form.
 
 ## 6. Cross-references
 
@@ -139,7 +143,8 @@ The table is built at link, the time when the tags are assigned (Rule CM8.8). A 
 | `spec/effects.md` | Diagnostics are not effects and do not appear in rows |
 | `spec/properties.md` | Rule P8.4 prints counterexamples by Rule DG3.4; the static prover ignores diagnostics |
 | `spec/compilation_model.md` | Rule CM3.5 immediates; Rule CM8.1 choice points; Rule CM8.8 tags and the type table |
-| `spec/memory_management.md` | Rule PR3.1 the header the printer reads |
+| `spec/memory_management.md` | Rule PR3.1 the descriptor the printer reads |
 | `spec/cost.md` | Rule CT3.5: diagnostics are not steps and build no counted cell |
-| `spec/syntax_grammar.ebnf` | Productions for interpolation and messages (OQ-DG4) |
+| `spec/syntax_grammar.ebnf` | Interpolation in a sink's message (note at `STRING_LITERAL`); the message of `unreachable` (`AtomExpr`) |
+| `spec/stdlib.md` | §5: the prelude declares `inspect` and `trace` |
 | `docs/decisions/P6-resolution-round-2026-11-20.md` | D10 and D11 |

@@ -1,8 +1,10 @@
 # Fixed Compilation Model
 
-**Status:** Draft v0.3
+**Status:** Draft v0.3.1
 **Specifies:** how Fixed v0.4.4 source becomes code: the baseline version of every function, the travel form and the rest form of a value, immediates, accessors, witnesses, specialisation (clones, budget, score, mandatory cases), build modes, packages and the package ABI, visibility, satisfactions in a link unit, the interface and body tiers, and the application link (choice points, summaries, selection, the lock file, the profile file, clones at link, the type table).
 **Last revised:** 2026-11-20
+
+**Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the table convention is one containment test with a table of examples (Rule CM4.6); an `Inline` value that is not an immediate is copied out before it meets a `ref` witness (Rules CM3.5, CM4.1); new accessor `T.variant` (Rule CM3.7); level 4 of satisfaction resolution, deferred sites (level 5 only) and private satisfactions follow `spec/type_system.md` Rules 8.4 and 8.6.a (Rule CM6.6); the test build's application root (§8); the pool's satisfaction, viability at link and the score cite their owners (Rule CM8.4); the type table has a row for every kind of cell (Rule CM8.8); "descriptor" replaces "header" for the tag and reference map.
 
 **Changes from v0.2.** Applies `docs/decisions/P6-resolution-round-2026-11-20.md` (D1–D17). The 64-bit slot is the *travel form* (Rule CM3.3); new Rules CM3.5 (immediates: every data type instance with no reference that fits in 64 bits), CM3.6 (rest form and `width`) and CM3.7 (accessors for layouts not known at package compile). The value witness gains `width` and its family is fixed (Rule CM4.1). Witness records are built on the stack in baseline code and are static where the instance is known at link (Rule CM4.2). A closure captures its evidence; choice points are not hidden parameters (Rule CM4.3). The signature alone decides who picks the representation of a result; the caller-chosen / callee-chosen split is withdrawn (Rule CM4.5). The convention of a call through a table is derived from the requirement's signature, with an exclusive pointer narrowed to `own` parameters of type `Self` (Rule CM4.6). Ownership clones are requested only where a run-time test cannot stand in, and the static weight is carried along call edges (§5). Declarations are private unless marked `pub` (Rule CM6.2). Coherence per link unit is withdrawn: a link unit may hold several satisfactions of one pair, resolved by `using` (Rule CM6.6). Bodies ship by default (Rule CM7.3). New §8 specifies the application link. Open questions move to §9 and cross-references to §10; OQ-CM1, OQ-CM4, OQ-CM5, OQ-CM8, OQ-CM10, OQ-CM11 and OQ-CM12 are closed, and OQ-CM13 to OQ-CM18 are new.
 
@@ -104,7 +106,7 @@ Consequences:
 - Whether an instance is an immediate, and its rest form, are pure functions of the type and the witnesses of its arguments (Rules CM3.5, CM3.6). A clone, where the arguments are constants, and the baseline, where it reads them from witnesses, apply the same function and therefore agree.
 - `List of u8` built from the declared `data List` is a cell with one slot per element field in every version. A dense layout for a sequence of `u8` is a different representation, a satisfier that selection picks (Rule CM3.6), with its own witness.
 
-**Reference map.** `drop` on a cell must not depend on which instantiation built it. The header of a cell therefore records which payload slots hold counted references (`spec/memory_management.md` Rule PR3.1). For a slot of parameter type the entry comes from the value witness (`kind`, §4.1) when a baseline version builds the cell, and is a constant in a clone. Cells stay self-describing: `drop` needs no type information.
+**Reference map.** `drop` on a cell must not depend on which instantiation built it. The descriptor of a cell therefore records which payload slots hold counted references (`spec/memory_management.md` Rule PR3.1). For a slot of parameter type the entry comes from the value witness (`kind`, §4.1) when a baseline version builds the cell, and is a constant in a clone. Cells stay self-describing: `drop` needs no type information.
 
 ### 3.5 Immediates (Rule CM3.5)
 
@@ -127,6 +129,8 @@ data Pair of (A, B): Pair(first: A, second: B)  // Pair of (u8, u16): size 3, im
 
 For a parameterised type, the rule is a pure function of the witnesses of its arguments: a field of parameter type is a reference when the argument's witness is `ref`, and otherwise has the argument's `width`. Code that knows the type but not its arguments computes the layout from the witnesses it already receives (Rule CM3.7). A field whose type is a choice point (Rule CM8.1) has the width of the chosen type, known at link.
 
+A value that representation selection makes `Inline` without being an immediate is not covered by this rule: it is copied out to a cell with a descriptor where it meets code that does not know its type (`spec/memory_management.md` Rule MM3.1).
+
 Equality of two immediates of one type is not equality of their bits unless the type's `Eq` says so; the zero high bits only make the bits canonical.
 
 The rule loses two things, accepted until a program shows they hurt: narrow fields are not packed inside a value that must be a cell (the allocator's rounding absorbs most of it), and nothing wider than 64 bits is an immediate (OQ-CM7).
@@ -148,7 +152,7 @@ A data cell is not a flat container: its payload fields are slots (`spec/memory_
 A package constructs and reads a data type through **accessors**, per-type entry points, when the layout of the type is not known when the package is compiled. There are two kinds:
 
 1. **Choice-point layouts.** The layout depends on a choice point (Rule CM8.1), for example a field `red: N is Numeric`. The accessors (`Color.RGB.make`, `Color.red`) are generated by the link step once the choice is made (Rule CM8.2).
-2. **Parameterised layouts.** A parameterised type that could be an immediate for some arguments (Rule CM3.5). The accessors take the argument witnesses (`Pair.make(a, b, wA, wB)`, `Pair.first(p, wA, wB)`) and compute the layout from them. They are generated with the type, in the package that declares it.
+2. **Parameterised layouts.** A parameterised type that could be an immediate for some arguments (Rule CM3.5). The accessors take the argument witnesses (`Pair.make(a, b, wA, wB)`, `Pair.first(p, wA, wB)`) and compute the layout from them. They are generated with the type, in the package that declares it. For a type with more than one variant they include `T.variant(x, witnesses)`, which returns the index of `x`'s variant: from the low byte of the slot when the instance is an immediate, and from the cell's tag less the type's base (Rule CM8.8) when it is a cell. A `match` in generic code reads the variant through it (`spec/pattern_matching.md` §8.4).
 
 A call through an accessor in baseline code costs one direct call per construction or field read; this is accepted as a cost of development builds. A clone inlines the accessor. A type whose layout is statically known (every field's type known, or the type statically a cell) has no accessors, and code uses its fields directly.
 
@@ -169,7 +173,7 @@ witness(op, v, dest)    op ∈ { drop, dup, reuse_test, evacuate, copy, size, ki
 `drop`, `dup`, `reuse_test`, `evacuate` and `size` are as in Rule MM7.3. Three operations are added there for this document:
 
 - `copy` returns an exclusively owned copy of the value in `dest`. It is what the shared entry of a `fip fn` uses (Rule CM5.5); `evacuate` cannot serve, because it is the identity when the value already lives where `dest` is. For a cell it takes the size and field kinds from the link-time type table (Rule CM8.8).
-- `kind` answers whether a slot of this type holds an immediate or a reference (Rule CM3.4).
+- `kind` answers whether a slot of this type holds an immediate or a reference (Rule CM3.4). A `ref` witness always meets a cell with a descriptor: an `Inline` value that is not an immediate is copied out to a cell before it reaches one (`spec/memory_management.md` Rule MM3.1).
 - `width` is the rest width of Rule CM3.6.
 
 **The family is fixed.** An immediate needs no `dup`, `drop` or `copy`, so the value witness of every instance of every type is one of:
@@ -263,19 +267,30 @@ The reason: a convention inferred from the body made a body change an ABI change
 
 ### 4.6 Calls through a table (Rule CM4.6)
 
-A capability method **requirement** has no body, so it has no inferred demand (`spec/quantities.md` §4.1). The convention of a call through a capability table is derived from the requirement's signature, never from a body:
+A capability method **requirement** has no body, so it has no inferred demand (`spec/quantities.md` §4.1). The convention of a call through a capability table is derived from the requirement's signature, never from a body. This rule is the one statement of it; `spec/quantities.md` Rule Q4.1.e, `spec/memory_management.md` Rules PR5.5 and PR5.6 and `spec/effects.md` Rule E5.5.b cite it.
 
-- A parameter, the receiver included, is **`own`** if a type variable of its type occurs in the result type, and **`read`** otherwise. For this test, `Self` in a capability with `of` parameters counts as mentioning each of them, because a value of `Self` may contain them.
+- **Containment.** A parameter, the receiver included, is **`own`** iff a value of the parameter's type can become part of the result, and **`read`** otherwise. For this test a value of type `Self` contains values of its capability's `of` parameters (`Part` included); a type variable, an anonymous bound included, contains only itself; and a function type is contained in nothing but a function type or a data type with a field of function type. A data type contains what its fields contain.
 - **Shared pointer.** `read` parameters are borrowed. `own` parameters are passed as counted references, moved at the caller's last use; the callee may keep, drop or reuse-after-test each one.
 - **Exclusive pointer.** As above, and the caller guarantees that it exclusively owns, in every part, each `own` parameter whose type is `Self`. Other arguments may stay shared. The caller picks this pointer statically, as for a closure (Rule PR5.6), and only when the guarantee holds.
 
 ```
 cap Sequencing of Part:
-    fn size(self) -> u64                           // self: read
-    fn compare(self, other: Self) -> is Ordering   // both read
-    fn push(self, x: Part) -> Self                 // both own; exclusive pointer: self only
-    fn get(self, i: u64) -> Part                   // self read; the part is dup'd
+    fn size(self) -> u64
+    fn compare(self, other: Self) -> is Ordering
+    fn push(self, x: Part) -> Self
+    fn get(self, i: u64) -> Part
+
+cap Folding:
+    fn fold(init: R, f: (R, Part) -> R) -> R
 ```
+
+| Requirement | Receiver | Other parameters | Why |
+|---|---|---|---|
+| `size(self) -> u64` | `read` | — | `u64` contains no `Self` |
+| `compare(self, other: Self) -> is Ordering` | `read` | `other`: `read` | the anonymous bound contains only itself |
+| `get(self, i: u64) -> Part` | `read` | `i`: `read` | the type variable `Part` contains only itself, not `Self` |
+| `push(self, x: Part) -> Self` | `own` | `x`: `own` | `Self` contains `Self`, and contains `Part`; exclusive pointer: `self` only |
+| `fold(init: R, f: (R, Part) -> R) -> R` | `read` | `init`: `own`; `f`: `read` | `R` contains only itself; a function type is not contained in a type variable |
 
 `push` updates `self` in place through the exclusive pointer while `x` stays shared. `get` borrows `self` and returns a `dup` of the part.
 
@@ -451,8 +466,8 @@ Two packages that build the same clone of an imported function, under the same s
 
 A link unit may hold several satisfactions of one pair (`data` type, capability with its `of` arguments). A package may declare a satisfaction for a type and a capability neither of which it declares. Coherence per link unit, which earlier drafts required, is withdrawn.
 
-- **Resolution.** Which satisfaction a site uses is decided by `using`, innermost first, as `spec/type_system.md` Rule 8.4 specifies: at the call site, in a type, at file or package scope, the one satisfaction imported by `use`, `using` in the application root, the only one in the link unit. Otherwise it is an error. Two satisfactions of one pair differ in results, not in speed, so the score, the lock file and declaration order never choose between them.
-- **Deferred sites.** A site in a library that sees several satisfactions of the pair and has no `using` is not an error when the library is compiled. It is bound at the application link by the last two rules (`using` in the application root, or the only one in the link unit), and the link reports it as a note. If neither rule gives one satisfaction, the link fails with the error of Rule 8.4. A site that sees none is a type error, as before.
+- **Resolution.** Which satisfaction a site uses is decided by `using`, innermost first, as `spec/type_system.md` Rule 8.4 specifies: at the call site, in a type, at file or package scope, the one satisfaction of the pair in scope (by `use`, by declaration in the site's package, or because it is always in scope), `using` in the application root, the only one in the link unit. Otherwise it is an error. A private satisfaction counts only in its own package (`spec/type_system.md` Rule 8.6.a). Two satisfactions of one pair differ in results, not in speed, so the score, the lock file and declaration order never choose between them.
+- **Deferred sites.** A site in a library that sees (`spec/type_system.md` Rule 8.4) several satisfactions of the pair and has no `using` is not an error when the library is compiled. It is bound at the application link by `using` in the application root (level 5), and the link reports it as a note; level 6 cannot decide it, because the link unit holds every satisfaction the site sees. If level 5 does not give one satisfaction, the link fails with the error of Rule 8.4. A site that sees none is a type error, as before.
 - **The satisfaction is part of the type.** For a bound declared on a type's own parameter (`data Tree of K is Ord`), the elaborated type records the satisfaction (`spec/type_system.md` Rule 8.4.a). This is what keeps a set built under one order from being searched under another, without a record of the satisfaction in the value. The witness record of the instance carries that satisfaction's tables (Rule CM4.2), and the symbols of its clones name it (Rule CM6.5).
 
 Satisfactions the compiler derives (`spec/type_system.md` §7.4) or builds in (§6.6) are determined by the `data` declaration alone. Every package derives the same one, so they have one identity and the linker keeps one copy of the table (Rule CM6.5).
@@ -540,6 +555,8 @@ The three builds and what each decides:
 | Application link | resolution of deferred satisfaction sites (Rule CM6.6); selection of the remaining choice points (Rule CM8.4); binding (Rule CM8.2); accessors (Rule CM3.7); the type table (Rule CM8.8); clones, in a release build (Rule CM8.7) |
 | Test build | property-based testing, and measurement (`spec/properties.md` Rule P7.9) |
 
+A test build is a link unit of its own. It has no `main`; its application root, for level 5 of `spec/type_system.md` Rule 8.4 and for any `using` that serves as the default of the link unit, is the `package.fixed` of the package under test.
+
 ### 8.1 Choice points (Rule CM8.1)
 
 An abstract type is bound at one of three times:
@@ -588,9 +605,9 @@ At the application link, the link step adds vectors along the edges, from each c
 
 For each choice point the link step selects one candidate.
 
-- **Candidates.** The satisfactions of the choice point's bound set in the link unit, and the built-in candidates of `spec/type_system.md` §6.6, which count as declared in the standard library package, in the order of that section's table. The selector chooses freely among satisfactions of different data types. Among several satisfactions of one pair it does not choose: the resolution of Rule CM6.6 for the application root gives the one that is a candidate, and if it gives none, the link fails with the error of `spec/type_system.md` Rule 8.4.
-- **Viability.** A candidate that does not meet the cost props of the requirements of its capabilities is not viable (`spec/cost.md` Rule CT8.1). Nor is a candidate whose variant fields refine a requirement parameter (`spec/type_system.md` Rule 8.1.a) so that an argument of one of the choice point's abstract constructor calls is rejected; the argument types come from the summaries (Rule CM8.3). Zero viable candidates is a link error, which names the choice point and the candidate that came closest.
-- **Score.** `score(candidate) = Σ over methods m of usage(m) × cost(m, candidate)`, lower cost scoring higher: usage from the vector of Rule CM8.3, cost from measurements (Rule CM8.6) where they exist, and otherwise from the candidate's cost bounds through the table of classes (`spec/cost.md` Rule CT8.3).
+- **Candidates.** The satisfactions of the choice point's bound set in the link unit that count at the choice point (`spec/type_system.md` Rule 8.6.a), and the built-in candidates of `spec/type_system.md` §6.6, which count as declared in the standard library package (Rule 6.5.5). The selector chooses freely among satisfactions of different data types. Among several satisfactions of one pair it does not choose: the one that enters the pool is resolved at the site that created the choice point, by levels 1–4 of `spec/type_system.md` Rule 8.4 there; if that leaves several, by levels 5–6 at link; if that gives none, the link fails with the error of Rule 8.4 (`spec/type_system.md` §6.5.2).
+- **Viability.** A candidate that fails a cost prop of the requirements of its capabilities is not viable (`spec/cost.md` Rule CT8.1, which also says what this check at link catches that the package compile did not). Nor is a candidate whose variant fields refine a requirement parameter (`spec/type_system.md` Rule 8.1.a) so that an argument of one of the choice point's abstract constructor calls is rejected; the argument types come from the summaries (Rule CM8.3). Zero viable candidates is a link error, which names the choice point and the candidate that came closest.
+- **Score.** The score of `spec/type_system.md` Rule 6.5.4, with usage from the vector of Rule CM8.3 and cost from measurements (Rule CM8.6) where they exist, and otherwise the fallback of `spec/cost.md` Rule CT8.2.
 - **Disambiguation.** The first rule that decides, in the order of `spec/type_system.md` Rule 6.5.5: a pin written by the user in the lock file, if the pinned candidate is viable; the choice recorded in the lock file, while its score is within ε of the best; the highest score; the satisfaction declared in the capability's own package; declaration order, then qualified name.
 
 Selection never halts on a tie. The lock file gives hysteresis: a clear winner that becomes a tie neither halts the build nor flips the choice. The only selection error is zero viable candidates. Choice points selected at package compile use the same rule without the first two steps, since a package has no lock file.
@@ -631,11 +648,21 @@ A development build builds no clones at link; it binds symbols only (Rule CM8.2)
 
 ### 8.8 Link-unique tags and the type table (Rule CM8.8)
 
-The tag in a cell header (`spec/memory_management.md` Rule PR3.1) is unique in the link unit. It indexes a **type table**, built at the application link, with one row per variant: (type name, variant name, field kinds, size).
+The tag in a cell's descriptor (`spec/memory_management.md` Rule PR3.1) is unique in the link unit. It indexes a **type table**, built at the application link, with one row for every kind of cell:
+
+| Row kind | One row per | The row holds | `copy` and `size` read | The printer reads |
+|---|---|---|---|---|
+| data variant | variant of a data type | type name, variant name, field kinds, size | size and field kinds from the row | type and variant names from the row; fields by their kinds |
+| closure | closure body | function name and location, number of captures, capture kinds | size and capture kinds from the row | `<fn name @ file:line>` from the row |
+| string | (one row) | the kind | the byte length from the cell | the text from the cell |
+| flat container | flat container type and element witness (`imm1`, `imm2`, `imm4`, `imm8`, `ref`) | type name, element width and kind | the length from the cell (how its descriptor records it is `spec/memory_management.md` OQ-MM6), width and kind from the row | type name from the row; the elements by width and kind |
+| blob | packed satisfier type | type name | the byte size from the blob (Rule MM16.1); a blob is copied as plain bytes | type name from the row and the byte size |
+
+A field kind is a reference, an immediate of a width, or a slot of parameter type whose kind the cell's reference map gives.
 
 - A `match` on a cell subtracts the type's base, a link-time constant, from the tag to obtain the variant's index.
-- The witness operation `copy` takes the size and field kinds of a cell from the table (Rule CM4.1).
-- The diagnostic sinks print a cell reached through generic code from the table (`spec/diagnostics.md` Rule DG3.6), so generic baseline code can name what it prints without a `Show` bound. An immediate reached through generic code carries no table index and prints as a raw number.
+- The witness operation `copy` takes the size and field kinds of a cell from its row (Rule CM4.1).
+- The diagnostic sinks print a cell reached through generic code from its row (`spec/diagnostics.md` Rule DG3.6), so generic baseline code can name what it prints without a `Show` bound. An immediate carries no table index; how it prints is `spec/diagnostics.md` Rule DG3.4.
 
 A release build strips `inspect` and `trace` unless a flag keeps them; the table is still built for `match` and `copy`. The layout of the table is provisional (OQ-CM13).
 

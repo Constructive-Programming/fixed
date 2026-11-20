@@ -1,8 +1,10 @@
 # Fixed Effects
 
-**Status:** Draft v0.3
+**Status:** Draft v0.3.1
 **Specifies:** algebraic effect declarations, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.4 source.
 **Last revised:** 2026-11-20
+
+**Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): every evidence entry, passed or captured, has one layout that holds the handler's marker, through which the frame is found (§7.1, Rule E7.2); Rule E7.7 no longer says a table call passes every argument `own` (it follows `spec/compilation_model.md` Rule CM4.6); Rule E5.5.b cites the containment test of Rule CM4.6; wrong references to a diagnostics section and to a rule number for §7.6 corrected.
 
 **Changes from v0.2.3.** Applies decision P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`, D11, D14). A closure captures the evidence of the effects that its type does not mention, at the point where it is given that type; it captures the handler's marker, not a stack address (new Rule E7.8). A closure that captured evidence must not outlive the handler (new Rule E5.5.b, `E085`); the prose caveat of Rule E5.5.a about callbacks stored and invoked later is replaced by these two rules. `inspect` and `trace` are not effects and never appear in a row (new §4.6). Mechanical repairs from the review of 2026-11-20 (`docs/decisions/P0-spec-review-2026-11-20.md` §3): Rule E4.5.b no longer shows an alias application that does not parse; §4.2 says package instead of a `module` construct that does not exist; the unused declared effect is `warning[E081]`, listed as a warning; the cross-references no longer say prop bodies are "checked at quantity 0". §5.5 and §8.3 no longer say that a receiving function must declare its callback's effects. New OQ-E9 (parameterised effect aliases) and OQ-E10 (a handler clause cannot name an effect's `of` argument).
 
@@ -39,7 +41,7 @@ It does **not** specify:
 - `spec/quantities.md` v0.6 — Rule Q5.11 (resume single-shot), OQ-Q5 (open: effect-row × quantity interaction).
 - `spec/compilation_model.md` — evidence as a hidden parameter (Rule CM4.3), clone keys (Rule CM5.1).
 - `spec/memory_management.md` v0.5 — Rule MM4.1 (regions), §14 (handler memory), §20.1 (escape sets).
-- `spec/diagnostics.md` — `inspect` and `trace` (§4.6).
+- `spec/diagnostics.md` — `inspect` and `trace`, which are not effects (Rule E4.6).
 - Plotkin & Pretnar, *"Handlers of Algebraic Effects"*, ESOP 2009. The model.
 - Leijen, *"Type Directed Compilation of Row-Typed Algebraic Effects"*, POPL 2017. The evidence-passing compilation strategy Fixed adopts.
 - Xie & Leijen, *"Generalized Evidence Passing for Effect Handlers"*, ICFP 2021. Refinements used in Koka, the closest production reference.
@@ -342,7 +344,7 @@ At run time the effects of `R_v` that the expected type does not mention are per
 **Rule E5.5.b (Confinement).** A closure that captured the evidence of a handler (Rule E7.8) must not outlive that handler's installation. A use that could let it do so is `error[E085]: closure outlives the handler of <E>`, with a help line that suggests writing the row in the type where the closure is stored.
 
 - **The check is an escape check.** The dynamic extent of a handler installation is treated as a region (`spec/memory_management.md` Rule MM4.1, §14.1), and the closure as a value allocated in it. The existing escape analysis (`spec/memory_management.md` §20.1) decides whether the closure, or a value that contains it, flows out of the `handle` expression: through the `handle`'s result, into a continuation that escapes it, or into the argument of an operation whose handler is installed outside it. Any of these is `E085`.
-- **Across a package edge it needs no body.** Every callee whose parameter has an unannotated function type is pure for that parameter's effects, and every Fixed function is total. Such a parameter can outlive the call only through the callee's result or through the argument of an effect operation the callee performs. The callee's signature shows both: whether a value of the parameter's type can be part of the result type, and which operations the callee's row allows. A call to a function of another package, or through a capability table, is checked from its signature alone; the escape set recorded in the interface (`spec/memory_management.md` Rule MM20.2) may only make the check more precise.
+- **Across a package edge it needs no body.** Every callee whose parameter has an unannotated function type is pure for that parameter's effects, and every Fixed function is total. Such a parameter can outlive the call only through the callee's result or through the argument of an effect operation the callee performs. The callee's signature shows both: whether a value of the parameter's type can become part of the result (the containment test of `spec/compilation_model.md` Rule CM4.6), and which operations the callee's row allows. A call to a function of another package, or through a capability table, is checked from its signature alone; the escape set recorded in the interface (`spec/memory_management.md` Rule MM20.2) may only make the check more precise.
 - **The reason.** Evidence refers to a handler installation. If a closure could outlive it, invoking the closure would perform an operation with no handler, which the type system promised could not happen.
 
 Examples. `Log` is handled inside each function shown.
@@ -483,7 +485,7 @@ Fixed compiles handlers via the **evidence-passing** strategy of Leijen 2017 / X
 Each operation of each effect is compiled to an indirect call through a per-handler **evidence vector**. The evidence vector contains, for each operation:
 
 - A function pointer to the clause body.
-- A handler-frame reference (the captured continuation root), and the handler installation's marker, through which captured evidence finds the frame (Rule E7.8).
+- The handler installation's **marker** (Rule E7.8). The handler frame, which holds the continuation root, is found through it. Every entry has this one layout, whether it is passed as a hidden parameter or captured by a closure.
 - Nothing about the types of arguments and results: they are passed as 64-bit slots, an immediate in the slot and anything wider behind a pointer (`spec/compilation_model.md` Rule CM3.3), so an entry needs no boxing information.
 
 ### 7.2 Operation dispatch (Rule E7.2)
@@ -491,7 +493,7 @@ Each operation of each effect is compiled to an indirect call through a per-hand
 A call `E.op(args)` compiles to:
 
 1. Look up the current evidence for `E` from the caller's evidence-vector argument or, inside a closure body for an effect its type does not mention, from the evidence the closure captured (Rule E7.8).
-2. Indirectly call the operation's pointer with `args` and the handler-frame reference.
+2. Indirectly call the operation's pointer with `args` and the entry's marker; the clause reaches its handler frame through the marker.
 3. Receive a result value (for non-abortive ops) or transfer control (for abortive ops).
 
 ### 7.3 Handler installation (Rule E7.3)
@@ -531,7 +533,7 @@ Where a call site knows the handler, the specialiser may build a clone of the ca
 
 ### 7.7 What an operation call hands over (Rule E7.7)
 
-- **Arguments.** The performer cannot see the clause, so it cannot know the clause's demands. It passes every argument under demand `own`, as a call through a capability table does (`spec/compilation_model.md` Rule CM4.6, `spec/quantities.md` Rule Q4.1.e). A clone for a known handler uses the clause's inferred demands.
+- **Arguments.** The performer cannot see the clause, so it cannot know the clause's demands. It passes every argument under demand `own`. (A call through a capability table does not: it follows the convention of `spec/compilation_model.md` Rule CM4.6.) A clone for a known handler uses the clause's inferred demands.
 - **Evidence is not a witness.** Both are hidden parameters that hold code pointers. Evidence is dynamically scoped: each `handle` installs an entry and may shadow an outer one (Rule E6.5), and an entry refers to a handler frame. A witness is static and the same throughout a link unit.
 - **Order.** The entries of an evidence vector for a signature follow the canonical order of its effect row, so that a caller and a callee in different packages agree. How row variables and the library entry points of Rule E5.4 are laid out is open (`spec/compilation_model.md` OQ-CM9).
 - **Cost.** The cost of performing an operation is that of the clause, which the performer cannot see; in a cost bound it is a symbolic term until a `handle` supplies the clause (`spec/cost.md` Rule CT5.3).
@@ -548,7 +550,7 @@ A function-typed value receives, at each invocation, the evidence for the row wr
 
 The reason for capture over passing: a pure higher-order function in a library does not have to change, gain a hidden parameter or gain a row variable for its callers to pass effectful callbacks, and the code it was compiled to stays correct.
 
-**Relation to dispatch and clones.** Rule E7.2 dispatches through the captured entry exactly as through a passed one; the entry has the same layout. Where the function that creates the closure knows the handler (it is itself a clone keyed on that handler, Rule E7.6), the closure's code may be compiled for that handler and call the clause directly; the captured marker is then still needed for continuation capture and for `resume`. A closure that captured evidence and is passed through a capability table is subject to the same confinement check as any other argument: the requirement's signature is all the check needs (Rule E5.5.b).
+**Relation to dispatch and clones.** Rule E7.2 dispatches through the captured entry exactly as through a passed one; the entry has the same layout. Where the function that creates the closure knows the handler (it is itself a clone keyed on that handler, §7.6), the closure's code may be compiled for that handler and call the clause directly; the captured marker is then still needed for continuation capture and for `resume`. A closure that captured evidence and is passed through a capability table is subject to the same confinement check as any other argument: the requirement's signature is all the check needs (Rule E5.5.b).
 
 **Relation to Rule E7.7.** An operation called from a closure body passes its arguments under `own`, as from any other performer. Captured evidence is not a witness: it is chosen at run time, by the handler installed where the closure was given its type, and a witness never is.
 
