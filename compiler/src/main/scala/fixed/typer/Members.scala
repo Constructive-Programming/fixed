@@ -259,13 +259,13 @@ object Members:
       case _                                                            => Nil
 
   /** `fold` derived from a data type's variants (a catamorphism): one function per variant, its
-    * fields with each recursive occurrence of the type replaced by the result type `R`.
+    * fields with each recursive occurrence of the type (`Self` as declared) replaced by the result type `R`.
     */
   private def derivedFold(s: TyperState, data: SymbolId, args: List[Type]): (TyperState, Type) =
     val (s0, r) = s.fresh
     val (s1, cases) = mapAccum(s0, s.symbols.variantsOf(data).toList) { (si, v) =>
-      val (si1, fields) = fieldTypes(si, data, args, v.id)
-      (si1, Type.ArrowType(Type.TupleType(fields.map(replaceSelf(_, data, r))), r, EffectRow.empty))
+      val (si1, fields) = fieldTypes(si, data, args, v.id, replaceSelf(_, declaredSelf(s.symbols, data), r))
+      (si1, Type.ArrowType(Type.TupleType(fields), r, EffectRow.empty))
     }
     (s1, Type.ArrowType(Type.TupleType(cases), r, EffectRow.empty))
 
@@ -322,11 +322,12 @@ object Members:
       layer: Option[Type.Layer]
   ): (TyperState, Type) =
     val (s1, args) = freshArgs(s, data)
-    val (s2, fields) = fieldTypes(s1, data, args, variant)
-    val (result, fieldsOut) = layer match
-      case Some(Type.Layer(`data`, _, seed)) => (Type.Layer(data, args, seed), fields.map(replaceSelf(_, data, seed)))
-      case _                                 => (Type.TypeRef(data, args), fields)
-    (s2, if fields.isEmpty then result else Type.ArrowType(Type.TupleType(fieldsOut), result, EffectRow.empty))
+    val (result, declared) = layer match
+      case Some(Type.Layer(`data`, _, seed)) =>
+        (Type.Layer(data, args, seed), replaceSelf(_, declaredSelf(s.symbols, data), seed))
+      case _ => (Type.TypeRef(data, args), identity[Type])
+    val (s2, fields) = fieldTypes(s1, data, args, variant, declared)
+    (s2, if fields.isEmpty then result else Type.ArrowType(Type.TupleType(fields), result, EffectRow.empty))
 
   /** `unfold(seed: S, step: S -> layer of D over S) -> D`, derived from the variants (an anamorphism). */
   private def derivedUnfold(s: TyperState, data: SymbolId): (TyperState, Type) =
@@ -351,14 +352,27 @@ object Members:
       (si.copy(unifier = u), v)
     }
 
-  def fieldTypes(s: TyperState, data: SymbolId, args: List[Type], variant: SymbolId): (TyperState, List[Type]) =
+  /** The field types of `variant` at `args`, each declared type first passed through `declared`. */
+  def fieldTypes(
+      s: TyperState,
+      data: SymbolId,
+      args: List[Type],
+      variant: SymbolId,
+      declared: Type => Type = identity
+  ): (TyperState, List[Type]) =
     val sub = Subst(Subst.of(typeParamsOf(s, data), args), Set(variant))
-    mapAccum(s, s.symbols.fieldsOf(variant).toList)((si, f) => instantiate(si, f.info, sub))
+    mapAccum(s, s.symbols.fieldsOf(variant).toList)((si, f) => instantiate(si, declared(f.info), sub))
 
-  private def replaceSelf(t: Type, data: SymbolId, by: Type): Type =
-    t match
-      case Type.TypeRef(`data`, _) => by
-      case other                   => other.mapChildren(replaceSelf(_, data, by))
+  /** `Self` as declared: `data` at its own type parameters. Only a field of this type is recursive
+    * (Rule 7.4.a): at `Tree of Tree of u64` a field `value: Tree of u64` is an element, and so is a
+    * field `M of (B, A)` in `M of (A, B)`. Decided before instantiation, where they differ.
+    */
+  def declaredSelf(symbols: SymbolTable, data: SymbolId): Type =
+    Type.TypeRef(data, symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil)))
+
+  /** `t` with each occurrence of `self` replaced by `by`. */
+  private def replaceSelf(t: Type, self: Type, by: Type): Type =
+    if t == self then by else t.mapChildren(replaceSelf(_, self, by))
 
   /** An arrow's left-hand side is always its parameter list, a `TupleType` of any arity, so a
     * single `()` parameter and no parameters stay distinct.

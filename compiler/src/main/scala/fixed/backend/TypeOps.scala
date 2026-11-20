@@ -50,14 +50,5 @@ object TypeOps:
   def replaceAll(t: Type, by: Map[Type, Type]): Type =
     if by.isEmpty then t else by.getOrElse(t, t.mapChildren(replaceAll(_, by)))
 
-  /** Whether `t` mentions data type `data` anywhere. */
-  def mentions(t: Type, data: SymbolId): Boolean = isSelf(t, data) || t.children.exists(mentions(_, data))
-
-  /** `t` with every occurrence of data type `data` replaced by `by`. */
-  def replace(t: Type, data: SymbolId, by: Type): Type =
-    if isSelf(t, data) then by else t.mapChildren(replace(_, data, by))
-
-  def isSelf(t: Type, data: SymbolId): Boolean =
-    t match
-      case Type.TypeRef(`data`, _) => true
-      case _                       => false
+  /** Whether `t` mentions type `self` anywhere. */
+  def mentions(t: Type, self: Type): Boolean = t == self || t.children.exists(mentions(_, self))

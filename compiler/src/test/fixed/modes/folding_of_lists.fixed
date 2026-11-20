@@ -1,0 +1,16 @@
+// A list of lists passed where an anonymous Folding bound is expected.
+use std.io.Console
+
+fn twice(x: A) -> List of List of A = [[x], [x, x]]
+
+fn count(xs: is Folding of A) -> u64 = xs.fold(0, (n, x) -> n + 1)
+
+fn wrap(x: A) -> List of A = [x]
+
+fn good(xs: is Folding of String) -> u64 = count(wrap(xs))
+
+fn main() -> () with Console =
+    Console.print_line(count(twice("a".concat("b"))).show())
+    Console.print_line(count(twice(7)).show())
+    Console.print_line(count([[[1]], [[2]]]).show())
+    Console.print_line(good(["a".concat("b"), "c"]).show())

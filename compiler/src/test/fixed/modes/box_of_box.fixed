@@ -1,0 +1,13 @@
+// A non-recursive wrapper whose element is the same wrapper.
+use std.io.Console
+
+data Box of A:
+    Box(v: A)
+
+fn get(b: Box of A) -> A = b.fold((v) -> v)
+
+fn twice(b: Box of Box of u64) -> Box of u64 = get(b)
+
+fn main() -> () with Console =
+    Console.print_line(get(twice(Box.Box(Box.Box(3)))).show())
+    Console.print_line(get(Box.Box(Box.Box(4))).fold((v) -> v + 1).show())

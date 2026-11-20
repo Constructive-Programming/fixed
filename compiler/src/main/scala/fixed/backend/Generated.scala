@@ -59,17 +59,18 @@ private[backend] trait Generated:
     val ws = hidden(args :+ r)
     instance(name) {
       val x = typed(fresh("x", CType.Boxed), Type.TypeRef(data, args), span)
+      val self = selfType(data, args)
       val callbacks = symbols.variantsOf(data).toList.map(v => fresh(s"on_${v.name}", CType.Boxed))
       val rt = ctype(r, span)
       def through(t: Type, v: Atom)(k: K): Expr =
         t match
-          case _ if TypeOps.isSelf(t, data) =>
+          case _ if t == self =>
             val rec = fresh("rec", rt)
             Expr.Let(rec, Rhs.Call(name, ws ++ (v :: callbacks), runtime = false), k(rec))
-          case Type.TypeRef(f, fargs) if fargs.lastOption.exists(TypeOps.mentions(_, data)) && dataOf(t).isDefined =>
+          case Type.TypeRef(f, fargs) if fargs.lastOption.exists(TypeOps.mentions(_, self)) && dataOf(t).isDefined =>
             val elem = fargs.last
             val param = fresh("e", ctype(elem, span))
-            val folded = TypeOps.replace(elem, data, r)
+            val folded = TypeOps.replaceAll(elem, Map(self -> r))
             closure(List(param), through(elem, param)(Expr.Ret(_)), ctype(folded, span)) { c =>
               val mapped = fresh("mapped", CType.Boxed)
               val (map, ws) = member(f, fargs, Some(folded))((a, b) => derivedMap(f, a, b, span))
@@ -77,7 +78,7 @@ private[backend] trait Generated:
             }
           case _ => k(v)
       val branches = perVariant(data, args, x, span) { (tag, loaded) =>
-        rebuild(loaded, (t, v) => Option.when(TypeOps.mentions(t, data))(through(t, v)))(as =>
+        rebuild(loaded, (t, v) => Option.when(TypeOps.mentions(t, self))(through(t, v)))(as =>
           result(Rhs.CallClosure(callbacks(tag), as), rt)
         )
       }
@@ -95,8 +96,9 @@ private[backend] trait Generated:
       val s = fresh("seed", seedType)
       val step = fresh("step", CType.Boxed)
       val layer = fresh("layer", CType.Boxed)
+      val self = selfType(data, args)
       val recurse = (t: Type, v: Var) =>
-        Option.when(TypeOps.isSelf(t, data))(bound(Rhs.Call(name, ws ++ List(v, step), runtime = false), CType.Boxed))
+        Option.when(t == self)(bound(Rhs.Call(name, ws ++ List(v, step), runtime = false), CType.Boxed))
           .flatten
       val branches = perVariant(data, args, layer, span, Some(seedType)) {
         (tag, loaded) => construction(tag, loaded, recurse)
@@ -123,7 +125,7 @@ private[backend] trait Generated:
           declared(loaded.indexWhere(_._2 == v)) match
             case Type.TypeRef(p, Nil) if elemParam.contains(p) =>
               bound(Rhs.CallClosure(f, List(v)), ctype(newElem, span))
-            case d if TypeOps.isSelf(d, data) =>
+            case d if d == declaredSelf(data) =>
               bound(Rhs.Call(name, ws ++ List(v, f), runtime = false), CType.Boxed)
             case _ => None
         construction(tag, loaded, mapField)
@@ -243,14 +245,14 @@ private[backend] trait Generated:
     attempt(gen(own, Generated.R)) match
       case Right(name) =>
         baselines += name
-        specialised(name, args ++ r) match
+        (if nonRegular(data) then None else specialised(name, args ++ r)) match
           case Some(key) =>
             typeClones(perInstance._1) = (name, key)
             perInstance
           case None => (name, (args ++ r).map(witnessAtom))
       case Left(why) =>
         val (name, ws) = perInstance
-        if ws.isEmpty then instances(name) = why else report(why)
+        if ws.isEmpty && !nonRegular(data) then instances(name) = why else report(why)
         (name, ws)
 
   private def listParam(data: SymbolId, args: List[Type], span: Span): Var =
@@ -286,8 +288,9 @@ private[backend] trait Generated:
   private def listBranches(data: SymbolId, args: List[Type], xs: Var, span: Span, empty: Expr)(
       cell: (Var, Var) => Expr
   ): List[(Int, Expr)] =
+    val self = selfType(data, args)
     perVariant(data, args, xs, span) { (_, loaded) =>
-      (loaded.find(l => !TypeOps.isSelf(l._1, data)), loaded.find(l => TypeOps.isSelf(l._1, data))) match
+      (loaded.find(_._1 != self), loaded.find(_._1 == self)) match
         case (Some((_, elem)), Some((_, rest))) => cell(elem, rest)
         case _                                  => empty
     }
@@ -334,9 +337,10 @@ private[backend] trait Generated:
   private def perVariant(data: SymbolId, args: List[Type], obj: Var, span: Span, seed: Option[CType] = None)(
       body: (Int, List[(Type, Var)]) => Expr
   ): List[(Int, Expr)] =
+    val self = selfType(data, args)
     symbols.variantsOf(data).toList.zipWithIndex.map { (v, tag) =>
       val types = fieldTypes(data, args, v.id)
-      val cts = types.map(t => seed.filter(_ => TypeOps.isSelf(t, data)).getOrElse(ctype(t, span)))
+      val cts = types.map(t => seed.filter(_ => t == self).getOrElse(ctype(t, span)))
       val vars = cts.map(fresh("f", _))
       val loads = vars.zip(Layout.slots(cts))
       (tag, loads.foldRight(body(tag, types.zip(vars)))((l, acc) => Expr.Let(l._1, Rhs.Field(obj, l._2), acc)))
@@ -346,11 +350,29 @@ private[backend] trait Generated:
     val res = fresh("res", rt)
     Expr.Let(res, Rhs.Switch(obj, branches), Expr.Ret(res))
 
+  /** Whether a field of `data` mentions it at other arguments (`M of (B, A)` in `M of (A, B)`): at
+    * known arguments it can have the instance's own type, which [[selfType]] cannot tell apart, so
+    * `data`'s members are built at its own parameters only.
+    */
+  private def nonRegular(data: SymbolId): Boolean =
+    def other(t: Type): Boolean =
+      t match
+        case Type.TypeRef(`data`, _) => t != declaredSelf(data)
+        case _                       => t.children.exists(other)
+    symbols.variantsOf(data).exists(v => symbols.fieldsOf(v.id).exists(f => other(f.info)))
+
+  private def declaredSelf(data: SymbolId): Type = fixed.typer.Members.declaredSelf(symbols, data)
+
+  /** `Self` at `args` as the instance's field types show it: the type of a recursive field. */
+  private def selfType(data: SymbolId, args: List[Type]): Type =
+    symbols.variantsOf(data).iterator.flatMap(v => symbols.fieldsOf(v.id).map(_.info).zip(fieldTypes(data, args, v.id)))
+      .collectFirst { case (d, t) if d == declaredSelf(data) => t }.getOrElse(Type.TypeRef(data, args))
+
   /** Every variant has no fields, or one recursive field and one element field. */
   protected def listShaped(data: SymbolId): Boolean =
     symbols.variantsOf(data).forall { v =>
       val fs = symbols.fieldsOf(v.id).toList
-      fs.isEmpty || (fs.size == 2 && fs.count(f => TypeOps.isSelf(f.info, data)) == 1)
+      fs.isEmpty || (fs.size == 2 && fs.count(_.info == declaredSelf(data)) == 1)
     }
 
 object Generated:

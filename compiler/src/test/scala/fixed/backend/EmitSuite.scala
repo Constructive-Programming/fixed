@@ -57,15 +57,21 @@ class EmitSuite extends munit.FunSuite:
       check(name, java.nio.file.Files.readString(Path.of("examples", s"$name.fixed")), golden("out"), golden("in"))
   }
 
-  /** Every runtime benchmark in `bench/runtime`, each against its committed result line. */
-  private val benches =
-    java.nio.file.Files.list(Path.of("bench", "runtime")).toArray.toList.map(_.toString).collect {
-      case p if p.endsWith(".fixed") => Path.of(p).getFileName.toString.stripSuffix(".fixed")
-    }.sorted
+  /** Every runtime benchmark in `bench/runtime`, and every generic program in
+    * `compiler/src/test/fixed/modes` (a default build must compute what the baseline computes), each
+    * against its committed result.
+    */
+  private val programs =
+    List(Path.of("bench", "runtime"), Path.of("compiler", "src", "test", "fixed", "modes")).flatMap {
+      dir =>
+        java.nio.file.Files.list(dir).toArray.toList.map(_.toString).collect {
+          case p if p.endsWith(".fixed") => dir -> Path.of(p).getFileName.toString.stripSuffix(".fixed")
+        }.sorted
+    }
 
-  benches.foreach { name =>
-    test(s"benchmark $name prints its expected result"):
-      val read = (ext: String) => java.nio.file.Files.readString(Path.of("bench", "runtime", s"$name.$ext"))
+  programs.foreach { (dir, name) =>
+    test(s"$dir/$name prints its expected result"):
+      val read = (ext: String) => java.nio.file.Files.readString(dir.resolve(s"$name.$ext"))
       check(name, read("fixed"), read("expected"))
   }
 

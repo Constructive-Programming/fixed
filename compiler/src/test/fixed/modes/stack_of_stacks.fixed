@@ -1,0 +1,30 @@
+// A user list-shaped type of itself: generated fold, length and find at Stack of Stack of u64.
+use std.io.Console
+
+data Stack of A:
+    Push(top: A, rest: Stack of A)
+    Empty
+
+Stack satisfies Sequencing:
+    Push as cons
+    Empty as empty
+Stack satisfies Folding
+
+fn total(s: Stack of u64) -> u64 = s.fold(0, (a, x) -> a + x)
+
+fn tt(s: Stack of Stack of u64) -> u64 = s.fold(0, (a, x) -> a + total(x))
+
+fn len(s: Stack of Stack of u64) -> u64 = s.length()
+
+fn glen(s: Stack of A) -> u64 = s.length()
+
+fn pick(s: Stack of Stack of u64) -> u64 = s.find((x) -> x.length() == 2).fold((x) -> total(x), () -> 99)
+
+fn main() -> () with Console =
+    let a = Stack.Push(1, Stack.Push(2, Stack.Empty))
+    let b = Stack.Push(5, Stack.Empty)
+    let s = Stack.Push(b, Stack.Push(a, Stack.Push(b, Stack.Empty)))
+    Console.print_line(tt(s).show())
+    Console.print_line(len(s).show())
+    Console.print_line(glen(s).show())
+    Console.print_line(pick(s).show())

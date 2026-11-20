@@ -104,6 +104,18 @@ class TyperSuite extends munit.FunSuite:
       List(DiagCode.T002)
     )
 
+  test("derived fold: only Self as declared is pre-folded, not an element or a field at other arguments (Rule 7.4.a)"):
+    val tree = "data Tree of A:\n    Leaf\n    Node(left: Tree of A, value: A, right: Tree of A)\n\n" +
+      "data M of (A, B):\n    Nil\n    X(a: A, r: M of (B, A))\n\n"
+    val elem =
+      (body: String) => typedUnit(tree + s"fn f(t: Tree of Tree of u64) -> u64 = t.fold(() -> 0, (l, v, r) -> $body)\n")
+    assertEquals(elem("l + r").diags, Nil)
+    assertEquals(codes(elem("l + v + r")), List(DiagCode.T002))
+    val other =
+      (body: String) => typedUnit(tree + s"fn g(m: M of (u64, u64)) -> u64 = m.fold(() -> 0, (a, r) -> $body)\n")
+    assertEquals(other("a").diags, Nil)
+    assert(codes(other("a + r")).contains(DiagCode.T002))
+
   test("M4: if/else branches agree; the condition is bool"):
     assertEquals(typedUnit("fn f(x: u64) -> u64 =\n    if x > 1: x else: 0\n").diags, Nil)
     assertEquals(codes(typedUnit("fn f(x: u64) -> u64 =\n    if x: x else: 0\n")), List(DiagCode.T002))
