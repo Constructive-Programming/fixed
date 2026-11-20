@@ -58,12 +58,17 @@ object Members:
     val (s1, _, out) = go(s, t, sub, sub.mapping)
     (s1, out)
 
+  private def rebuildAll(s: TyperState, ts: List[Type], sub: Subst, m: IntMap[Type])
+      : (TyperState, IntMap[Type], List[Type]) =
+    val ((s1, m1), out) = mapAccum((s, m), ts) { case ((si, mi), ti) =>
+      val (si1, mi1, ti1) = go(si, ti, sub, mi)
+      ((si1, mi1), ti1)
+    }
+    (s1, m1, out)
+
   private def go(s: TyperState, t: Type, sub: Subst, m: IntMap[Type]): (TyperState, IntMap[Type], Type) =
     def rebuild(parts: List[Type])(mk: List[Type] => Type) =
-      val ((s1, m1), out) = mapAccum((s, m), parts) { case ((si, mi), ti) =>
-        val (si1, mi1, ti1) = go(si, ti, sub, mi)
-        ((si1, mi1), ti1)
-      }
+      val (s1, m1, out) = rebuildAll(s, parts, sub, m)
       (s1, m1, mk(out))
     t match
       case Type.TypeRef(id, Nil) if m.contains(id.toInt)  => (s, m, m(id.toInt))
@@ -71,9 +76,17 @@ object Members:
         rebuild(args)(Unifier.applyHead(s.unifier.resolve(m(id.toInt)), _))
       case Type.TypeRef(id, args)
           if s.symbols(id).kind == SymKind.TypeParam && sub.freshOwners(s.symbols(id).owner) =>
-        val (u, v) =
-          s.unifier.fresh(numeric = isNumeric(s, Type.TypeRef(id, Nil)), default = None, bounds = boundsOf(s, id))
-        go(s.copy(unifier = u), Type.TypeRef(id, args), sub, m.updated(id.toInt, v))
+        /** The variable first, so that its bounds, instantiated under the same mapping, may name it. */
+        val anonymous = anonymousParam(s, id)
+        val numeric = isNumeric(s, Type.TypeRef(id, Nil)) && !anonymous
+        val (u, v) = s.unifier.fresh(numeric = numeric, default = None)
+        val (s1, m1, bounds) = rebuildAll(s.copy(unifier = u), boundsOf(s, id), sub, m.updated(id.toInt, v))
+        val withBounds = v match
+          case Type.TypeVar(n) if bounds.nonEmpty =>
+            val u1 = s1.unifier.copy(varBounds = s1.unifier.varBounds.updated(n, bounds))
+            s1.copy(unifier = if anonymous then u1.copy(obliged = u1.obliged.incl(n)) else u1)
+          case _ => s1
+        go(withBounds, Type.TypeRef(id, args), sub, m1)
       case Type.TypeRef(id, args)   => rebuild(args)(Type.TypeRef(id, _))
       case Type.CapRef(id, args)    => rebuild(args)(Type.CapRef(id, _))
       case Type.ArrowType(l, r, fx) =>
@@ -104,6 +117,9 @@ object Members:
 
   private def boundElement(bounds: List[Type]): Option[Type] =
     bounds.collectFirst { case Type.CapRef(_, args) if args.nonEmpty => args.last }
+
+  /** A type parameter the Namer made for an anonymous bound `is C` (named as written). */
+  def anonymousParam(s: TyperState, id: SymbolId): Boolean = s.symbols(id).name.startsWith("is ")
 
   /** Memo key for the fresh variable standing for an unknown `Part`. */
   private val PartKey: Int = -1
@@ -229,10 +245,12 @@ object Members:
     }
 
   /** A type variable's bound chain, aliases expanded. */
-  def boundsOf(s: TyperState, param: SymbolId): List[Type] =
-    s.symbols(param).info match
-      case Type.IsBound(bs) => expandAliases(s.symbols, bs)
-      case _                => Nil
+  def boundsOf(s: TyperState, param: SymbolId): List[Type] = boundsOf(s.symbols, param)
+
+  def boundsOf(symbols: SymbolTable, param: SymbolId): List[Type] =
+    symbols(param).info match
+      case Type.IsBound(bs) if symbols(param).kind == SymKind.TypeParam => expandAliases(symbols, bs)
+      case _                                                            => Nil
 
   /** `fold` derived from a data type's variants (a catamorphism): one function per variant, its
     * fields with each recursive occurrence of the type replaced by the result type `R`.

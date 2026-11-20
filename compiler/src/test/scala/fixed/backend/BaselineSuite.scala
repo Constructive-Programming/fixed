@@ -146,15 +146,16 @@ class BaselineSuite extends munit.FunSuite:
     List("count", "sum").foreach(f => assertEquals(fns.map(_.name).filter(_.startsWith(f)), List(f)))
     val hidden = named(fns, "sum").params.take(4)
     assertEquals(hidden.map(_.ctype), List(CType.Witness, CType.Table, CType.Witness, CType.Table))
-    assert(hidden(0).name.startsWith("w.N.") && hidden(2).name.startsWith("w.is."), hidden)
+    assert(hidden(0).name.startsWith("w.N.") && hidden(2).name.startsWith("w.isFolding"), hidden)
 
-  test("two parameters with one anonymous bound at different types call an instance; at one type, the baseline"):
-    val lower = Lower(unit("unshared", BaselineSuite.unshared))
-    val ds = lower.program.fold(identity, fns => fail(s"lowered: ${fns.map(_.name)}"))
-    assert(lower.instances("two[u8,String]").contains("at different types"), lower.instances)
+  test("two parameters with one anonymous bound are two type parameters: one baseline serves both calls"):
+    val (lower, fns) = lowered("unshared", BaselineSuite.unshared)
+    assert(lower.instances.isEmpty, lower.instances)
     assert(lower.baselines("two"), lower.baselines)
-    assert(ds.forall(_.message.contains("is Show")), ds)
-    assert(Backend.analyse(unit("unshared", BaselineSuite.unshared)).isLeft, "the default mode rejects it too")
+    assertEquals(
+      named(fns, "two").params.map(_.ctype).take(4),
+      List(CType.Witness, CType.Table, CType.Witness, CType.Table)
+    )
 
   test("a table entry the backend does not build is never called: the call is an instance, here B005"):
     val src = "fn right(xs: is Folding of u8) -> u64 = xs.fold_right(0, (x, n) -> n + 1)\n\n" +
@@ -166,11 +167,14 @@ class BaselineSuite extends munit.FunSuite:
 
   test("05: a phantom type parameter gets no witness; a result built by a constructor requirement is the caller's"):
     val (_, fns) = lowered("05_phantom_types", file("examples/05_phantom_types"))
-    List("inspect", "show_quantity", "add").foreach { f =>
+    List("inspect", "show_quantity").foreach { f =>
       val fn = named(fns, f)
       assertEquals(fn.params.map(_.ctype).take(3), List(CType.Witness, CType.Table, CType.Slot(fn.params.head.name)), f)
       assert(!fn.params.exists(_.name.startsWith("w.S.")) && !fn.params.exists(_.name.startsWith("w.U.")), fn.params)
     }
+    val add = named(fns, "add")
+    assertEquals(add.params.map(_.ctype).take(4), List(CType.Witness, CType.Table, CType.Witness, CType.Table))
+    assert(!add.params.exists(_.name.startsWith("w.U.")), add.params)
     val unlock = named(fns, "unlock")
     val List(wIn, tIn, wOut, tOut, door) = unlock.params: @unchecked
     assertEquals(List(wIn, tIn, wOut, tOut).map(_.ctype), List(CType.Witness, CType.Table, CType.Witness, CType.Table))
@@ -222,8 +226,8 @@ object BaselineSuite:
     "    Console.print_line(sum(0, [200, 100]).show())\n" +
     "    Console.print_line(join([\"x\".concat(\"y\"), \"z\"], \", \"))\n"
 
-  /** `two` at one type for both parameters, which shares the baseline version, and at two types,
-    * where the instance, like the default mode, cannot represent `is Show` at a scalar (`B005`).
+  /** `two` at one type for both parameters and at two: each anonymous bound is a type parameter of
+    * its own (`spec/type_system.md` §5.1), so one baseline version serves both calls.
     */
   val unshared = "use std.io.Console\n\nfn two(a: is Show, b: is Show) -> String = a.show().concat(b.show())\n\n" +
     "fn byte(x: u8) -> u8 = x\n\nfn main() -> () with Console =\n" +

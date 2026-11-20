@@ -19,17 +19,18 @@ final case class Unifier(
     varBounds: IntMap[List[Type]],
     tuple: Option[SymbolId],
     next: Int,
-    obligations: List[(Type, Type)]
+    obligations: List[(Type, Type)],
+    obliged: BitSet = BitSet.empty,
+    paramBounds: SymbolId => List[Type] = _ => Nil
 ):
 
-  def fresh(numeric: Boolean, default: Option[Type], bounds: List[Type] = Nil): (Unifier, Type) =
+  def fresh(numeric: Boolean, default: Option[Type]): (Unifier, Type) =
     val v = Type.TypeVar(next)
     (
       copy(
         bindings = bindings :+ v,
         numericVars = if numeric then numericVars.incl(next) else numericVars,
         defaults = default.fold(defaults)(defaults.updated(next, _)),
-        varBounds = if bounds.isEmpty then varBounds else varBounds.updated(next, bounds),
         next = next + 1
       ),
       v
@@ -181,9 +182,14 @@ final case class Unifier(
       val bound = copy(bindings = bindings.updated(id, t))
       t match
         case Type.TypeVar(other) =>
+          /** A literal meeting an anonymous bound is checked against it once defaulted. */
+          val literal = (obliged.contains(id) && numericVars.contains(other)) ||
+            (obliged.contains(other) && numericVars.contains(id))
+          val checked = if literal then bound.oblige(t, Type.IsBound(boundsOf(id) ++ boundsOf(other))) else bound
           Right(
-            bound.copy(
+            checked.copy(
               numericVars = if numericVars.contains(id) then numericVars.incl(other) else numericVars,
+              obliged = if obliged.contains(id) then obliged.incl(other) else obliged,
               varBounds =
                 if boundsOf(id).isEmpty then varBounds else varBounds.updated(other, boundsOf(other) ++ boundsOf(id)),
               defaults =
@@ -191,7 +197,18 @@ final case class Unifier(
             )
           )
         case _ if numericVars.contains(id) && !numeric(t) => Left(())
-        case _                                            => Right(bound)
+
+        /** An instantiated anonymous bound meets a value: the value must satisfy the bounds, and a
+          * capability both name has its arguments unified, as when the bound was a type of its own.
+          */
+        case _ if obliged.contains(id) =>
+          val checked = bound.oblige(t, Type.IsBound(boundsOf(id)))
+          val written = t match
+            case Capabilities(ys)     => ys
+            case Type.TypeRef(p, Nil) => paramBounds(p)
+            case _                    => Nil
+          checked.unifyShared(boundsOf(id), written, numeric)
+        case _ => Right(bound)
 
   private def occurs(id: Int, t: Type): Boolean =
     resolve(t) match

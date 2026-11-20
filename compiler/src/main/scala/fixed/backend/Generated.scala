@@ -196,7 +196,8 @@ private[backend] trait Generated:
     }
 
   /** The witness parameter of type parameter `p` (`spec/compilation_model.md` Rule CM4.3). */
-  protected def witnessOf(p: SymbolId): Var = Var(s"w.${symbols(p).name}.${p.toInt}", CType.Witness)
+  protected def witnessOf(p: SymbolId): Var =
+    Var(s"w.${symbols(p).name.filter(_.isLetterOrDigit)}.${p.toInt}", CType.Witness)
 
   /** The witness parameter of a type parameter: a declared one, [[Generated.R]] or an implicit one. */
   protected def witnessVar(t: Type): Var =

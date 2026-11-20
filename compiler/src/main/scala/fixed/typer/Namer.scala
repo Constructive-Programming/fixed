@@ -148,12 +148,12 @@ object Namer:
             case Some(other) => ci1.table.satisfy(typeName, other)
             case None        => ci1.table
           (ci1.copy(table = withCtors), Type.UnitType)
-        case t: Trees.FnDecl                         => fnSignature(ci, t)
+        case t: Trees.FnDecl                         => fnSignature(ci, t, anonymousParams = true)
         case t: Trees.CapDecl                        => capSignature(ci, t)
         case t: Trees.DataDecl                       => dataSignature(ci, t, id)
         case t: Trees.EffectDecl                     => effectSignature(ci, t, id)
         case Trees.TypeAlias(_, valueParams, rhs, _) =>
-          val (ci1, _) = mapAccum(ci, valueParams)(valueParam)
+          val (ci1, _) = mapAccum(ci, valueParams)(valueParam(_, _))
           typeOf(ci1, rhs)
         case _ => (ci, Type.UnitType)
     }
@@ -162,26 +162,42 @@ object Namer:
   /** `(params) -> ret with fx`. Parameters become `ValueParam` symbols in scope for the rest of the
     * signature (refinement calls such as `between(lo, hi)` refer to them).
     */
-  private def fnSignature(c: Ctx, fn: Trees.FnLike): (Ctx, Type) =
+  private def fnSignature(c: Ctx, fn: Trees.FnLike, anonymousParams: Boolean = false): (Ctx, Type) =
     val c0 = fn.typeParamsHint.foldLeft(c)((ci, name) => introduce(ci, name, Nil, fn.span)._1)
-    val (c1, params) = mapAccum(c0, fn.params)(valueParam)
+    val (c1, params) = mapAccum(c0, fn.params)(valueParam(_, _, anonymousParams))
     val (c2, ret) = fn.returnType.fold((c1, Type.UnitType))(typeOf(c1, _))
     arrow(c2, Type.TupleType(params), ret, fn.withClause)
+
+  /** Each anonymous bound `is C` in a parameter type of a top-level `fn` becomes a type parameter
+    * of its own, named as written (`spec/type_system.md` §5.1).
+    */
+  private def anonymous(c: Ctx, t: Type, span: Span): (Ctx, Type) =
+    t match
+      case Type.IsBound(bs) =>
+        val (c1, inner) = mapAccum(c, bs)(anonymous(_, _, span))
+        val (c2, id) = c1.enter(c1.table.render(Type.IsBound(inner)), SymKind.TypeParam, Type.IsBound(inner), span)
+        (c2, Type.TypeRef(id, Nil))
+      case _: Type.TypeRef | _: Type.CapRef | _: Type.TupleType =>
+        val (c1, parts) = mapAccum(c, t.children)(anonymous(_, _, span))
+        val it = parts.iterator
+        (c1, t.mapChildren(_ => it.next()))
+      case other => (c, other)
 
   /** `lhs -> rhs [with row]`. */
   private def arrow(c: Ctx, lhs: Type, rhs: Type, withClause: Option[Tree]): (Ctx, Type) =
     val (c1, fx) = withClause.fold((c, EffectRow.empty))(effects(c, _))
     (c1, Type.ArrowType(lhs, rhs, fx))
 
-  private def valueParam(c: Ctx, p: Trees.FnParam): (Ctx, Type) =
-    val (c1, t) = typeOf(c, p.typeAnn)
+  private def valueParam(c: Ctx, p: Trees.FnParam, anonymousBounds: Boolean = false): (Ctx, Type) =
+    val (c0, written) = typeOf(c, p.typeAnn)
+    val (c1, t) = if anonymousBounds then anonymous(c0, written, p.span) else (c0, written)
     val (c2, id) = c1.enter(p.name, SymKind.ValueParam, t, p.span)
     (c2.bind(p.name, id), t)
 
   /** A cap's info is its `extends` chain; its methods are entered as members. */
   private def capSignature(c: Ctx, cap: Trees.CapDecl): (Ctx, Type) =
     val (c1, _) = ofParams(c, cap.ofParams)
-    val (c2, _) = mapAccum(c1, cap.valueParams)(valueParam)
+    val (c2, _) = mapAccum(c1, cap.valueParams)(valueParam(_, _))
     val (c3, supers) = mapAccum(c2, cap.extendsList)(capBound)
     val c4 = cap.body.foldLeft(c3) { (ci, item) =>
       item match

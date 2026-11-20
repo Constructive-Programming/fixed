@@ -25,11 +25,25 @@ object TypeOps:
       case other                                     => other.mapChildren(subst(_, sigma))
 
   /** Match a declared signature against a concrete type, solving the declared type parameters. */
-  def solve(params: Set[SymbolId], declared: Type, concrete: Type, acc: Map[SymbolId, Type]): Map[SymbolId, Type] =
+  def solve(
+      params: Set[SymbolId],
+      declared: Type,
+      concrete: Type,
+      acc: Map[SymbolId, Type],
+      boundsOf: SymbolId => List[Type] = _ => Nil
+  ): Map[SymbolId, Type] =
+    def step(a: Map[SymbolId, Type], dc: (Type, Type)) = solve(params, dc._1, dc._2, a, boundsOf)
     declared match
-      case Type.TypeRef(p, Nil) if params(p)         => if acc.contains(p) then acc else acc.updated(p, concrete)
+      case Type.TypeRef(p, Nil) if params(p) =>
+        /** A parameter's bound arguments (`C is Folding of A`) are the type's element arguments. */
+        val elements = (boundsOf(p), concrete) match
+          case (List(Type.CapRef(_, as)), Type.TypeRef(_, cs)) if as.nonEmpty && cs.size >= as.size =>
+            as.zip(cs.takeRight(as.size))
+          case _ => Nil
+        val withP = if acc.contains(p) then acc else acc.updated(p, concrete)
+        elements.foldLeft(withP)(step)
       case _ if declared.ordinal == concrete.ordinal =>
-        declared.children.zip(concrete.children).foldLeft(acc)((a, dc) => solve(params, dc._1, dc._2, a))
+        declared.children.zip(concrete.children).foldLeft(acc)(step)
       case _ => acc
 
   /** `t` with each type that is a key of `by` replaced by its value. */

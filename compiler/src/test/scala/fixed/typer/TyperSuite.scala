@@ -219,7 +219,7 @@ class TyperSuite extends munit.FunSuite:
       "fn f(x: T) -> T = x.clone()\n",
       "fn f(x: T is Numeric) -> String = x.show()\n",
       "fn f(x: is Folding of u64) -> String = x.show()\n",
-      "fn f(x: is Folding of u64, y: is Folding of u64) -> bool = x == y\n",
+      "fn f(x: is Folding of u64) -> bool = x == x\n",
       "fn f(x: is Folding of u64) -> is Folding of u64 = x.clone()\n",
       "fn f(xs: F of u64) -> String = xs.show()\n",
       "type Printable = Show + Eq\nfn f(x: T is Printable) -> T = x.clone()\n",
@@ -291,6 +291,31 @@ class TyperSuite extends munit.FunSuite:
       "fn f(xs: List of u64) -> String = xs.show()\n",
       "data P(a: u64)\nfn f(x: P, y: P) -> bool = x == y\n"
     ).foreach(code => assertEquals(typedUnit(code).diags, Nil, code))
+
+  test("spec 5.1: each anonymous bound is its own type variable; a named one is shared"):
+    val ifAnon = "fn f(c: bool, a: is Show, b: is Show) -> u64 =\n    let x = if c: a else: b\n    0\n"
+    assertEquals(codes(typedUnit(ifAnon)), List(DiagCode.T002))
+    assertEquals(typedUnit("fn f(c: bool, a: T is Show, b: T) -> T = if c: a else: b\n").diags, Nil)
+    val two = "fn two(a: is Show, b: is Show) -> String = a.show().concat(b.show())\n"
+    assertEquals(typedUnit(two + "fn g(n: u64) -> String = two(n, \"x\")\n").diags, Nil)
+    assertEquals(
+      codes(typedUnit(two + "data H:\n    H(f: u64 -> u64)\nfn g(h: H) -> String = two(1, h)\n")),
+      List(DiagCode.T010)
+    )
+    val pretty = "cap Pretty extends Show\nfn p(x: is Pretty) -> String = x.show()\n"
+    assertEquals(codes(typedUnit(pretty + "fn g() -> String = p(1)\n")), List(DiagCode.T010))
+    val alias =
+      "type Printable = Show + Eq\nfn r(x: is Printable, y: is Printable) -> String = x.show()\ndata H:\n    H(f: u64 -> u64)\n"
+    assertEquals(typedUnit(alias + "fn g() -> String = r(1, \"x\")\n").diags, Nil)
+    assertEquals(codes(typedUnit(alias + "fn g(h: H) -> String = r(1, h)\n")), List(DiagCode.T010, DiagCode.T010))
+
+  test("spec 5.1: a named type inside two anonymous bounds is shared"):
+    val q = "cap Quantity of U:\n    Self.fn new(value: f64) -> Self\n    fn value -> f64\ncap Meters\ncap Seconds\n" +
+      "fn add(a: is Quantity of U, b: is Quantity of U) -> is Quantity of U = Quantity.new(a.value + b.value)\n"
+    val same = "fn g(m: is Quantity of Meters, n: is Quantity of Meters) -> is Quantity of Meters = add(m, n)\n"
+    assertEquals(typedUnit(q + same).diags, Nil)
+    val mixed = "fn g(m: is Quantity of Meters, s: is Quantity of Seconds) -> is Quantity of Meters = add(m, s)\n"
+    assertEquals(codes(typedUnit(q + mixed)), List(DiagCode.T010))
 
   test("3.1.M2: values flowing into `is` bounds must satisfy them (T010)"):
     val sum = "fn total(xs: is Folding of (N is Numeric)) -> N = xs.fold(0, (a, x) -> a + x)\n"

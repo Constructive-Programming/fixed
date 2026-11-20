@@ -347,7 +347,7 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
   private def call(name: String, fnType: Type, args: List[Tree], t: Tree, sc: Scope)(k: K): Expr =
     val id = symbols.scope(name)
     val params = symbols.typeParamsOf(id)
-    val solved = TypeOps.solve(params.toSet, symbols(id).info, fnType, Map.empty)
+    val solved = TypeOps.solve(params.toSet, symbols(id).info, fnType, Map.empty, Members.boundsOf(symbols, _))
     val sigma = params.map(p => p -> solved.getOrElse(p, Type.UnitType)).toMap
     val (declared, ret) = TypeOps.signature(symbols(id).info)
     val argTypes = args.map(typeOf(_, sc))

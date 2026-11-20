@@ -111,7 +111,7 @@ object TyperState:
     TyperState(
       TypeTable.empty,
       symbols,
-      Unifier.empty.copy(tuple = symbols.scope.get("Tuple")),
+      Unifier.empty.copy(tuple = symbols.scope.get("Tuple"), paramBounds = Members.boundsOf(symbols, _)),
       Nil,
       0,
       MemberTables(symbols),
@@ -370,7 +370,8 @@ object Typer:
       case Type.IsBound(bs) => bs
       case _                => Nil
     val hint = c.value match
-      case Type.TypeRef(id, _) =>
+      case Type.TypeRef(id, _) if Members.anonymousParam(s, id) => s"`is ${written(declared(id))}`"
+      case Type.TypeRef(id, _)                                  =>
         val (param, owner) = (s"${s.symbols(id).name} is ${written(declared(id))}", s.symbols(s.symbols(id).owner))
         owner.kind match
           case SymKind.Data                          => s"`data ${owner.name} of ($param)`"

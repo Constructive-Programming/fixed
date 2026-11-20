@@ -337,6 +337,9 @@ class EmitSuite extends munit.FunSuite:
       "    Console.print_line(shown(\"c\".concat(\"d\")))\n"
     val _ = check("captured_witness", src, "7\ncd\n")
 
+  test("two parameters with one anonymous bound run at u8 with String and at u8 with u8"):
+    val _ = check("unshared", BaselineSuite.unshared, "7xy\n12\n")
+
   test("a failed baseline attempt keeps no callee: the instance that replaces it runs"):
     val _ = check("failed_attempt", BaselineSuite.failedAttempt, "1.5\n")
 
