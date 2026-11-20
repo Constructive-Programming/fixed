@@ -5,10 +5,11 @@ import java.nio.file.{Files, Path}
 import fixed.util.SourceFile
 import fixed.{CompilationUnit, Compiler}
 
-/** Baseline versions (`spec/compilation_model.md` Rule CM3.1) in the Core that `--no-specialise`
-  * lowers: one version per polymorphic function or generated member, whatever the number of
-  * instantiations, with its values of parameter type in slots (Rule CM3.3). Each test would fail on
-  * a monomorphising backend.
+/** Baseline versions (`spec/compilation_model.md` Rule CM3.1) in the Core lowered with no clone
+  * chosen (`--no-specialise`, and round 0 of the default mode): one version per polymorphic
+  * function or generated member, whatever the number of instantiations, with its values of
+  * parameter type in slots (Rule CM3.3). Each test would fail on a monomorphising backend. Where
+  * noted, a test reads the default mode's Core instead.
   */
 class BaselineSuite extends munit.FunSuite:
 
@@ -17,10 +18,14 @@ class BaselineSuite extends munit.FunSuite:
     assert(!u.hasErrors, u.diagnostics)
     u
 
-  /** `source` lowered in the given mode, with the lowering's bookkeeping. */
-  private def lowered(name: String, source: String, baseline: Boolean = true): (Lower, List[Fn]) =
-    val lower = Lower(unit(name, source), baseline)
+  /** `source` lowered with no clone (`--no-specialise`), with the lowering's bookkeeping. */
+  private def lowered(name: String, source: String): (Lower, List[Fn]) =
+    val lower = Lower(unit(name, source))
     (lower, lower.program.fold(ds => fail(s"$name: ${ds.map(_.message)}"), identity))
+
+  /** The functions the default mode builds for `source`. */
+  private def specialised(name: String, source: String): List[Fn] =
+    Backend.analyse(unit(name, source)).fold(ds => fail(s"$name: ${ds.map(_.message)}"), _.fns)
 
   private def file(path: String): String = Files.readString(Path.of(s"$path.fixed"))
 
@@ -57,7 +62,7 @@ class BaselineSuite extends munit.FunSuite:
   test("records folds a List of u64 and a List of Order through one foldLeft, its accumulator a slot"):
     val src = file("bench/runtime/records")
     val folds = (fns: List[Fn]) => fns.map(_.name).filter(_.contains(".foldLeft["))
-    assertEquals(folds(lowered("records", src, baseline = false)._2).size, 2)
+    assertEquals(folds(specialised("records", src)).size, 3)
     val (_, fns) = lowered("records", src)
     assertEquals(folds(fns), List("List of A.foldLeft[R]"))
     val f = named(fns, "List of A.foldLeft[R]")
@@ -88,7 +93,7 @@ class BaselineSuite extends munit.FunSuite:
 
   test("fib_iter has one version, its N a slot; its arithmetic, literals and == are table calls"):
     val u = unit("01_basics", file("examples/01_basics"))
-    val lower = Lower(u, baseline = true)
+    val lower = Lower(u)
     val fns = lower.program.fold(ds => fail(s"${ds.map(_.message)}"), identity)
     assert(lower.baselines("fib_iter"), lower.baselines)
     assertEquals(fns.map(_.name).filter(_.startsWith("fib_iter")), List("fib_iter"))
@@ -102,9 +107,8 @@ class BaselineSuite extends munit.FunSuite:
     val called = rhss.collect { case Rhs.CallTable(`t`, i, _, _) => entries(i) }
     assertEquals(called.toSet, Set("from_i64", "eq", "sub", "add"))
     assertEquals(
-      lowered("01_basics", file("examples/01_basics"), baseline = false)._2.map(_.name)
-        .filter(_.startsWith("fib_iter")),
-      List("fib_iter[u64]")
+      specialised("01_basics", file("examples/01_basics")).map(_.name).filter(_.startsWith("fib_iter")).sorted,
+      List("fib_iter", "fib_iter[u64]")
     )
 
   test("a call at a type without a full table of the bound calls an instance; another call shares the baseline"):
@@ -135,17 +139,17 @@ class BaselineSuite extends munit.FunSuite:
     assert(hidden(0).name.startsWith("w.N.") && hidden(2).name.startsWith("w.is."), hidden)
 
   test("two parameters with one anonymous bound at different types call an instance; at one type, the baseline"):
-    val lower = Lower(unit("unshared", BaselineSuite.unshared), baseline = true)
+    val lower = Lower(unit("unshared", BaselineSuite.unshared))
     val ds = lower.program.fold(identity, fns => fail(s"lowered: ${fns.map(_.name)}"))
     assert(lower.instances("two[u8,String]").contains("at different types"), lower.instances)
     assert(lower.baselines("two"), lower.baselines)
     assert(ds.forall(_.message.contains("is Show")), ds)
-    assert(Lower(unit("unshared", BaselineSuite.unshared)).program.isLeft, "the default mode rejects it too")
+    assert(Backend.analyse(unit("unshared", BaselineSuite.unshared)).isLeft, "the default mode rejects it too")
 
   test("a table entry the backend does not build is never called: the call is an instance, here B005"):
     val src = "fn right(xs: is Folding of u8) -> u64 = xs.fold_right(0, (x, n) -> n + 1)\n\n" +
       "fn byte(x: u8) -> u8 = x\n\nfn main() -> () =\n    let n = right([byte(1), byte(2)])\n    ()\n"
-    val lower = Lower(unit("right", src), baseline = true)
+    val lower = Lower(unit("right", src))
     val ds = lower.program.fold(identity, fns => fail(s"lowered: ${fns.map(_.name)}"))
     assert(ds.exists(_.message.contains("fold_right")), ds)
     assert(lower.instances("right[List of u8]").contains("no `Folding.fold_right` the backend builds"), lower.instances)
@@ -167,12 +171,12 @@ class BaselineSuite extends munit.FunSuite:
       Set[(Atom, Int)]((tIn, 1), (tOut, 0)),
       "`name` on the argument table, `new` on the result one"
     )
-    val (_, plain) = lowered("05_phantom_types", file("examples/05_phantom_types"), baseline = false)
-    assertEquals(named(plain, "inspect[(),Door of Locked]").params.map(_.ctype), List(CType.Boxed))
+    val plain = specialised("05_phantom_types", file("examples/05_phantom_types"))
+    assertEquals(named(plain, "inspect[Door of Locked]").params.map(_.ctype), List(CType.Boxed))
 
-  test("in the default mode the same program is lowered per instance"):
-    val (_, fns) = lowered("generic", BaselineSuite.generic, baseline = false)
-    assertEquals(fns.map(_.name).filter(_.startsWith("last")).sorted, List("last[String]", "last[i8]"))
+  test("with the reference budget, the default mode adds a clone per requested key to the baseline version"):
+    val fns = specialised("generic", BaselineSuite.generic)
+    assertEquals(fns.map(_.name).filter(_.startsWith("last")).sorted, List("last", "last[String]", "last[i8]"))
 
 object BaselineSuite:
 

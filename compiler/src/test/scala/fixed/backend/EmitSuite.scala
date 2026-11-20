@@ -13,6 +13,9 @@ class EmitSuite extends munit.FunSuite:
 
   private val dir = Path.of("target", "emit-tests")
 
+  /** The build modes every program runs in (Rule CM5.7). */
+  private val modes = List(Mode.Default, Mode.NoSpecialise)
+
   /** The LLVM IR of `source` in build mode `mode`, or the backend's diagnostics. */
   private def lowered(name: String, source: String, mode: Mode = Mode.Default) =
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString(s"$name.fixed", source)))
@@ -33,7 +36,7 @@ class EmitSuite extends munit.FunSuite:
     * the runtime's counters per mode.
     */
   private def check(name: String, source: String, expected: String, stdin: String = ""): Map[Mode, Map[String, Long]] =
-    Mode.values.toList.map { mode =>
+    modes.map { mode =>
       val (code, out, err) = run(name, source, stdin, mode)
       assertEquals(code, 0, s"$mode: $err")
       assertEquals(out, expected, mode)
@@ -131,7 +134,7 @@ class EmitSuite extends munit.FunSuite:
          |    Console.print_line((false && div(1, 0) == 0).show())
          |    Console.print_line(div(1, 0).show())
          |""".stripMargin
-    Mode.values.foreach { mode =>
+    modes.foreach { mode =>
       val (code, out, err) = run("divzero", src, "", mode)
       assertEquals(out, "false\n", mode)
       assertEquals(code, 101, mode)
@@ -266,6 +269,19 @@ class EmitSuite extends munit.FunSuite:
     val plain = ir("generic", src, Mode.NoSpecialise)
     assert(plain.contains("call i64 @\"fx_u_last\"(ptr @fx_w_ref,"), plain)
     assert(plain.contains("call i64 @\"fx_u_last\"(ptr @fx_w_imm,"), plain)
+
+  test("with room for one clone, one program runs the clone of a function and its baseline version (Rule CM5.6)"):
+    val src = header + "fn pick(xs: List of A, d: A) -> A = xs.fold(d, (acc, x) -> x)\n\n" +
+      "fn main() -> () with Console =\n    Console.print_line(pick([\"a\".concat(\"b\")], \"c\"))\n" +
+      "    Console.print_line([1, 2].fold(0, (s, i) -> pick([i], s)).show())\n"
+    val unit = Compiler.compile(CompilationUnit(SourceFile.fromString("one_clone.fixed", src)))
+    val fns = Backend.analyse(unit).fold(ds => fail(s"$ds"), _.fns)
+    val one = Mode(fns.find(_.name == "pick").fold(0)(f => Core.lets(f.body).size))
+    val (code, out, err) = run("one_clone", src, "", one)
+    assertEquals((code, out), (0, "ab\n2\n"), err)
+    val counts = Native.counters(err)
+    assertEquals(counts.get("allocs"), counts.get("frees"), err)
+    assert(counts("wops") > 0, "the String call runs the baseline version")
 
   test("one baseline version of a Numeric function wraps at u8 and not at i64; comparisons follow the sign (4.1.M7b)"):
     val src = header + "fn grow(x: N is Numeric) -> N = x * 2 + 100\n\n" +

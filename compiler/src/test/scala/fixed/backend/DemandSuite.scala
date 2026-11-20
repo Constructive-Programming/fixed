@@ -60,8 +60,11 @@ class DemandSuite extends munit.FunSuite:
     val code = "use std.io.Console\n\nfn upto(n: u64) -> List of u64 =\n" +
       "    List.unfold(0, (i) ->\n        if i >= n:\n            List.Nil\n        else:\n" +
       "            List.Cons(i, i + 1)\n    )\n\n"
-    val t = demands(code, "upto(3).map((x) -> x + 1).fold(0, (a, x) -> a + x)")
-    val map = t.params.find(_._1.contains(".map[")).map(_._2.head).getOrElse(fail(s"${t.params.keys}"))
+    val src = code +
+      "fn main() -> () with Console =\n    Console.print_line((upto(3).map((x) -> x + 1).fold(0, (a, x) -> a + x)).show())\n"
+    val unit = Compiler.compile(CompilationUnit(SourceFile.fromString("<unit>", src)))
+    val t = Backend.analyse(unit).fold(ds => fail(s"lowering failed: $ds"), _.demands)
+    val map = t.params.get("List of u64.map[u64]").map(_.head).getOrElse(fail(s"${t.params.keys}"))
     assertEquals(map.root, Demand.Excl)
     assertEquals(map.parts, Map(("List of u64", 0) -> Demand.Own, ("List of u64", 1) -> Demand.Excl))
 

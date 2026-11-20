@@ -8,7 +8,7 @@ import fixed.util.Span
   * its `fip` contract, each parameter's demand and escape, each allocation's class with its escapes
   * and reasons, fork facts and copy sites; then each `handle`'s kind. Positions are `line:column`.
   * Every function except a clone and a `fip` shared entry also gives its baseline size and its
-  * clone candidates, built or not (`spec/compilation_model.md` Rule CM5.8).
+  * clone candidates on both axes, built or not (`spec/compilation_model.md` Rule CM5.8).
   */
 object MemoryReport:
 
@@ -80,7 +80,10 @@ object MemoryReport:
           "allocations" -> Value.Arr(allocations),
           "forks" -> Value.Arr(forks),
           "copies" -> Value.Arr(copies)
-        ) ++ (if f.name == f.instance then specialisation(f, a.candidates.getOrElse(f.name, Nil)) else Nil)
+        ) ++
+          (if f.name == f.instance && !a.typeClones.contains(f.name) then
+             specialisation(f, a.candidates.getOrElse(f.name, Nil))
+           else Nil)
       )
     }
     val handlers = unit.tree.toList.flatMap(Trees.subtrees).collect { case h: Trees.HandleExpr =>
@@ -89,12 +92,13 @@ object MemoryReport:
     Value.Obj(List("functions" -> Value.Arr(fns), "handlers" -> Value.Arr(handlers)))
 
   /** Rule CM5.8: the baseline size, the clones built and the candidates not built. A version has
-    * as many `let`s as the baseline it was walked from, so `f`'s own body gives the size.
+    * as many `let`s as the baseline it was walked from, so `f`'s own body gives the size. A body
+    * with no `let` (its only site a witness `drop`) has its score divided by 1 instead of 0.
     */
   private def specialisation(f: Fn, candidates: List[Candidate]): Fields =
     val size = Core.lets(f.body).size
     def item(c: Candidate, last: (String, Value)) =
-      val score = BigDecimal(c.removed * c.weight) / size
+      val score = BigDecimal(c.removed * c.weight) / size.max(1)
       Value.Obj(
         List(
           "key" -> Value.Str(c.key),

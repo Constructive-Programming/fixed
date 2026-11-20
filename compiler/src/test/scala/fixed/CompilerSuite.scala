@@ -50,3 +50,11 @@ class CompilerSuite extends munit.FunSuite:
     List(0, 1, 2, 4).foreach { i =>
       assertEquals(Main.modeOf(plain.patch(i, List("--no-specialise"), 0)), (backend.Mode.NoSpecialise, plain))
     }
+
+  test("4.1.M8: --budget <n> is taken from any position; a malformed one stays for the usage error"):
+    val plain = List("ship", "f.fixed", "-o", "out")
+    List(0, 1, 2, 4).foreach { i =>
+      assertEquals(Main.modeOf(plain.patch(i, List("--budget", "7"), 0)), (backend.Mode(7), plain))
+    }
+    assertEquals(Main.modeOf(plain :+ "--budget")._2, plain :+ "--budget")
+    assertEquals(Main.modeOf(plain ++ List("--budget", "-1"))._2, plain ++ List("--budget", "-1"))

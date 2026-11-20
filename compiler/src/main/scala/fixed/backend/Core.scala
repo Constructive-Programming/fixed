@@ -168,6 +168,17 @@ object Core:
       case Expr.Dup(_, b)         => returnsAs(b, rt)
       case Expr.Drop(_, b)        => returnsAs(b, rt)
 
+  /** The slot variables `e` duplicates or drops, each a call of its witness. Reference counting is
+    * applied with no borrowing, so a discarded slot is dropped by the function that discards it.
+    */
+  def witnessOps(e: Expr): List[Atom.Var] =
+    def op(x: Atom.Var, b: Expr) = Core.witnessOf(x).map(_ => x).toList ++ witnessOps(b)
+    e match
+      case Expr.Dup(x, b)      => op(x, b)
+      case Expr.Drop(x, b)     => op(x, b)
+      case Expr.Let(_, rhs, b) => Core.branches(rhs).flatMap(witnessOps) ++ witnessOps(b)
+      case Expr.Ret(_)         => Nil
+
   /** The witness variable of slot variable `v`. */
   def witnessOf(v: Atom.Var): Option[Atom.Var] =
     v.ctype match

@@ -65,8 +65,16 @@ final case class Candidate(key: String, removed: Int, weight: Long, reason: Stri
   * Result ownership per version is a summary: optimistic at first (fresh results are exclusive),
   * then recomputed until no summary changes ([[run]]).
   *
+  * The budget is shared with the type axis ([[Specialise]]): a clone of the type axis is an
+  * instance here, but its ownership clones are charged to the function it is a clone of, at the
+  * size of that function's baseline version, after the type axis's own charges `spent`. That
+  * baseline version is a root, like `main`, so that it is built even where every caller calls a
+  * clone (Rule CM3.1).
+  *
   * @param copy the copy function of a type key for a set of parts, if the type is data
   * @param budget the clone budget `B` of each function, in Core `let`s
+  * @param typeClones each clone of the type axis, with the function it is a clone of and its key
+  * @param spent per function, what its clones of the type axis are charged
   */
 final class Versions(
     d: Demands,
@@ -74,7 +82,9 @@ final class Versions(
     fns: List[Fn],
     copy: (String, Set[Need.Part]) => Option[String],
     fip: String => Boolean,
-    budget: Int
+    budget: Int,
+    typeClones: Map[String, (String, String)] = Map.empty,
+    spent: Map[String, Int] = Map.empty
 ):
   private type Mask = List[Set[Option[Need.Part]]]
   private type Key = (String, Mask)
@@ -122,7 +132,7 @@ final class Versions(
   def run(): List[Fn] =
     val before = (results.toMap, clones.toSet)
     List(built, queued, forced, weights, removals, sharedSites, reasons).foreach(_.clear())
-    ensure("main", Nil)
+    ("main" :: typeClones.values.map(_._1).toList.distinct.sorted).foreach(ensure(_, Nil))
     drain()
     clones.toList.foreach(build)
     drain()
@@ -137,37 +147,36 @@ final class Versions(
         clones --= dead
         run()
 
-  /** Per function instance with candidates, each candidate in key order. */
-  def candidates: Map[String, List[Candidate]] = (weights.keySet ++ clones ++ unused).toList.groupMap(_._1) { k =>
+  /** Per function with candidates (a clone of the type axis's under its function), each candidate in key order. */
+  def candidates: Map[String, List[Candidate]] = (weights.keySet ++ clones ++ unused).toList.groupMap(k =>
+    family(k._1)
+  ) { k =>
     val why = if clones(k) then "" else reasons.getOrElse(k, "unused")
-    Candidate(text(k._2), removed(k), weights.getOrElse(k, 0L), why, charged = !forced(k))
+    Candidate(keyText(k), removed(k), weights.getOrElse(k, 0L), why, charged = !forced(k))
   }.view.mapValues(_.sortBy(_.key)).toMap
+
+  /** The function whose budget the clones of instance `f` are charged to. */
+  private def family(f: String): String = typeClones.get(f).fold(f)(_._1)
+
+  /** A candidate's canonical key: the type key of its instance, if a clone of the type axis, then
+    * its ownership mask (Rule CM6.5).
+    */
+  private def keyText(k: Key): String = typeClones.get(k._1).fold("")(_._2 + " ") + text(k._2)
 
   /** Rule CM5.4's rounds: rank and choose per function, then build what was chosen. */
   private def rounds(): Unit =
-    val chosen = weights.keys.map(_._1).toList.distinct.sorted.flatMap(choose)
+    val chosen = weights.keys.map(k => family(k._1)).toList.distinct.sorted.flatMap(choose)
     chosen.foreach(k => if !clones(k) then build(k))
     drain()
     if chosen.nonEmpty then rounds()
 
   private def choose(f: String): List[Key] =
     val size = Core.lets(byName(f).body).size
-    val ranked =
-      weights.keys.filter(k => k._1 == f && !clones(k) && !unused(k)).toList.sortBy(k =>
-        (-removed(k) * weights(k), text(k._2))
-      )
-    ranked.foldLeft(List.empty[Key]) { (chosen, k) =>
-      val charged = (clones.count(c => c._1 == f && !forced(c)) + chosen.size) * size
-      val why =
-        if removed(k) == 0 then "removed = 0"
-        else if size > budget then "larger than B"
-        else if charged + size > budget then "budget exhausted"
-        else ""
-      if why.isEmpty then chosen :+ k
-      else
-        reasons(k) = why
-        chosen
-    }
+    val open = weights.keys.filter(k => family(k._1) == f && !clones(k) && !unused(k)).toList
+    val already = clones.count(c => family(c._1) == f && !forced(c)) * size + spent.getOrElse(f, 0)
+    val (chosen, why) = Versions.rank(open, removed, weights, keyText, size, already, budget)
+    reasons ++= why
+    chosen
 
   /** Sites whose decision differs between the clone for `k` and the shared version. */
   private def removed(k: Key): Int =
@@ -224,7 +233,7 @@ final class Versions(
     val (body, result, made) = log.withValue(Log())(walkAt(f, mask))
     built(name) = byName(f).copy(name = name, body = body, version = Some(Version(f, mask != full(f))))
     results(name) = results.get(name).fold(result)(_ meet result)
-    val weight = 1L << (3 * math.min(depths.getOrElse(f, 0), 20))
+    val weight = Versions.weight(depths.getOrElse(f, 0))
     made.requests.foreach { (g, m) =>
       ensure(g, if fip(g) then m else shared(g))
       val k = (g, m)
@@ -253,24 +262,7 @@ final class Versions(
     built(entryName(f)) = fn.copy(name = entryName(f), body = body, version = Some(Version(f, conditional = false)))
     ensure(f, full(f))
 
-  /** Per function, the number of loop steps that lexically enclose its body (Rule CM5.4's `d`): a
-    * closure passed to a derived loop is one step deeper than the function that builds it, any
-    * other closure is as deep. Functions that are not closures are at depth 0.
-    */
-  private lazy val depths: Map[String, Int] =
-    val loops = Seq(".fold[", ".unfold[", ".foldLeft[", ".map[")
-    val all = fns.flatMap(f => Core.lets(f.body).map(f.name -> _))
-    def from(f: String, k: Int, seen: Set[String]): Map[String, Int] =
-      val lets = all.collect { case (`f`, l) => l }
-      val steps = lets.collect {
-        case (_, Rhs.Call(g, as, false)) if loops.exists(g.contains) => as.flatMap(Core.countedVar).map(_.name)
-      }.flatten.toSet
-      lets.collect {
-        case (x, Rhs.Closure(code, _, _)) if !seen(code) =>
-          from(code, k + (if steps(x.name) then 1 else 0), seen + code)
-      }.foldLeft(Map(f -> k))(_ ++ _)
-    val closures = all.collect { case (_, (_, Rhs.Closure(code, _, _))) => code }.toSet
-    fns.map(_.name).filterNot(closures).foldLeft(Map.empty[String, Int])((m, f) => m ++ from(f, 0, Set(f)))
+  private lazy val depths: Map[String, Int] = Versions.depths(fns)
 
   /** Per parameter, the parts its demand marks exclusive (`None` is the value's own cell). */
   private def full(f: String): Mask =
@@ -412,3 +404,49 @@ object Versions:
 
   /** The reference clone budget of Rule CM5.3, in Core `let`s. */
   val budget: Int = 512
+
+  /** Rule CM5.4's choice among one function's `candidates`, of baseline size `size`, whose clones
+    * already built are charged `spent`: in descending order of `removed × weight` (the divisor
+    * `size` is the same for all), ties by key text, each chosen while the charges stay within
+    * `budget` (Rule CM5.3). The candidates chosen, in that order, and why each other one was not.
+    */
+  def rank[K](
+      candidates: List[K],
+      removed: K => Int,
+      weight: K => Long,
+      text: K => String,
+      size: Int,
+      spent: Int,
+      budget: Int
+  ): (List[K], Map[K, String]) =
+    candidates.sortBy(k => (-removed(k) * weight(k), text(k))).foldLeft((List.empty[K], Map.empty[K, String])) {
+      case ((chosen, why), k) =>
+        val reason =
+          if removed(k) == 0 then "removed = 0"
+          else if size > budget then "larger than B"
+          else if spent + (chosen.size + 1) * size > budget then "budget exhausted"
+          else ""
+        if reason.isEmpty then (chosen :+ k, why) else (chosen, why.updated(k, reason))
+    }
+
+  /** Rule CM5.4's weight of one request made at depth `d`: `8^d`, `d` capped at 20 to fit a `Long`. */
+  def weight(d: Int): Long = 1L << (3 * math.min(d, 20))
+
+  /** Per function of `fns`, the number of loop steps that lexically enclose its body (Rule CM5.4's
+    * `d`): a closure passed to a derived loop is one step deeper than the function that builds it,
+    * any other closure is as deep. Functions that are not closures are at depth 0.
+    */
+  def depths(fns: List[Fn]): Map[String, Int] =
+    val loops = Seq(".fold[", ".unfold[", ".foldLeft[", ".map[")
+    val all = fns.flatMap(f => Core.lets(f.body).map(f.name -> _))
+    def from(f: String, k: Int, seen: Set[String]): Map[String, Int] =
+      val lets = all.collect { case (`f`, l) => l }
+      val steps = lets.collect {
+        case (_, Rhs.Call(g, as, false)) if loops.exists(g.contains) => as.flatMap(Core.countedVar).map(_.name)
+      }.flatten.toSet
+      lets.collect {
+        case (x, Rhs.Closure(code, _, _)) if !seen(code) =>
+          from(code, k + (if steps(x.name) then 1 else 0), seen + code)
+      }.foldLeft(Map(f -> k))(_ ++ _)
+    val closures = all.collect { case (_, (_, Rhs.Closure(code, _, _))) => code }.toSet
+    fns.map(_.name).filterNot(closures).foldLeft(Map.empty[String, Int])((m, f) => m ++ from(f, 0, Set(f)))

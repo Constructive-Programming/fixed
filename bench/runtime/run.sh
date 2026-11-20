@@ -3,7 +3,8 @@
 # bench/runtime/<program>.expected, and write docs/baselines/runtime-<date>-<mode>.md
 # (docs/plans/phase-4.0-backend-slice.md §4.9). NOTE, if set, replaces the description paragraph.
 # MODE is the build mode (spec/compilation_model.md Rule CM5.7): default or no-specialise.
-# Usage: [NOTE=...] [MODE=...] bench/runtime/run.sh [RUNS]   (default 5). Needs sbt and clang on PATH.
+# B, if set, is the clone budget of Rule CM5.3 (`--budget B`); the report name then ends in -B<n>.
+# Usage: [NOTE=...] [MODE=...] [B=...] bench/runtime/run.sh [RUNS]   (default 5). Needs sbt and clang on PATH.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -17,6 +18,10 @@ case $mode in
   no-specialise) flag="--no-specialise" ;;
   *) echo "MODE must be default or no-specialise" >&2; exit 2 ;;
 esac
+if [ -n "${B:-}" ]; then
+  [[ $B =~ ^[0-9]+$ ]] || { echo "B must be a non-negative integer" >&2; exit 2; }
+  flag="$flag --budget $B"; mode="$mode-B$B"
+fi
 
 cmds=()
 for p in "${progs[@]}"; do cmds+=("compiler/run ship $flag bench/runtime/$p.fixed -o $out/$p-$mode"); done
@@ -36,8 +41,8 @@ report=docs/baselines/runtime-$(date +%F)-$mode.md
   echo "- Wall time: best of $runs runs, measured by the runtime from \`main\` start to end (no process start-up)."
   echo "- Counts are deterministic: every run gives the same allocations, reuses, \`dup\`s and \`drop\`s."
   echo
-  echo "| Program | Size | Result | Wall (ms) | Peak RSS (KiB) | Allocations | Reuses | Frees | dups | drops |"
-  echo "|---|---|---|---:|---:|---:|---:|---:|---:|---:|"
+  echo "| Program | Size | Result | Wall (ms) | Peak RSS (KiB) | Allocations | Reuses | Frees | dups | drops | Witness calls |"
+  echo "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"
   for p in "${progs[@]}"; do
     best=""; result=""; bin="$out/$p-$mode"
     for _ in $(seq "$runs"); do
@@ -47,10 +52,10 @@ report=docs/baselines/runtime-$(date +%F)-$mode.md
     done
     cmp -s "$bin.out" "bench/runtime/$p.expected" || { echo "$p: result differs from bench/runtime/$p.expected" >&2; exit 1; }
     size=$(sed -n 's|^// Size: ||p' "bench/runtime/$p.fixed")
-    printf '| `%s` | %s | %s | %.1f | %s | %s | %s | %s | %s | %s |\n' "$p" "$size" "$(cat "$bin.out")" \
+    printf '| `%s` | %s | %s | %.1f | %s | %s | %s | %s | %s | %s | %s |\n' "$p" "$size" "$(cat "$bin.out")" \
       "$(echo "scale=3; $(echo "$best" | field wall_ns) / 1000000" | bc)" "$(echo "$best" | field peak_rss_kb)" \
       "$(echo "$best" | field allocs)" "$(echo "$best" | field reuses)" "$(echo "$best" | field frees)" \
-      "$(echo "$best" | field dups)" "$(echo "$best" | field drops)"
+      "$(echo "$best" | field dups)" "$(echo "$best" | field drops)" "$(echo "$best" | field wops)"
   done
 } > "$report"
 echo "wrote $report"

@@ -59,7 +59,7 @@ object FipCheck:
         error("reference-count operation (Rule CM4.7)", a.spans(x), s"`$f` calls a member through a capability table")
     }
     val witnessed = reached.toList.sorted.flatMap(f => byName.get(f).toList).flatMap { g =>
-      witnessOps(Rc(g).body).map(v =>
+      Core.witnessOps(Rc(g).body).map(v =>
         error("reference-count operation (Rule CM4.7)", a.spans(v.name), s"`${g.name}` duplicates or drops `${v.name}`")
       )
     }
@@ -80,17 +80,6 @@ object FipCheck:
             error("not a loop (Rule MM18.2(2))", k.span, s"`${k.loop}` is a tree fold")
         }
     heap ++ rc ++ witnessed ++ scratch ++ strict
-
-  /** The slot variables `e` duplicates or drops, each a call of its witness. Reference counting is
-    * applied with no borrowing, so a discarded slot is dropped by the function that discards it.
-    */
-  private def witnessOps(e: Expr): List[Atom.Var] =
-    def op(x: Atom.Var, b: Expr) = Core.witnessOf(x).map(_ => x).toList ++ witnessOps(b)
-    e match
-      case Expr.Dup(x, b)      => op(x, b)
-      case Expr.Drop(x, b)     => op(x, b)
-      case Expr.Let(_, rhs, b) => Core.branches(rhs).flatMap(witnessOps) ++ witnessOps(b)
-      case Expr.Ret(_)         => Nil
 
   /** A derived loop: its recursion is structural, and its step's scratch resets per step. */
   private def loop(f: String): Boolean = Seq(".fold[", ".unfold[", ".foldLeft[", ".map[", ".copy[").exists(f.contains)

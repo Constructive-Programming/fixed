@@ -104,12 +104,14 @@ class VersionSuite extends munit.FunSuite:
   test("a clone chosen early that no call reaches in the end is dropped and holds no budget"):
     val src = java.nio.file.Files.readString(java.nio.file.Path.of("bench", "runtime", "records.fixed"))
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString("records.fixed", src)))
-    val map = "List of Order.map[Order]"
+    val map = "List of A.map[R]"
     val size = Core.lets(Backend.core(unit).fold(ds => fail(s"$ds"), identity).find(_.name == map).get.body).size
-    val a = Backend.analyse(unit, size).fold(ds => fail(s"$ds"), identity)
+
+    /** Room for the clone of the type axis at `Order` and one clone of the ownership axis. */
+    val a = Backend.analyse(unit, 2 * size).fold(ds => fail(s"$ds"), identity)
     assertEquals(
       a.candidates(map).map(c => c.key -> c.reason),
-      List("0:List of Order#1,cell" -> "unused", "0:cell" -> "")
+      List("Order,Order" -> "", "Order,Order 0:List of Order#1,cell" -> "unused", "Order,Order 0:cell" -> "")
     )
     val names = a.fns.map(_.name).toSet
     assert(a.fns.forall(f => Core.callees(f.body).forall(g => names(g) || !g.contains("#"))), names)

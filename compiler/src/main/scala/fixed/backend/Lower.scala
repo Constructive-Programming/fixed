@@ -11,16 +11,18 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
 
 /** Typed tree to Core (slice §4.1–§4.4), in continuation-passing style: `expr(t, sc)(k)` lowers `t`
   * and hands its atom to `k`, which builds the rest of the function. Starts at `main` and lowers
-  * each function it reaches. By default each polymorphic function is monomorphised per instance:
-  * `sc.sigma` maps the instance's type parameters to concrete types. With `baseline`
-  * (`--no-specialise`), a polymorphic function is lowered once under its own name where it can be
-  * (Rule CM3.1, [[baselineOf]]): it takes a witness and the tables of the bound set per type
+  * each function it reaches. A polymorphic function is lowered once under its own name where it
+  * can be (Rule CM3.1, [[baselineOf]]): it takes a witness and the tables of the bound set per type
   * parameter, and a value of a type parameter is a slot named by its witness. Derived members
-  * (`fold`, `unfold`, `Folding.fold`) are generated as Core functions ([[Generated.member]]).
-  * Constructs beyond the current milestone are `B005`, and so is a cell with a reference beyond its
-  * header's reference map (`refMapLimit`).
+  * (`fold`, `unfold`, `Folding.fold`) are generated as Core functions ([[Generated.member]]). A call
+  * whose type arguments are all known requests the clone for them ([[specialised]], Rule CM5.4):
+  * it calls that clone, the function lowered again at those types (`sc.sigma` maps its type
+  * parameters to them), if the key is in `chosen` ([[Specialise]]), and else the baseline version
+  * with static witnesses and tables (Rule CM5.6). A function whose baseline version cannot be
+  * built is lowered per instance. Constructs beyond the current milestone are `B005`, and so is a
+  * cell with a reference beyond its header's reference map (`refMapLimit`).
   */
-final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false) extends Tables:
+final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.empty) extends Tables:
   private type Env = Map[String, Var]
   private type Sigma = Map[SymbolId, Type]
 
@@ -46,13 +48,13 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
   /** Top-level functions with bodies: the prelude's, then the unit's (which shadow them). */
   private val decls: Map[String, Trees.FnDecl] = fixed.typer.Stdlib.functions(unit.tree)
 
-  /** In baseline mode, the baseline versions built: functions and generated members compiled once
-    * for all instantiations of their type parameters (Rule CM3.1).
+  /** The baseline versions built: functions and generated members compiled once for all
+    * instantiations of their type parameters (Rule CM3.1).
     */
   val baselines: mutable.Set[String] = mutable.LinkedHashSet.empty
 
-  /** In baseline mode, the polymorphic functions and generated members still lowered per instance,
-    * each with the reason its baseline version could not be built.
+  /** The polymorphic functions and generated members lowered per instance, each with the reason
+    * its baseline version could not be built.
     */
   val instances: mutable.Map[String, String] = mutable.LinkedHashMap.empty
 
@@ -69,6 +71,15 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
 
   /** The entries of its tables each type parameter's code calls, directly or by passing the table on. */
   private val calledEntries = mutable.Map.empty[Type, Set[String]].withDefaultValue(Set.empty)
+
+  /** The call sites that request a clone (Rule CM5.4), in the order lowered; and each clone built,
+    * with the baseline version it specialises and its key.
+    */
+  val requests: mutable.ListBuffer[Request] = mutable.ListBuffer.empty
+  val typeClones: mutable.Map[String, (String, String)] = mutable.LinkedHashMap.empty
+
+  /** The function whose code is being lowered, which owns the requests its call sites make. */
+  private val owner = scala.util.DynamicVariable("")
 
   /** Every function instance built so far, including copies and table entries requested after [[program]]. */
   def functions: List[Fn] = fns.values.toList
@@ -109,7 +120,7 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
   protected def instance(name: String)(build: => Fn): String =
     if !fns.contains(name) then
       fns(name) = Fn(name, Nil, CType.Unit, Expr.Ret(Atom.UnitC))
-      fns(name) = build
+      fns(name) = owner.withValue(name)(build)
     name
 
   /** `body`, or why it failed: the first problem it reported. On failure the functions it built, the
@@ -120,6 +131,7 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
   protected def attempt[A](body: => A): Either[String, A] =
     val (before, count, seen) = (fns.keySet.toSet, problems.size, tried.keySet.toSet)
     val (built, instead, entries) = (baselines.toSet, instances.keySet.toSet, calledEntries.toMap)
+    val (asked, cloned) = (requests.size, typeClones.keySet.toSet)
     val result = body
     if problems.size == count then Right(result)
     else
@@ -131,6 +143,8 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
       instances.keySet.toList.filterNot(instead).foreach(instances.remove)
       calledEntries.clear()
       calledEntries ++= entries
+      requests.dropRightInPlace(requests.size - asked)
+      typeClones.filterInPlace((c, _) => cloned(c))
       Left(why)
 
   /** Instance `name` of `decl`: `sigma` for its type parameters, `bounds` for its anonymously bound
@@ -342,7 +356,7 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
       case (d, actual) if TypeOps.anonymous(d) && dataOf(actual).isDefined => d -> actual
     }.toMap
     val typeArgs = params.map(sigma) ++ declared.flatMap(bounds.get)
-    val chosen = baselineOf(name, params, declared, ret).map(_.flatMap { typeParams =>
+    val version = baselineOf(name, params, declared, ret).map(_.flatMap { typeParams =>
       /** A declared type parameter is keyed by itself; an implicit one by the bound it stands for. */
       val actuals = typeParams.map { (key, p) =>
         if key == p then p -> List(TypeOps.subst(p, sigma))
@@ -354,19 +368,29 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
         case Some(p) => Left(s"positions bounded by `${symbols.render(implicitBounds(p))}` at different types")
         case None    =>
           val pairs = actuals.map((p, as) => p -> as.head)
-          checkEntries(pairs).flatMap(_ => hiddenArgs(pairs))
+          checkEntries(pairs).flatMap(_ => hiddenArgs(pairs)).map(ws => (typeParams.map(_._1).zip(pairs.map(_._2)), ws))
     })
-    chosen match
-      case Some(Right(ws)) => all(args, sc)(as => bind(Rhs.Call(name, ws ++ as, runtime = false), t, sc)(k))
+    version match
       case Some(Left(why)) if typeArgs.exists(typeParamsIn(_).nonEmpty) =>
         unsupported(t.span, s"a call of `$name` at a type parameter, which has no baseline version ($why)", k)
-      case other =>
-        val anonymousArgs = declared.zip(argTypes).collect { case (d, a) if TypeOps.anonymous(d) => a }
-        val shown = if typeArgs.isEmpty && other.isDefined then anonymousArgs else typeArgs
-        val inst = if shown.isEmpty then name else shown.map(symbols.render(_)).mkString(s"$name[", ",", "]")
-        other.foreach(_.left.foreach(instances(inst) = _))
-        val _ = instance(inst)(function(decls(name), sigma, bounds, inst))
-        all(args, sc)(as => bind(Rhs.Call(inst, as, runtime = false), t, sc)(k))
+      case _ =>
+        /** The callee, its hidden arguments, and the bounds to build it at if it is an instance. */
+        val (callee, ws, at) = version match
+          case Some(Right((keyed, ws))) =>
+            specialised(name, keyed.map(_._2)) match
+              case Some(key) =>
+                /** The clone: this function lowered again at the key's types (Rule CM5.1). */
+                typeClones(s"$name[$key]") = (name, key)
+                (s"$name[$key]", Nil, Some(bounds ++ keyed.filter((d, _) => TypeOps.anonymous(d))))
+              case None => (name, ws, None)
+          case other =>
+            val anonymousArgs = declared.zip(argTypes).collect { case (d, a) if TypeOps.anonymous(d) => a }
+            val shown = if typeArgs.isEmpty && other.isDefined then anonymousArgs else typeArgs
+            val inst = if shown.isEmpty then name else shown.map(symbols.render(_)).mkString(s"$name[", ",", "]")
+            other.foreach(_.left.foreach(instances(inst) = _))
+            (inst, Nil, Some(bounds))
+        at.foreach(b => instance(callee)(function(decls(name), sigma, b, callee)))
+        all(args, sc)(as => bind(Rhs.Call(callee, ws ++ as, runtime = false), t, sc)(k))
 
   /** That no static table among the hidden arguments `pairs` has a null entry ([[Tables.unbuilt]])
     * where the callee's code calls one, or why: such a call then goes to an instance.
@@ -382,11 +406,22 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
       yield s"`${symbols.render(t)}` has no `${symbols(cap).name}.$m` the backend builds"
     missing.headOption.toLeft(())
 
-  /** In baseline mode, for a polymorphic function `name` with type parameters `params`, declared
-    * parameter types `declared` and result type `ret`: its baseline version (Rule CM3.1), built once
-    * under its own name, or why it has none; `None` in the default mode and for a monomorphic
-    * function. With the version come its type parameters that are not phantom, each keyed by
-    * itself, or, for an implicit one, by the anonymous bound it stands for.
+  /** Whether a call site of the code being lowered, which asks for baseline version `of` at the
+    * type arguments `types`, calls the clone for them: if they are all known, the site requests
+    * the clone (Rule CM5.4), and it calls it if the key is chosen. The key is the types' text.
+    */
+  protected def specialised(of: String, types: List[Type]): Option[String] =
+    Option.when(types.nonEmpty && types.forall(typeParamsIn(_).isEmpty))(types.map(symbols.render(_)).mkString(","))
+      .flatMap { key =>
+        requests += Request(owner.value, of, key)
+        Option.when(chosen((of, key)))(key)
+      }
+
+  /** For a polymorphic function `name` with type parameters `params`, declared parameter types
+    * `declared` and result type `ret`: its baseline version (Rule CM3.1), built once under its own
+    * name, or why it has none; `None` for a monomorphic function. With the version come its type
+    * parameters that are not phantom, each keyed by itself, or, for an implicit one, by the
+    * anonymous bound it stands for.
     *
     * An implicit type parameter stands for each distinct anonymous bound among `declared` and
     * `ret` (`is Folding of String`): a reserved type variable, substituted for the bound as the
@@ -439,7 +474,7 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
       }
     val polymorphic = params.nonEmpty || declared.exists(TypeOps.anonymous)
     def version = if resultImplicit then build(true).orElse(build(false)) else build(false)
-    Option.when(baseline && polymorphic)(building.get(name).fold(tried.getOrElseUpdate(name, version))(Right(_)))
+    Option.when(polymorphic)(building.get(name).fold(tried.getOrElseUpdate(name, version))(Right(_)))
 
   /** A lambda becomes a code function taking the closure first; its captures ([[closure]]) are
     * loaded from the closure on entry.
@@ -460,12 +495,13 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
   /** A closure over `body`: a code function taking the closure first, then `params`. Its captures
     * ([[captures]]) are loaded from the closure on entry.
     */
-  protected def closure(params: List[Var], body: Expr, ret: CType)(k: Var => Expr): Expr =
-    val captures = this.captures(body, params)
+  protected def closure(params: List[Var], body: => Expr, ret: CType)(k: Var => Expr): Expr =
+    val code = s"lambda.${ids.next()}"
+    val lowered = owner.withValue(code)(body)
+    val captures = this.captures(lowered, params)
     val env = fresh("env", CType.Boxed)
     val slots = Layout.slots(captures.map(_.ctype), first = Layout.closureCode)
-    val loaded = captures.zip(slots).foldRight(body)((cs, acc) => Expr.Let(cs._1, Rhs.Field(env, cs._2), acc))
-    val code = s"lambda.${ids.next()}"
+    val loaded = captures.zip(slots).foldRight(lowered)((cs, acc) => Expr.Let(cs._1, Rhs.Field(env, cs._2), acc))
     fns(code) = Fn(code, env :: params, ret, loaded)
     val x = fresh("closure", CType.Boxed)
     Expr.Let(x, Rhs.Closure(code, captures), k(x))
@@ -721,9 +757,9 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
     */
   private def handle(h: Trees.HandleExpr, sc: Scope)(k: K): Expr =
     val subjectType = typeOf(h.subject, sc)
-    val body = tail(h.subject, sc)
-    val captures = this.captures(body, Nil)
     val code = s"handle.${ids.next()}"
+    val body = owner.withValue(code)(tail(h.subject, sc))
+    val captures = this.captures(body, Nil)
     fns(code) = Fn(code, captures, ctype(subjectType, h.span), body)
     val v = fresh("subject", ctype(subjectType, h.span))
     val resultType = ctype(typeOf(h, sc), h.span)

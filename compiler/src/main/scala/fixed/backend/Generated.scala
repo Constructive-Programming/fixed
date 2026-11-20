@@ -6,8 +6,8 @@ import fixed.util.Span
 
 /** Members the compiler derives or generates as Core functions: Rule 7.4.a `fold` (through functors
   * per Rule 7.4.a.1), Rule 7.4.b `unfold`, Rule 7.4.c `map`, and for list-shaped data
-  * `Folding.fold`, `length` and `find`. By default one instance is built per data type and
-  * arguments; in baseline mode one version per data type, at its own parameters ([[member]]).
+  * `Folding.fold`, `length` and `find`: one baseline version per data type, at its own parameters,
+  * and clones at known arguments ([[member]]).
   * Arguments that are type parameters make a polymorphic member with hidden witness parameters
   * ([[hidden]]).
   */
@@ -26,12 +26,15 @@ private[backend] trait Generated:
   protected def fieldTypes(data: SymbolId, args: List[Type], variant: SymbolId): List[Type]
   protected def dataOf(t: Type): Option[(SymbolId, List[Type])]
 
-  /** Whether generated members are built once, at their data type's own parameters (Rule CM3.1). */
-  protected def baseline: Boolean
-
-  /** The baseline versions built, and the members still built per instance with the reason (`Lower`). */
+  /** The baseline versions built, the members still built per instance with the reason, and the
+    * clones built with their baseline version and key (`Lower`).
+    */
   def baselines: collection.mutable.Set[String]
   def instances: collection.mutable.Map[String, String]
+  def typeClones: collection.mutable.Map[String, (String, String)]
+
+  /** The key of the clone a call of baseline version `of` at `types` calls, if any (`Lower.specialised`). */
+  protected def specialised(of: String, types: List[Type]): Option[String]
 
   /** `body`, or the first problem it reported, everything it built discarded (`Lower.attempt`). */
   protected def attempt[A](body: => A): Either[String, A]
@@ -46,7 +49,7 @@ private[backend] trait Generated:
   protected def typed(x: Var, t: Type, span: Span): Var
 
   /** A closure over `body` taking `params` (see `Lower.closure`). */
-  protected def closure(params: List[Var], body: Expr, ret: CType)(k: VarK): Expr
+  protected def closure(params: List[Var], body: => Expr, ret: CType)(k: VarK): Expr
 
   /** Rule 7.4.a: `x.fold(on_v1, ..., on_vn)`, recursive fields folded first; Rule 7.4.a.1: a field
     * `F of ... Self` is mapped through `F`'s derived `map`, so the callback receives `F of ... R`.
@@ -225,26 +228,29 @@ private[backend] trait Generated:
       case Type.TypeRef(p, Nil) => symbols(p).kind == fixed.core.SymKind.TypeParam
       case _                    => t == Generated.R || implicitBounds.contains(t)
 
-  /** Generated member `gen(args, r)` of `data`, with the hidden witnesses to call it with. In baseline
-    * mode it is built once, at `data`'s own parameters and [[Generated.R]], and takes the witness of
-    * each of `args` and of `r`; otherwise it is built at `args` and `r` and takes the witnesses of the
-    * type parameters they mention.
+  /** Generated member `gen(args, r)` of `data`, with the hidden witnesses to call it with. Its
+    * baseline version is built once, at `data`'s own parameters and [[Generated.R]], and takes the
+    * witness of each of `args` and of `r`; the clone for known `args` and `r`, if chosen, and an
+    * instance where the baseline version cannot be built, are built at `args` and `r` and take the
+    * witnesses of the type parameters they mention.
     */
   protected def member(data: SymbolId, args: List[Type], r: Option[Type])(
       gen: (List[Type], Type) => String
   ): (String, List[Atom]) =
     lazy val perInstance = (gen(args, r.getOrElse(Type.UnitType)), hidden(args ++ r))
-    if !baseline then perInstance
-    else
-      val own = symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil))
-      attempt(gen(own, Generated.R)) match
-        case Right(name) =>
-          baselines += name
-          (name, (args ++ r).map(witnessAtom))
-        case Left(why) =>
-          val (name, ws) = perInstance
-          if ws.isEmpty then instances(name) = why else report(why)
-          (name, ws)
+    val own = symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil))
+    attempt(gen(own, Generated.R)) match
+      case Right(name) =>
+        baselines += name
+        specialised(name, args ++ r) match
+          case Some(key) =>
+            typeClones(perInstance._1) = (name, key)
+            perInstance
+          case None => (name, (args ++ r).map(witnessAtom))
+      case Left(why) =>
+        val (name, ws) = perInstance
+        if ws.isEmpty then instances(name) = why else report(why)
+        (name, ws)
 
   private def listParam(data: SymbolId, args: List[Type], span: Span): Var =
     typed(fresh("xs", CType.Boxed), Type.TypeRef(data, args), span)

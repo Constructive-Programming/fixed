@@ -12,7 +12,8 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
   * LLVM IR, and LLVM IR plus the C runtime to a native executable through `clang`.
   */
 /** Versioned Core and what M10 inferred about it; `fips` are the `fip fn` instances, `candidates`
-  * the clone candidates of each function instance.
+  * the clone candidates of each function, on both axes, and `typeClones` each clone of the type
+  * axis with the function it is a clone of and its key.
   */
 final case class Analysed(
     fns: List[Fn],
@@ -20,27 +21,27 @@ final case class Analysed(
     demands: DemandTable,
     memory: MemoryTable,
     fips: Map[String, fixed.ast.Trees.Fip],
-    spans: String => Span
+    spans: String => Span,
+    typeClones: Map[String, (String, String)] = Map.empty
 )
 
-/** A build mode (`spec/compilation_model.md` Rule CM5.7), by the clone budget it gives each
-  * function. With `--no-specialise` the budget is 0, so only mandatory versions are built: shared
-  * versions, `fip` bodies with their shared entries, and the clones a `fip` body needs; and
-  * polymorphic code is lowered as baseline versions (Rule CM3.1) where it can be. The default
-  * mode still lowers one instance per type instantiation.
+/** A build mode (`spec/compilation_model.md` Rule CM5.7), by the clone budget `B` it gives each
+  * function (Rule CM5.3). Every mode builds baseline versions (Rule CM3.1) and the mandatory
+  * versions: `fip` bodies with their shared entries, and the clones a `fip` body needs. The
+  * default mode adds clones chosen by score within the reference budget; `--no-specialise` has
+  * budget 0, so it adds none; `--budget <n>` sets the budget for measurement.
   */
-enum Mode(val budget: Int):
-  case Default extends Mode(Versions.budget)
-  case NoSpecialise extends Mode(0)
+final case class Mode(budget: Int)
 
-  /** Whether polymorphic code is lowered as baseline versions: in `NoSpecialise`. */
-  def baseline: Boolean = this == NoSpecialise
+object Mode:
+  val Default: Mode = Mode(Versions.budget)
+  val NoSpecialise: Mode = Mode(0)
 
 object Backend:
 
   /** LLVM IR for `unit`, which must have passed the typer without errors. */
   def compile(unit: CompilationUnit, mode: Mode = Mode.Default): Either[List[Diagnostic], String] =
-    analyse(unit, mode.budget, mode.baseline).flatMap(emit)
+    analyse(unit, mode.budget).flatMap(emit)
 
   /** LLVM IR for analysed Core: the `fip` check, erasure and borrowing, abort tests, reference counting. */
   def emit(a: Analysed): Either[List[Diagnostic], String] =
@@ -53,25 +54,33 @@ object Backend:
   /** Core for `unit`: lowered, then split into the versions demand inference calls for (3.4.M3). */
   def core(unit: CompilationUnit): Either[List[Diagnostic], List[Fn]] = analyse(unit).map(_.fns)
 
-  /** Versioned Core with its demands and memory facts (3.4.M2–M4); `budget` is each function's
-    * clone budget (`spec/compilation_model.md` Rule CM5.3); with `baseline`, polymorphic code is
-    * lowered as baseline versions where it can be (Rule CM3.1).
+  /** Versioned Core with its demands and memory facts (3.4.M2–M4): baseline versions, clones of the
+    * type axis ([[Specialise]]), then shared versions and clones of the ownership axis
+    * ([[Versions]]), within one clone budget `budget` per function (`spec/compilation_model.md`
+    * Rule CM5.3). A clone of the type axis that no call reaches once the ownership axis is chosen is
+    * reported as `unused`.
     */
-  def analyse(
-      unit: CompilationUnit,
-      budget: Int = Versions.budget,
-      baseline: Boolean = false
-  ): Either[List[Diagnostic], Analysed] =
-    val lower = Lower(unit, baseline)
-    lower.program.map { fns =>
+  def analyse(unit: CompilationUnit, budget: Int = Versions.budget): Either[List[Diagnostic], Analysed] =
+    Specialise(unit, budget).map { s =>
+      val (lower, fns) = (s.lower, s.fns)
       val render = (t: fixed.core.Type) => unit.symbols.render(t)
       val (demands, table) = Demands.analyse(lower, fns, render)
       val byKey = Demands.typesByKey(lower, render)
       val copy = (k: String, parts: Set[Need.Part]) => byKey.get(k).flatMap(lower.copy(_, parts))
-      val versions = Versions(demands, table, fns, copy, lower.fips.contains, budget)
+      val typeClones = lower.typeClones.toMap
+      val versions = Versions(demands, table, fns, copy, lower.fips.contains, budget, typeClones, s.spent)
       val all = versions.run() ++ lower.functions.filter(_.name.contains(".copy["))
+      val present = all.map(_.name).toSet
+      val cloneNamed = typeClones.map((c, k) => k -> c)
+      val typeAxis = s.candidates.map((f, cs) =>
+        f -> cs.map(c =>
+          if c.reason.isEmpty && !cloneNamed.get((f, c.key)).exists(present) then c.copy(reason = "unused") else c
+        )
+      )
+      val candidates = Core.merge(typeAxis, versions.candidates, Nil)(_ ++ _).view.mapValues(_.sortBy(_.key)).toMap
       val spans = (v: String) => lower.spans.getOrElse(v, Span.NoSpan)
-      Analysed(all, versions.candidates, table, Memory(all, table, spans).run(), lower.fips.toMap, spans)
+      val memory = Memory(all, table, spans).run()
+      Analysed(all, candidates, table, memory, lower.fips.toMap, spans, typeClones)
     }
 
   /** Hand-built Core with no source types (tests): its versions, demands and memory facts. */
