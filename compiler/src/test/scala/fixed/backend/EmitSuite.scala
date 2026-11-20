@@ -337,6 +337,14 @@ class EmitSuite extends munit.FunSuite:
       "    Console.print_line(shown(\"c\".concat(\"d\")))\n"
     val _ = check("captured_witness", src, "7\ncd\n")
 
+  test("an `is Ordering` result is the prelude's Order, folded by variant"):
+    val src = header + "fn lo() -> is Ordering = Ordering.lt\n\nfn same() -> is Ordering = Ordering.eq\n\n" +
+      "fn hi() -> is Ordering = Ordering.gt\n\nfn main() -> () with Console =\n" +
+      "    Console.print_line(lo().fold(() -> \"lt\", () -> \"eq\", () -> \"gt\"))\n" +
+      "    Console.print_line(same().fold(() -> \"lt\", () -> \"eq\", () -> \"gt\"))\n" +
+      "    Console.print_line(hi().fold(() -> \"lt\", () -> \"eq\", () -> \"gt\"))\n"
+    val _ = check("order", src, "lt\neq\ngt\n")
+
   test("two parameters with one anonymous bound run at u8 with String and at u8 with u8"):
     val _ = check("unshared", BaselineSuite.unshared, "7xy\n12\n")
 

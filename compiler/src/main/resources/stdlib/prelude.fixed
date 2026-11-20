@@ -25,6 +25,11 @@ data Nat:
     Zero
     Succ(pred: Nat)
 
+data Order:
+    Less
+    Equal
+    Greater
+
 cap Functor:
     fn map(f: Part -> B) -> Self of B
 
@@ -161,6 +166,11 @@ List satisfies Clone
 Maybe satisfies Clone
 Nat satisfies Clone
 Tuple satisfies Clone
+Order satisfies Clone
+Order satisfies Ordering:
+    Less as lt
+    Equal as eq
+    Greater as gt
 Tuple satisfies Pair:
     Tuple as pair
 bool satisfies Boolean:

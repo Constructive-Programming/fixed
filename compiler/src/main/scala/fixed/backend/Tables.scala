@@ -222,12 +222,18 @@ object Tables:
   private val arithmetic =
     Map("add" -> PrimOp.Add, "sub" -> PrimOp.Sub, "mul" -> PrimOp.Mul, "div" -> PrimOp.Div, "rem" -> PrimOp.Rem)
 
-  /** Members of the language the backend builds no entry for yet: `compare` needs a data type that
-    * satisfies `Ordering`, and the others are not derived (`find` only for list-shaped data).
+  /** Members of the language the backend builds no entry for yet: `compare`, whose result is the
+    * prelude's `Order` (P6 D17), and the others, which are not derived (`find` only for list-shaped
+    * data).
     */
   private val unbuilt = Set("compare", "fold_right", "head", "tail", "find")
 
-  /** The hidden entries every table of a capability that extends `Ord` ends with (plan §2). */
+  /** The hidden entries every table of a capability that extends `Ord` ends with (plan §2): the
+    * comparison operators. They mean what `compare` means through `Order`: `lt(a, b)` is
+    * `a.compare(b)` being `Order.Less`, `le(a, b)` its not being `Order.Greater`. For floats this
+    * fixes `compare`: `Less` iff ordered-less, `Equal` iff ordered-equal, else `Greater` (a NaN on
+    * either side is `Greater`), as the `fcmp olt` / `ole` entries compute.
+    */
   private val ordEntries = List("lt", "le")
 
   /** The canonical, frozen member order of capability `cap`'s tables: its own members in

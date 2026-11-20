@@ -539,6 +539,23 @@ class TyperSuite extends munit.FunSuite:
     assertEquals(codes(typedUnit(caps + "cap C extends A + B\n")), List(DiagCode.T013))
     assertEquals(typedUnit(caps + "cap C extends A + B:\n    fn go -> u64\n").diags, Nil)
 
+  test("P6 D17: the prelude's Order satisfies Ordering: compare results fold, Ordering.gt is Order.Greater"):
+    val s = typedUnit(
+      "fn lesser(a: u64, b: u64) -> bool = a.compare(b).fold(() -> true, () -> false, () -> false)\n" +
+        "fn lo() -> is Ordering = Ordering.lt\nfn same() -> is Ordering = Ordering.eq\nfn hi() -> is Ordering = Ordering.gt\n"
+    )
+    assertEquals(s.diags, Nil)
+    assertEquals(
+      s.constructors.map((_, d, v) => s"${s.symbols(d).name}.$v").sorted,
+      List("Order.Equal", "Order.Greater", "Order.Less")
+    )
+
+    /** A program's own Ordering satisfier now stands beside Order: an abstract result must name it. */
+    val cmp = "data Cmp:\n    Lo\n    Mid\n    Hi\nCmp satisfies Ordering:\n    Lo as lt\n    Mid as eq\n    Hi as gt\n"
+    assertEquals(codes(typedUnit(cmp + "fn f() -> is Ordering = Ordering.gt\n")), List(DiagCode.T011))
+    val c = typedUnit(cmp + "fn g() -> Cmp = Ordering.gt\n")
+    assertEquals((c.diags, c.constructors.map((_, _, v) => v)), (Nil, List("Hi")))
+
   test("3.1.M3: the stdlib's own satisfies declarations pass the checks"):
     val (table, _) = Namer.index(Parser.parse(SourceFile.fromString("<empty>", "")).tree)
     assertEquals(Declarations.check(TyperState(table), Stdlib.prelude).finish.diags, Nil)
