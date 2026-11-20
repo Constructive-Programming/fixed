@@ -14,11 +14,11 @@ class VersionSuite extends munit.FunSuite:
     "fn first(xs: L) -> u64 =\n    match xs:\n        L.C(h, _) => h\n        L.E => 0\n\n"
 
   /** The analysed Core of `code` whose `main` prints `body`, with clone budget `budget`. */
-  private def analyse(code: String, body: String, budget: Int = Versions.budget): Analysed =
+  private def analyse(code: String, body: String, budget: Int = Versions.budget, ownership: Boolean = true): Analysed =
     val src = code + s"fn main() -> () with Console =\n    Console.print_line(($body).show())\n"
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString("<unit>", src)))
     assert(!unit.hasErrors, unit.diagnostics)
-    Backend.analyse(unit, budget).fold(ds => fail(s"lowering failed: $ds"), identity)
+    Backend.analyse(unit, budget, ownership).fold(ds => fail(s"lowering failed: $ds"), identity)
 
   private def core(code: String, body: String): List[Fn] = analyse(code, body).fns
 
@@ -129,6 +129,15 @@ class VersionSuite extends munit.FunSuite:
     )
     val names = a.fns.map(_.name).toSet
     assert(a.fns.forall(f => Core.callees(f.body).forall(g => names(g) || !g.contains("#"))), names)
+
+  test("with ownership clones off, a fip body still forces its clones; other candidates say why not"):
+    val code = list + "fn pass(xs: L) -> L = bump(xs)\n\nfip fn outer(xs: L) -> L = pass(xs)\n\n" +
+      "fn inc(xs: L) -> L =\n    match xs:\n        L.C(h, t) => L.C(h + 2, t)\n        L.E => L.E\n\n"
+    val a = analyse(code, "first(outer(L.C(1, L.E))) + first(inc(L.C(2, L.E)))", ownership = false)
+    assertEquals(FipCheck(a), Nil)
+    assert(calls(a.fns, "outer").contains(clone(a.fns, "pass")), calls(a.fns, "outer"))
+    assert(calls(a.fns, "main").contains("inc"), calls(a.fns, "main"))
+    assertEquals(a.candidates("inc").map(_.reason), List("no ownership clones"))
 
   test("a fip body forces the clones it requests, uncharged, so it passes its check with no budget"):
     val code = list + "fn pass(xs: L) -> L = bump(xs)\n\nfip fn outer(xs: L) -> L = pass(xs)\n\n"

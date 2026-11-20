@@ -306,6 +306,17 @@ class EmitSuite extends munit.FunSuite:
     assertEquals(sites(counts(Mode.Default)).init, List(4L, 0L, 0L))
     assertEquals(sites(counts(Mode.NoSpecialise)).init, List(0L, 4L, 0L))
 
+    /** Ownership clones off: the clone of the type axis stays, so no witness call; every reuse tests. */
+    val typeOnly = Mode.Default.copy(ownership = false)
+    val off = ir("map_reuse", src, typeOnly)
+    assert(
+      off.contains("@\"fx_u_List of u64.map[u64]\"") && !off.contains("#x[") && !off.contains("fx_reuse_excl("),
+      off
+    )
+    val (code, out, err) = run("map_reuse_typeonly", src, "", typeOnly)
+    assertEquals((code, out), (0, "12\n"), err)
+    assertEquals(sites(Native.counters(err)), List(0L, 4L, 0L, 0L))
+
   test("one baseline version of a generic function runs at String and at i8, freeing every String (Rule CM3.1)"):
     val src = BaselineSuite.generic
     val counts = check("generic", src, "cd\n-100\nxy-7\n")

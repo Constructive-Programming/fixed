@@ -2,7 +2,8 @@
 # Build the runtime benchmarks, run each one RUNS times, check each result against
 # bench/runtime/<program>.expected, and write docs/baselines/runtime-<date>-<mode>.md
 # (docs/plans/phase-4.0-backend-slice.md §4.9). NOTE, if set, replaces the description paragraph.
-# MODE is the build mode (spec/compilation_model.md Rule CM5.7): default or no-specialise.
+# MODE is the build mode (spec/compilation_model.md Rule CM5.7): default, no-specialise, or
+# no-ownership-clones (type-axis clones only, `--no-ownership-clones`, to compare the two axes).
 # B, if set, is the clone budget of Rule CM5.3 (`--budget B`); the report name then ends in -B<n>.
 # Usage: [NOTE=...] [MODE=...] [B=...] bench/runtime/run.sh [RUNS]   (default 5). Needs sbt and clang on PATH.
 set -euo pipefail
@@ -16,7 +17,8 @@ mode=${MODE:-default}
 case $mode in
   default) flag="" ;;
   no-specialise) flag="--no-specialise" ;;
-  *) echo "MODE must be default or no-specialise" >&2; exit 2 ;;
+  no-ownership-clones) flag="--no-ownership-clones" ;;
+  *) echo "MODE must be default, no-specialise or no-ownership-clones" >&2; exit 2 ;;
 esac
 if [ -n "${B:-}" ]; then
   [[ $B =~ ^[0-9]+$ ]] || { echo "B must be a non-negative integer" >&2; exit 2; }

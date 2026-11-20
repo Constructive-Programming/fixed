@@ -15,7 +15,9 @@ import fixed.util.{Diagnostic, Reporter, SourceFile}
   *     (`spec/memory_management.md` §19).
   *   - `--no-specialise`, in any position, builds only mandatory versions
   *     (`spec/compilation_model.md` Rule CM5.7); `--budget <n>`, in any position, sets the clone
-  *     budget of Rule CM5.3 instead of the reference value, for measurement.
+  *     budget of Rule CM5.3 instead of the reference value, for measurement;
+  *     `--no-ownership-clones`, in any position, keeps the clones of the type axis and builds
+  *     none of the ownership axis but those a `fip` body needs, for measurement.
   *
   * Exit codes (implementation plan, "Agent-Friendly CLI"): 0 success, 1 compile error, 2 usage,
   * 3 build failure.
@@ -32,7 +34,8 @@ object Main:
       case Nil | ("compile" | "ship") :: _ =>
         Console.err.println(
           "usage: fixed <file.fixed>... | fixed compile|ship <file.fixed> -o <out>" +
-            " | fixed compile <file.fixed> --explain-memory [--format json]; --no-specialise or --budget <n> anywhere"
+            " | fixed compile <file.fixed> --explain-memory [--format json];" +
+            " --no-specialise, --budget <n> or --no-ownership-clones anywhere"
         )
         sys.exit(2)
       case paths =>
@@ -42,11 +45,12 @@ object Main:
 
   /** The build mode `args` ask for, and the other arguments. */
   private[fixed] def modeOf(args: List[String]): (Mode, List[String]) =
-    val (flag, others) = args.partition(_ == "--no-specialise")
+    val (flags, others) = args.partition(a => a == "--no-specialise" || a == "--no-ownership-clones")
     val at = others.indexOf("--budget")
     val budget = if at < 0 then None else others.lift(at + 1).flatMap(_.toIntOption).filter(_ >= 0)
     val rest = if budget.isDefined then others.patch(at, Nil, 2) else others
-    (if flag.nonEmpty then Mode.NoSpecialise else budget.fold(Mode.Default)(Mode(_)), rest)
+    val mode = if flags.contains("--no-specialise") then Mode.NoSpecialise else budget.fold(Mode.Default)(Mode(_))
+    (mode.copy(ownership = !flags.contains("--no-ownership-clones")), rest)
 
   /** Check `file`, lower it to LLVM IR and hand the IR to `use`; exit code 1 on any error. */
   private def backend(file: String, mode: Mode)(use: String => Int): Int =
@@ -64,7 +68,7 @@ object Main:
   /** Print the memory report of `file`; exit code 1 on any error. */
   private def explain(file: String, json: Boolean, mode: Mode): Int =
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromPath(file)))
-    Option.when(!unit.hasErrors)(Backend.analyse(unit, mode.budget)) match
+    Option.when(!unit.hasErrors)(Backend.analyse(unit, mode.budget, mode.ownership)) match
       case Some(Right(a)) =>
         println(if json then MemoryReport.json(unit, a) else MemoryReport.text(unit, a))
         0

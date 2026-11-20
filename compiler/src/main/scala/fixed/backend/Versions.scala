@@ -76,6 +76,8 @@ final case class Candidate(key: String, removed: Int, weight: Long, reason: Stri
   * @param typeClones each clone of the type axis, with the function it is a clone of and its key
   * @param spent per function, what its clones of the type axis are charged
   * @param known whether a type key names a type without type parameters ([[construct]])
+  * @param ownership whether clones of the ownership axis are chosen (`--no-ownership-clones`); the
+  *   mandatory ones a `fip` body forces are built either way
   */
 final class Versions(
     d: Demands,
@@ -86,7 +88,8 @@ final class Versions(
     budget: Int,
     typeClones: Map[String, (String, String)] = Map.empty,
     spent: Map[String, Int] = Map.empty,
-    known: String => Boolean = _ => false
+    known: String => Boolean = _ => false,
+    ownership: Boolean = true
 ):
   private type Mask = List[Set[Option[Need.Part]]]
   private type Key = (String, Mask)
@@ -176,7 +179,9 @@ final class Versions(
     val size = Core.lets(byName(f).body).size
     val open = weights.keys.filter(k => family(k._1) == f && !clones(k) && !unused(k)).toList
     val already = clones.count(c => family(c._1) == f && !forced(c)) * size + spent.getOrElse(f, 0)
-    val (chosen, why) = Versions.rank(open, removed, weights, keyText, size, already, budget)
+    val (chosen, why) =
+      if ownership then Versions.rank(open, removed, weights, keyText, size, already, budget)
+      else (Nil, open.map(_ -> "no ownership clones").toMap)
     reasons ++= why
     chosen
 

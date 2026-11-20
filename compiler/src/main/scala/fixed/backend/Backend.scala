@@ -29,9 +29,11 @@ final case class Analysed(
   * function (Rule CM5.3). Every mode builds baseline versions (Rule CM3.1) and the mandatory
   * versions: `fip` bodies with their shared entries, and the clones a `fip` body needs. The
   * default mode adds clones chosen by score within the reference budget; `--no-specialise` has
-  * budget 0, so it adds none; `--budget <n>` sets the budget for measurement.
+  * budget 0, so it adds none; `--budget <n>` sets the budget for measurement;
+  * `--no-ownership-clones` keeps the clones of the type axis and chooses none of the ownership
+  * axis, so that the two can be compared.
   */
-final case class Mode(budget: Int)
+final case class Mode(budget: Int, ownership: Boolean = true)
 
 object Mode:
   val Default: Mode = Mode(Versions.budget)
@@ -41,7 +43,7 @@ object Backend:
 
   /** LLVM IR for `unit`, which must have passed the typer without errors. */
   def compile(unit: CompilationUnit, mode: Mode = Mode.Default): Either[List[Diagnostic], String] =
-    analyse(unit, mode.budget).flatMap(emit)
+    analyse(unit, mode.budget, mode.ownership).flatMap(emit)
 
   /** LLVM IR for analysed Core: the `fip` check, erasure and borrowing, abort tests, reference counting. */
   def emit(a: Analysed): Either[List[Diagnostic], String] =
@@ -60,7 +62,11 @@ object Backend:
     * Rule CM5.3). A clone of the type axis that no call reaches once the ownership axis is chosen is
     * reported as `unused`.
     */
-  def analyse(unit: CompilationUnit, budget: Int = Versions.budget): Either[List[Diagnostic], Analysed] =
+  def analyse(
+      unit: CompilationUnit,
+      budget: Int = Versions.budget,
+      ownership: Boolean = true
+  ): Either[List[Diagnostic], Analysed] =
     Specialise(unit, budget).map { s =>
       val (lower, fns) = (s.lower, s.fns)
       val render = (t: fixed.core.Type) => unit.symbols.render(t)
@@ -69,7 +75,8 @@ object Backend:
       val copy = (k: String, parts: Set[Need.Part]) => byKey.get(k).flatMap(lower.copy(_, parts))
       val typeClones = lower.typeClones.toMap
       val known = (k: String) => byKey.get(k).exists(lower.known)
-      val versions = Versions(demands, table, fns, copy, lower.fips.contains, budget, typeClones, s.spent, known)
+      val versions =
+        Versions(demands, table, fns, copy, lower.fips.contains, budget, typeClones, s.spent, known, ownership)
       val all = versions.run() ++ lower.functions.filter(_.name.contains(".copy["))
       val present = all.map(_.name).toSet
       val cloneNamed = typeClones.map((c, k) => k -> c)
