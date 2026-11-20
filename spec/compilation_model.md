@@ -1,8 +1,10 @@
 # Fixed Compilation Model
 
-**Status:** Draft v0.3.1
+**Status:** Draft v0.3.2
 **Specifies:** how Fixed v0.4.4 source becomes code: the baseline version of every function, the travel form and the rest form of a value, immediates, accessors, witnesses, specialisation (clones, budget, score, mandatory cases), build modes, packages and the package ABI, visibility, satisfactions in a link unit, the interface and body tiers, and the application link (choice points, summaries, selection, the lock file, the profile file, clones at link, the type table).
 **Last revised:** 2026-11-20
+
+**Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). No witness travels with an anonymous result: its choice point is bound by symbol, and a requirement's anonymous result is one choice point shared by every implementation (Rules CM4.2, CM4.5). A link unit is an application; a library is not one (Rule CM6.1). The sixth resolution level is removed, and derived satisfactions get no preference (Rule CM6.6).
 
 **Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the table convention is one containment test with a table of examples (Rule CM4.6); an `Inline` value that is not an immediate is copied out before it meets a `ref` witness (Rules CM3.5, CM4.1); new accessor `T.variant` (Rule CM3.7); level 4 of satisfaction resolution, deferred sites (level 5 only) and private satisfactions follow `spec/type_system.md` Rules 8.4 and 8.6.a (Rule CM6.6); the test build's application root (§8); the pool's satisfaction, viability at link and the score cite their owners (Rule CM8.4); the type table has a row for every kind of cell (Rule CM8.8); "descriptor" replaces "header" for the tag and reference map.
 
@@ -217,7 +219,7 @@ A link unit may hold several satisfactions of one pair (Rule CM6.6). Each has it
 - Where an argument is a choice point (Rule CM8.1), the record is static data emitted at link, when the instance becomes known.
 - Where an argument is a type parameter of the code that forms the instance, a baseline version builds the record **on the stack**, in its own frame, from the witnesses it holds. The record lives as long as that frame; a callee that receives it does not keep it beyond the call.
 
-**Results of requirements.** A requirement whose result is an anonymous bound (`compare -> is Ordering`, `get -> is Optional of Part`) follows the first case of Rule CM4.5: the entry returns the witness record with the value.
+**Results of requirements.** A requirement whose result is an anonymous bound (`compare -> is Ordering`, `get -> is Optional of Part`) follows Rule CM4.5: the result is one choice point owned by the requirement, and the entry returns only the value.
 
 ### 4.3 Hidden parameters (Rule CM4.3)
 
@@ -249,19 +251,19 @@ An `of` value parameter (`spec/type_system.md` §7.3) is erased from every value
 
 The signature decides. The body cannot change the calling convention.
 
-- **Anonymous result, `-> is C`.** The result is a choice point owned by the function (Rule CM8.1). The function returns the witness record of the result as a hidden result next to the value. The caller treats the value as opaque and uses it through that witness. Every value the body returns has the type of that one choice point: an abstract constructor call for the result is the choice point, and a body that constructs a concrete data type fixes it.
+- **Anonymous result, `-> is C`.** The result is a choice point owned by the function (Rule CM8.1). No witness is passed or returned. The caller treats the value as opaque and uses it through the choice point's witness, which the link step binds by symbol (Rule CM8.2). Every value the body returns has the type of that one choice point: an abstract constructor call for the result is the choice point, and a body that constructs a concrete data type fixes it.
 - **Named result, `-> R is C`, with `R` in no parameter type.** `R` is an ordinary type parameter. The caller passes its witness (Rule CM4.3). A body that returns a concrete data type where `R` is expected is a type error. An abstract constructor call for `R` stays abstract and is resolved by the caller: at a call site, `R` is a concrete type, a named type parameter of the caller (whose witness is passed on), or else a choice point of the caller (Rule CM8.1).
-- **Requirements.** A requirement whose result is `-> is C` (`compare -> is Ordering`) follows the first case.
+- **Requirements.** A requirement whose result is `-> is C` (`compare -> is Ordering`) owns one choice point, shared by every satisfaction's implementation of it. A call through a capability table therefore knows the type of the result without a witness. An implementation that constructs a concrete data type restricts the candidates of that choice point to that type; two implementations that restrict it to different types leave no viable candidate, which is the link error of Rule CM8.4.
 
 ```
-fn parse(s: String) -> is Optional of u64      // choice point of parse; witness returned
+fn parse(s: String) -> is Optional of u64      // choice point of parse; no witness travels
 fn empty() -> R is Empty                       // caller passes R's witness
     Empty.empty()                              // stays abstract; resolved at the caller
 ```
 
 This also settles `spec/type_system.md` §8.5 against its Rule 8.1.a: an abstract constructor call for an anonymous result is a choice point, which is never "zero matches" while the link unit holds a satisfier; for a named `R` it stays abstract.
 
-The convention is read from the signature, so it is part of the interface tier (Rule CM7.1) and changes only with the signature (Rule CM6.7). A clone, or an importer that holds the body (§7.3), that knows the concrete type of an anonymous result drops the hidden result.
+The convention is read from the signature, so it is part of the interface tier (Rule CM7.1) and changes only with the signature (Rule CM6.7). A clone, or an importer that holds the body (§7.3), that knows the concrete type of an anonymous result uses the value at that type.
 
 The reason: a convention inferred from the body made a body change an ABI change, and made the choice depend on whether the callee happened to see a constructor. A choice point is made once for the program, at link, where the uses are known (§8).
 
@@ -411,7 +413,7 @@ Copying the demanded part of a shared value remains only inside the shared entry
 
 ### 6.1 Package and link unit (Rule CM6.1)
 
-A **package** is the unit of separate compilation and of ABI: a set of source files compiled together, whose compiled form other packages link against without recompiling it. A **link unit** is the set of packages linked into one executable or library. Linking an executable is the **application link** (§8).
+A **package** is the unit of separate compilation and of ABI: a set of source files compiled together, whose compiled form other packages link against without recompiling it. A **link unit** is the set of packages linked into one executable. Linking it is the **application link** (§8). A library is one or more packages and is not a link unit: its choice points that escape (Rule CM8.1) and its deferred satisfaction sites (Rule CM6.6) stay unbound until an application links it.
 
 Inside a package the compiler sees every body, so every call site can request clones (§5.4). Between packages a caller sees only the interface tier (§7.1), unless the callee's package ships the body (§7.3).
 
@@ -466,8 +468,8 @@ Two packages that build the same clone of an imported function, under the same s
 
 A link unit may hold several satisfactions of one pair (`data` type, capability with its `of` arguments). A package may declare a satisfaction for a type and a capability neither of which it declares. Coherence per link unit, which earlier drafts required, is withdrawn.
 
-- **Resolution.** Which satisfaction a site uses is decided by `using`, innermost first, as `spec/type_system.md` Rule 8.4 specifies: at the call site, in a type, at file or package scope, the one satisfaction of the pair in scope (by `use`, by declaration in the site's package, or because it is always in scope), `using` in the application root, the only one in the link unit. Otherwise it is an error. A private satisfaction counts only in its own package (`spec/type_system.md` Rule 8.6.a). Two satisfactions of one pair differ in results, not in speed, so the score, the lock file and declaration order never choose between them.
-- **Deferred sites.** A site in a library that sees (`spec/type_system.md` Rule 8.4) several satisfactions of the pair and has no `using` is not an error when the library is compiled. It is bound at the application link by `using` in the application root (level 5), and the link reports it as a note; level 6 cannot decide it, because the link unit holds every satisfaction the site sees. If level 5 does not give one satisfaction, the link fails with the error of Rule 8.4. A site that sees none is a type error, as before.
+- **Resolution.** Which satisfaction a site uses is decided by `using`, innermost first, as `spec/type_system.md` Rule 8.4 specifies: at the call site, in a type, at file or package scope, the one satisfaction of the pair in scope (by `use`, by declaration in the site's package, or because it is always in scope), `using` in the application root. Otherwise it is an error. A derived satisfaction counts like a declared one, so a pair with a derived and a named satisfaction in scope is ambiguous until a `using` chooses. A private satisfaction counts only in its own package (`spec/type_system.md` Rule 8.6.a). Two satisfactions of one pair differ in results, not in speed, so the score, the lock file and declaration order never choose between them.
+- **Deferred sites.** A site in a library that sees (`spec/type_system.md` Rule 8.4) several satisfactions of the pair and has no `using` is not an error when the library is compiled. It is bound at the application link by `using` in the application root (level 5), and the link reports it as a note. If level 5 does not give one satisfaction, the link fails with the error of Rule 8.4. A site that sees none is a type error, as before.
 - **The satisfaction is part of the type.** For a bound declared on a type's own parameter (`data Tree of K is Ord`), the elaborated type records the satisfaction (`spec/type_system.md` Rule 8.4.a). This is what keeps a set built under one order from being searched under another, without a record of the satisfaction in the value. The witness record of the instance carries that satisfaction's tables (Rule CM4.2), and the symbols of its clones name it (Rule CM6.5).
 
 Satisfactions the compiler derives (`spec/type_system.md` §7.4) or builds in (§6.6) are determined by the `data` declaration alone. Every package derives the same one, so they have one identity and the linker keeps one copy of the table (Rule CM6.5).
@@ -605,7 +607,7 @@ At the application link, the link step adds vectors along the edges, from each c
 
 For each choice point the link step selects one candidate.
 
-- **Candidates.** The satisfactions of the choice point's bound set in the link unit that count at the choice point (`spec/type_system.md` Rule 8.6.a), and the built-in candidates of `spec/type_system.md` §6.6, which count as declared in the standard library package (Rule 6.5.5). The selector chooses freely among satisfactions of different data types. Among several satisfactions of one pair it does not choose: the one that enters the pool is resolved at the site that created the choice point, by levels 1–4 of `spec/type_system.md` Rule 8.4 there; if that leaves several, by levels 5–6 at link; if that gives none, the link fails with the error of Rule 8.4 (`spec/type_system.md` §6.5.2).
+- **Candidates.** The satisfactions of the choice point's bound set in the link unit that count at the choice point (`spec/type_system.md` Rule 8.6.a), and the built-in candidates of `spec/type_system.md` §6.6, which count as declared in the standard library package (Rule 6.5.5). The selector chooses freely among satisfactions of different data types. Among several satisfactions of one pair it does not choose: the one that enters the pool is resolved at the site that created the choice point, by levels 1–4 of `spec/type_system.md` Rule 8.4 there; if that leaves several, by level 5 at link; if that gives none, the link fails with the error of Rule 8.4 (`spec/type_system.md` §6.5.2).
 - **Viability.** A candidate that fails a cost prop of the requirements of its capabilities is not viable (`spec/cost.md` Rule CT8.1, which also says what this check at link catches that the package compile did not). Nor is a candidate whose variant fields refine a requirement parameter (`spec/type_system.md` Rule 8.1.a) so that an argument of one of the choice point's abstract constructor calls is rejected; the argument types come from the summaries (Rule CM8.3). Zero viable candidates is a link error, which names the choice point and the candidate that came closest.
 - **Score.** The score of `spec/type_system.md` Rule 6.5.4, with usage from the vector of Rule CM8.3 and cost from measurements (Rule CM8.6) where they exist, and otherwise the fallback of `spec/cost.md` Rule CT8.2.
 - **Disambiguation.** The first rule that decides, in the order of `spec/type_system.md` Rule 6.5.5: a pin written by the user in the lock file, if the pinned candidate is viable; the choice recorded in the lock file, while its score is within ε of the best; the highest score; the satisfaction declared in the capability's own package; declaration order, then qualified name.

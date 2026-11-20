@@ -1,8 +1,10 @@
 # Fixed Quantities (QTT)
 
-**Status:** Draft v0.6.1
+**Status:** Draft v0.6.2
 **Specifies:** quantity and demand inference for Fixed v0.4.4 source.
 **Last revised:** 2026-11-20
+
+**Changes from v0.6.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule Q5.13.a: fork site 3 takes facts-lane props (`proved` or `assumed`); a closure carries a bit for captured evidence, and a fork site that would call a function-typed parameter tests it.
 
 **Changes from v0.6.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): Rule Q4.1.e cites the table convention of `spec/compilation_model.md` Rule CM4.6 instead of restating it, and an effect operation has one pointer; a use in `inspect` or `trace` counts as an ordinary use where diagnostics are kept (§4); §4 and Rule Q5.5 say where a `proved` status obtained by enumeration in the test build reaches; wrong references to P7.9 and §6.2 corrected.
 
@@ -194,7 +196,7 @@ A function parameter's quantity is the sum of its usages in the body, taken unde
 ```
 fn double(x: i64) -> i64 = x + x          // x used twice → quantity ω
 fn identity(x: i64) -> i64 = x            // x used once → quantity 1
-fn const_zero(x: i64) -> i64 = 0          // x used zero times → quantity 0 (warning unless _x)
+fn constZero(x: i64) -> i64 = 0          // x used zero times → quantity 0 (warning unless _x)
 ```
 
 The inferred quantity is part of the function's signature. What the caller must hand over is the parameter's demand (Rule Q4.1.c), not its quantity: `identity` demands `own` of `x`, and `double` demands `read` of a scalar `x`. For unboxed scalars only `0` and non-`0` produce different code.
@@ -227,7 +229,7 @@ Same as Rule Q5.2: a lambda parameter's quantity is the sum of its usages in the
 
 ```
 let inc = (x: i64) -> x + 1        // x is quantity 1 within inc's body
-let by_two = (x: i64) -> x + x     // x is quantity ω
+let byTwo = (x: i64) -> x + x     // x is quantity ω
 ```
 
 ### 5.7 Captures by closures (Rule Q5.7)
@@ -311,9 +313,9 @@ Fixed has no surface syntax for parallelism. The compiler may evaluate independe
 2. **Tree unfold.** An auto-derived `unfold` (Rule 7.4.b) whose step returns a variant with two or more recursive seeds. The sub-unfolds of those seeds are the lanes. Required: the step has an empty effect row.
 3. **Sequence fold over a proved associative operation.** A `fold(init, step)` over a value with one recursive position, where `step` has the form `(acc, x) -> op(acc, g(x))` with `op: (R, R) -> R`, all effect rows are empty, and props with status `proved` (`spec/properties.md` Rule P7.7) state that `op` is associative and that `init` is its identity. The sequence is split into contiguous runs. Each run is a lane, and the lane results are combined with `op` in sequence order.
 
-Sites 1 and 2 need no props. Each lane computes exactly the sub-result that sequential evaluation computes, and the node function combines the sub-results in the same order. Site 3 changes the association order, so its result differs from the sequential one unless `op` is associative. That is why it needs `proved` props: a `tested` or `assumed` prop does not qualify (Rule P7.7.c). The props come from the static prover, which runs before this pass (§4); a `tested` status, which only the test build can give, could not arrive in time and is excluded from the facts lane in any case (`spec/properties.md` Rule P7.8). Floating-point addition is the standard case that is rejected: it is not associative, so the prop is never `proved` and the fold stays sequential.
+Sites 1 and 2 need no props. Each lane computes exactly the sub-result that sequential evaluation computes, and the node function combines the sub-results in the same order. Site 3 changes the association order, so its result differs from the sequential one unless `op` is associative. That is why it needs props of the facts lane, `proved` or `assumed`: a `tested` prop does not qualify (Rule P7.7.c). The props come from the static prover, which runs before this pass (§4); a `tested` status, which only the test build can give, could not arrive in time and is excluded from the facts lane in any case (`spec/properties.md` Rule P7.8). Floating-point addition is the standard case that is rejected: it is not associative, so the prop is never `proved`, and the fold stays sequential unless the programmer writes the assumption (`assume prop`, `spec/properties.md` Rule P7.7) and so accepts a result that may differ from the sequential one.
 
-An effect row is a typing fact (`spec/effects.md` §5), not a prop, so "pure" needs no verification status. A callback that reaches a `fold` through an unannotated function type (`spec/effects.md` Rule E5.5.a) keeps its own non-empty row and carries captured evidence (Rule E7.8), so its `fold` is not a fork site and captured evidence never crosses into a lane.
+An effect row is a typing fact (`spec/effects.md` §5), not a prop, so "pure" needs no verification status. A callback that reaches a `fold` through an unannotated function type (`spec/effects.md` Rule E5.5.a) has an empty row in that type and may still carry captured evidence (Rule E7.8), so the type cannot tell whether calling it is pure. A closure therefore carries one bit, set when it holds captured evidence. A fork site whose lanes would call a function-typed parameter tests the bit before it forks and runs sequentially when the bit is set; in a clone where the callback is known the test is decided at compile time. Captured evidence never crosses into a lane.
 
 **Rule Q5.13.b (quantities across lanes).** Every lane runs, so a free binding's contribution is the **sum** (`+`, §3.1) of its usages over the lanes, as for sequencing (Rule Q5.10):
 
@@ -386,15 +388,15 @@ A handler clause body for a `linear effect` (per `spec/effects.md` §3.5) is its
 Consequence: an exclusively owned outer value captured by a linear-effect clause body **stays exclusive** there, because the clause runs at most once (Rule Q5.7 with `q' = 1`). The capture's contribution to the outer scope's usage of that binding is the join of (clause-body usage) and (other-paths usage), bounded above by 1.
 
 ```
-let lock_token = make_token()        // quantity 1
+let lockToken = makeToken()        // quantity 1
 handle (do: ... Lock.release):
     Lock.release =>
-        consume(lock_token)          // captured from outer scope — OK under Rule Q7.4
+        consume(lockToken)          // captured from outer scope — OK under Rule Q7.4
         resume(())
-// total quantity of lock_token across the handle block: 1 (consumed in the clause)
+// total quantity of lockToken across the handle block: 1 (consumed in the clause)
 ```
 
-A non-linear clause body may run once per operation performed, so the same capture there is downgraded to `own` (Rule Q5.7): `lock_token` becomes shared and `consume` gets the shared version. This is not an error (Rule Q7.1); it costs the in-place reuse.
+A non-linear clause body may run once per operation performed, so the same capture there is downgraded to `own` (Rule Q5.7): `lockToken` becomes shared and `consume` gets the shared version. This is not an error (Rule Q7.1); it costs the in-place reuse.
 
 If OQ-Q5 closes the other way (effect rows do not participate in QTT quantity), Rule Q7.4 is withdrawn and every handler clause downgrades its exclusive captures.
 
@@ -427,10 +429,10 @@ At a call, each binding contributes according to where its **value** goes, not w
 For quantities, the same rule applies: an argument expression is evaluated once, so a binding used inside a composite argument is counted once, while a binding passed as itself, and a lambda argument's captures, are scaled by the parameter's quantity. The v0.3 rule scaled every binding inside an argument, which in a strict language counts work that never happens twice and contradicted §10.1.
 
 ```
-fn pair_double(x: String) -> String = x ++ x     // x: own (kept twice)
+fn pairDouble(x: String) -> String = x ++ x     // x: own (kept twice)
 
 fn caller(y: String) -> String =
-    pair_double(y)                                // y passed as itself: own
+    pairDouble(y)                                // y passed as itself: own
 ```
 
 ### 9.2 Evaluation order (Rule Q9.2)
@@ -459,7 +461,7 @@ fn bump(xs: List of u64) -> List of u64 =
 fn main() -> () with Console =
     let a = upto(3)                                 // fresh: exclusively owned
     let b = bump(a)                                 // a is used again below: shared version
-    Console.print_line(a.show())
+    Console.printLine(a.show())
 ```
 
 Had `main` printed `a` before calling `bump`, the call would be `a`'s last use and `a` would still be exclusively owned. If `a` is `Heap`, the shared version's `rc == 1` test succeeds and `a`'s cell is overwritten in place. If `a` is `Frame`, the call requests the exclusive version (Rule Q9.3.a), which overwrites the cell if it was built.
@@ -474,10 +476,10 @@ An argument meets an `exclusive` demand only if no other argument or capture of 
 
 ## 10. Worked examples (from `examples/*.fixed`)
 
-### 10.1 `examples/01_basics.fixed` — `fib_iter`
+### 10.1 `examples/01_basics.fixed` — `fibIter`
 
 ```
-fn fib_iter(n: N is Numeric) -> N =
+fn fibIter(n: N is Numeric) -> N =
     fn go(i: N, a: N, b: N) -> N =
         if i == 0:
             a                           // a used once
@@ -517,7 +519,7 @@ This is the canonical case where QTT's erasure makes phantom-typed state machine
 ```
 data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
     Bounded(value: N)
-    prop in_range: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
+    prop inRange: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
 
 let x: Bounded of (i64, 0, 10) = Bounded.Bounded(5)
 let result = x.value + x.lo                     // x.value: runtime read; x.lo: compile-time constant
@@ -538,7 +540,7 @@ let result = x.value + x.lo                     // x.value: runtime read; x.lo: 
 - **OQ-Q4 — Quantity polymorphism.** A truly generic `id : T -> T` could be quantity-polymorphic — the parameter's quantity equals the call site's. Idris 2 has limited quantity polymorphism; Fixed has so far inferred everything. The shared baseline with exclusive clones (Rule Q9.3) gives ownership polymorphism without syntax; whether anything beyond that is needed waits for benchmark code.
 - ~~**OQ-Q7 — Version cap.**~~ Closed in v0.5. There is no version cap: exclusive versions are clones under the one size budget of `spec/compilation_model.md` Rule CM5.3, and a function larger than the budget has only its shared version. The budget's value is to be measured (OQ-CM3).
 
-- **OQ-Q5 — Effect operations and quantities.** Effect ops (e.g., `Console.print_line`) currently follow Rule Q5.2. Whether *effect rows* themselves participate in quantity (e.g., a "linear effect" that may be performed at most once) is a separate research question, related to OQ-Q1. The proposed semantics live in `spec/effects.md` §3.5 (re-opened OQ-E5 in v0.2.1) and stand non-normative pending closure of this question.
+- **OQ-Q5 — Effect operations and quantities.** Effect ops (e.g., `Console.printLine`) currently follow Rule Q5.2. Whether *effect rows* themselves participate in quantity (e.g., a "linear effect" that may be performed at most once) is a separate research question, related to OQ-Q1. The proposed semantics live in `spec/effects.md` §3.5 (re-opened OQ-E5 in v0.2.1) and stand non-normative pending closure of this question.
 
 - **OQ-Q6 — Where associativity props live.** Fork site 3 (Rule Q5.13.a) needs `proved` props that an operation is associative and has an identity. `spec/stdlib.md` has no capability carrying such props today: `Numeric` declares none. Until one exists (a monoid-like capability, or props on `Numeric.add` for the integer types), only tree folds and tree unfolds fork. Whether the static prover can discharge associativity for fixed-width integer arithmetic also depends on OQ-P1.
 

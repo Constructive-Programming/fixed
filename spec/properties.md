@@ -1,8 +1,10 @@
 # Fixed Properties
 
-**Status:** Draft v0.3.1
+**Status:** Draft v0.3.2
 **Specifies:** `prop` declarations, `forall` / `implies` / `suchThat` constructs, the three verifiers (static prover, cost checker, property-based testing) and where each runs, verification statuses and the two lanes they feed, measurement during testing, property-based test generation, and how verified properties feed compiler decisions for Fixed v0.4.5 source.
 **Last revised:** 2026-11-20
+
+**Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). `assumed` arises only when the programmer writes `assume prop` (provisional keyword). A prop nobody checked is open and steers nothing: `--no-pbt` and an undecided asymptotic cost bound leave a prop open. The order of Rule P7.7 is open < `tested` < `assumed` < `proved`. OQ-P8 is closed.
 
 **Changes from v0.3.0.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): cost props skip the static prover and go to the cost checker (Rule P7.1); the viability of a refinement-capability candidate is a facts-lane decision (Rules P7.7.c, P7.8); a status is per (prop, satisfaction), and the reported status is the weakest over the satisfactions that ran (Rule P7.7.a); the failure report of a prop is printed by the diagnostic printer and is not a string literal (Rule P8.4); the test build keeps diagnostics (§4.2); "per satisfaction" replaces "per satisfying type".
 
@@ -111,7 +113,7 @@ A `prop` declared inside a `data` body is a **data invariant**: every value of t
 ```
 data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
     Bounded(value: N)
-    prop in_range: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
+    prop inRange: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
 ```
 
 Implicit bindings inside the body:
@@ -136,7 +138,7 @@ A function whose return type is `cap of T` (or `cap extends C`) — a **cap-gene
 
 ```
 fn between(min: N is Ord, max: N) -> cap of N =
-    prop in_range: min <= Self && Self <= max
+    prop inRange: min <= Self && Self <= max
 
 fn positive() -> cap of (N is Numeric + Ord) =
     prop positive: Self > 0
@@ -156,7 +158,7 @@ A prop in a `cap` or `data` declaration whose body is a comparison with a cost t
 A cost prop is a prop in every other respect: it is excluded from the compiled artifact (§4.1), inherited through `extends` (§10), verified per satisfaction, and given a status (Rule P7.7). Two things differ:
 
 - Its body is not evaluated as an expression. `steps`, `constructs`, `releases`, `size`, `O`, `log` and `max` denote the cost vocabulary of `spec/cost.md` Rules CT4.1 and CT4.2, and the bound is compared with the member's inferred cost (`spec/cost.md` §6).
-- A bound written with `O(…)` cannot be refuted by testing, so it is `proved`, rejected because the inferred cost exceeds it, or `assumed`; it is never `tested` (`spec/cost.md` Rule CT6.2). An exact bound can be `tested`: the test build counts the member's steps and constructions and compares. A `tested` cost prop is a measurement. Every cost prop, whatever its status, is used only in the measurement lane (Rule P7.8.b; `spec/cost.md` Rule CT6.5).
+- A bound written with `O(…)` cannot be refuted by testing, so it is `proved`, rejected because the inferred cost exceeds it, or left open unless the programmer assumes it (`assume prop`, Rule P7.7); it is never `tested` (`spec/cost.md` Rule CT6.2). An exact bound can be `tested`: the test build counts the member's steps and constructions and compares. A `tested` cost prop is a measurement. Every cost prop, whatever its status, is used only in the measurement lane (Rule P7.8.b; `spec/cost.md` Rule CT6.5).
 
 ## 4. Prop body expressions
 
@@ -172,7 +174,7 @@ Property verification, when it requires running the body (step 4 of Rule P7.1), 
 
 ### 4.2 No effects (Rule P4.2)
 
-A prop body's effect row must be **empty**. Calls to effect operations (`Console.print_line`, `Fail.fail`, etc.) are forbidden inside prop bodies: `error[E100]: effect performed in prop body`.
+A prop body's effect row must be **empty**. Calls to effect operations (`Console.printLine`, `Fail.fail`, etc.) are forbidden inside prop bodies: `error[E100]: effect performed in prop body`.
 
 A prop body is a statement about values, and its truth must not depend on a handler: the static prover sees no handler, and the program binary does not contain the body at all (§4.1), so an effect in it would have no meaning in either place. The typer enforces effect-row emptiness as a separate check for clearer error messages.
 
@@ -198,7 +200,7 @@ Pattern matching and conditional expressions are allowed inside prop bodies. The
 
 ```
 cap Sorted extends Sequencing:
-    prop sorted_or_empty: match Self.head:
+    prop sortedOrEmpty: match Self.head:
         Optional.none => true
         Optional.some(_) => fold(true, (acc, prev, curr) -> acc && prev <= curr)
 ```
@@ -260,7 +262,7 @@ SuchThatClause = "suchThat" Expr
 ```
 
 ```
-prop pop_decrements: forall (s: Self) suchThat s.size > 0 ->
+prop popDecrements: forall (s: Self) suchThat s.size > 0 ->
     s.pop().size == s.size - 1
 ```
 
@@ -307,12 +309,12 @@ Example contrasting the two:
 ```
 // `implies` — every generated stack tested; empty stacks pass vacuously
 //             (they make the antecedent false, but PBT still counts the case).
-prop pop_decrements_implies: forall (s: Self) ->
+prop popDecrementsImplies: forall (s: Self) ->
     s.size > 0 implies s.pop().size == s.size - 1
 
 // `suchThat` — only non-empty stacks generated; PBT spends iterations on
 //              the interesting case.
-prop pop_decrements_filter: forall (s: Self) suchThat s.size > 0 ->
+prop popDecrementsFilter: forall (s: Self) suchThat s.size > 0 ->
     s.pop().size == s.size - 1
 ```
 
@@ -335,8 +337,9 @@ For each prop:
 1. **Static proof.** The static prover (choice deferred to OQ-P1) gets every prop that is not a cost prop, with a bounded time budget (default 5 seconds per prop, configurable). `proved` gives the status `proved`. A counterexample is `error[E102]: prop failed: <name>`, reported by Rule P8.4.
 2. **Cost check.** A cost prop skips the static prover. The cost checker decides it on Core and makes its own solver call (`spec/cost.md` Rule CT6.2, step 1).
 3. **Open.** A prop that steps 1 and 2 leave undecided is **open** when the package compile ends. Open is not a status: an open prop is not a fact (Rule P7.8), and `fixed compile` reports the number of open props.
-4. **Testing.** The test build runs property-based testing (§8) on every open prop for at least 100 non-discarded iterations. A counterexample is `E102`. Otherwise the prop is `tested`, or `proved` when Rule P8.5 enumerated every value. A cost prop with an asymptotic bound is not tested (`spec/cost.md` Rule CT6.2) and becomes `assumed`.
-5. **No testing.** With `fixed verify --no-pbt` step 4 is skipped and every open prop becomes `assumed` (`W107`).
+4. **Testing.** The test build runs property-based testing (§8) on every open prop for at least 100 non-discarded iterations. A counterexample is `E102`. Otherwise the prop is `tested`, or `proved` when Rule P8.5 enumerated every value. A cost prop with an asymptotic bound is not tested (`spec/cost.md` Rule CT6.2) and stays open.
+5. **No testing.** With `fixed verify --no-pbt` step 4 is skipped and every open prop stays open (`W107`).
+6. **Assumption.** A prop the programmer wrote with `assume` (Rule P7.7) is never open: where steps 1 to 4 leave it undecided, its status is `assumed`. The verifiers still run on it. A proof makes it `proved`, and the `assume` is then reported as unnecessary; a counterexample is `E102`.
 
 The prover runs before quantity inference because quantity inference and the memory passes make facts-lane decisions (a fork site, `spec/quantities.md` Rule Q5.13.a; reuse justified by a prop) that need `proved` statuses as input. `fixed verify` records the results of steps 4 and 5 in the package's interface (`spec/compilation_model.md` Rule CM7.1). Recording them changes no code of the package: what the package compile decided, it decided from the statuses it had (Rule P7.8.c).
 
@@ -386,18 +389,18 @@ The user controls verification behavior via the following flags. The testing fla
 
 | Flag | Effect |
 |---|---|
-| `--no-pbt` | **Disable PBT entirely.** Open props become `assumed` with `warning[W107]: prop <name> not statically verified; PBT disabled`. An `assumed` prop enters the facts lane of importers (Rule P7.8), so this flag is a decision to trust the open props, not only a way to save time. |
+| `--no-pbt` | **Disable PBT entirely.** Open props stay open, each with `warning[W107]: prop <name> not statically verified; PBT disabled`. An open prop is not a fact and steers no compiler decision (Rule P7.8), so this flag saves time and changes no generated code. |
 | `--strict-pbt` | Treat PBT *failure* AND *timeout* as errors (the default treats timeout as `warning[W103]`). Useful for release builds where any unverified prop should block. |
 | `--prop-iterations=N` | Override default PBT iteration count (default: 100 non-discarded cases per prop). |
 | `--prop-timeout=Ts` | Override default total time budget per prop (default: 30s). |
 | `--prop-discard-threshold=R` | Override the discard-rate guard (Rule P5.4.d, default 0.9 — i.e., 90%). |
 | `--no-measure` | Run the props without recording measurements (Rule P7.9). |
 | `--no-prop-cache` | Disable the verification cache (Rule P7.4). Forces fresh verification on every invocation. Useful for debugging cache invalidation issues. |
-| `--require-proved` | Treat every prop whose status is `tested` or `assumed` (Rule P7.7), and with `fixed compile` every open prop, as `error[E106]: prop <name> is not proved (status: <status>)`. |
+| `--require-proved` | Treat every prop whose status is `tested` or `assumed` (Rule P7.7), and every open prop, as `error[E106]: prop <name> is not proved (status: <status>)`. |
 
 `--no-pbt` is mutually exclusive with `--strict-pbt`; combining them is a CLI usage error.
 
-When `--no-pbt` is set, props requiring PBT are not verified. The compiler emits W107 warnings for each. The compiled artifact still excludes prop bodies (per §4.1) — the only effect is that the *verification step* is skipped and its props are recorded as `assumed`.
+When `--no-pbt` is set, props requiring PBT are not verified. The compiler emits W107 warnings for each. The compiled artifact still excludes prop bodies (per §4.1) — the only effect is that the *verification step* is skipped and its props stay open.
 
 ### 7.7 Verification status (Rule P7.7)
 
@@ -407,11 +410,11 @@ Every accepted prop has exactly one **verification status**:
 |---|---|---|
 | `proved` | The static prover reported `proved`, or the test build enumerated every value (Rule P8.5); and everything it rests on is `proved`. | The prop holds for every value of its binders. |
 | `tested` | Testing ran without a counterexample. The record keeps the number of non-discarded iterations, including the reduced count of a `W103` budget overrun, and the satisfactions it ran under (Rule P7.4). | No counterexample among the generated inputs. The prop may still be false. |
-| `assumed` | Nobody checked the prop: `--no-pbt` left it open (`W107`), or it is an asymptotic cost bound that the cost checker could not decide (`spec/cost.md` Rule CT6.2). | Nothing. Whoever ran the build accepted it. |
+| `assumed` | The programmer wrote the prop with `assume` (`assume prop sortedOut: …`), and no verifier proved or refuted it. Nothing else gives this status: not `--no-pbt`, and not a cost bound the checker could not decide. | Nothing. The programmer vouches for it in the source, where a reviewer sees it. |
 
-A prop that fails (Rule P7.1) is an error and has no status. A prop still open after the package compile has no status yet (Rule P7.1, step 3).
+A prop that fails (Rule P7.1) is an error and has no status. A prop still open after the package compile has no status yet (Rule P7.1, step 3). It stays open until a verifier decides it, and an open prop steers no compiler decision.
 
-By what they guarantee the statuses are ordered `assumed` < `tested` < `proved`. **The status of a prop is the weakest status of everything it rests on**: its own check, and every premise the prover used (Rule P7.2). A proof whose premise is an inherited prop that is only `tested` for this satisfaction gives `tested`; a proof whose premise is `assumed` gives `assumed`. A proof never makes a prop stronger than its premises.
+By what the compiler may rely on, the order is open < `tested` < `assumed` < `proved`: the first two license no fact, the last two do (Rule P7.8). **The status of a prop is the weakest of everything it rests on**: its own check, and every premise the prover used (Rule P7.2). A proof whose premise is an inherited prop that is only `tested` for this satisfaction gives `tested`; a proof whose premises are `proved` and `assumed` gives `assumed`; a proof with an open premise leaves the prop open. A proof never makes a prop stronger than its premises. The order is not one of evidence: a `tested` prop has more evidence behind it than an `assumed` one and is still not a fact, because nobody vouched for it.
 
 **Rule P7.7.a (inheritance and satisfactions).** A prop inherited through `extends` (§10) is verified per satisfaction (`spec/type_system.md` Rule 8.4), so its status is recorded per (prop, satisfaction) pair. A link unit may hold several satisfactions of one (type, capability); each is its own pair. An override (Rule P10.3) has its own status; proving the override proves the parent's version, because the override implies it.
 
@@ -422,10 +425,10 @@ A satisfaction that received no run for a prop (one that sampling never picked, 
 **Rule P7.7.b (verdict).** `fixed verify` ends with one verdict line giving the count of each status and of failures:
 
 ```
-props: 41 proved, 6 tested, 1 assumed, 0 failed
+props: 41 proved, 6 tested, 1 assumed, 3 open, 0 failed
 ```
 
-With `--format json` the same counts appear together with one record per prop: name, location, status and, for `tested`, the iteration count and the satisfactions it ran under. The exit code is `2` when any prop failed, or when `--require-proved` is set and any prop is `tested` or `assumed`.
+With `--format json` the same counts appear together with one record per prop: name, location, status and, for `tested`, the iteration count and the satisfactions it ran under. The exit code is `2` when any prop failed, or when `--require-proved` is set and any prop is `tested`, `assumed` or open.
 
 **Rule P7.7.c (what a status licenses).** A status decides which lane a prop may enter (Rule P7.8): `proved` and `assumed` props enter the facts lane, `tested` props do not. Every accepted prop, whatever its status, is still an obligation on every satisfaction. A refinement relies on its props, since later code takes them as true of the value; so a refinement-cap candidate is viable only by `proved` and `assumed` props (`spec/type_system.md` §6.5.3), a facts-lane decision (Rule P7.8.a).
 
@@ -440,7 +443,7 @@ A decision the compiler makes from a prop belongs to one of two lanes.
 - a parallel fork site that relies on a prop (`spec/quantities.md` Rule Q5.13.a);
 - the viability of a candidate by refinement caps (`spec/type_system.md` §6.5.3).
 
-A `tested` prop is excluded because it looks like evidence while guaranteeing nothing: nobody chose to trust it, and a false one would turn a passing test suite into undefined behaviour without anyone having decided anything. An `assumed` prop is admitted because it is an explicit, visible act of trust. It is the only way a property that no prover and no generator can reach (OQ-P4) can drive an optimisation; whoever ran the build accepted it (`--no-pbt`, Rule P7.6); the verdict line counts it; the link report lists the decisions that rest on it; and `--require-proved` rejects it.
+A `tested` prop is excluded because it looks like evidence while guaranteeing nothing: nobody chose to trust it, and a false one would turn a passing test suite into undefined behaviour without anyone having decided anything. An `assumed` prop is admitted because it is an explicit, visible act of trust: the programmer wrote `assume` in the source (Rule P7.7). It is the only way a property that no prover and no generator can reach (OQ-P4) can drive an optimisation; the verdict line counts it; the link report lists the decisions that rest on it; and `--require-proved` rejects it. No flag and no build mode produces an `assumed` prop, so turning testing off never makes the compiler rely on more.
 
 **Rule P7.8.b (measurement lane).** A decision **among alternatives that are all correct** takes anything measured while code runs, and every status. The decisions in this lane are candidate selection (`spec/cost.md` §8), clone weights (`spec/compilation_model.md` Rule CM5.4), the clone budget (Rule CM5.3), fork granularity, and the viability of a candidate by cost contracts. A wrong input makes the program slower, not wrong. Cost props are used only here (`spec/cost.md` Rule CT6.5).
 
@@ -538,8 +541,8 @@ A prop with status `proved` or `assumed` (Rule P7.7) is in the **facts lane** (R
 | Prop | Optimisation enabled |
 |---|---|
 | `prop sorted: ...` on a `Sequencing` | `find(x)` lowers to binary search rather than linear scan. |
-| `prop non_empty: size > 0` | `head` returns `Part` directly instead of `is Optional of Part`; `fold`'s empty case is unreachable and can be elided. |
-| `prop in_range: lo <= value <= hi` (Bounded) | Bounds checks at use sites are elided; arithmetic that would have required checked overflow uses unchecked. |
+| `prop nonEmpty: size > 0` | `head` returns `Part` directly instead of `is Optional of Part`; `fold`'s empty case is unreachable and can be elided. |
+| `prop inRange: lo <= value <= hi` (Bounded) | Bounds checks at use sites are elided; arithmetic that would have required checked overflow uses unchecked. |
 | `prop positive: Self > 0` | `0 - n` becomes guaranteed-non-negative; `if n > 0` branches compile to unconditional. |
 
 The mechanism: each prop in the facts lane annotates the symbol's denotation (per `docs/references/scala3-compiler-reference.md` §4.4) with a *fact* the optimiser may consult. A missing fact is simply a missed optimisation.
@@ -559,9 +562,9 @@ fn median(collection: C is SortedNonEmpty of (N is Numeric)) -> N =
     )
 ```
 
-Per `prop non_empty: size > 0` on `NonEmpty`, the typer proves `collection.get(mid)` is `Optional.some(_)` for `mid < size`; the `Optional.none` case is unreachable and the call to `unreachable` is dead code. The compiler emits no runtime check for this case.
+Per `prop nonEmpty: size > 0` on `NonEmpty`, the typer proves `collection.get(mid)` is `Optional.some(_)` for `mid < size`; the `Optional.none` case is unreachable and the call to `unreachable` is dead code. The compiler emits no runtime check for this case.
 
-`tested` props do **not** discharge `unreachable` (testing is incomplete; a counterexample at runtime would convert dead-code elision into undefined behavior). `proved` and `assumed` props do, as for every other assumption in this section; an `assumed` prop that is false makes the discharge wrong on the responsibility of whoever accepted it (Rule P7.8.a). A `NonEmpty` bound on a type parameter in baseline code does not discharge it unless the prop holds for every satisfaction (Rule P7.8.c); in a clone for a known type it does.
+`tested` props do **not** discharge `unreachable` (testing is incomplete; a counterexample at runtime would convert dead-code elision into undefined behavior). `proved` and `assumed` props do, as for every other assumption in this section; an `assumed` prop that is false makes the discharge wrong on the responsibility of the programmer who wrote the assumption (Rule P7.8.a). A `NonEmpty` bound on a type parameter in baseline code does not discharge it unless the prop holds for every satisfaction (Rule P7.8.c); in a clone for a known type it does.
 
 ## 10. Inheritance through `extends`
 
@@ -571,7 +574,7 @@ When `cap A extends B`, every prop of `B` becomes an obligation on every satisfa
 
 ```
 cap NonEmpty extends Sequencing + Sized:
-    prop non_empty: size > 0
+    prop nonEmpty: size > 0
 
 cap Sorted of (Part is Ord) extends Sequencing:
     prop sorted: fold(true, (acc, prev, curr) -> acc && prev <= curr)
@@ -579,7 +582,7 @@ cap Sorted of (Part is Ord) extends Sequencing:
 cap SortedNonEmpty of (Part is Ord) extends Sorted + NonEmpty
 ```
 
-`SortedNonEmpty` inherits both `prop sorted` (from `Sorted`) and `prop non_empty` (from `NonEmpty`). A `T satisfies SortedNonEmpty` declaration must verify both.
+`SortedNonEmpty` inherits both `prop sorted` (from `Sorted`) and `prop nonEmpty` (from `NonEmpty`). A `T satisfies SortedNonEmpty` declaration must verify both.
 
 ### 10.2 Same-named props from different parents (Rule P10.2)
 
@@ -593,10 +596,10 @@ A child cap may redeclare a prop already present in a parent. The redeclaration 
 
 ```
 cap Eq:
-    prop eq_reflexive: forall (a: Self) -> a == a
+    prop eqReflexive: forall (a: Self) -> a == a
 
 cap StrictlyEq extends Eq:
-    prop eq_reflexive: forall (a: Self, b: Self) ->
+    prop eqReflexive: forall (a: Self, b: Self) ->
         a == a && (a == b implies hash(a) == hash(b))
     // Override implies parent: its first conjunct is the parent's body
 ```
@@ -612,28 +615,28 @@ cap Stack extends Sequencing + Sized:
     fn push(value: Part) -> Self
     fn pop -> Self
 
-    prop push_increments: forall (s: Self, x: Part) ->
+    prop pushIncrements: forall (s: Self, x: Part) ->
         s.push(x).size == s.size + 1
 
-    prop pop_decrements: forall (s: Self) suchThat s.size > 0 ->
+    prop popDecrements: forall (s: Self) suchThat s.size > 0 ->
         s.pop().size == s.size - 1
 
-    prop push_pop_identity: forall (s: Self, x: Part) ->
+    prop pushPopIdentity: forall (s: Self, x: Part) ->
         s.push(x).pop == s
 ```
 
 Verification walk:
 
-- `push_increments` — static prover: with `s` and `x` quantified, `s.push(x)` is a function call whose body is opaque to the prover. Likely `unknown`; PBT runs. Generator: pick a `Self` from a satisfying type's generator (e.g., a `List` or `Vec` that provides `push`); pick a `Part`; check the equality.
-- `pop_decrements` — `suchThat s.size > 0` filters generated stacks at the PBT generator level. Empty stacks are discarded by the driver and never counted toward the iteration budget. The body is then evaluated only on non-empty stacks. Compare to a hypothetical `implies` formulation, where every generated stack would count toward the budget but only non-empty ones would actually exercise the property.
-- `push_pop_identity` — the strongest invariant. PBT with the same generators verifies, giving the prop status `tested`. The peephole `s.push(x).pop()` ⇒ `s` (eliminating the round-trip) is a facts-lane decision (Rule P7.8.a), so it is not applied on the strength of PBT alone.
+- `pushIncrements` — static prover: with `s` and `x` quantified, `s.push(x)` is a function call whose body is opaque to the prover. Likely `unknown`; PBT runs. Generator: pick a `Self` from a satisfying type's generator (e.g., a `List` or `Vec` that provides `push`); pick a `Part`; check the equality.
+- `popDecrements` — `suchThat s.size > 0` filters generated stacks at the PBT generator level. Empty stacks are discarded by the driver and never counted toward the iteration budget. The body is then evaluated only on non-empty stacks. Compare to a hypothetical `implies` formulation, where every generated stack would count toward the budget but only non-empty ones would actually exercise the property.
+- `pushPopIdentity` — the strongest invariant. PBT with the same generators verifies, giving the prop status `tested`. The peephole `s.push(x).pop()` ⇒ `s` (eliminating the round-trip) is a facts-lane decision (Rule P7.8.a), so it is not applied on the strength of PBT alone.
 
 ### 11.2 `Bounded` data type
 
 ```
 data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
     Bounded(value: N)
-    prop in_range: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
+    prop inRange: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
 ```
 
 Verification walk: each `Bounded.Bounded(v)` constructor call site triggers a verification check that `lo <= v <= hi` for the type's `lo` and `hi`. Per Rule Q5.3, `lo` and `hi` are quantity-0 of-params, so they are statically known at every constructor site. The static prover handles this in the package compile: a single SMT query suffices. No PBT needed.
@@ -644,16 +647,16 @@ When verification succeeds, the runtime constructor is a plain assignment with n
 
 ```
 fn between(min: N is Ord, max: N) -> cap of N =
-    prop in_range: min <= Self && Self <= max
+    prop inRange: min <= Self && Self <= max
 
-fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String =
-    let n = parse_u16(s)
+fn parsePort(s: String) -> N is PortRange(1024, 49151) with Fail of String =
+    let n = parseU16(s)
     if n < 1024: Fail.fail("port too low")
     else if n > 49151: Fail.fail("port too high")
     else: n
 ```
 
-`PortRange(1024, 49151)` expands (per parameterised type aliases) to a refinement cap with `prop in_range: 1024 <= Self && Self <= 49151`. The body's branches handle the violating cases by `Fail.fail` (which has type `!` and so satisfies any return type per §5.6 of type_system.md). The remaining `else: n` branch is verified statically: `n >= 1024 && n <= 49151` follows from the negated branch conditions.
+`PortRange(1024, 49151)` expands (per parameterised type aliases) to a refinement cap with `prop inRange: 1024 <= Self && Self <= 49151`. The body's branches handle the violating cases by `Fail.fail` (which has type `!` and so satisfies any return type per §5.6 of type_system.md). The remaining `else: n` branch is verified statically: `n >= 1024 && n <= 49151` follows from the negated branch conditions.
 
 ## 12. Open questions
 
@@ -665,7 +668,7 @@ fn parse_port(s: String) -> N is PortRange(1024, 49151) with Fail of String =
 - **OQ-P4 — User-supplied static proofs.** When the prover reports `unknown` and PBT is unsuitable (e.g., the binder type has no generator), the user could supply an explicit proof. Mechanism deferred until needed.
 - **OQ-P5 — `result` in non-postcondition contexts.** Moot in v0.2.1 — fn-body postconditions themselves are deferred (§3.3). When postconditions are re-enabled, the question of `result` in `cap`-method postconditions resurfaces and OQ-P5 will be revisited.
 - **OQ-P7 — Generators for types whose constructors are not public.** Rule P8.1 derives a generator for a `data` type from its fields. An importer sees the variants of a `pub data` type (`spec/compilation_model.md` Rule CM6.7). Declarations are private by default (P6, D13), and a private `data` type crosses a package edge only as a choice-point value of a public capability; its package must export a generator for it, or an importer cannot test props over it.
-- **OQ-P8 — Explicit and implicit `assumed`.** Rule P7.8.a admits `assumed` to the facts lane as an act of trust, but `assumed` also arises without one: from `--no-pbt`, a flag a user may pass to save time, and from an asymptotic cost bound the checker could not decide. Under Rule P7.8, `--no-pbt` turns a prop that testing would have left out of the facts lane, or refuted, into a fact for importers. Splitting the status into an explicit `trusted` (a user-written assumption, OQ-P4) that enters the facts lane and an `unchecked` that does not would remove this; it needs a decision.
+- **OQ-P8 — Explicit and implicit `assumed` (closed).** `assumed` arises only from `assume` in the source. A prop that nobody checked (`--no-pbt`, or an asymptotic cost bound the checker could not decide) is open and steers nothing (Rules P7.1, P7.7). The word `assume` is provisional (`spec/syntax_grammar.ebnf`, `PropDecl`).
 - **OQ-P9 — Facts on capability props in baseline code.** Rule P7.8.c forbids, in baseline code, a facts-lane decision resting on a capability's prop whose satisfaction is unknown there. The alternative is to record the props such decisions rest on in the summaries (`spec/compilation_model.md` Rule CM8.3) and have the link step make a satisfaction whose status for one of them is `tested` not viable at that choice point; for a named type parameter the caller would check its type argument. It would keep the optimisations in baseline code at the price of a link-time and call-site check.
 - **OQ-P6 — Temporal / safety properties.** Properties about traces of operations (e.g., "every `acquire` is eventually followed by `release`") are out of scope for v0.4.3. Linear effects (`spec/effects.md` §3.5) provide a partial alternative for resource lifecycles. Revisit when language matures.
 

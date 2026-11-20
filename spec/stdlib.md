@@ -1,8 +1,10 @@
 # Fixed Standard Library — Core Types and Capabilities
 
-**Status:** Draft v0.3.1
+**Status:** Draft v0.3.2
 **Specifies:** the core data types and capabilities Fixed's stdlib provides; the cap-vs-data classification each one takes; the auto-derived satisfactions.
 **Last revised:** 2026-11-20
+
+**Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). `Clone` is derived only on request (§4.11). Naming: value-level names are camelCase, type-level names PascalCase (§1); the members of this document are renamed accordingly.
 
 **Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the prelude declares the diagnostic sinks `inspect` and `trace` (§5); the reference to struct-destructure patterns names Rule M3.6.b; a cost prop binds a satisfaction, not a satisfying type (§4.12).
 
@@ -15,6 +17,8 @@
 This document is the normative source for which built-in stdlib types are `data` types (closed sums or product records the programmer can match on by variant) and which are `cap`s (abstract capabilities the compiler picks a representation for). It also records the prelude's `satisfies` declarations that bridge them.
 
 The prelude is a package. Every declaration this document gives is `pub` in it (`spec/type_system.md` §8.6), and the code below writes `pub` on each.
+
+**Naming (Rule S1.1).** Value-level names are written in camelCase: functions, members of capabilities and of data types, effect operations, parameters, fields, bindings and props (`fromI64`, `isEmpty`, `foldRight`, `printLine`). Type-level names are written in PascalCase: data types, variants, capabilities, effects, type variables and named satisfactions. The standard library, the examples and this specification follow the convention without exception. The grammar fixes only the case of the first letter (`spec/syntax_grammar.ebnf`); the rest is a convention, which the compiler may report as a warning and never as an error.
 
 It does **not** specify:
 - The full method surface of each cap (see `stdlib/*.fixed` source once implemented in Phase 5).
@@ -125,7 +129,7 @@ The prelude's satisfier of `Ordering` (§4.4), so `Ord.compare -> is Ordering` h
 pub cap Optional extends Functor + Folding:
     Self.fn some(value: Part) -> Self
     Self.fn none -> Self
-    fn fold(on_some: Part -> R, on_none: () -> R) -> R
+    fn fold(onSome: Part -> R, onNone: () -> R) -> R
     fn isDefined -> bool = self.fold((_) -> true, () -> false)
     fn orElse(other: Self) -> Self = self.fold((_) -> self, () -> other)
 ```
@@ -136,7 +140,7 @@ pub cap Optional extends Functor + Folding:
 pub cap Result of (E, A):
     Self.fn ok(value: A) -> Self
     Self.fn err(error: E) -> Self
-    fn fold(on_ok: A -> R, on_err: E -> R) -> R
+    fn fold(onOk: A -> R, onErr: E -> R) -> R
 ```
 
 ### 4.3 `cap Pair`
@@ -155,7 +159,7 @@ pub cap Ordering:
     Self.fn lt -> Self
     Self.fn eq -> Self
     Self.fn gt -> Self
-    fn fold(on_lt: () -> R, on_eq: () -> R, on_gt: () -> R) -> R
+    fn fold(onLt: () -> R, onEq: () -> R, onGt: () -> R) -> R
 ```
 
 Programmers do not `match` on an `is Ordering` value — they `.fold(...)`.
@@ -166,7 +170,7 @@ Programmers do not `match` on an `is Ordering` value — they `.fold(...)`.
 pub cap Boolean:
     Self.fn yes -> Self
     Self.fn no -> Self
-    fn fold(on_yes: () -> R, on_no: () -> R) -> R
+    fn fold(onYes: () -> R, onNo: () -> R) -> R
     fn not -> Self = self.fold(() -> Self.no, () -> Self.yes)
 ```
 
@@ -225,7 +229,7 @@ a >= b     ≡   a.compare(b).fold(() -> false, () -> true,  () -> true)
 
 ```
 pub cap Numeric extends Eq + Ord:
-    Self.fn from_i64(n: i64) -> Self
+    Self.fn fromI64(n: i64) -> Self
     fn add(other: Self) -> Self
     fn sub(other: Self) -> Self
     fn mul(other: Self) -> Self
@@ -247,7 +251,7 @@ a % b      ≡   a.rem(b)
 
 Per the v0.4.6 grammar (`UnaryExpr`), prefix `-` is single-arity: `--a` is not admitted; iterate via parens (`-(-a)`) or call `.negate` directly.
 
-Numeric-literal polymorphism (`type_system.md` §5.7) goes through `Self.fn from_i64`: an integer literal in a `Numeric`-bounded position is desugared to `Self.from_i64(LITERAL)`. Float literals desugar to a `from_f64` overload (forthcoming; deferred until float-spec lands).
+Numeric-literal polymorphism (`type_system.md` §5.7) goes through `Self.fn fromI64`: an integer literal in a `Numeric`-bounded position is desugared to `Self.fromI64(LITERAL)`. Float literals desugar to a `fromF64` overload (forthcoming; deferred until float-spec lands).
 
 All built-in primitive numeric types — `i8`/`i16`/`i32`/`i64`/`i128`, `u8`/`u16`/`u32`/`u64`/`u128`, `f32`/`f64` — satisfy `Numeric` (compiler-provided).
 
@@ -272,10 +276,10 @@ pub cap Clone:
 `clone` returns a value equal to the receiver (P6 D10): where `Self` also satisfies `Eq`, `x.clone == x`. `Clone` does not extend `Eq`, so the law is stated here and not as a `prop` of the capability. The satisfier chooses how. A **sharing** satisfier returns the same cells with their counts incremented, and states it in a cost prop:
 
 ```
-    prop clone_shares: constructs(clone) <= 0
+    prop cloneShares: constructs(clone) <= 0
 ```
 
-A **copying** satisfier builds fresh cells, so the result does not keep the receiver's cells alive, and states its bound, for example `prop clone_copies: constructs(clone) <= size(self)`. Values are immutable, so the two are indistinguishable in results. They differ in cost and in how long the receiver's cells live, and the cost prop tells which one a caller gets (`spec/cost.md` §4).
+A **copying** satisfier builds fresh cells, so the result does not keep the receiver's cells alive, and states its bound, for example `prop cloneCopies: constructs(clone) <= size(self)`. Values are immutable, so the two are indistinguishable in results. They differ in cost and in how long the receiver's cells live, and the cost prop tells which one a caller gets (`spec/cost.md` §4).
 
 A type that must not be duplicated does not satisfy `Clone`.
 
@@ -285,7 +289,7 @@ A type that must not be duplicated does not satisfy `Clone`.
 
 In current example code, `.clone()` was used defensively in places where borrow inference is expected to handle the duplication implicitly; the v0.4.5 sweep removed those calls.
 
-**Auto-derivation.** `Clone` is auto-derived for any `data` type whose every field type satisfies `Clone`. The derived `clone` copies: it builds a fresh cell of the same variant and clones each field. It states `constructs(clone) <= 1 + ` the sum of what cloning each field builds. An immediate (`spec/compilation_model.md` Rule CM3.5) has no cell, so its derived `clone` builds nothing. Primitives satisfy `Clone` trivially. Capabilities do not auto-derive `Clone`, because the representation is not fixed. A satisfying type must opt in.
+**Derivation on request.** `Clone` is never derived silently. A `data` type whose every field type satisfies `Clone` gets the derived `clone` by declaring the satisfaction without a body (`Money satisfies Clone`). Without that declaration the type does not satisfy `Clone`, and that is how a type that must not be duplicated stays so. The prelude declares it for each of its own data types. The derived `clone` copies: it builds a fresh cell of the same variant and clones each field. It states `constructs(clone) <= 1 + ` the sum of what cloning each field builds. An immediate (`spec/compilation_model.md` Rule CM3.5) has no cell, so its derived `clone` builds nothing. Primitives satisfy `Clone` trivially. Capabilities do not auto-derive `Clone`, because the representation is not fixed. A satisfying type must opt in.
 
 ### 4.12 Cost contracts (provisional)
 
@@ -295,8 +299,8 @@ The core capabilities carry cost props (`spec/cost.md` §4). Every satisfaction 
 |---|---|---|---|---|
 | `Optional`, `Result`, `Pair`, `Ordering`, `Boolean` | constructors, accessors | `O(1)` | at most 1 | — |
 | `Optional`, `Result`, `Boolean` | `fold` | `O(steps(f))` | `constructs(f)` | — |
-| `Empty` | `empty`, `is_empty` | `O(1)` | 0 | — |
-| `Numeric` | arithmetic, `from_i64` | `O(1)` for the primitive types; no bound stated for user satisfactions | 0 for the primitive types | — |
+| `Empty` | `empty`, `isEmpty` | `O(1)` | 0 | — |
+| `Numeric` | arithmetic, `fromI64` | `O(1)` for the primitive types; no bound stated for user satisfactions | 0 for the primitive types | — |
 | `Eq`, `Ord` | `eq`, `compare` | `O(n)` | 0 | — |
 | `Show` | `show` | `O(n)` | `O(n)` | no |
 | `Clone` | `clone` | at most `O(n)` plus the cost of cloning each element | at most `O(n)` plus what cloning each element builds; a sharing satisfier states `0` | no |
@@ -409,4 +413,4 @@ Earlier drafts (`docs/plans/implementation-plan.md` line 352) classified `List`,
 
 - **OQ-S1 — Built-in `Show`.** Should `bool`, `i64`, `f64`, etc. auto-satisfy `Show`? Most programs need `.show()` constantly; refusing the default is friction. Provisional yes, formalize once `cap Show` lands.
 - **OQ-S2 — Map/Set.** `cap Map of (K, V)` and `cap Set of A` are mentioned in examples but not yet specified here. Defer to a Phase-5 stdlib doc.
-- **OQ-S3 — `String`.** Currently ambiguous: a primitive in the grammar (`PrimitiveType`), but example 11 declares refinements (`type Username = String + min_length(3)`) that expect cap-like composition. Decision: `String` is a primitive *and* satisfies a `cap Stringlike` (or similar) for refinement purposes. Formalize separately.
+- **OQ-S3 — `String`.** Currently ambiguous: a primitive in the grammar (`PrimitiveType`), but example 11 declares refinements (`type Username = String + minLength(3)`) that expect cap-like composition. Decision: `String` is a primitive *and* satisfies a `cap Stringlike` (or similar) for refinement purposes. Formalize separately.

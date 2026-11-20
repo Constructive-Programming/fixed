@@ -1,8 +1,10 @@
 # Fixed Reports: Coverage, Cardinality and the Tool Interface
 
-**Status:** Draft v0.2.1
+**Status:** Draft v0.2.2
 **Specifies:** two analyses the compiler runs and reports — coverage of code by verification, and cardinality of types — the report of what the link step chose, the files a build reads besides its sources, and the interface external tools use.
 **Last revised:** 2026-11-20
+
+**Changes from v0.2.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule RP3.2: the specification status follows the order of Rule P7.7.
 
 **Changes from v0.2.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the link report shows props tested under another binding, decisions resting on `assumed` props and each satisfier's claims beside the contract (Rule RP5.4); the lock file's deferred satisfaction sites (Rule RP5.3); layout uses no count, since a tag is one byte and each type has one layout (Rule RP4.3); "per satisfaction" replaces "per satisfying type".
 
@@ -49,7 +51,7 @@ Line coverage answers one question badly. Fixed separates two.
 | `executed` | Its counter is non-zero after the property-based tests of the build ran. |
 | `not executed` | Otherwise. |
 
-**Is the declaration constrained by a property?** Each function and member has a *specification status*: the strongest status (`proved`, then `tested`, then `assumed`, in the order of what each guarantees; Rule P7.7) among the accepted props whose body calls it, or calls a function that (transitively) calls it. A declaration no prop reaches in this way is `unconstrained`.
+**Is the declaration constrained by a property?** Each function and member has a *specification status*: the strongest status (`proved`, then `assumed`, then `tested`, the order of `spec/properties.md` Rule P7.7) among the accepted props whose body calls it, or calls a function that (transitively) calls it. A declaration no prop reaches in this way is `unconstrained`.
 
 The two are independent. The static prover does not look inside function bodies (Rule P7.2), so a `proved` prop constrains a function without executing any region of it; and a region can be executed by a test that asserts nothing about it.
 

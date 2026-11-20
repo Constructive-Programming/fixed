@@ -1,8 +1,10 @@
 # Fixed Memory Management
 
-**Status:** Draft v0.5.1
+**Status:** Draft v0.5.2
 **Specifies:** how the compiler places, frees and reference-counts runtime values for Fixed v0.4.4 source: lifetime classes, immediates, data-stack regions, counted regions, the Perceus heap, destinations, value witnesses, reuse (FBIP), borrowing, effect-handler memory, structured parallelism, the `fip` contract and the memory report.
 **Last revised:** 2026-11-20
+
+**Changes from v0.5.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Descriptors on every cell are decided; only the optimisation of omitting one stays open (OQ-MM7). Rule MM20.2: no witness travels with an anonymous result.
 
 **Changes from v0.5.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): an `Inline` value that is not an immediate is copied out to a cell with a descriptor where it meets code that does not know its type (Rule MM3.1); a `Static` cell carries a count word holding the immortal sentinel, and a `Heap` cell holds counted references only to cells with a count (Rules PR3.1, PR7.3); the type table has a row for every kind of cell (Rules PR3.1, MM7.3); Rules PR5.5 and PR5.6 cite the table convention of Rule CM4.6 instead of restating it; §20.3 no longer gives the static prover `assumed` props, places `E071`, `E083`, `E085` and the deferred-site binding, and states where a `proved` status from enumeration reaches; "header" is the descriptor plus the count word, and stale phrases about tags and headers are corrected.
 
@@ -213,7 +215,7 @@ Copying the demanded part of a shared value in the shared entry of a `fip fn` (�
 warning[W110]: value copied to the heap inside a fold step
   --> src/index.fixed:42:17
    |
-42 |         let entry = make_entry(key, line)
+42 |         let entry = makeEntry(key, line)
    |                     ^^^^^^^^^^^^^^^^^^^^^ evacuated: `entry` is stored into `index` (Heap)
    = note: `index` is Heap because its fold step is not garbage-free (Rule MM5.2(b))
    = help: run `fixed compile --explain-memory` for the full reason chain
@@ -475,7 +477,7 @@ match list:
 match list:
     List.Cons(h, t):
         let token = drop_to_reuse(list)
-        List.Cons.from_token(token, transform(h), recur(t))
+        List.Cons.fromToken(token, transform(h), recur(t))
     List.Nil => List.Nil
 ```
 
@@ -555,14 +557,14 @@ Dropping a value must run in bounded native stack, whatever the shape of the val
 A drop function that drops a recursive field last makes it a tail call:
 
 ```
-fn drop_list(x: List of A) -> () =
+fn dropList(x: List of A) -> () =
     match x:
         List.Nil => free(x)
         List.Cons(h, t) =>
-            let t_local = x.tail   // hoist the tail before x is freed
+            let tLocal = x.tail   // hoist the tail before x is freed
             drop(h)
             free(x)
-            drop_list(t_local)     // tail call; constant stack
+            dropList(tLocal)     // tail call; constant stack
 ```
 
 The compiler must guarantee tail-call optimization for compiler-emitted drop functions.
@@ -812,7 +814,7 @@ These facts appear in every function signature. For a public function they are s
 - **Per parameter:** demand per part (`0`, `read`, `own`, `exclusive`; `spec/quantities.md` Rule Q4.1.a), which replaces the separate quantity and borrowed/owned mode; escape ∈ {`none`, `into-result`, `unbounded`}; class-polymorphic or fixed (decides whether a witness is passed, §7.3).
 - **Versions:** the clones built, each with its key (`spec/compilation_model.md` Rule CM5.1); for a public function, the exported versions and whether each is a body, an alias or an adapter (Rule CM6.4).
 - **Witnesses:** the hidden parameters and their order (Rule CM4.3).
-- **Result:** destination-polymorphic or a fixed class. Who picks its representation follows from the signature (Rule CM4.5): for `-> R is C` the caller passes `R`'s witness; for `-> is C` the result is a choice point owned by the function and its witness travels with the value.
+- **Result:** destination-polymorphic or a fixed class. Who picks its representation follows from the signature (Rule CM4.5): for `-> R is C` the caller passes `R`'s witness; for `-> is C` the result is a choice point owned by the function, or by the requirement, and no witness travels: the link step binds it by symbol.
 - **Stack demand:** the maximum number of growable stacks in use at once, and the static bound on scratch bumps if one exists.
 - **Contracts:** the `fip` level (none, `fip(n)`, `fip` or `fip(strict)`) and the cost props with their statuses (`spec/cost.md`).
 
@@ -873,8 +875,8 @@ Every performance statement in this document is a hypothesis until measured; the
 ### 22.1 Simple let-binding (quantity ω, `Frame`)
 
 ```
-fn count_pairs(x: i64, y: i64) -> i64 =
-    let pair = make_pair(x, y)        // built in this function's Frame region (Dest at make_pair)
+fn countPairs(x: i64, y: i64) -> i64 =
+    let pair = makePair(x, y)        // built in this function's Frame region (Dest at makePair)
     pair.first + pair.second           // two borrowed reads
 ```
 
@@ -896,7 +898,7 @@ Fixed functions cannot call themselves. The code above is what the auto-derived 
 ### 22.3 Fold with per-step temporaries
 
 ```
-fn total_len(words: List of String) -> u64 =
+fn totalLen(words: List of String) -> u64 =
     words.fold(0, (acc, w) -> acc + w.trim().length())
 ```
 
@@ -906,7 +908,7 @@ fn total_len(words: List of String) -> u64 =
 
 ```
 fn index(lines: List of String) -> Map of (String, u64) =
-    lines.fold(Map.empty, (m, line) -> m.insert(key_of(line), line.length()))
+    lines.fold(Map.empty, (m, line) -> m.insert(keyOf(line), line.length()))
 ```
 
 If `m` is exclusively owned and `insert` reuses the path it rebuilds, the step is garbage-free (Rule MM5.2(b)). `m` then lives in the caller's destination and is updated in place. If the old map version is shared elsewhere, the replaced path nodes become garbage each step, so `m` is long-lived and goes to `Heap`. The report states which.
@@ -917,7 +919,7 @@ If `m` is exclusively owned and `insert` reuses the path it rebuilds, the step i
 linear effect Lock:
     fn release -> ()
 
-fn critical_section(work: () -> () with Lock) -> () =
+fn criticalSection(work: () -> () with Lock) -> () =
     work()
     Lock.release
 ```
@@ -938,7 +940,7 @@ The `Lock` handler is installed once and consumed by `Lock.release`. Its continu
 - **OQ-MM4 — Cohesive-group detection.** Rule MM5.4 states the conditions; how far M10 searches for groups (one function, one call tree, across modules) is open.
 - **OQ-MM5 — Region and witness facts across packages.** What the interface carries is settled (`spec/compilation_model.md` Rule CM7.1). Its on-disk encoding is open there (OQ-CM2).
 - **OQ-MM6 — Descriptors of flat containers.** A flat container (Rule MM16.3) must stay self-describing for `drop`, `copy` and `inspect`, but its element count is not bounded by the 32 slots of a reference map. A length field and a flag "every element is a reference" in the descriptor would do; it is not decided.
-- **OQ-MM7 — Descriptors outside the heap.** Rule PR3.1 puts a descriptor on every cell, including `Frame` and `Region` cells, because a type-independent `ref` witness must read it. That is a word per cell that the Goose-style regions of v0.2 did not pay. A clone cannot omit it, because cloning never changes a layout (`spec/compilation_model.md` Rule CM3.4). Whether the cost matters is to be measured (§21).
+- **OQ-MM7 — Descriptors outside the heap (the rule is decided; an optimisation is open).** Rule PR3.1 puts a descriptor on every cell, including `Frame` and `Region` cells, because a type-independent `ref` witness must read it. That is a word per cell that the Goose-style regions of v0.2 did not pay; the owner accepted it. A clone cannot omit it, because cloning never changes a layout (`spec/compilation_model.md` Rule CM3.4). What stays open is whether a cell that provably never reaches code that does not know its type may be allocated without one. That needs an escape-like fact per allocation site and a measured cost (§21) before it is designed.
 
 ## 24. Cross-references
 

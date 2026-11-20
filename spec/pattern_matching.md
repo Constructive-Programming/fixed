@@ -103,7 +103,7 @@ match d:
 
 ```
 let (a, b) = pair                                 // 2-tuple binding
-let (single,) = unit_tuple                         // 1-tuple binding (mandatory trailing comma)
+let (single,) = unitTuple                         // 1-tuple binding (mandatory trailing comma)
 match triple:
     (0, _, _) => "starts with 0"
     (_, _, last) => last
@@ -270,7 +270,7 @@ The typer uses a standard *pattern-matrix algorithm* (Maranget 2008): the residu
 
 **Rule M6.2 (Refinement-aided exhaustiveness, required).** The typer **must** apply in-scope refinement caps to compute the *reachable value-domain* of the scrutinee. Patterns are matched against this domain rather than the unrefined type. Exhaustiveness is satisfied iff the union of case patterns covers the reachable domain.
 
-When a refinement cap (per type_system.md §6.4 Marker class — e.g., `between(1, 3)`, `multiple_of(2)`, `between(0, 10) + multiple_of(2)`) restricts the scrutinee's domain to a finite set, exhaustiveness checks against that narrowed set. Literal patterns covering the narrowed set certify exhaustiveness without a wildcard:
+When a refinement cap (per type_system.md §6.4 Marker class — e.g., `between(1, 3)`, `multipleOf(2)`, `between(0, 10) + multipleOf(2)`) restricts the scrutinee's domain to a finite set, exhaustiveness checks against that narrowed set. Literal patterns covering the narrowed set certify exhaustiveness without a wildcard:
 
 ```
 fn name(d: u8 is between(1, 3)) -> String =
@@ -344,7 +344,7 @@ fn count(t: Tree of A) -> u64 =
     t.fold(
         () -> 0,                                              // Empty
         (_) -> 1,                                             // Leaf
-        (l_count, _, r_count) -> 1 + l_count + r_count,       // Branch (subtrees pre-folded)
+        (lCount, _, rCount) -> 1 + lCount + rCount,       // Branch (subtrees pre-folded)
     )
 ```
 
@@ -391,7 +391,7 @@ For refutable patterns, use `match`:
 ```
 // REFUTABLE — use match:
 match opt:
-    Maybe.Just(v) => use_v(v)
+    Maybe.Just(v) => useV(v)
     Maybe.Nothing => default
 
 // IRREFUTABLE — let is fine:

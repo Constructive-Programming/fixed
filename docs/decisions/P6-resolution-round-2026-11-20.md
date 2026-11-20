@@ -188,7 +188,27 @@ An independent consistency review of the specs (2026-11-20, after this record wa
 - **M22, M23.** The link report adds props tested under another binding, decisions resting on `assumed` props and each satisfier's claims beside the contract; the lock file records deferred sites (Rules RP5.3, RP5.4). Rule RP4.3 no longer narrows or shares tags.
 - **Minors.** Built-in candidates count as declared in the standard library package, before its source declarations, and rule 4 of Rule 6.5.5 names the first capability of the bound set in canonical bound order. A test build keeps diagnostics (OQ-DG3 closed). A choice-point immediate prints with its chosen type where the choice point is known at the site, and as the raw slot through generic code (Rule DG3.4). Deferred sites are bound by level 5 only, since the link unit holds every satisfaction such a site sees (Rule 8.4.b).
 
-Items B3, B4, M1, M8, M19 and the remaining part of M10 wait for the owner.
+Items B3, B4, M1, M8, M19 and the remaining part of M10 waited for the owner; they are decided below.
+
+## Owner's decisions after the consistency review (third round, 2026-11-20)
+
+The writers of the specs and the reviewer left thirteen questions for the owner. The answers:
+
+- **A. Descriptors on every cell.** Accepted: every cell, in every class, carries its tag and reference map; only a `Heap` cell adds a count. This gives up the headerless stack cells of the first memory design. Omitting the descriptor from a cell that provably never reaches code that does not know its type stays open as an optimisation (`spec/memory_management.md` OQ-MM7).
+- **B. `assumed` is written, never inferred.** A prop has the status `assumed` only when the programmer writes `assume prop` (the word is provisional). A prop that nobody checked is *open* and steers no compiler decision: `--no-pbt` and an undecided asymptotic cost bound leave a prop open. The order of statuses is open < `tested` < `assumed` < `proved`; the facts lane takes the last two. This settles B3 (a fork site takes `proved` or `assumed` props), M8 (an undecided asymptotic bound is open) and M10 (no test-build result other than a proof by enumeration reaches a facts lane, and that one reaches importers only).
+- **C. Package scope.** `using` at package scope is written in the file `package.fixed` at the root of the package; the application root is that file in the package that declares `main`.
+- **D. The table-call rule** as restated in Rule CM4.6 (amendment B1).
+- **E. One `ref` witness per lifetime class.** The family of value witnesses stays fixed.
+- **F. No witness travels with an anonymous result.** The choice point is bound by symbol at link. *(Author's consequence, not debated:)* the anonymous result of a requirement is therefore one choice point owned by the requirement and shared by every implementation; two implementations that construct different concrete types leave it without a viable candidate, which is a link error. This settles M1.
+- **G. A link unit is an application.** A library is not a link unit; its escaping choice points and deferred sites stay unbound until an application links it.
+- **H. `Clone` is derived only on request**, by a satisfaction declared without a body.
+- **I. Naming.** camelCase for every value-level name, PascalCase for every type-level name (`spec/stdlib.md` Rule S1.1). The specs are renamed; the prelude, the examples, the benchmarks and the compiler's built-in member names are not yet.
+- **J. Captured evidence and parallel lanes.** A closure carries one bit that is set when it holds captured evidence; a fork site that would call a function-typed parameter tests it and stays sequential when it is set. This settles B4.
+- **K. `use` accepts lower-case names**, so a `pub fn` can be imported (M19).
+- **L. The sixth resolution level is removed.** It could never decide.
+- **M. Derived and named satisfactions.** No preference: a pair with a derived or unnamed satisfaction and a named one in scope is ambiguous until a `using` chooses (`E061`). *(Author's consequence:)* a `using` must then be able to name an unnamed or derived satisfaction, so `SatisfactionRef` also takes the pair form, `using Money satisfies Ord`.
+
+Still not decided: the error code of an unbounded `show`, `==` or `clone` (the spec says `E064`, the typer branch uses `T022`); the exit code of `fixed verify`; how a release build is requested; minors 7, 8 and 14 of the review.
 
 ## Corrections to statements made in this debate
 

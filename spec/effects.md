@@ -1,8 +1,10 @@
 # Fixed Effects
 
-**Status:** Draft v0.3.1
+**Status:** Draft v0.3.2
 **Specifies:** algebraic effect declarations, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.4 source.
 **Last revised:** 2026-11-20
+
+**Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule E7.8: a closure carries one bit that is set when it holds captured evidence; a fork site tests it.
 
 **Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): every evidence entry, passed or captured, has one layout that holds the handler's marker, through which the frame is found (§7.1, Rule E7.2); Rule E7.7 no longer says a table call passes every argument `own` (it follows `spec/compilation_model.md` Rule CM4.6); Rule E5.5.b cites the containment test of Rule CM4.6; wrong references to a diagnostics section and to a rule number for §7.6 corrected.
 
@@ -69,11 +71,11 @@ Each operation declared inside `effect E:` is treated as a method on the effect 
 
 ```
 effect Console:
-    fn print_line(msg: String) -> ()
-    fn read_line -> String
+    fn printLine(msg: String) -> ()
+    fn readLine -> String
 
-// Console.print_line("hi")     : ()      with Console
-// Console.read_line             : String  with Console
+// Console.printLine("hi")     : ()      with Console
+// Console.readLine             : String  with Console
 ```
 
 ### 3.3 The `!` return type and abortive operations (Rule E3.3)
@@ -115,7 +117,7 @@ An effect declared with the `linear` modifier is a **linear effect** — its ope
 
 ```
 linear effect FileHandle:
-    fn read_all -> Bytes
+    fn readAll -> Bytes
 
 linear effect Lock:
     fn release -> ()
@@ -150,14 +152,14 @@ linear effect Handle of R:
 **Exclusive captures across linear clause bodies (resolves L6).** Because a linear effect's clause body runs at most once per `handle` block, the clause body itself has quantity 1 — see `spec/quantities.md` Rule Q7.4. An exclusively owned outer value captured into a linear-effect clause body therefore stays exclusive:
 
 ```
-let lock_token = make_token()        // quantity 1
+let lockToken = makeToken()        // quantity 1
 handle (do: ... Lock.release):
     Lock.release =>
-        consume(lock_token)          // exclusive: clause body is quantity 1, see Rule Q7.4
+        consume(lockToken)          // exclusive: clause body is quantity 1, see Rule Q7.4
         resume(())
 ```
 
-The same capture into a *non-linear* clause body (e.g. `Console.print_line`) is downgraded to `own`: the value is shared from then on (`spec/quantities.md` Rule Q5.7). It is not an error.
+The same capture into a *non-linear* clause body (e.g. `Console.printLine`) is downgraded to `own`: the value is shared from then on (`spec/quantities.md` Rule Q5.7). It is not an error.
 
 ## 4. Effect rows
 
@@ -204,9 +206,9 @@ The `type` syntax (per `spec/syntax_grammar.ebnf` §7) extends to effect rows. T
 
 ```
 effect Console:
-    fn print_line(msg: String) -> ()
+    fn printLine(msg: String) -> ()
 effect FileSystem:
-    fn read_file(path: String) -> is Result of (String, String)
+    fn readFile(path: String) -> is Result of (String, String)
 effect Clock:
     fn now -> u64
 
@@ -236,8 +238,8 @@ type IO = Console + FileSystem
 fn run() -> () with IO = ...
 
 handle run():
-    Console.print_line(s) => ...
-    FileSystem.read_file(p) => ...
+    Console.printLine(s) => ...
+    FileSystem.readFile(p) => ...
     return(v) => v
 // SUBJECT row expands to Console + FileSystem; clauses cover both → outer row is empty
 ```
@@ -334,7 +336,7 @@ Invoking a value adds the row in its type. A parameter declared `f: A -> B` ther
 
 ```
 fn inner(input: String) -> u64 with Fail of String =
-    parse_u64(input).fold((v) -> v, (e) -> Fail.fail(e))   // Fail joins inner's row here
+    parseU64(input).fold((v) -> v, (e) -> Fail.fail(e))   // Fail joins inner's row here
 ```
 
 The rule reads an unannotated function type in a parameter as sharing the enclosing body's effects. It gives the effect polymorphism of §8 without a written row variable.
@@ -353,11 +355,11 @@ Examples. `Log` is handled inside each function shown.
 effect Log:
     fn write(msg: String) -> ()
 
-fn log_len(s: String) -> u64 with Log =
+fn logLen(s: String) -> u64 with Log =
     Log.write(s)
     s.length()
 
-fn log_id(s: String) -> String with Log =
+fn logId(s: String) -> String with Log =
     Log.write(s)
     s
 ```
@@ -368,8 +370,8 @@ fn log_id(s: String) -> String with Log =
 fn map(xs: List of A, f: A -> B) -> List of B
 
 fn ok(xs: List of String) -> List of u64 with Console =
-    handle map(xs, (s) -> log_len(s)):
-        Log.write(m) => resume(Console.print_line(m))
+    handle map(xs, (s) -> logLen(s)):
+        Log.write(m) => resume(Console.printLine(m))
 ```
 
 ```
@@ -378,11 +380,11 @@ fn ok(xs: List of String) -> List of u64 with Console =
 // escape analysis continues on it.
 fn compose(f: A -> B, g: B -> C) -> (A -> C) = (x) -> g(f(x))
 
-fn also_ok(xs: List of String) -> List of u64 with Console =
+fn alsoOk(xs: List of String) -> List of u64 with Console =
     handle (do:
-        let h = compose((s) -> log_id(s), (s) -> s.length())
+        let h = compose((s) -> logId(s), (s) -> s.length())
         map(xs, h)):                     // `h` is used inside the handler only
-        Log.write(m) => resume(Console.print_line(m))
+        Log.write(m) => resume(Console.printLine(m))
 ```
 
 ```
@@ -391,7 +393,7 @@ fn later(f: () -> ()) -> List of (() -> ()) = List.Cons(f, List.Nil)
 
 fn bad() -> List of (() -> ()) with Console =
     handle later(() -> Log.write("late")):
-        Log.write(m) => resume(Console.print_line(m))
+        Log.write(m) => resume(Console.printLine(m))
 // error[E085]: closure outlives the handler of `Log`
 //   = help: write the row in the stored type: `List of (() -> () with Log)`,
 //           and give `later` the parameter type `() -> () with Log`
@@ -452,11 +454,11 @@ For abortive operations (`-> !`), `resume` is never present in the clause — th
 `handle` blocks nest. Inner handlers run first; an effect bubbles outward until a handler claims it. Clauses in an inner handler do not see outer handlers' clauses — each `handle` has its own clause scope.
 
 ```
-handle outer_subject:
+handle outerSubject:
     OuterEff.op() => ...
 ```
 
-If `outer_subject` is itself `handle inner_subject: InnerEff.op() => ...`, then `InnerEff` is removed inside the inner handle and the outer handle sees only what `outer_subject` produces externally.
+If `outerSubject` is itself `handle innerSubject: InnerEff.op() => ...`, then `InnerEff` is removed inside the inner handle and the outer handle sees only what `outerSubject` produces externally.
 
 ### 6.6 Handler types and rows (Rule E6.6)
 
@@ -519,7 +521,7 @@ When a clause body's only use of `resume` is a tail call — `resume(expr)` as t
 ```
 handle f():
     Channel.send(value) =>
-        log_send(value)
+        logSend(value)
         resume(())              // tail position → no continuation roundtrip
 ```
 
@@ -554,7 +556,7 @@ The reason for capture over passing: a pure higher-order function in a library d
 
 **Relation to Rule E7.7.** An operation called from a closure body passes its arguments under `own`, as from any other performer. Captured evidence is not a witness: it is chosen at run time, by the handler installed where the closure was given its type, and a witness never is.
 
-**Lanes.** A callback with captured evidence has a non-empty row, so a `fold` that receives it is not a fork site (`spec/quantities.md` Rule Q5.13.a). Captured evidence never crosses into a parallel lane.
+**Lanes.** A closure carries one bit that is set when it holds captured evidence. Inside a function that receives the closure through an unannotated type, the row of that type is empty (Rule E5.5.a), so the bit is the only sign that calling it performs an effect. A fork site tests the bit before it forks and stays sequential when it is set (`spec/quantities.md` Rule Q5.13.a). Captured evidence never crosses into a parallel lane.
 
 **Alternative considered.** Koka binds effects dynamically: every higher-order function and every closure call is row-polymorphic and passes the current evidence vector as a hidden argument, so a closure performs its effects with the handlers in force where it runs. Closures stay fully first-class: one can be stored and invoked later under any handler. The price is a hidden argument on every higher-order function and closure call and a row variable in every such signature, with `mask` to keep a callee from intercepting what its type does not mention. Fixed keeps higher-order functions written without rows (Rule E5.5.a) and pays with Rule E5.5.b instead: a closure that relies on ambient effects is confined to its handler, and one that must outlive it says so with a row in its type (P6 D14).
 
@@ -579,7 +581,7 @@ Row variables are bound by the function and follow the same scoping as type vari
 A function may have a concrete effect row plus a row variable:
 
 ```
-fn map_console<E>(list: is List of A, f: A -> B with Console + E) -> is List of B with Console + E
+fn mapConsole<E>(list: is List of A, f: A -> B with Console + E) -> is List of B with Console + E
 ```
 
 Calls to this function must supply a callback whose row contains at least `Console`. The row variable `E` captures any additional effects.
@@ -606,7 +608,7 @@ fn each<E>(list: is List of A, f: A -> () with E) -> () with E =
 - **OQ-E5 — Linear effects (re-opened in v0.2.1).** §3.5 sketches the proposed semantics: `linear effect E:` declares an effect whose ops are quantity 1 in the row. Closure depends on `spec/quantities.md` OQ-Q5 (whether effect rows participate in QTT quantity at all). Until OQ-Q5 closes, §3.5 is non-normative.
 - **OQ-E1 — Multi-shot handlers (deferred to v0.5+).** Linked to `spec/quantities.md` OQ-Q1. v0.4.4 keeps `resume` at quantity 1 per Rule Q5.11 and Rule E6.4. Multi-shot would require continuation copying or persistent continuation representation, both with significant memory overhead.
 - **OQ-E3 — Effect inheritance (deferred).** No `extends` for effects in v0.4.4. Adding `effect MyConsole extends Console: ...` is straightforward if stdlib needs it.
-- **OQ-E8 — Row-polymorphic data (deferred).** A data type cannot take a row variable, so a structure that stores callbacks (a task queue) fixes their row: `List of (() -> () with Async)`. A callback with an extra rigid row variable cannot be stored in it. `examples/08_effects_handlers.fixed`'s `run_scheduler` hits this case and keeps one `T015` until it is resolved.
+- **OQ-E8 — Row-polymorphic data (deferred).** A data type cannot take a row variable, so a structure that stores callbacks (a task queue) fixes their row: `List of (() -> () with Async)`. A callback with an extra rigid row variable cannot be stored in it. `examples/08_effects_handlers.fixed`'s `runScheduler` hits this case and keeps one `T015` until it is resolved.
 - **OQ-E9 — Parameterised effect aliases.** Rule E4.5.b: the grammar gives aliases value parameters only. An alias over an effect's `of` argument needs a type parameter on `TypeAlias` and a use form (`with AppEffect of String` would parse as an `EffectBound`).
 - **OQ-E10 — Handler clauses for one effect at two `of` arguments.** `Fail of String` and `Fail of i64` are distinct effects (§3.4, Rule E4.2), but `HandlerClause` names only `E.op(…)` and cannot name the `of` argument. A `handle` whose subject performs both cannot say which one a clause handles. Needs a decision: a clause form with `of` (`Fail of String.fail(e) => …`), inference from the pattern's type, or a rule that one `handle` handles at most one instance of an effect.
 - **OQ-E4 — Higher-rank effect polymorphism (deferred).** A function whose argument is itself effect-polymorphic (`fn higher(g: forall E. (A -> B with E) -> ...)`) is not in v0.4.4. Defer until benchmark code reveals the need.
@@ -623,7 +625,7 @@ fn each<E>(list: is List of A, f: A -> () with E) -> () with E =
 ```
 fn compute(input: String) -> is Result of (String, u64) =
     fn inner(input: String) -> u64 with Fail of String =
-        let n = parse_u64(input).fold((v) -> v, (e) -> Fail.fail(e))
+        let n = parseU64(input).fold((v) -> v, (e) -> Fail.fail(e))
         let doubled = n * 2
         let result = divide(doubled, 3).fold((v) -> v, (e) -> Fail.fail(e))
         result
@@ -635,7 +637,7 @@ fn compute(input: String) -> is Result of (String, u64) =
 
 Inference walk:
 
-- `parse_u64`'s callback `(e) -> Fail.fail(e)` — the lambda's body calls abortive op `Fail.fail`, so its row is `Fail of String`.
+- `parseU64`'s callback `(e) -> Fail.fail(e)` — the lambda's body calls abortive op `Fail.fail`, so its row is `Fail of String`.
 - `inner`'s body passes these lambdas to `fold`, whose parameters have unannotated function types. By Rule E5.5.a the lambdas' row joins `inner`'s row where they are passed, and by Rule E7.8 each lambda captures `inner`'s evidence for `Fail` there; `fold` itself stays pure. So `inner`'s `R_inferred = Fail of String`. The lambdas do not outlive the call of `fold` (its result type cannot hold them), so Rule E5.5.b holds. Its declared `with Fail of String` matches.
 - `compute`'s body wraps `inner(input)` in a `handle` whose clauses cover `Fail` (abortive — `Result.err(e)`) and `return` (transforms to `Result.ok(v)`). After subtraction, the row outside is empty. `compute` declares no `with` clause, which matches. ✓
 - The `handle` block's result type joins:
@@ -645,7 +647,7 @@ Inference walk:
 
 ### 10.2 `examples/08_effects_handlers.fixed` — main with nested handlers
 
-The deeply nested `handle (do: ... ): clauses` chain in `main` removes one effect per nesting level: `Fail`, then `Log`, then `Console`. Each level subtracts its handled effect from the row that the next outer level sees. The outermost `handle` for `Console` leaves `FileSystem`, which `read_config` performs and no clause handles. `main` declares `with FileSystem`, consistent with §5.4's rule that `main`'s row must be a subset of the runtime-installed stdlib effects: the runtime handles `FileSystem`.
+The deeply nested `handle (do: ... ): clauses` chain in `main` removes one effect per nesting level: `Fail`, then `Log`, then `Console`. Each level subtracts its handled effect from the row that the next outer level sees. The outermost `handle` for `Console` leaves `FileSystem`, which `readConfig` performs and no clause handles. `main` declares `with FileSystem`, consistent with §5.4's rule that `main`'s row must be a subset of the runtime-installed stdlib effects: the runtime handles `FileSystem`.
 
 ### 10.3 `examples/06_functor_monad.fixed` — `sequence` (effect-poly callback)
 

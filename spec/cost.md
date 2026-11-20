@@ -1,8 +1,10 @@
 # Fixed Cost Contracts
 
-**Status:** Draft v0.2.1
+**Status:** Draft v0.2.2
 **Specifies:** what a cost contract bounds (steps, constructions, releases), how one is written (cost props, `fip`), the size index, how cost is inferred and verified, when a change to a contract is an ABI change, and how representation selection uses contracts and measured costs.
 **Last revised:** 2026-11-20
+
+**Changes from v0.2.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule CT6.2: an asymptotic bound the checker cannot decide is open, and `assumed` only if the programmer wrote `assume`.
 
 **Changes from v0.2.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the cost checker makes its own solver call and cost props skip the static prover (Rule CT6.2); the pool's satisfaction is resolved at the site that created the choice point, the link check is said to catch version skew and implicit satisfactions, and an open prop does not make a candidate non-viable (Rule CT8.1); "per satisfaction" replaces "per satisfying type".
 
@@ -112,14 +114,14 @@ prop <name>: <cost term> <= <bound>
 cap RandomAccess of (Part, Index is Numeric):
     fn get(index: Index) -> is Optional of Part
 
-    prop get_steps: steps(get) <= O(1)
+    prop getSteps: steps(get) <= O(1)
 
 cap Functor:
     fn map(f: Part -> B) -> Self of B
 
-    prop map_steps:    steps(map) <= O(size(self) * steps(f))
-    prop map_cells:    constructs(map) <= size(self) + size(self) * constructs(f)
-    prop map_in_place: constructs(map) - releases(map) <= size(self) * constructs(f)
+    prop mapSteps:    steps(map) <= O(size(self) * steps(f))
+    prop mapCells:    constructs(map) <= size(self) + size(self) * constructs(f)
+    prop mapInPlace: constructs(map) - releases(map) <= size(self) * constructs(f)
 ```
 
 Cost props need no grammar change: `steps(get)` is an application and `<=` a comparison (`spec/syntax_grammar.ebnf`, `AppExpr`). The names `steps`, `constructs`, `releases`, `size`, `O`, `log` and `max` have their cost meaning only in a prop whose left side is a cost term; elsewhere they are ordinary identifiers. This surface is provisional (OQ-CT1).
@@ -160,11 +162,11 @@ A member with no contract has an inferred cost (§6.1), which is reported and is
 ```
 Rope satisfies Clone:
     fn clone -> Self = self                       // shares
-    prop clone_cells: constructs(clone) <= 0
+    prop cloneCells: constructs(clone) <= 0
 
 Buffer satisfies Clone:
     fn clone -> Self = …                          // copies
-    prop clone_cells: constructs(clone) <= size(self)
+    prop cloneCells: constructs(clone) <= size(self)
 ```
 
 The capability `Clone` states only the copying bound, so that both kinds satisfy it. A caller that knows the type relies on the claim of its satisfaction (Rule CT4.4); the selector sees it as the cost of `clone` (Rule CT8.2). A satisfaction with no cost prop on `clone` has the inferred cost of its body. A type whose values must not be duplicated does not satisfy `Clone`.
@@ -202,7 +204,7 @@ The compiler infers `steps`, `constructs` and `releases` for every function from
 
 Functions cannot call themselves, so the only source of a size factor is a `fold` or an `unfold`. The inference is therefore syntax-directed: it solves no recurrences.
 
-A call on a choice-point value costs the contract and not the chosen satisfier's cost, because the choice is made after the package is compiled and the package is compiled once for every choice. Where the requirement states no contract the term is `?`, and a cost prop that depends on it continues at step 2 of Rule CT6.2: an exact bound may be `tested` in the test build, under the satisfaction that the test build's link chose (`spec/properties.md` Rule P7.4); an asymptotic bound is `assumed`. The link step reads no bodies and does not infer cost again; the link report (`spec/reports.md` Rule RP5.4) shows the chosen satisfier's claims beside the contract.
+A call on a choice-point value costs the contract and not the chosen satisfier's cost, because the choice is made after the package is compiled and the package is compiled once for every choice. Where the requirement states no contract the term is `?`, and a cost prop that depends on it continues at step 2 of Rule CT6.2: an exact bound may be `tested` in the test build, under the satisfaction that the test build's link chose (`spec/properties.md` Rule P7.4); an asymptotic bound stays open unless the programmer assumes it. The link step reads no bodies and does not infer cost again; the link report (`spec/reports.md` Rule RP5.4) shows the chosen satisfier's claims beside the contract.
 
 The size of a result is known where the member that built it says so (a `map` keeps the size; a constructor adds one). Where it is not known the result's size is a fresh symbol, and a bound that depends on it is `?`.
 
@@ -215,9 +217,9 @@ A cost prop is verified like any prop (`spec/properties.md` §7) and gets a stat
    - The inferred cost is known and exceeds the bound: the prop **fails**, `error[E120]: cost bound not met`, with the inferred cost and the construct that produced the excess. The inferred cost is an upper bound, so this can reject an implementation whose real cost is within the bound; the author then restructures it or states a weaker bound.
    - The inferred cost is unknown (`?`, Rule CT6.1): continue with step 2.
 2. **Testing, exact bounds only.** A test build counts steps and constructions around a call. For generated inputs the driver evaluates the bound at the inputs' sizes and compares. No counterexample gives `tested`.
-3. **Otherwise** the prop is `assumed`.
+3. **Otherwise** the prop is open (`spec/properties.md` Rule P7.1). Its status is `assumed` only if the programmer wrote it with `assume` (`spec/properties.md` Rule P7.7).
 
-Property-based testing cannot refute an asymptotic bound: a finite sample fixes neither `k` nor `n0`. A bound written with `O(…)` is therefore `proved`, failed by step 1, or `assumed`; it is never `tested`. A `tested` exact bound is a measurement of the member on the generated inputs (`spec/properties.md` Rule P7.9) and belongs to the measurement lane (Rule CT6.5). For an `assumed` asymptotic bound the test build may still measure the member at doubling sizes and report **W120** (measured growth exceeds the declared class). W120 is a warning, because the measurement proves nothing.
+Property-based testing cannot refute an asymptotic bound: a finite sample fixes neither `k` nor `n0`. A bound written with `O(…)` is therefore `proved`, failed by step 1, open, or `assumed` by the programmer; it is never `tested`. A `tested` exact bound is a measurement of the member on the generated inputs (`spec/properties.md` Rule P7.9) and belongs to the measurement lane (Rule CT6.5). For an open or `assumed` asymptotic bound the test build may still measure the member at doubling sizes and report **W120** (measured growth exceeds the declared class). W120 is a warning, because the measurement proves nothing.
 
 A failed exact bound is an error with a counterexample, as for any prop (Rule P8.4).
 
@@ -235,7 +237,7 @@ This check replaces the per-satisfaction re-check of default bodies for cost: a 
 
 `spec/properties.md` Rule P7.8 separates decisions that are wrong if a claim is false (the facts lane) from choices among alternatives that are all correct (the measurement lane). Every use of a cost contract is in the measurement lane: viability (Rule CT8.1), the score (Rule CT8.2), clone weights and the budget. A wrong contract makes a program slower, never wrong. What code does at a call site (whether a cell is reused, whether a branch is removed) is decided from the inferred cost and the reuse analysis of the code itself (Rules CT3.4, CT6.1), never from a cost prop.
 
-So the status of a cost prop never licenses a fact, and a `tested` cost prop, which is a measurement, is used as one. An asymptotic bound is `proved`, failed or `assumed` (Rule CT6.2); an `assumed` bound is taken as stated for selection, and W120 reports a measured growth that contradicts it.
+So the status of a cost prop never licenses a fact, and a `tested` cost prop, which is a measurement, is used as one. An asymptotic bound is `proved`, failed, open or `assumed` (Rule CT6.2); an open or `assumed` bound is taken as stated for selection, and W120 reports a measured growth that contradicts it.
 
 `fip` is not a cost prop in this sense: it is checked on the code (Rule CT4.3), and its failure is an error, not a status.
 

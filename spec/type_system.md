@@ -1,8 +1,10 @@
 # Fixed Type System
 
-**Status:** Draft v0.5.1
+**Status:** Draft v0.5.2
 **Specifies:** typing of Fixed source as defined by `spec/syntax_grammar.ebnf` v0.4.12.
 **Last revised:** 2026-11-20
+
+**Changes from v0.5.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule 5.1.2: no witness travels with an anonymous result, and a requirement's anonymous result is one choice point shared by its implementations. Rule 8.4: the sixth resolution level is removed; a derived or unnamed satisfaction gets no preference over a named one, so the ambiguity error stands, and `using Money satisfies Ord` names such a satisfaction by its pair.
 
 **Changes from v0.5.0.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): derived, built-in and prelude satisfactions are always in scope, and "sees" is defined (Rule 8.4); deferred sites are bound by level 5 (Rule 8.4.b); the test build's application root; private satisfactions (Rule 8.6.a); the pool's satisfaction is resolved at the site that created the choice point (§6.5.2); rule 4 of Rule 6.5.5 names the first capability of the bound set, and built-ins precede the standard library's source declarations; examples that used `let x: T = …` use parameter types (§5.1.1, §8.4, §8.5); new codes `E061`–`E065`; wrong references and "(TBD)" cross-references repaired.
 
@@ -92,7 +94,7 @@ Reason: a per-value variable would need a witness in every cell. A per-use varia
 
 ```
 // `examples/01_basics.fixed:30`  —  N introduced once, referenced twice
-fn fib_iter(n: N is Numeric) -> N: ...
+fn fibIter(n: N is Numeric) -> N: ...
 //          ^introduces      ^refers
 
 // `examples/05_phantom_types.fixed:110-112`  —  U introduced once, referenced 3x
@@ -138,8 +140,8 @@ Two forms:
 
 ```
 fn count(c: is Folding) -> u64                          // anonymous: any Folding
-fn fib_iter(n: N is Numeric) -> N                       // named: input and output share type
-fn even_doubled(numbers: C is Filtering of (N is Numeric) + Functor of N) -> C
+fn fibIter(n: N is Numeric) -> N                       // named: input and output share type
+fn evenDoubled(numbers: C is Filtering of (N is Numeric) + Functor of N) -> C
 //              ^reused C    ^reused N as element type
 ```
 
@@ -159,13 +161,13 @@ Reason: whoever supplies a value of a type parameter knows its type. A choice po
 
 The signature decides who picks the representation of a result. The body cannot change the calling convention.
 
-- **`-> is C` (anonymous).** The result is a choice point owned by the function. The caller treats the value as opaque: it may use only the members of `C`. It receives the value's witness with it (`spec/compilation_model.md` Rule CM4.5). All values the body returns have one type. If the body constructs data directly, that data type is the choice point's only candidate. An abstract constructor call for the result is the choice point (§8.5).
+- **`-> is C` (anonymous).** The result is a choice point owned by the function. The caller treats the value as opaque: it may use only the members of `C`. No witness travels with it: the witness of the choice point is bound at link (`spec/compilation_model.md` Rule CM4.5). All values the body returns have one type. If the body constructs data directly, that data type is the choice point's only candidate. An abstract constructor call for the result is the choice point (§8.5).
 - **`-> R is C` (named, `R` in no parameter type).** `R` is an ordinary type parameter: the caller picks it and passes its witness. A body that returns a concrete data type where `R` is expected is a type error: `Maybe.Just(x)` is a `Maybe`, not an `R`. An abstract constructor call for `R` stays abstract. It resolves at the caller, through the capability table in `R`'s witness.
-- **A requirement whose result is `-> is C`** (`fn compare(other: Self) -> is Ordering`) follows the first case. The result is a choice point of each satisfying method.
+- **A requirement whose result is `-> is C`** (`fn compare(other: Self) -> is Ordering`) follows the first case, with one difference: the choice point is owned by the requirement and shared by every satisfaction's implementation of it, so that a call through a capability table knows the type of the result without a witness. An implementation that constructs data directly restricts the choice point to that data type; two implementations that restrict it to different types leave no viable candidate (`E060`, §6.5.3).
 
 ```
 fn parse(s: String) -> is Optional of u64 = ...     // the function's choice point
-fn empty_of() -> R is Optional of u64 = Optional.none // the caller picks R
+fn emptyOf() -> R is Optional of u64 = Optional.none // the caller picks R
 fn wrong() -> R is Optional of u64 = Maybe.Nothing    // ERROR: Maybe is not R
 ```
 
@@ -193,7 +195,7 @@ Reason: a function of type `T -> T` has one implementation only if it cannot ins
 
 ```
 cap Sized of (Part, Size is Numeric)           // declares two params
-fn size_of(c: is Sized of (i64, u64)) -> u64    // applies both
+fn sizeOf(c: is Sized of (i64, u64)) -> u64    // applies both
 ```
 
 `of` arguments may be:
@@ -398,7 +400,7 @@ Instance and static methods may carry an optional body (v0.4):
 cap Optional:
     Self.fn some(value: Part) -> Self
     Self.fn none -> Self
-    fn fold<R>(on_some: Part -> R, on_none: () -> R) -> R
+    fn fold<R>(onSome: Part -> R, onNone: () -> R) -> R
 
     // Default implementations — types satisfying Optional may override.
     fn isDefined -> bool = self.fold((_) -> true, () -> false)
@@ -436,7 +438,7 @@ The default body itself is not checked again. It is compiled once, as a baseline
 cap Optional:
     Self.fn some(v: Part) -> Self
     Self.fn none -> Self
-    fn fold<R>(on_some: Part -> R, on_none: () -> R) -> R
+    fn fold<R>(onSome: Part -> R, onNone: () -> R) -> R
     fn isDefined -> bool = self.fold((_) -> true, () -> false)
     //                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     //   Phase 1 typing: self : Self (abstract); fold available with declared signature; OK.
@@ -461,12 +463,12 @@ A capability with value parameters is sugar for a function returning a capabilit
 
 ```
 cap Between(min: N is Ord, max: N) of N:
-    prop in_range: min <= Self && Self <= max
+    prop inRange: min <= Self && Self <= max
 
 // is equivalent to
 
 fn between(min: N is Ord, max: N) -> cap of N =
-    prop in_range: min <= Self && Self <= max
+    prop inRange: min <= Self && Self <= max
 ```
 
 Both forms produce a *cap-generating function* (see `spec/properties.md` for the prop semantics; this document treats `fn -> cap` as a regular function whose return type happens to be a refinement capability).
@@ -477,10 +479,10 @@ A function `fn f(args) -> cap of T` (or `fn f(args) -> cap extends C`) is a **ca
 
 ```
 fn between(min: N is Ord, max: N) -> cap of N =
-    prop in_range: min <= Self && Self <= max
+    prop inRange: min <= Self && Self <= max
 
 // Use site — call the generator by name, no `cap` keyword:
-fn validate_age(age: u8 is between(0, 150)) -> u8 = age
+fn validateAge(age: u8 is between(0, 150)) -> u8 = age
 //                       ^^^^^^^^^^^^^^^^ RefinementCall (per grammar §10)
 ```
 
@@ -489,7 +491,7 @@ Per the grammar (`syntax_grammar.ebnf` §10 — `CapBound = CapRef | RefinementC
 **Higher-order positions.** When a cap-generator value is passed as an argument or stored as a binding, its *type* requires the `cap of T` form (per the grammar's `CapType` admitted as a `TypeAtom`):
 
 ```
-fn validate_with(
+fn validateWith(
     value: N is Numeric,
     constraint: (N, N) -> cap of N,    // higher-order parameter type
     lo: N,
@@ -518,12 +520,12 @@ Different generators always produce different caps even if their prop bodies are
 
 ```
 fn between(lo: N is Ord, hi: N) -> cap of N = prop r: lo <= Self && Self <= hi
-fn alt_between(lo: N is Ord, hi: N) -> cap of N = prop r: lo <= Self && Self <= hi
-// Even though the bodies match, `between(0, 10)` and `alt_between(0, 10)`
+fn altBetween(lo: N is Ord, hi: N) -> cap of N = prop r: lo <= Self && Self <= hi
+// Even though the bodies match, `between(0, 10)` and `altBetween(0, 10)`
 // are *different* caps. A value of one is not assignable to a binding of the other.
 
-type alt_between = between
-// `alt_between` is now a type-alias for `between`, so `alt_between(0, 10)` *is*
+type altBetween = between
+// `altBetween` is now a type-alias for `between`, so `altBetween(0, 10)` *is*
 // `between(0, 10)` (same generator after alias expansion).
 ```
 
@@ -541,7 +543,7 @@ Cap-generator returns are **Marker** classification (per §6.4 — no methods, o
 // substitute a List-of-i64 here). The `between(0, 10)` refinement adds an
 // obligation but does not change which auto-derivations apply.
 
-// `is pair_constraint(0, 100)` where `pair_constraint(lo, hi) -> cap of (X, Y)`
+// `is pairConstraint(0, 100)` where `pairConstraint(lo, hi) -> cap of (X, Y)`
 // returns a multi-param refinement — does **not** auto-derive Functor.
 // Programs needing Functor over a multi-param refinement must declare a
 // named cap with explicit type parameters; Rule 7.4.c then applies normally.
@@ -566,7 +568,7 @@ Type-checking a signature that mentions `f(arg1, arg2, ...)` (a cap-generator ca
 | Closed-form arithmetic over admissible operands: `+`, `-`, `*`, `/`, `%` (compile-time constant-foldable) | `between(0, 2 * upper)` |
 
 Not admitted in v0:
-- Function calls (`config.max_age()`)
+- Function calls (`config.maxAge()`)
 - Field access on bindings (`config.max`)
 - `match`/`if` expressions
 - Capability-method calls
@@ -580,16 +582,16 @@ The v0→v1 promotion is purely a relaxation; programs valid under v0 are valid 
 
 ```
 // v0 — accepted:
-fn validate_age(age: u8 is between(0, 150)) -> u8 = age
+fn validateAge(age: u8 is between(0, 150)) -> u8 = age
 let upper = 150
-fn validate_age2(age: u8 is between(0, upper)) -> u8 = age   // upper is a literal-initialized binding
+fn validateAge2(age: u8 is between(0, upper)) -> u8 = age   // upper is a literal-initialized binding
 
 // v0 — rejected (computed bound):
-let upper = config.max_age()
-fn validate_age3(age: u8 is between(0, upper)) -> u8 = age   // error: not a literal
+let upper = config.maxAge()
+fn validateAge3(age: u8 is between(0, upper)) -> u8 = age   // error: not a literal
 
 // v1 (when totality lands):
-// All three forms are accepted; the totality checker certifies `config.max_age()`.
+// All three forms are accepted; the totality checker certifies `config.maxAge()`.
 ```
 
 Tracking gate: see implementation-plan.md Phase 3 totality-checker delivery.
@@ -635,7 +637,7 @@ The candidates are **satisfactions**, from two sources:
 - **Declared satisfactions.** A `T satisfies C` for some C in the bound set, or inherited by one. At package compile, the pool is the satisfactions the package can see. At link, it is the satisfactions of the link unit that count at the choice point (Rule 8.6).
 - **Built-in candidates**: the §6.6 pool. Each carries a precondition expressing which bound sets it can satisfy.
 
-**Two satisfactions of the same pair are never ranked.** When the link unit holds several satisfactions of one (type, capability), Rule 8.4 picks the one that serves the choice point: at the site that created the choice point, by levels 1–4 there; if that leaves several, by levels 5–6 at link (`spec/compilation_model.md` Rule CM8.4, `spec/cost.md` Rule CT8.1). Only that satisfaction enters the pool for that type. Two satisfactions of one pair differ in results, not in speed, so the score must not choose between them. The pool therefore holds at most one candidate per data type and capability.
+**Two satisfactions of the same pair are never ranked.** When the link unit holds several satisfactions of one (type, capability), Rule 8.4 picks the one that serves the choice point: at the site that created the choice point, by levels 1–4 there; if that leaves several, by level 5 at link (`spec/compilation_model.md` Rule CM8.4, `spec/cost.md` Rule CT8.1). Only that satisfaction enters the pool for that type. Two satisfactions of one pair differ in results, not in speed, so the score must not choose between them. The pool therefore holds at most one candidate per data type and capability.
 
 Per Rule 6.6, built-in and declared candidates have **equal priority**; the score of Rule 6.5.4 and the disambiguation of Rule 6.5.5 choose.
 
@@ -831,7 +833,7 @@ Non-`phantom` `of` parameters with a type annotation (e.g., `lo: N = 16`) are **
 ```
 data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
     Bounded(value: N)
-    prop in_range: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
+    prop inRange: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
 
 // Two distinct types — values are not assignable across them:
 //   Bounded of (i64, 0, 10)
@@ -878,12 +880,12 @@ data Json:
 
 // Auto-derived fold:
 //   fn fold<R>(
-//       on_null:   () -> R,
-//       on_bool:   (b: bool) -> R,
-//       on_number: (n: f64) -> R,
-//       on_string: (s: String) -> R,
-//       on_array:  (elements: List of R) -> R,
-//       on_object: (fields:   List of (Tuple of (String, R))) -> R,
+//       onNull:   () -> R,
+//       onBool:   (b: bool) -> R,
+//       onNumber: (n: f64) -> R,
+//       onString: (s: String) -> R,
+//       onArray:  (elements: List of R) -> R,
+//       onObject: (fields:   List of (Tuple of (String, R))) -> R,
 //   ) -> R
 ```
 
@@ -898,10 +900,10 @@ data Expr:
 
 // Auto-derived:
 //   fn fold<R>(
-//       on_lit: f64 -> R,
-//       on_add: (R, R) -> R,
-//       on_mul: (R, R) -> R,
-//       on_neg: R -> R,
+//       onLit: f64 -> R,
+//       onAdd: (R, R) -> R,
+//       onMul: (R, R) -> R,
+//       onNeg: R -> R,
 //   ) -> R
 ```
 
@@ -917,7 +919,7 @@ The compiler iterates `step` until no recursive seeds remain. The combination of
 
 **Rule 7.4.b.1 (Guaranteed fusion).** Function recursion is not available (functions are total), so every loop in a Fixed program is a `fold`, and a counted loop is an `unfold` followed by a `fold`. The compiler therefore **must** remove the intermediate structure, with no allocation for it, when all of these hold:
 
-1. The result of an `unfold` (or of a conversion the compiler derives from one, such as `to_nat`) is consumed by exactly one `fold`.
+1. The result of an `unfold` (or of a conversion the compiler derives from one, such as `toNat`) is consumed by exactly one `fold`.
 2. That result is used once (quantity 1, `spec/quantities.md` §5): nothing else observes it. Exclusive ownership is not required, because the structure is never built.
 3. Both calls resolve to auto-derived `fold` / `unfold` (Rules 7.4.a, 7.4.b) of a data type that is statically known at the call site.
 
@@ -933,7 +935,7 @@ These two guarantees are **mandatory specialisations** (`spec/compilation_model.
 2. `Xn` appears in **covariant** position in at least one variant field.
 3. `Xn` does **not** appear in contravariant position (e.g., as a function-parameter type) in any variant field.
 
-This rule applies to **named** data types only. Anonymous caps produced by cap-generator calls (e.g., `pair_constraint(0, 100)`) are never auto-derived per Rule 6.3.2 — refinement caps add prop obligations, not method surfaces.
+This rule applies to **named** data types only. Anonymous caps produced by cap-generator calls (e.g., `pairConstraint(0, 100)`) are never auto-derived per Rule 6.3.2 — refinement caps add prop obligations, not method surfaces.
 
 The auto-derived `map` is implemented as a `fold` that re-builds each variant with the function applied to fields of type `Xn`, leaving fields of other types untouched. The map's range type substitutes `Xn` with the supplied target type:
 
@@ -967,11 +969,11 @@ data Tree of A:
 
 // Auto-derived:
 //   fn para<R>(
-//       on_leaf:   (value: A) -> R,
-//       on_branch: (left_orig: Tree of A, left_folded: R,
+//       onLeaf:   (value: A) -> R,
+//       onBranch: (leftOrig: Tree of A, leftFolded: R,
 //                    value: A,
-//                    right_orig: Tree of A, right_folded: R) -> R,
-//       on_empty:  () -> R,
+//                    rightOrig: Tree of A, rightFolded: R) -> R,
+//       onEmpty:  () -> R,
 //   ) -> R
 ```
 
@@ -1029,7 +1031,7 @@ data Node:
 // on both. To consume them, the user writes explicit satisfaction:
 //
 //   Tree satisfies Folding:
-//       fn fold<R>(on_branch: ..., on_leaf: ...) -> R = ...
+//       fn fold<R>(onBranch: ..., onLeaf: ...) -> R = ...
 //   Node satisfies Folding: ...
 ```
 
@@ -1101,7 +1103,7 @@ A self-contained example. Define a sum-style cap with two requirements:
 cap Either of (L, R):
     Self.fn left(value: L) -> Self
     Self.fn right(value: R) -> Self
-    fn fold<X>(on_left: L -> X, on_right: R -> X) -> X
+    fn fold<X>(onLeft: L -> X, onRight: R -> X) -> X
 
 // A data type that is always the right side — for instance, a parse result
 // from a trusted source where failure is impossible by construction.
@@ -1119,8 +1121,8 @@ Calling `Either.right(v)` at a position whose expected type resolves to `AlwaysR
 Static guarantees that the panic is unreachable are the user's responsibility, expressible as `prop` declarations on the surrounding code per `spec/properties.md`. For instance:
 
 ```
-fn unwrap_right(x: AlwaysRight of (L, R)) -> R =
-    prop never_calls_left: ...     // user-supplied invariant ruling out Either.left
+fn unwrapRight(x: AlwaysRight of (L, R)) -> R =
+    prop neverCallsLeft: ...     // user-supplied invariant ruling out Either.left
     x.fold((_) -> unreachable, (r) -> r)
 ```
 
@@ -1168,10 +1170,11 @@ Without the `satisfies` clause, a `use` imports only the type, and its satisfact
 2. `using` in a type: `Set of Money using ByAmount`;
 3. `using` at file or package scope;
 4. the one satisfaction of the pair in scope: by `use`, by declaration in the site's package, or because it is always in scope;
-5. `using` in the application root, as the default of the link unit;
-6. the only satisfaction of the pair in the link unit.
+5. `using` in the application root, as the default of the link unit.
 
-Otherwise the site is ambiguous, and that is an error (`E061`).
+Otherwise the site is ambiguous, and that is an error (`E061`). (Earlier drafts had a sixth level, "the only satisfaction of the pair in the link unit". It could never decide: a site that sees one satisfaction is decided at level 4, and a site that sees several is not unique in the link unit.)
+
+**Derived and unnamed satisfactions get no preference.** A derived satisfaction (§7.4, `spec/stdlib.md` §5) counts like a declared one, and an unnamed satisfaction like a named one. A pair that has a derived satisfaction and a named one in scope has two, and a site that no `using` decides is ambiguous. Declaring a named satisfaction for a pair that already has one therefore makes every site that sees both ambiguous until a `using` chooses. A `using` names a named satisfaction by its name, and an unnamed or derived one by its pair: `using Money satisfies Ord`.
 
 A `using` names satisfactions, and each name determines its pair. At the call site it covers every resolution made in the call expression, including its arguments, unless an inner `using` decides first. In a type it covers the whole type expression it is written in (`spec/syntax_grammar.ebnf` §10). A top-level `using` declaration in a source file applies to that file. Package scope is a `using` declaration in the file `package.fixed` at the root of the package. The application root is that file in the package that declares `main`; in a test build it is the `package.fixed` of the package under test (`spec/compilation_model.md` §8). In the application package that file is therefore both its package scope (level 3) and the application root (level 5); for a site of the application package level 3 decides first, and level 5 matters only for deferred sites of other packages. A level that names two satisfactions of one pair is itself ambiguous.
 
@@ -1193,7 +1196,7 @@ A bound on a function's type parameter (`fn sort(xs: is Sequencing of (T is Ord)
 
 A field-local choice point (Rule 4.1.a) is bound once per link unit, so a satisfaction recorded inside it is fixed for the whole program. A `using` in a type can name a satisfaction only for the type's parameters, never for its field-local choice points.
 
-**Rule 8.4.b (Deferred sites).** A site in a library that sees several satisfactions of a pair and has no `using` is not an error in the library. It is bound at link by level 5, and reported as a note; level 6 cannot decide it, because the link unit holds every satisfaction the site sees. If level 5 does not decide, the link fails with the ambiguity error (`E061`), naming the library site. A site that sees no satisfaction of the pair is a type error, as before. A site in the application package that levels 1–4 do not decide is resolved the same way, at its link.
+**Rule 8.4.b (Deferred sites).** A site in a library that sees several satisfactions of a pair and has no `using` is not an error in the library. It is bound at link by level 5, and reported as a note. If level 5 does not decide, the link fails with the ambiguity error (`E061`), naming the library site. A site that sees no satisfaction of the pair is a type error, as before. A site in the application package that levels 1–4 do not decide is resolved the same way, at its link.
 
 *(Rule 8.4.b is the author's choice in P6 D12.)*
 
@@ -1213,10 +1216,10 @@ fn biggest(xs: is Sequencing of Money) -> is Sequencing of Money =
 fn merge(a: Set of Money using ByAmount, b: Set of Money using ByAmount) -> Set of Money using ByAmount = ...
 
 fn combine(
-    by_amount: Set of Money using ByAmount,   // level 2: Set of Money[Ord = ByAmount]
-    by_date: Set of Money using ByDate,       //          Set of Money[Ord = ByDate]
+    byAmount: Set of Money using ByAmount,   // level 2: Set of Money[Ord = ByAmount]
+    byDate: Set of Money using ByDate,       //          Set of Money[Ord = ByDate]
 ) -> Set of Money using ByAmount =
-    merge(by_amount, by_date)
+    merge(byAmount, byDate)
 // error[E062]: Set of Money[Ord = ByDate] is not Set of Money[Ord = ByAmount];
 //        help: pass a set built `using ByAmount`, or convert it explicitly
 ```
@@ -1255,7 +1258,7 @@ When the expected type contains refinement caps (Marker classification, per §6.
 **Stage C — Re-apply refinements as obligations.** The chosen constructor's result is a value of the satisfying type, which by virtue of having satisfied `E_base` is well-typed. The refinement caps in `E_ref` become **prop obligations** on that result, discharged by the verifier per `spec/properties.md` §7. If `E_base` is empty (the expected type is *only* refinement caps), resolution fails with `error[E065]: refinement caps have no constructors; the expected type must include a base capability with a constructor requirement`.
 
 ```
-fn try_make(i: u64) -> is Optional of u64 + between(1, 99) =
+fn tryMake(i: u64) -> is Optional of u64 + between(1, 99) =
     Optional.some(i)
 //  ^^^^^^^^^^^^^^^^
 //  Stage A: E_base = { Optional of u64 }, E_ref = { between(1, 99) }
@@ -1285,12 +1288,12 @@ pub cap Stack:
 data ArrayStack(items: is Sequencing of i64)    // private
 ArrayStack satisfies Stack: ...                  // private
 
-pub fn new_stack() -> is Stack = Stack.empty     // the caller sees only Stack
+pub fn newStack() -> is Stack = Stack.empty     // the caller sees only Stack
 ```
 
 **Rule 8.6.a (Private names in public signatures).** A public declaration must not name a private one in its signature, in the fields of its variants, or in its bounds (`error[E063]`). A public function that returns a value of a private data type declares the result as `-> is C`. Reason: an importer could not name the type, and an importer is compiled from the interface alone.
 
-A private satisfaction is visible only in its package: it counts as a candidate for the package's own choice points (§6.5.2) and in the resolution of Rule 8.4 at the package's own sites, and nowhere else. It does not count for levels 5 and 6 of Rule 8.4, nor for the deferred sites of other packages. A type that records it (Rule 8.4.a) may not appear in a `pub` signature, as a private data type may not (`E063`). A `pub` satisfaction of a private data type is allowed. It makes the type a candidate at choice points of the whole link unit, and code outside the package then uses it only through the capability.
+A private satisfaction is visible only in its package: it counts as a candidate for the package's own choice points (§6.5.2) and in the resolution of Rule 8.4 at the package's own sites, and nowhere else. It does not count for level 5 of Rule 8.4, nor for the deferred sites of other packages. A type that records it (Rule 8.4.a) may not appear in a `pub` signature, as a private data type may not (`E063`). A `pub` satisfaction of a private data type is allowed. It makes the type a candidate at choice points of the whole link unit, and code outside the package then uses it only through the capability.
 
 A private function needs no floor entry. A private data type needs no accessors (`spec/compilation_model.md` Rule CM3.7).
 
@@ -1298,7 +1301,7 @@ A private function needs no floor entry. A private data type needs no accessors 
 
 `effect E: fn op(...) -> T` declares a set of effect operations. A function that performs effects declares them in its `with` clause: `fn read() -> String with FileSystem`. Effect rows compose with `+`. This document does not specify effect inference, evidence-passing compilation, or handler semantics; see `spec/effects.md`.
 
-For typing purposes here, an effect's operations are first-class methods on the effect type (e.g., `Console.print_line(s)` is a method call returning `()` and adding `Console` to the caller's effect row).
+For typing purposes here, an effect's operations are first-class methods on the effect type (e.g., `Console.printLine(s)` is a method call returning `()` and adding `Console` to the caller's effect row).
 
 ## 10. Type inference architecture
 
@@ -1355,9 +1358,9 @@ Subtyping in Fixed is intentionally narrow:
 
   ```
   fn sort(collection: ...) -> C is Sorted =
-      prop result_same_size: result.size == collection.size
+      prop resultSameSize: result.size == collection.size
       //                     ^^^^^^ implicitly bound to the fn's return value
-      collection.fold_right(...)
+      collection.foldRight(...)
   ```
 
 **Carried over from `docs/plans/implementation-plan.md` (Open Design Questions, not resolved here):**
