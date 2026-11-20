@@ -258,6 +258,25 @@ class EmitSuite extends munit.FunSuite:
     assert(counts(Mode.Default).getOrElse("reuses", 0L) >= 4, counts)
     assertEquals(counts(Mode.Default)("reuses"), counts(Mode.NoSpecialise)("reuses"))
 
+  test("one baseline version of a generic function runs at String and at i8, freeing every String (Rule CM3.1)"):
+    val src = BaselineSuite.generic
+    val counts = check("generic", src, "cd\n-100\nxy-7\n")
+    assertEquals(counts(Mode.Default).getOrElse("wops", 0L), 0L)
+    assert(counts(Mode.NoSpecialise)("wops") > 0, counts)
+    val plain = ir("generic", src, Mode.NoSpecialise)
+    assert(plain.contains("call i64 @\"fx_u_last\"(ptr @fx_w_ref,"), plain)
+    assert(plain.contains("call i64 @\"fx_u_last\"(ptr @fx_w_imm,"), plain)
+
+  test("a closure in a baseline version captures the witness of a slot it binds; a failed attempt keeps no callee"):
+    val src = header + "data Pair of (A, B):\n    P(a: A, b: B)\n\n" +
+      "fn later(p: Pair of (A, B)) -> () -> u64 =\n    () -> match p:\n        Pair.P(x, y) => 7\n\n" +
+      "fn ident(x: A) -> A = x\n\n" +
+      "fn shown(x: A) -> String =\n    let y = ident(x)\n    y.show()\n\n" +
+      "fn main() -> () with Console =\n" +
+      "    Console.print_line(later(Pair.P(\"a\".concat(\"b\"), 3))().show())\n" +
+      "    Console.print_line(shown(\"c\".concat(\"d\")))\n"
+    val _ = check("captured_witness", src, "7\ncd\n")
+
   /** `P of u8` has a scalar in slot 0 and a reference in slot 1; `P of String` has references in
     * both, and its cell reuses the `P of u8` one. A wrong reference map leaks or frees a scalar.
     * `N` puts every narrow scalar kind in a slot.

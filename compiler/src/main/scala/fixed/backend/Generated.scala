@@ -4,10 +4,12 @@ import fixed.backend.Atom.Var
 import fixed.core.{SymbolId, SymbolTable, Type, render}
 import fixed.util.Span
 
-/** Members the compiler derives or generates as Core functions, one instance per data type and
-  * arguments: Rule 7.4.a `fold` (through functors per Rule 7.4.a.1), Rule 7.4.b `unfold`, Rule
-  * 7.4.c `map`, and for list-shaped data `Folding.fold`, `length` and `find`. Arguments that are
-  * type parameters make a polymorphic instance with hidden witness parameters ([[hidden]]).
+/** Members the compiler derives or generates as Core functions: Rule 7.4.a `fold` (through functors
+  * per Rule 7.4.a.1), Rule 7.4.b `unfold`, Rule 7.4.c `map`, and for list-shaped data
+  * `Folding.fold`, `length` and `find`. By default one instance is built per data type and
+  * arguments; in baseline mode one version per data type, at its own parameters ([[member]]).
+  * Arguments that are type parameters make a polymorphic member with hidden witness parameters
+  * ([[hidden]]).
   */
 private[backend] trait Generated:
   protected type K = Atom => Expr
@@ -24,6 +26,19 @@ private[backend] trait Generated:
   protected def fieldTypes(data: SymbolId, args: List[Type], variant: SymbolId): List[Type]
   protected def dataOf(t: Type): Option[(SymbolId, List[Type])]
 
+  /** Whether generated members are built once, at their data type's own parameters (Rule CM3.1). */
+  protected def baseline: Boolean
+
+  /** The baseline versions built, and the members still built per instance with the reason (`Lower`). */
+  def baselines: collection.mutable.Set[String]
+  def instances: collection.mutable.Map[String, String]
+
+  /** `body`, or the first problem it reported, everything it built discarded (`Lower.attempt`). */
+  protected def attempt[A](body: => A): Either[String, A]
+
+  /** Report `what` as a problem of the code being lowered (`B005`). */
+  protected def report(what: String): Unit
+
   /** Record `x`'s typer type for `Demands`; returns `x`. */
   protected def typed(x: Var, t: Type, span: Span): Var
 
@@ -34,7 +49,7 @@ private[backend] trait Generated:
     * `F of ... Self` is mapped through `F`'s derived `map`, so the callback receives `F of ... R`.
     */
   protected def derivedFold(data: SymbolId, args: List[Type], r: Type, span: Span): String =
-    val name = generatedName(data, args, "fold", symbols.render(r))
+    val name = generatedName(data, args, "fold", shown(r))
     val ws = hidden(args :+ r)
     instance(name) {
       val x = typed(fresh("x", CType.Boxed), Type.TypeRef(data, args), span)
@@ -51,9 +66,8 @@ private[backend] trait Generated:
             val folded = Lower.replace(elem, data, r)
             closure(List(param), through(elem, param)(Expr.Ret(_)), ctype(folded, span)) { c =>
               val mapped = fresh("mapped", CType.Boxed)
-              val call =
-                Rhs.Call(derivedMap(f, fargs, folded, span), hidden(fargs :+ folded) ++ List(v, c), runtime = false)
-              Expr.Let(mapped, call, k(mapped))
+              val (map, ws) = member(f, fargs, Some(folded))((a, b) => derivedMap(f, a, b, span))
+              Expr.Let(mapped, Rhs.Call(map, ws ++ List(v, c), runtime = false), k(mapped))
             }
           case _ => k(v)
       val branches = perVariant(data, args, x, span) { (tag, loaded) =>
@@ -67,21 +81,23 @@ private[backend] trait Generated:
   /** Rule 7.4.b: `D.unfold(seed, step)`. The step returns one layer whose recursive fields hold
     * seeds; each is unfolded in turn. (The layer is a separate allocation: fusion is Phase 4.)
     */
-  protected def derivedUnfold(data: SymbolId, args: List[Type], seed: Atom, span: Span): String =
-    val seedType = seed.tpe
-    val name = generatedName(data, args, "unfold", seedType.toString)
+  protected def derivedUnfold(data: SymbolId, args: List[Type], seed: Type, span: Span): String =
+    val seedType = ctype(seed, span)
+    val name = generatedName(data, args, "unfold", if seed == Generated.R then "R" else seedType.toString)
+    val ws = hidden(args :+ seed)
     instance(name) {
       val s = fresh("seed", seedType)
       val step = fresh("step", CType.Boxed)
       val layer = fresh("layer", CType.Boxed)
       val recurse = (t: Type, v: Var) =>
-        Option.when(Lower.isSelf(t, data))(bound(Rhs.Call(name, List(v, step), runtime = false), CType.Boxed)).flatten
+        Option.when(Lower.isSelf(t, data))(bound(Rhs.Call(name, ws ++ List(v, step), runtime = false), CType.Boxed))
+          .flatten
       val branches = perVariant(data, args, layer, span, Some(seedType)) {
         (tag, loaded) => construction(tag, loaded, recurse)
       }
       Fn(
         name,
-        List(s, step),
+        ws ++ List(s, step),
         CType.Boxed,
         Expr.Let(layer, Rhs.CallClosure(step, List(s)), switch(layer, branches, CType.Boxed))
       )
@@ -89,7 +105,7 @@ private[backend] trait Generated:
 
   /** Rule 7.4.c: `x.map(f)` over the rightmost type parameter; recursive fields are mapped too. */
   protected def derivedMap(data: SymbolId, args: List[Type], newElem: Type, span: Span): String =
-    val name = generatedName(data, args, "map", symbols.render(newElem))
+    val name = generatedName(data, args, "map", shown(newElem))
     val ws = hidden(args :+ newElem)
     instance(name) {
       val (x, f) = (typed(fresh("x", CType.Boxed), Type.TypeRef(data, args), span), fresh("f", CType.Boxed))
@@ -114,7 +130,7 @@ private[backend] trait Generated:
     * `find` below.
     */
   protected def foldLeft(data: SymbolId, args: List[Type], accType: Type, span: Span): String =
-    val name = generatedName(data, args, "foldLeft", symbols.render(accType))
+    val name = generatedName(data, args, "foldLeft", shown(accType))
     val ws = hidden(args :+ accType)
     instance(name) {
       val rt = ctype(accType, span)
@@ -176,16 +192,55 @@ private[backend] trait Generated:
   /** The witness parameter of type parameter `p` (`spec/compilation_model.md` Rule CM4.3). */
   protected def witnessOf(p: SymbolId): Var = Var(s"w.${symbols(p).name}.${p.toInt}", CType.Witness)
 
+  /** The witness parameter of a type parameter: a declared one, or [[Generated.R]]. */
+  protected def witnessVar(t: Type): Var =
+    t match
+      case Type.TypeRef(p, Nil) => witnessOf(p)
+      case _                    => Var("w.R", CType.Witness)
+
+  /** The witness of type `t` where the code being lowered runs: the witness parameter of a type
+    * parameter, else the static witness of a known type (every value that is not an immediate is on
+    * the heap).
+    */
+  protected def witnessAtom(t: Type): Atom =
+    if isTypeParam(t) then witnessVar(t)
+    else Atom.StaticWitness(if ctype(t, Span.NoSpan).counted then "ref" else "imm")
+
   /** The hidden witness parameters of a generated member at `types`: one per type parameter they
     * mention, in order of first occurrence. Empty for a member at concrete types.
     */
-  protected def hidden(types: List[Type]): List[Var] = types.flatMap(typeParamsIn).distinct.map(witnessOf)
+  protected def hidden(types: List[Type]): List[Var] = types.flatMap(typeParamsIn).distinct.map(witnessVar)
 
-  /** The type parameters `t` mentions, in order of first occurrence. */
-  protected def typeParamsIn(t: Type): List[SymbolId] =
+  /** The type parameters `t` mentions, in order of first occurrence, [[Generated.R]] included. */
+  protected def typeParamsIn(t: Type): List[Type] =
+    if isTypeParam(t) then List(t) else t.children.flatMap(typeParamsIn)
+
+  /** Whether `t` is a type parameter: a declared one, or [[Generated.R]]. */
+  protected def isTypeParam(t: Type): Boolean =
     t match
-      case Type.TypeRef(p, Nil) if symbols(p).kind == fixed.core.SymKind.TypeParam => List(p)
-      case _                                                                       => t.children.flatMap(typeParamsIn)
+      case Type.TypeRef(p, Nil) => symbols(p).kind == fixed.core.SymKind.TypeParam
+      case _                    => t == Generated.R
+
+  /** Generated member `gen(args, r)` of `data`, with the hidden witnesses to call it with. In baseline
+    * mode it is built once, at `data`'s own parameters and [[Generated.R]], and takes the witness of
+    * each of `args` and of `r`; otherwise it is built at `args` and `r` and takes the witnesses of the
+    * type parameters they mention.
+    */
+  protected def member(data: SymbolId, args: List[Type], r: Option[Type])(
+      gen: (List[Type], Type) => String
+  ): (String, List[Atom]) =
+    lazy val perInstance = (gen(args, r.getOrElse(Type.UnitType)), hidden(args ++ r))
+    if !baseline then perInstance
+    else
+      val own = symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil))
+      attempt(gen(own, Generated.R)) match
+        case Right(name) =>
+          baselines += name
+          (name, (args ++ r).map(witnessAtom))
+        case Left(why) =>
+          val (name, ws) = perInstance
+          if ws.isEmpty then instances(name) = why else report(why)
+          (name, ws)
 
   private def listParam(data: SymbolId, args: List[Type], span: Span): Var =
     typed(fresh("xs", CType.Boxed), Type.TypeRef(data, args), span)
@@ -259,6 +314,9 @@ private[backend] trait Generated:
   private def generatedName(data: SymbolId, args: List[Type], member: String, at: String): String =
     s"${symbols.render(Type.TypeRef(data, args))}.$member[$at]"
 
+  /** `t` as a generated member's name shows it. */
+  private def shown(t: Type): String = if t == Generated.R then "R" else symbols.render(t)
+
   /** One `Switch` branch per variant of `data`: `obj`'s fields loaded, then `body(tag, fields)`.
     * Inside an unfold layer, recursive fields hold a seed of type `seed`.
     */
@@ -283,3 +341,11 @@ private[backend] trait Generated:
       val fs = symbols.fieldsOf(v.id).toList
       fs.isEmpty || (fs.size == 2 && fs.count(f => Lower.isSelf(f.info, data)) == 1)
     }
+
+object Generated:
+
+  /** The type parameter of a generated member built once that is the member's own: the result of a
+    * `fold`, the new element of a `map`, the seed of an `unfold`. The typer gives none of them a
+    * symbol, so this reserved type variable stands for each, and its witness parameter is `w.R`.
+    */
+  val R: Type = Type.TypeVar(-1)

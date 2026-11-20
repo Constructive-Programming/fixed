@@ -35,7 +35,7 @@ typedef struct fx_string {
     char bytes[];
 } fx_string;
 
-static uint64_t n_alloc, n_free, n_dup, n_drop, n_reuse;
+static uint64_t n_alloc, n_free, n_dup, n_drop, n_reuse, n_wop; /* n_wop: dup and drop calls through a value witness */
 static struct timespec t_start;
 
 static void fx_die(const char *msg, int code) {
@@ -134,10 +134,10 @@ typedef struct fx_witness {
     int64_t (*copy)(int64_t);
 } fx_witness;
 
-static void imm_keep(int64_t v) { (void)v; }
+static void imm_keep(int64_t v) { (void)v; n_wop++; }
 static int64_t imm_copy(int64_t v) { return v; }
-static void ref_dup(int64_t v) { fx_dup((fx_header *)(intptr_t)v); }
-static void ref_drop(int64_t v) { fx_drop((fx_header *)(intptr_t)v); }
+static void ref_dup(int64_t v) { n_wop++; fx_dup((fx_header *)(intptr_t)v); }
+static void ref_drop(int64_t v) { n_wop++; fx_drop((fx_header *)(intptr_t)v); }
 
 /* A cell's header gives neither its size nor its field types, so one witness for every reference
    type cannot copy one. Copying needs a witness per type, whose `copy` is that type's copy
@@ -310,8 +310,8 @@ int main(void) {
         int64_t wall_ns = (t_end.tv_sec - t_start.tv_sec) * 1000000000LL + (t_end.tv_nsec - t_start.tv_nsec);
         fprintf(stderr,
                 "{\"allocs\":%" PRIu64 ",\"frees\":%" PRIu64 ",\"dups\":%" PRIu64 ",\"drops\":%" PRIu64
-                ",\"reuses\":%" PRIu64 ",\"peak_rss_kb\":%ld,\"wall_ns\":%" PRId64 "}\n",
-                n_alloc, n_free, n_dup, n_drop, n_reuse, ru.ru_maxrss, wall_ns);
+                ",\"reuses\":%" PRIu64 ",\"wops\":%" PRIu64 ",\"peak_rss_kb\":%ld,\"wall_ns\":%" PRId64 "}\n",
+                n_alloc, n_free, n_dup, n_drop, n_reuse, n_wop, ru.ru_maxrss, wall_ns);
     }
     return 0;
 }

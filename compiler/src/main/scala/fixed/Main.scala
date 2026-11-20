@@ -60,7 +60,7 @@ object Main:
   /** Print the memory report of `file`; exit code 1 on any error. */
   private def explain(file: String, json: Boolean, mode: Mode): Int =
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromPath(file)))
-    Option.when(!unit.hasErrors)(Backend.analyse(unit, mode.budget)) match
+    Option.when(!unit.hasErrors)(Backend.analyse(unit, mode.budget, mode.baseline)) match
       case Some(Right(a)) =>
         println(if json then MemoryReport.json(unit, a) else MemoryReport.text(unit, a))
         0

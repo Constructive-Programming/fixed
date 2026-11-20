@@ -51,7 +51,9 @@ private[backend] trait Tables extends Generated:
     val own = symbols.typeParamsOf(data).map(p => Type.TypeRef(p, Nil))
     val list = listShaped(data)
     val decl = Tables.reached(symbols, cap).flatMap(symbols.membersOf).find(_.name == member)
-    val r = decl.flatMap(d => typeParamsIn(d.info).find(symbols(_).owner == d.id)).map(Type.TypeRef(_, Nil))
+    val r = decl.flatMap(d =>
+      typeParamsIn(d.info).collectFirst { case Type.TypeRef(p, _) if symbols(p).owner == d.id => Generated.R }
+    )
     val arity = decl.map(_.info).collect { case Type.ArrowType(lhs, _, _) => Members.params(lhs).size }.getOrElse(0)
     val name = s"${symbols.render(t)}:${symbols(cap).name}.$member"
     (decl.map(d => symbols(d.owner).name), member, r) match
@@ -85,7 +87,7 @@ private[backend] trait Tables extends Generated:
     instance(name) {
       val fn = functionNamed(g)
       val (ws, params) = fn.params.span(_.ctype == CType.Witness)
-      val fixed = own.zip(args).collect { case (Type.TypeRef(p, _), a) => witnessOf(p) -> staticWitness(a) }.toMap
+      val fixed = own.zip(args).collect { case (Type.TypeRef(p, _), a) => witnessOf(p) -> witnessAtom(a) }.toMap
       val callbacks = params.drop(1)
       val inCapOrder =
         if variantOrder.isEmpty then callbacks
@@ -107,9 +109,6 @@ private[backend] trait Tables extends Generated:
     }
 
   private def table: Atom.Var = Atom.Var("table", CType.Table)
-
-  /** The value witness of a concrete type: every value that is not an immediate is on the heap. */
-  private def staticWitness(t: Type): Atom = Atom.StaticWitness(if ctype(t, Span.NoSpan).counted then "ref" else "imm")
 
   /** A compiler-provided entry of the primitive type or `String` named `t`, of Core type `c`. */
   private def primitive(t: String, c: CType, member: String): Option[String] =

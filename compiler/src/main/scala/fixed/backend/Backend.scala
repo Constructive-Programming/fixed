@@ -25,17 +25,22 @@ final case class Analysed(
 
 /** A build mode (`spec/compilation_model.md` Rule CM5.7), by the clone budget it gives each
   * function. With `--no-specialise` the budget is 0, so only mandatory versions are built: shared
-  * versions, `fip` bodies with their shared entries, and the clones a `fip` body needs.
+  * versions, `fip` bodies with their shared entries, and the clones a `fip` body needs; and
+  * polymorphic code is lowered as baseline versions (Rule CM3.1) where it can be. The default
+  * mode still lowers one instance per type instantiation.
   */
 enum Mode(val budget: Int):
   case Default extends Mode(Versions.budget)
   case NoSpecialise extends Mode(0)
 
+  /** Whether polymorphic code is lowered as baseline versions: in `NoSpecialise`. */
+  def baseline: Boolean = this == NoSpecialise
+
 object Backend:
 
   /** LLVM IR for `unit`, which must have passed the typer without errors. */
   def compile(unit: CompilationUnit, mode: Mode = Mode.Default): Either[List[Diagnostic], String] =
-    analyse(unit, mode.budget).flatMap(emit)
+    analyse(unit, mode.budget, mode.baseline).flatMap(emit)
 
   /** LLVM IR for analysed Core: the `fip` check, erasure and borrowing, abort tests, reference counting. */
   def emit(a: Analysed): Either[List[Diagnostic], String] =
@@ -49,10 +54,15 @@ object Backend:
   def core(unit: CompilationUnit): Either[List[Diagnostic], List[Fn]] = analyse(unit).map(_.fns)
 
   /** Versioned Core with its demands and memory facts (3.4.M2–M4); `budget` is each function's
-    * clone budget (`spec/compilation_model.md` Rule CM5.3).
+    * clone budget (`spec/compilation_model.md` Rule CM5.3); with `baseline`, polymorphic code is
+    * lowered as baseline versions where it can be (Rule CM3.1).
     */
-  def analyse(unit: CompilationUnit, budget: Int = Versions.budget): Either[List[Diagnostic], Analysed] =
-    val lower = Lower(unit)
+  def analyse(
+      unit: CompilationUnit,
+      budget: Int = Versions.budget,
+      baseline: Boolean = false
+  ): Either[List[Diagnostic], Analysed] =
+    val lower = Lower(unit, baseline)
     lower.program.map { fns =>
       val render = (t: fixed.core.Type) => unit.symbols.render(t)
       val (demands, table) = Demands.analyse(lower, fns, render)

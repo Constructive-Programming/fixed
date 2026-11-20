@@ -65,22 +65,29 @@ object Rc:
         case Let(x, rhs @ (_: Rhs.If | _: Rhs.Switch), body) =>
           val live = free(body)
           val handed = consumed(rhs).toSet -- lent
-          val dead = owned -- live -- handed
-          val rest = Let(x, rhs.mapBranches(go(_, handed)), go(body, (owned & live) ++ Core.countedVar(x)))
+          val (dead, waiting) = ready(owned -- live -- handed, e)
+          val rest = Let(x, rhs.mapBranches(go(_, handed)), go(body, (owned & live) ++ waiting ++ Core.countedVar(x)))
           drops(dead, handed.filter(live).foldLeft(rest: Expr)((acc, v) => Dup(v, acc)))
         case Let(x, rhs, body) =>
           val live = free(body)
           val uses = consumed(rhs).groupMapReduce(identity)(_ => 1)(_ + _)
           val read = reads(rhs)
-          val dead = owned -- live -- uses.keySet -- read
+          val (dead, waiting) = ready(owned -- live -- uses.keySet -- read, e)
           val deadAfter = (owned & read) -- live -- uses.keySet
-          val inner = drops(deadAfter, go(body, (owned & live) ++ Core.countedVar(x)))
+          val inner = drops(deadAfter, go(body, (owned & live) ++ waiting ++ Core.countedVar(x)))
           val owning = rhs match
             case _: Rhs.Field => Core.countedVar(x).fold(inner)(Dup(_, inner))
             case _            => inner
           val dups = uses.toList.flatMap((v, n) => List.fill(n - 1 + (if live(v) || lent(v) then 1 else 0))(v))
           drops(dead, dups.foldLeft(Let(x, rhs, owning): Expr)((acc, v) => Dup(v, acc)))
         case Dup(_, _) | Drop(_, _) => e
+
+    /** The dead variables `vs` split into those dropped before `e` and those that wait: a slot whose
+      * witness `e` binds (a closure's capture, loaded on entry) is dropped once the witness is bound.
+      */
+    private def ready(vs: Set[Var], e: Expr): (Set[Var], Set[Var]) =
+      lazy val bound = Core.lets(e).map(_._1).toSet
+      vs.partition(v => !Core.witnessOf(v).exists(bound))
 
     private def drops(vs: Set[Var], e: Expr): Expr = vs.toList.sortBy(_.name).foldRight(e)(Drop(_, _))
 

@@ -16,9 +16,11 @@ final class EmitLLVM:
   private val declared = mutable.LinkedHashMap.empty[String, String]
   private val statics = mutable.LinkedHashMap.empty[String, String]
   private val entries = mutable.Set.empty[String]
+  private val signatures = mutable.Map.empty[String, Fn]
 
   def program(fns: List[Fn]): String =
     entries ++= Core.indirectEntries(fns)
+    signatures ++= fns.map(f => f.name -> f)
     val bodies = fns.map(f => function(f, slots = entries(f.name))).mkString("\n")
     val globals = strings.map((s, name) => stringGlobal(name, s)).mkString + statics.values.mkString
     val decls = (EmitLLVM.always ++ declared.values).mkString("\n")
@@ -248,15 +250,32 @@ final class EmitLLVM:
 
   private def call(x: Var, f: String, args: List[Atom], runtime: Boolean): Unit =
     require(runtime || !entries(f), s"$f takes slots and must be called through its closure or table")
-    val argList = typed(args)
-    if !runtime then line(s"  %${x.name} = call ${EmitLLVM.llType(x.ctype)} ${EmitLLVM.user(f)}($argList)")
+    if !runtime then direct(x, f, args)
     else
+      val argList = typed(args)
       val ret = if x.ctype == CType.Unit then "void" else EmitLLVM.llType(x.ctype)
       declared(f) = s"declare $ret @$f(${args.map(a => EmitLLVM.llType(a.tpe)).mkString(", ")})"
       if ret == "void" then
         line(s"  call void @$f($argList)")
         aliases(x.name) = "0"
       else line(s"  %${x.name} = call $ret @$f($argList)")
+
+  /** A call of user function `f`. A baseline version takes and returns a value of parameter type
+    * as a slot (Rule CM3.3(1)): an argument of known type is widened into it, and a result narrowed
+    * out of it, as for a closure.
+    */
+  private def direct(x: Var, f: String, args: List[Atom]): Unit =
+    lazy val n = ids.next()
+    val params = signatures.get(f).fold(args.map(_.tpe))(_.params.map(_.ctype))
+    val argList = args.zip(params).zipWithIndex.map { case ((a, p), i) =>
+      if p.slot then slotted(operand(a), a.tpe, s"$n.$i")
+      else s"${EmitLLVM.llType(a.tpe)} ${operand(a)}"
+    }
+    val ret = signatures.get(f).fold(x.ctype)(_.ret)
+    if ret.slot then
+      line(s"  %${x.name}.s = call i64 ${EmitLLVM.user(f)}(${argList.mkString(", ")})")
+      narrow(x, s"%${x.name}.s")
+    else line(s"  %${x.name} = call ${EmitLLVM.llType(x.ctype)} ${EmitLLVM.user(f)}(${argList.mkString(", ")})")
 
   private def prim(x: Var, op: PrimOp, args: List[Atom], label: String): String =
     val t = args.head.tpe

@@ -1,8 +1,8 @@
 package fixed.backend
 
-/** Core: the backend's IR (`docs/plans/phase-4.0-backend-slice.md` §4.2). First order, monomorphic,
-  * in A-normal form: every intermediate value is a named [[Atom.Var]]. Later Phase 4 passes (fold
-  * specialiser, Perceus, region lowering) are Core to Core.
+/** Core: the backend's IR (`docs/plans/phase-4.0-backend-slice.md` §4.2). First order, in A-normal
+  * form: every intermediate value is a named [[Atom.Var]]; a value of parameter type is a
+  * [[CType.Slot]] handled through a witness parameter. Later passes are Core to Core.
   */
 enum CType:
   case Int(bits: scala.Int, signed: Boolean)
@@ -20,6 +20,10 @@ enum CType:
   case Witness, Table
 
   def boxed: Boolean = this == CType.Boxed
+
+  def slot: Boolean = this match
+    case _: CType.Slot => true
+    case _             => false
 
   /** May hold a counted reference: what reference counting and the analyses track. */
   def counted: Boolean = this match
