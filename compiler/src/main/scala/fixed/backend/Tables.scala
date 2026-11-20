@@ -15,7 +15,8 @@ import fixed.util.Span
   * A data type's entries call members generated once, polymorphic in its own type parameters, and
   * pass them the static witnesses of the instance's arguments: the adapter is per instance, the
   * member's body is shared. An adapter reaches its member through an ordinary call, so where the
-  * member only reads an argument, reference counting drops it in the adapter.
+  * member only reads an argument, reference counting drops it in the adapter. An auto-flat-struct's
+  * entries are its constructor and a field reader per field, which drops the struct it receives.
   *
   * A member of the language the backend does not build yet ([[Tables.unbuilt]]) gets a null entry;
   * no lowering asks for one. Any other member a type does not define makes the table an error. The
@@ -24,11 +25,12 @@ import fixed.util.Span
 private[backend] trait Tables extends Generated:
 
   protected def mappedFold(cap: SymbolId, recvType: Type, arity: Int): Option[List[Int]]
+  protected def productFields(t: Type): Option[(String, List[(String, Type)])]
   protected def functionNamed(name: String): Fn
 
   /** The table of capability `cap` at type `t`, or why there is none. */
   def table(t: Type, cap: String): Either[String, Atom.StaticTable] =
-    val known = Lower.scalar(t).isDefined || dataOf(t).isDefined || isStringType(t)
+    val known = Lower.scalar(t).isDefined || dataOf(t).isDefined || isStringType(t) || productFields(t).isDefined
     (Option.when(known)(ctype(t, Span.NoSpan)), symbols.scope.get(cap).filter(symbols(_).kind == SymKind.Cap)) match
       case _ if typeParamsIn(t).nonEmpty =>
         Left(s"a table at `${symbols.render(t)}` needs a witness record built at run time, which is not built yet")
@@ -86,13 +88,22 @@ private[backend] trait Tables extends Generated:
 
   /** The entry of `member`: its adapter, `""` for a null entry, `None` if `t` does not define it. */
   private def entry(t: Type, c: CType, cap: SymbolId, member: String): Option[String] =
-    val built = dataOf(t) match
-      case Some((data, args)) => dataEntry(t, data, args, cap, member)
-      case None               => primitive(symbols.render(t), c, member)
+    val name = s"${symbols.render(t)}:${symbols(cap).name}.$member"
+    val built = (dataOf(t), productFields(t)) match
+      case (Some((data, args)), _)   => dataEntry(t, data, args, cap, member, name)
+      case (_, Some((ctor, fields))) => productEntry(ctor, fields, member, name)
+      case _                         => primitive(symbols.render(t), c, member)
     built.orElse(Option.when(Tables.unbuilt(member))(""))
 
-  /** A data type's entry: an adapter over a generated member, or a constructor. */
-  private def dataEntry(t: Type, data: SymbolId, args: List[Type], cap: SymbolId, member: String): Option[String] =
+  /** A data type's entry `name`: an adapter over a generated member, or a constructor. */
+  private def dataEntry(
+      t: Type,
+      data: SymbolId,
+      args: List[Type],
+      cap: SymbolId,
+      member: String,
+      name: String
+  ): Option[String] =
     val own = symbols.typeParamsOf(data).map(p => Type.TypeRef(p, Nil))
     val list = listShaped(data)
     val decl = Tables.reached(symbols, cap).flatMap(symbols.membersOf).find(_.name == member)
@@ -100,10 +111,11 @@ private[backend] trait Tables extends Generated:
       typeParamsIn(d.info).collectFirst { case Type.TypeRef(p, _) if symbols(p).owner == d.id => Generated.R }
     )
     val arity = decl.map(_.info).collect { case Type.ArrowType(lhs, _, _) => Members.params(lhs).size }.getOrElse(0)
-    val name = s"${symbols.render(t)}:${symbols(cap).name}.$member"
     (decl.map(d => symbols(d.owner).name), member, r) match
       case (_, ctor, _) if decl.exists(_.kind == SymKind.StaticMethod) =>
-        capVariant(cap, ctor, t).map(tag => constructor(name, tag, data, args))
+        capVariant(cap, ctor, t).map(tag =>
+          constructor(name, tag, fieldTypes(data, args, symbols.variantsOf(data).toList(tag).id))
+        )
       case (_, "fold", Some(r)) if mappedFold(cap, t, arity).isDefined =>
         mappedFold(cap, t, arity).map(order => adapter(name, derivedFold(data, own, r, Span.NoSpan), args, own, order))
       case (Some("Folding"), "fold", Some(r)) if list =>
@@ -116,6 +128,20 @@ private[backend] trait Tables extends Generated:
         Some(adapter(name, length(data, own, Type.PrimType("u64"), Span.NoSpan), args, own))
       case (Some("Functor"), "map", Some(b)) => Some(adapter(name, derivedMap(data, own, b, Span.NoSpan), args, own))
       case _                                 => None
+
+  /** An auto-flat-struct's entry `name` (`spec/type_system.md` §6.6): its constructor `ctor` builds
+    * the struct from `fields`, and a member named like a field reads it.
+    */
+  private def productEntry(ctor: String, fields: List[(String, Type)], member: String, name: String): Option[String] =
+    if member == ctor then Some(constructor(name, 0, fields.map(_._2)))
+    else
+      Option(fields.indexWhere(_._1 == member)).filter(_ >= 0).map { i =>
+        instance(name) {
+          val self: Atom.Var = Atom.Var("self", CType.Boxed)
+          val r: Atom.Var = Atom.Var("r", ctype(fields(i)._2, Span.NoSpan))
+          Fn(name, List(table, self), r.ctype, Expr.Let(r, Rhs.Field(self, i), Expr.Ret(r)))
+        }
+      }
 
   /** An entry over generated member `g`, built at the data type's own parameters `own`. It takes
     * the table, the member's own witnesses, the receiver, then `g`'s callbacks in the capability's
@@ -143,12 +169,12 @@ private[backend] trait Tables extends Generated:
       Fn(name, entryParams, fn.ret, Expr.Let(result, call, Expr.Ret(result)))
     }
 
-  /** A constructor requirement mapped to variant `tag`: the variant built from the arguments. */
-  private def constructor(name: String, tag: Int, data: SymbolId, args: List[Type]): String =
+  /** A constructor requirement mapped to variant `tag`, whose fields have types `fields`: the
+    * variant built from the arguments.
+    */
+  private def constructor(name: String, tag: Int, fields: List[Type]): String =
     instance(name) {
-      val variant = symbols.variantsOf(data).toList(tag).id
-      val vs =
-        fieldTypes(data, args, variant).zipWithIndex.map((ft, i) => Atom.Var(s"a$i", ctype(ft, Span.NoSpan)): Atom.Var)
+      val vs = fields.zipWithIndex.map((ft, i) => Atom.Var(s"a$i", ctype(ft, Span.NoSpan)): Atom.Var)
       val result: Atom.Var = Atom.Var("r", CType.Boxed)
       Fn(name, table :: vs, CType.Boxed, Expr.Let(result, Rhs.Con(tag, vs), Expr.Ret(result)))
     }

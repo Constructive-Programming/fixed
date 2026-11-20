@@ -15,9 +15,10 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
   * `sc.sigma` maps the instance's type parameters to concrete types. With `baseline`
   * (`--no-specialise`), a polymorphic function is lowered once under its own name where it can be
   * (Rule CM3.1, [[baselineOf]]): it takes a witness and the tables of the bound set per type
-  * parameter, and a value of a type parameter is a slot named by its witness. Derived members (`fold`, `unfold`, `Folding.fold`) are
-  * generated as Core functions ([[Generated.member]]). Constructs beyond the current milestone are
-  * `B005`, and so is a cell with a reference beyond its header's reference map (`refMapLimit`).
+  * parameter, and a value of a type parameter is a slot named by its witness. Derived members
+  * (`fold`, `unfold`, `Folding.fold`) are generated as Core functions ([[Generated.member]]).
+  * Constructs beyond the current milestone are `B005`, and so is a cell with a reference beyond its
+  * header's reference map (`refMapLimit`).
   */
 final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false) extends Tables:
   private type Env = Map[String, Var]
@@ -60,6 +61,11 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
 
   /** The anonymous bound each implicit type parameter stands for ([[baselineOf]]). */
   protected val implicitBounds: mutable.Map[Type, Type] = mutable.HashMap.empty
+
+  /** The type parameters, each with its key ([[baselineOf]]), of each baseline version being built:
+    * what a recursive call passes, before the finished version drops its phantom ones.
+    */
+  private val building = mutable.Map.empty[String, List[(Type, Type)]]
 
   /** The entries of its tables each type parameter's code calls, directly or by passing the table on. */
   private val calledEntries = mutable.Map.empty[Type, Set[String]].withDefaultValue(Set.empty)
@@ -108,11 +114,12 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
 
   /** `body`, or why it failed: the first problem it reported. On failure the functions it built, the
     * problems it reported and what it recorded about baseline versions are discarded, so that the
-    * caller can lower the same code another way.
+    * caller can lower the same code another way. (Implicit type parameters an abandoned attempt
+    * made stay in `implicitBounds`, unused.)
     */
   protected def attempt[A](body: => A): Either[String, A] =
     val (before, count, seen) = (fns.keySet.toSet, problems.size, tried.keySet.toSet)
-    val (built, instead) = (baselines.toSet, instances.keySet.toSet)
+    val (built, instead, entries) = (baselines.toSet, instances.keySet.toSet, calledEntries.toMap)
     val result = body
     if problems.size == count then Right(result)
     else
@@ -122,6 +129,8 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
       tried.keySet.toList.filterNot(seen).foreach(tried.remove)
       baselines.filterInPlace(built)
       instances.keySet.toList.filterNot(instead).foreach(instances.remove)
+      calledEntries.clear()
+      calledEntries ++= entries
       Left(why)
 
   /** Instance `name` of `decl`: `sigma` for its type parameters, `bounds` for its anonymously bound
@@ -324,23 +333,27 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
   private def call(name: String, fnType: Type, args: List[Tree], t: Tree, sc: Scope)(k: K): Expr =
     val id = symbols.scope(name)
     val params = symbols.typeParamsOf(id)
-    val solved = Lower.solve(params.toSet, symbols(id).info, fnType, Map.empty)
+    val solved = TypeOps.solve(params.toSet, symbols(id).info, fnType, Map.empty)
     val sigma = params.map(p => p -> solved.getOrElse(p, Type.UnitType)).toMap
-    val declared = symbols(id).info match
-      case Type.ArrowType(lhs, _, _) => Members.params(lhs)
-      case _                         => Nil
+    val (declared, ret) = TypeOps.signature(symbols(id).info)
     val argTypes = args.map(typeOf(_, sc))
     val bounds = declared.zip(argTypes).collect {
-      case (d, actual: Type.CapRef) if Lower.anonymous(d)                => d -> actual
-      case (d, actual) if Lower.anonymous(d) && dataOf(actual).isDefined => d -> actual
+      case (d, actual: Type.CapRef) if TypeOps.anonymous(d)                => d -> actual
+      case (d, actual) if TypeOps.anonymous(d) && dataOf(actual).isDefined => d -> actual
     }.toMap
     val typeArgs = params.map(sigma) ++ declared.flatMap(bounds.get)
-    val chosen = baselineOf(name, params, declared).map(_.flatMap { implicits =>
-      val actuals = implicits.map((d, p) => p -> declared.zip(argTypes).collect { case (`d`, a) => a }.distinct)
+    val chosen = baselineOf(name, params, declared, ret).map(_.flatMap { typeParams =>
+      /** A declared type parameter is keyed by itself; an implicit one by the bound it stands for. */
+      val actuals = typeParams.map { (key, p) =>
+        if key == p then p -> List(TypeOps.subst(p, sigma))
+        else
+          val at = declared.zip(argTypes).collect { case (`key`, a) => a } ++ Option.when(key == ret)(typeOf(t, sc))
+          p -> at.distinct
+      }
       actuals.collectFirst { case (p, as) if as.size > 1 => p } match
-        case Some(p) => Left(s"parameters bounded by `${symbols.render(implicitBounds(p))}` at different types")
+        case Some(p) => Left(s"positions bounded by `${symbols.render(implicitBounds(p))}` at different types")
         case None    =>
-          val pairs = params.map(p => Type.TypeRef(p, Nil) -> sigma(p)) ++ actuals.map((p, as) => p -> as.head)
+          val pairs = actuals.map((p, as) => p -> as.head)
           checkEntries(pairs).flatMap(_ => hiddenArgs(pairs))
     })
     chosen match
@@ -348,7 +361,7 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
       case Some(Left(why)) if typeArgs.exists(typeParamsIn(_).nonEmpty) =>
         unsupported(t.span, s"a call of `$name` at a type parameter, which has no baseline version ($why)", k)
       case other =>
-        val anonymousArgs = declared.zip(argTypes).collect { case (d, a) if Lower.anonymous(d) => a }
+        val anonymousArgs = declared.zip(argTypes).collect { case (d, a) if TypeOps.anonymous(d) => a }
         val shown = if typeArgs.isEmpty && other.isDefined then anonymousArgs else typeArgs
         val inst = if shown.isEmpty then name else shown.map(symbols.render(_)).mkString(s"$name[", ",", "]")
         other.foreach(_.left.foreach(instances(inst) = _))
@@ -369,34 +382,64 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
       yield s"`${symbols.render(t)}` has no `${symbols(cap).name}.$m` the backend builds"
     missing.headOption.toLeft(())
 
-  /** In baseline mode, for a polymorphic function `name` whose type parameters are `params` and
-    * declared parameter types `declared`: its baseline version (Rule CM3.1), built once under its
-    * own name, and its implicit type parameters, or why it has none. `None` in the default mode
-    * and for a monomorphic function. An implicit type parameter stands for each distinct anonymous
-    * bound in `declared` (`is Folding of String`): a reserved type variable, substituted for the
-    * bound as the instance path substitutes the argument type. The version takes first a witness
-    * per type parameter, each followed by a table per capability of its bound set, then the same
-    * for each implicit type parameter ([[Tables.hiddenOf]], Rule CM4.3). A call whose type
-    * arguments have no table of a bound (`String` has no `Ord.lt`) calls an instance instead.
+  /** In baseline mode, for a polymorphic function `name` with type parameters `params`, declared
+    * parameter types `declared` and result type `ret`: its baseline version (Rule CM3.1), built once
+    * under its own name, or why it has none; `None` in the default mode and for a monomorphic
+    * function. With the version come its type parameters that are not phantom, each keyed by
+    * itself, or, for an implicit one, by the anonymous bound it stands for.
+    *
+    * An implicit type parameter stands for each distinct anonymous bound among `declared` and
+    * `ret` (`is Folding of String`): a reserved type variable, substituted for the bound as the
+    * instance path substitutes the argument type. One for the result makes the result chosen by
+    * the caller (Rule CM4.5): a constructor requirement of its bound becomes a call through the
+    * table the caller passes. That holds only if every value the function returns has the
+    * result's slot form; where one does not (`Optional.none`, which the typer types apart), the
+    * version is built again with the result chosen by `Representation`, as in the callee.
+    *
+    * The version takes a witness per type parameter, each followed by a table per capability of
+    * its bound set, the implicit ones after the declared ones ([[Tables.hiddenOf]], Rule CM4.3),
+    * except for a phantom type parameter, whose witness and tables the code never uses; a
+    * recursive call, made while the version is being built, passes them all ([[building]]). A call
+    * whose type arguments have no table of a bound (`String` has no `Ord.lt`) calls an instance.
     */
   private def baselineOf(
       name: String,
       params: List[SymbolId],
-      declared: List[Type]
+      declared: List[Type],
+      ret: Type
   ): Option[Either[String, List[(Type, Type)]]] =
-    val anonymous = declared.filter(Lower.anonymous).distinct
-    def build: Either[String, List[(Type, Type)]] =
+    val resultImplicit = TypeOps.anonymous(ret) && !declared.contains(ret)
+    def build(callerChosen: Boolean): Either[String, List[(Type, Type)]] =
+      val anonymous = (declared ++ Option.when(callerChosen)(ret)).filter(TypeOps.anonymous).distinct
       val implicits = anonymous.map { d =>
         val p = Type.TypeVar(-2 - implicitBounds.size)
         implicitBounds(p) = d
         d -> p
       }
-      val hidden = (params.map(Type.TypeRef(_, Nil)) ++ implicits.map(_._2)).flatMap(hiddenOf)
-      attempt(instance(name)(function(decls(name), Map.empty, implicits.toMap, name, hidden))).map { _ =>
-        baselines += name
-        implicits
+      val all = params.map(p => Type.TypeRef(p, Nil)).map(p => p -> p) ++ implicits
+      val hidden = all.flatMap((_, p) => hiddenOf(p))
+      val before = fns.keySet.toSet
+      building(name) = all
+      val built = attempt {
+        val _ = instance(name)(function(decls(name), Map.empty, implicits.toMap, name, hidden))
+        if callerChosen then
+          fns.values.filterNot(f => before(f.name)).find(f => !Core.returnsAs(f.body, f.ret)).foreach { f =>
+            report(s"`${f.name}` returns a value whose slot form differs from its result's")
+          }
       }
-    Option.when(baseline && (params.nonEmpty || anonymous.nonEmpty))(tried.getOrElseUpdate(name, build))
+      val _ = building.remove(name)
+      built.map { _ =>
+        baselines += name
+        val f = fns(name)
+        val used = Core.freeVars(f.body) ++ (f.params ++ Core.lets(f.body).map(_._1)).flatMap(Core.witnessOf) ++
+          Core.witnessOf(Atom.Var("result", f.ret))
+        val kept = all.filter((_, p) => hiddenOf(p).exists(used))
+        fns(name) = f.copy(params = kept.flatMap((_, p) => hiddenOf(p)) ++ f.params.drop(hidden.size))
+        kept
+      }
+    val polymorphic = params.nonEmpty || declared.exists(TypeOps.anonymous)
+    def version = if resultImplicit then build(true).orElse(build(false)) else build(false)
+    Option.when(baseline && polymorphic)(building.get(name).fold(tried.getOrElseUpdate(name, version))(Right(_)))
 
   /** A lambda becomes a code function taking the closure first; its captures ([[closure]]) are
     * loaded from the closure on entry.
@@ -484,7 +527,7 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
               case Some(opt) =>
                 val dargs = dataOf(recvType).fold(Nil)(_._2)
                 generatedCall(recvType, m, sc)((d, a, _) =>
-                  find(d, a, opt, Lower.replaceAll(typeOf(m, sc), dargs.zip(a).toMap), m.span)
+                  find(d, a, opt, TypeOps.replaceAll(typeOf(m, sc), dargs.zip(a).toMap), m.span)
                 )(k)
               case None => unsupported(m.span, s"`find` returning ${symbols.render(raw)}", k)
           case (_, name, Nil) if productField(recvType, name).isDefined => fieldRead(recvType, m, sc)(k)
@@ -500,11 +543,9 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
   private def tableMethod(m: Trees.MethodCall, member: SymbolId, t: Type, args: List[Tree], sc: Scope)(k: K): Expr =
     val d = symbols(member)
     val own = symbols.typeParamsOf(member)
-    val (declared, ret) = d.info match
-      case Type.ArrowType(lhs, r, _) => (Members.params(lhs), r)
-      case other                     => (Nil, other)
+    val (declared, ret) = TypeOps.signature(d.info)
     val actual = declared.zip(args.map(typeOf(_, sc))) :+ (ret -> typeOf(m, sc))
-    val solved = actual.foldLeft(Map.empty[SymbolId, Type])((acc, dc) => Lower.solve(own.toSet, dc._1, dc._2, acc))
+    val solved = actual.foldLeft(Map.empty[SymbolId, Type])((acc, dc) => TypeOps.solve(own.toSet, dc._1, dc._2, acc))
     own.find(!solved.contains(_)) match
       case Some(q) => unsupported(m.span, s"`${m.method}` whose `${symbols(q).name}` the call does not determine", k)
       case None    =>
@@ -533,10 +574,8 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
   /** The slot of field `name` of an auto-flat-struct or single-variant data value. */
   private def productField(t: Type, name: String): Option[Int] =
     t match
-      case Type.CapRef(c, args) =>
-        val fs = represent.fields(c, args)
-        Option(fs.indexWhere(_._1 == name)).filter(_ >= 0).map(Layout.slots(fs.map(f => ctype(f._2, Span.NoSpan)))(_))
-      case _ =>
+      case Type.CapRef(_, _) => productFields(t).map(_._2.indexWhere(_._1 == name)).filter(_ >= 0)
+      case _                 =>
         dataOf(t).flatMap { (data, args) =>
           symbols.variantsOf(data).toList match
             case List(v) =>
@@ -613,12 +652,13 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
       case (_: CType.Slot, _) => unsupported(m.span, "`show` on a value of parameter type", k)
       case _                  => unsupported(m.span, s"`show` on ${symbols.render(receiver)}", k)
 
-  /** Data constructors, derived `unfold`, capability constructors resolved by the typer, and the
-    * runtime effects. ponytail: `Console` is matched by name; effect resolution arrives with
+  /** Data constructors, derived `unfold`, capability constructors resolved by the typer (through the
+    * table of a type parameter when the value is one, Rule CM4.5), and the runtime effects. ponytail: `Console` is matched by name; effect resolution arrives with
     * handlers in 4.0.M4.
     */
   private def static(s: Trees.StaticCall, sc: Scope)(k: K): Expr =
     val args = s.args.getOrElse(Nil)
+    lazy val result = typeOf(s, sc)
     val owner = symbols.scope.get(s.qualifier)
     val resolved = unit.typing.flatMap(_.constructors.find(_._1 eq s)).map((_, d, v) => (d, v))
     (s.qualifier, s.method, args) match
@@ -639,9 +679,10 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
             construct(tag, args, s, sc)(k)
           case _ =>
             owner.map(symbols(_)) match
-              case Some(cap) if cap.kind == SymKind.Cap && capVariant(cap.id, s.method, typeOf(s, sc)).isDefined =>
-                val tag = capVariant(cap.id, s.method, typeOf(s, sc)).get
-                construct(tag, args, s, sc)(k)
+              case Some(cap) if cap.kind == SymKind.Cap && isTypeParam(result) =>
+                all(args, sc)(as => tableCall(result, cap.name, s.method, as, s, sc)(k))
+              case Some(cap) if cap.kind == SymKind.Cap && capVariant(cap.id, s.method, result).isDefined =>
+                construct(capVariant(cap.id, s.method, result).getOrElse(0), args, s, sc)(k)
               case Some(cap) if represent.constructor(cap.id).exists(_.name == s.method) =>
                 construct(0, args, s, sc)(k)
               case Some(effect) if effect.kind == SymKind.Effect => operation(s, effect.id, args, sc)(k)
@@ -762,6 +803,12 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
 
   private def hasVariant(data: SymbolId, name: String): Boolean = symbols.variantsOf(data).exists(_.name == name)
 
+  /** The constructor and the fields of the auto-flat-struct `t` represents, if it is one. */
+  protected def productFields(t: Type): Option[(String, List[(String, Type)])] =
+    t match
+      case Type.CapRef(c, args) => represent.constructor(c).map(_.name -> represent.fields(c, args))
+      case _                    => None
+
   /** A data type and its arguments: a data reference, a tuple (the prelude's `Tuple`) or an unfold layer. */
   protected def dataOf(t: Type): Option[(SymbolId, List[Type])] =
     t match
@@ -818,7 +865,7 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
 
   /** `t` at the instance's concrete types, with capability bounds replaced by their representation. */
   private def concrete(t: Type, sigma: Sigma, bounds: Map[Type, Type] = Map.empty): Type =
-    represent(Lower.subst(Lower.replaceAll(t, bounds), sigma))
+    represent(TypeOps.subst(TypeOps.replaceAll(t, bounds), sigma))
 
   private def isFn(name: String): Boolean = symbols.scope.get(name).exists(symbols(_).kind == SymKind.Fn)
 
@@ -851,12 +898,6 @@ final class Lower(unit: CompilationUnit, protected val baseline: Boolean = false
 
 object Lower:
 
-  /** Whether declared parameter type `t` is an anonymous bound (`is Folding of String`). */
-  def anonymous(t: Type): Boolean =
-    t match
-      case _: Type.IsBound | _: Type.CapRef => true
-      case _                                => false
-
   private val ints =
     Map("i8" -> 8, "i16" -> 16, "i32" -> 32, "i64" -> 64, "u8" -> 8, "u16" -> 16, "u32" -> 32, "u64" -> 64)
 
@@ -880,36 +921,6 @@ object Lower:
       case Type.PrimType("char")                => Some(CType.Int(32, signed = false))
       case Type.UnitType | Type.NeverType       => Some(CType.Unit)
       case _                                    => None
-
-  /** Replace type parameters by their concrete types. */
-  def subst(t: Type, sigma: Map[SymbolId, Type]): Type =
-    t match
-      case Type.TypeRef(p, Nil) if sigma.contains(p) => sigma(p)
-      case other                                     => other.mapChildren(subst(_, sigma))
-
-  /** Match a declared signature against a concrete type, solving the declared type parameters. */
-  def solve(params: Set[SymbolId], declared: Type, concrete: Type, acc: Map[SymbolId, Type]): Map[SymbolId, Type] =
-    declared match
-      case Type.TypeRef(p, Nil) if params(p)         => if acc.contains(p) then acc else acc.updated(p, concrete)
-      case _ if declared.ordinal == concrete.ordinal =>
-        declared.children.zip(concrete.children).foldLeft(acc)((a, dc) => solve(params, dc._1, dc._2, a))
-      case _ => acc
-
-  /** `t` with each type that is a key of `by` replaced by its value. */
-  def replaceAll(t: Type, by: Map[Type, Type]): Type =
-    if by.isEmpty then t else by.getOrElse(t, t.mapChildren(replaceAll(_, by)))
-
-  /** Whether `t` mentions data type `data` anywhere. */
-  def mentions(t: Type, data: SymbolId): Boolean = isSelf(t, data) || t.children.exists(mentions(_, data))
-
-  /** `t` with every occurrence of data type `data` replaced by `by`. */
-  def replace(t: Type, data: SymbolId, by: Type): Type =
-    if isSelf(t, data) then by else t.mapChildren(replace(_, data, by))
-
-  def isSelf(t: Type, data: SymbolId): Boolean =
-    t match
-      case Type.TypeRef(`data`, _) => true
-      case _                       => false
 
   /** Whether case pattern `p` covers variant `variant`. */
   def covers(p: Tree, variant: String): Boolean =

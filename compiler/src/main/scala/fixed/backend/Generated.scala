@@ -60,13 +60,13 @@ private[backend] trait Generated:
       val rt = ctype(r, span)
       def through(t: Type, v: Atom)(k: K): Expr =
         t match
-          case _ if Lower.isSelf(t, data) =>
+          case _ if TypeOps.isSelf(t, data) =>
             val rec = fresh("rec", rt)
             Expr.Let(rec, Rhs.Call(name, ws ++ (v :: callbacks), runtime = false), k(rec))
-          case Type.TypeRef(f, fargs) if fargs.lastOption.exists(Lower.mentions(_, data)) && dataOf(t).isDefined =>
+          case Type.TypeRef(f, fargs) if fargs.lastOption.exists(TypeOps.mentions(_, data)) && dataOf(t).isDefined =>
             val elem = fargs.last
             val param = fresh("e", ctype(elem, span))
-            val folded = Lower.replace(elem, data, r)
+            val folded = TypeOps.replace(elem, data, r)
             closure(List(param), through(elem, param)(Expr.Ret(_)), ctype(folded, span)) { c =>
               val mapped = fresh("mapped", CType.Boxed)
               val (map, ws) = member(f, fargs, Some(folded))((a, b) => derivedMap(f, a, b, span))
@@ -74,7 +74,7 @@ private[backend] trait Generated:
             }
           case _ => k(v)
       val branches = perVariant(data, args, x, span) { (tag, loaded) =>
-        rebuild(loaded, (t, v) => Option.when(Lower.mentions(t, data))(through(t, v)))(as =>
+        rebuild(loaded, (t, v) => Option.when(TypeOps.mentions(t, data))(through(t, v)))(as =>
           result(Rhs.CallClosure(callbacks(tag), as), rt)
         )
       }
@@ -93,7 +93,7 @@ private[backend] trait Generated:
       val step = fresh("step", CType.Boxed)
       val layer = fresh("layer", CType.Boxed)
       val recurse = (t: Type, v: Var) =>
-        Option.when(Lower.isSelf(t, data))(bound(Rhs.Call(name, ws ++ List(v, step), runtime = false), CType.Boxed))
+        Option.when(TypeOps.isSelf(t, data))(bound(Rhs.Call(name, ws ++ List(v, step), runtime = false), CType.Boxed))
           .flatten
       val branches = perVariant(data, args, layer, span, Some(seedType)) {
         (tag, loaded) => construction(tag, loaded, recurse)
@@ -120,7 +120,7 @@ private[backend] trait Generated:
           declared(loaded.indexWhere(_._2 == v)) match
             case Type.TypeRef(p, Nil) if elemParam.contains(p) =>
               bound(Rhs.CallClosure(f, List(v)), ctype(newElem, span))
-            case d if Lower.isSelf(d, data) =>
+            case d if TypeOps.isSelf(d, data) =>
               bound(Rhs.Call(name, ws ++ List(v, f), runtime = false), CType.Boxed)
             case _ => None
         construction(tag, loaded, mapField)
@@ -280,7 +280,7 @@ private[backend] trait Generated:
       cell: (Var, Var) => Expr
   ): List[(Int, Expr)] =
     perVariant(data, args, xs, span) { (_, loaded) =>
-      (loaded.find(l => !Lower.isSelf(l._1, data)), loaded.find(l => Lower.isSelf(l._1, data))) match
+      (loaded.find(l => !TypeOps.isSelf(l._1, data)), loaded.find(l => TypeOps.isSelf(l._1, data))) match
         case (Some((_, elem)), Some((_, rest))) => cell(elem, rest)
         case _                                  => empty
     }
@@ -329,7 +329,7 @@ private[backend] trait Generated:
   ): List[(Int, Expr)] =
     symbols.variantsOf(data).toList.zipWithIndex.map { (v, tag) =>
       val types = fieldTypes(data, args, v.id)
-      val cts = types.map(t => seed.filter(_ => Lower.isSelf(t, data)).getOrElse(ctype(t, span)))
+      val cts = types.map(t => seed.filter(_ => TypeOps.isSelf(t, data)).getOrElse(ctype(t, span)))
       val vars = cts.map(fresh("f", _))
       val loads = vars.zip(Layout.slots(cts))
       (tag, loads.foldRight(body(tag, types.zip(vars)))((l, acc) => Expr.Let(l._1, Rhs.Field(obj, l._2), acc)))
@@ -343,7 +343,7 @@ private[backend] trait Generated:
   protected def listShaped(data: SymbolId): Boolean =
     symbols.variantsOf(data).forall { v =>
       val fs = symbols.fieldsOf(v.id).toList
-      fs.isEmpty || (fs.size == 2 && fs.count(f => Lower.isSelf(f.info, data)) == 1)
+      fs.isEmpty || (fs.size == 2 && fs.count(f => TypeOps.isSelf(f.info, data)) == 1)
     }
 
 object Generated:

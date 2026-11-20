@@ -299,6 +299,15 @@ class EmitSuite extends munit.FunSuite:
     assert(plain.contains("@\"fx_t_List of u8:Folding\""), plain)
     assert(plain.contains("@\"fx_t_List of String:Folding\""), plain)
 
+  test("a recursive generic function passes its own witness and table to itself (4.1.M7d)"):
+    val src = header + "fn rep(x: A, n: u64) -> A =\n    if n == 0:\n        x\n    else:\n        rep(x, n - 1)\n\n" +
+      "fn spin(d: is Door of Locked, n: u64) -> is Door of Locked =\n    if n == 0:\n        Door.new(d.name)\n" +
+      "    else:\n        spin(d, n - 1)\n\ncap Locked\n\ncap Door of (State):\n    Self.fn new(name: String) -> Self\n" +
+      "    fn name -> String\n\nfn main() -> () with Console =\n" +
+      "    Console.print_line(rep(\"a\".concat(\"b\"), 3))\n    Console.print_line(rep(7, 2).show())\n" +
+      "    Console.print_line(spin(Door.new(\"front\".concat(\"!\")), 2).name)\n"
+    val _ = check("recursive", src, "ab\n7\nfront!\n")
+
   test("a function bounded by Ord runs at String through an instance and at i64 through its baseline version"):
     val _ = check("partial", BaselineSuite.partial, "true\nfalse\n")
 

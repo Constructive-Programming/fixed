@@ -54,5 +54,5 @@ final class Representation(unit: CompilationUnit):
   def fields(cap: SymbolId, args: List[Type]): List[(String, Type)] =
     val sigma = symbols.typeParamsOf(cap).zip(args).toMap
     constructor(cap).toList.flatMap(ctor =>
-      symbols.membersOf(ctor.id).filter(_.kind == SymKind.ValueParam).map(p => p.name -> Lower.subst(p.info, sigma))
+      symbols.membersOf(ctor.id).filter(_.kind == SymKind.ValueParam).map(p => p.name -> TypeOps.subst(p.info, sigma))
     )

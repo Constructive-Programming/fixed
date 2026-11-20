@@ -158,6 +158,16 @@ object Core:
       case v: Atom.Var if v.ctype.counted => Some(v)
       case _                              => None
 
+  /** Whether every value `e` returns is a slot exactly where `rt`, or the variable a branch binds,
+    * is one; a unit stands for the value of dead code after an abort.
+    */
+  def returnsAs(e: Expr, rt: CType): Boolean =
+    e match
+      case Expr.Let(x, rhs, body) => branches(rhs).forall(returnsAs(_, x.ctype)) && returnsAs(body, rt)
+      case Expr.Ret(a)            => a == Atom.UnitC || a.tpe.slot == rt.slot
+      case Expr.Dup(_, b)         => returnsAs(b, rt)
+      case Expr.Drop(_, b)        => returnsAs(b, rt)
+
   /** The witness variable of slot variable `v`. */
   def witnessOf(v: Atom.Var): Option[Atom.Var] =
     v.ctype match

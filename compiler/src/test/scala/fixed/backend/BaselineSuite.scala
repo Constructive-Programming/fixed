@@ -31,52 +31,27 @@ class BaselineSuite extends munit.FunSuite:
   private def reached(lower: Lower, fns: List[Fn]): Set[String] =
     Core.reach(Set("main"), fns.map(f => f.name -> f).toMap) & lower.baselines.toSet
 
-  /** For each example and benchmark: how many baseline versions `--no-specialise` reaches, the
-    * functions it still lowers per instance, and what the reason for each says. A change in any of
-    * them is a change in what is measured.
+  /** For each example and benchmark: how many baseline versions `--no-specialise` reaches. None of
+    * them lowers a function per instance any more. A change in either is a change in what is
+    * measured.
     */
   private val programs = List(
-    "examples/01_basics" -> (5, Set(), ""),
-    "examples/03_option_result" -> (1, Set(), ""),
-    "examples/04_json" -> (11, Set(), ""),
-    "examples/05_phantom_types" ->
-      (
-        0,
-        Set(
-          "unlock[Door of Locked]",
-          "lock[Door of Unlocked]",
-          "open[Door of Unlocked]",
-          "close[Door of Open]",
-          "inspect[(),Door of Locked]",
-          "bind[TcpSocket of Closed]",
-          "accept[TcpSocket of Listening]",
-          "send[TcpSocket of Established]",
-          "disconnect[TcpSocket of Established]",
-          "divide_units[Quantity of Meters,Quantity of Seconds]",
-          "add[(),Quantity of ?29,Quantity of ?29]",
-          "add[(),Quantity of Meters,Quantity of Meters]",
-          "force[Quantity of Kilograms,Quantity of MetersPerSecondSq]",
-          "kinematic_distance[Quantity of MetersPerSecond,Quantity of MetersPerSecondSq,Quantity of Seconds]",
-          "show_quantity[(),Quantity of MetersPerSecond]",
-          "show_quantity[(),Quantity of ?29]",
-          "show_quantity[(),Quantity of Newtons]",
-          "show_quantity[(),Quantity of Meters]"
-        ),
-        "no table of `"
-      ),
-    "bench/runtime/bintrees" -> (2, Set(), ""),
-    "bench/runtime/nat_loop" -> (4, Set(), ""),
-    "bench/runtime/list_pipeline" -> (3, Set(), ""),
-    "bench/runtime/records" -> (3, Set(), ""),
-    "bench/runtime/fail_chain" -> (2, Set(), "")
+    "examples/01_basics" -> 5,
+    "examples/03_option_result" -> 1,
+    "examples/04_json" -> 11,
+    "examples/05_phantom_types" -> 14,
+    "bench/runtime/bintrees" -> 2,
+    "bench/runtime/nat_loop" -> 4,
+    "bench/runtime/list_pipeline" -> 3,
+    "bench/runtime/records" -> 3,
+    "bench/runtime/fail_chain" -> 2
   )
 
-  test("every example and benchmark: the baseline versions reached and the functions still lowered per instance"):
-    programs.foreach { case (path, (baselines, instances, reason)) =>
+  test("every example and benchmark: the baseline versions reached, and no function lowered per instance"):
+    programs.foreach { (path, baselines) =>
       val (lower, fns) = lowered(path, file(path))
       assertEquals(reached(lower, fns).size, baselines, s"$path: ${reached(lower, fns)}")
-      assertEquals(lower.instances.keySet.toSet, instances, s"$path: ${lower.instances}")
-      lower.instances.foreach((f, why) => assert(why.contains(reason), s"$path: $f: $why"))
+      assertEquals(lower.instances.toMap, Map.empty[String, String], path)
     }
 
   test("records folds a List of u64 and a List of Order through one foldLeft, its accumulator a slot"):
@@ -149,6 +124,7 @@ class BaselineSuite extends munit.FunSuite:
     assert(body.exists { case Rhs.CallTable(`t`, 0, _, _) => true; case _ => false }, body)
     assert(!Core.callees(join.body).exists(_.contains("foldLeft")), Core.callees(join.body))
     assert(lower.baselines("map_optional"), lower.baselines)
+    assertEquals(named(fns, "map_optional").ret, CType.Boxed, "`Optional.none` is typed apart: the callee chooses")
 
   test("count and sum over `is Folding of ...` have one version each, called at three list types"):
     val (lower, fns) = lowered("anonymous", BaselineSuite.anonymous)
@@ -173,6 +149,26 @@ class BaselineSuite extends munit.FunSuite:
     val ds = lower.program.fold(identity, fns => fail(s"lowered: ${fns.map(_.name)}"))
     assert(ds.exists(_.message.contains("fold_right")), ds)
     assert(lower.instances("right[List of u8]").contains("no `Folding.fold_right` the backend builds"), lower.instances)
+
+  test("05: a phantom type parameter gets no witness; a result built by a constructor requirement is the caller's"):
+    val (_, fns) = lowered("05_phantom_types", file("examples/05_phantom_types"))
+    List("inspect", "show_quantity", "add").foreach { f =>
+      val fn = named(fns, f)
+      assertEquals(fn.params.map(_.ctype).take(3), List(CType.Witness, CType.Table, CType.Slot(fn.params.head.name)), f)
+      assert(!fn.params.exists(_.name.startsWith("w.S.")) && !fn.params.exists(_.name.startsWith("w.U.")), fn.params)
+    }
+    val unlock = named(fns, "unlock")
+    val List(wIn, tIn, wOut, tOut, door) = unlock.params: @unchecked
+    assertEquals(List(wIn, tIn, wOut, tOut).map(_.ctype), List(CType.Witness, CType.Table, CType.Witness, CType.Table))
+    assertEquals((door.ctype, unlock.ret), (CType.Slot(wIn.name), CType.Slot(wOut.name)))
+    val calls = Core.lets(unlock.body).collect { case (_, Rhs.CallTable(t, i, _, _)) => (t, i) }
+    assertEquals(
+      calls.toSet,
+      Set[(Atom, Int)]((tIn, 1), (tOut, 0)),
+      "`name` on the argument table, `new` on the result one"
+    )
+    val (_, plain) = lowered("05_phantom_types", file("examples/05_phantom_types"), baseline = false)
+    assertEquals(named(plain, "inspect[(),Door of Locked]").params.map(_.ctype), List(CType.Boxed))
 
   test("in the default mode the same program is lowered per instance"):
     val (_, fns) = lowered("generic", BaselineSuite.generic, baseline = false)
