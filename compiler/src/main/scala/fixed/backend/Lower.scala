@@ -201,14 +201,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
 
   private[backend] def expr(t: Tree, sc: Scope)(k: K): Expr =
     t match
-      case l: Trees.IntLit =>
-        val t = typeOf(l, sc)
-        ctype(t, l.span) match
-          case f: CType.Float => k(Atom.FloatC(BigDecimal(l.value), f))
-          case _: CType.Slot  =>
-            val n = Atom.IntC(l.value, CType.Int(64, signed = true))
-            tableCall(t, symbols.prelude("Numeric"), "fromI64", List(n), l, sc)(k)
-          case c => k(Atom.IntC(l.value, c))
+      case l: Trees.IntLit   => intLit(l.value, l, sc)(k)
       case l: Trees.FloatLit =>
         ctype(typeOf(l, sc), l.span) match
           case c: CType.Float => k(Atom.FloatC(l.value, c))
@@ -221,8 +214,9 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case Trees.TupleExpr(elems, _) => all(elems, sc)(as => bind(Rhs.Con(0, as), t, sc)(k))
       case Trees.Block(stmts, _)     => block(stmts, sc)(k)
       case b: Trees.BinOp            => binOp(b, sc)(k)
-      case u: Trees.UnaryOp          => unaryOp(u, sc)(k)
-      case i: Trees.IfExpr           =>
+      case Trees.UnaryOp(Trees.UnaryOperator.Neg, l: Trees.IntLit, _) if l.value != 0 => intLit(-l.value, l, sc)(k)
+      case u: Trees.UnaryOp                                                           => unaryOp(u, sc)(k)
+      case i: Trees.IfExpr                                                            =>
         expr(i.cond, sc)(c => bind(Rhs.If(c, tail(i.thenBranch, sc), tail(i.elseBranch, sc)), i, sc)(k))
       case Trees.Apply(fn, args, _) => application(fn, args, t, sc)(k)
       case Trees.ListExpr(elems, _) =>
@@ -373,6 +367,18 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case _ =>
         val what = s"`${symbols(cap).name}.$member` on a value of type ${symbols.render(t)}"
         unsupported(tree.span, s"$what without a bound whose table holds it", k)
+
+  /** Integer literal `l` lowered with value `v`, which includes a leading `-` (but not on `0`, whose
+    * negation is a float's `-0.0`), so that at a type parameter `-9223372036854775808` reaches
+    * `fromI64` as the most negative `i64` instead of wrapping before it is negated.
+    */
+  private def intLit(v: BigInt, l: Trees.IntLit, sc: Scope)(k: K): Expr =
+    val t = typeOf(l, sc)
+    ctype(t, l.span) match
+      case f: CType.Float => k(Atom.FloatC(BigDecimal(v), f))
+      case _: CType.Slot  =>
+        tableCall(t, symbols.prelude("Numeric"), "fromI64", List(Atom.IntC(v, CType.Int(64, signed = true))), l, sc)(k)
+      case c => k(Atom.IntC(v, c))
 
   private def unaryOp(u: Trees.UnaryOp, sc: Scope)(k: K): Expr =
     val op = u.op match
