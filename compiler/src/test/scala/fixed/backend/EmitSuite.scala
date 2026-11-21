@@ -78,7 +78,7 @@ class EmitSuite extends munit.FunSuite:
     */
   private val reuseSites = Map(
     "bintrees" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 2097150L)),
-    "nat_loop" -> (List(2000200L, 0L, 0L, 0L), List(0L, 2000200L, 0L, 2000800L)),
+    "nat_loop" -> (List(2000200L, 2000000L, 0L, 0L), List(0L, 4000200L, 0L, 2000800L)),
     "list_pipeline" -> (List(6000200L, 4000000L, 0L, 0L), List(0L, 10000200L, 0L, 16000800L)),
     "records" -> (List(2000100L, 2000000L, 0L, 0L), List(0L, 4000100L, 0L, 6000400L)),
     "fail_chain" -> (List(2000200L, 0L, 0L, 0L), List(0L, 2000200L, 0L, 7999400L))
@@ -319,19 +319,23 @@ class EmitSuite extends munit.FunSuite:
     * of an exclusive clone, say), so the calls between versions must not form a cycle: the native
     * stack depth is then bounded by the number of versions, whatever the length of the list.
     */
-  test("unfold, map and length of a list run as loops"):
+  test("unfold, map, fold and length of a list run as loops"):
     val src = java.nio.file.Files.readString(Path.of("compiler", "src", "test", "fixed", "modes", "long_lists.fixed"))
     (Mode.Default.copy(ownership = false) :: modes).foreach { mode =>
       val fns = ir("long_lists", src, mode).split("\ndefine ").toList.tail.map(f =>
         f.dropWhile(_ != '@').takeWhile(_ != '(') -> f
       )
       val loops =
-        fns.filter((n, _) => List("unfoldLoop", "mapLoop", "reverseOnto", "length").exists(n.contains)).toMap
+        fns.filter((n, _) =>
+          List("unfoldLoop", "mapLoop", "reverseOnto", "length", "foldDown", "foldUp").exists(n.contains)
+        ).toMap
       val calls =
-        loops.map((n, f) => n -> loops.keySet.filter(g => f.contains(s"call ptr $g(") || f.contains(s"call i64 $g(")))
+        loops.map((n, f) => n -> loops.keySet.filter(g => f.dropWhile(_ != '\n').contains(s" $g(")))
       assert(loops.values.exists(_.contains(".in, %entry ]")), s"$mode: no loop jumps back")
       val lengths = loops.filter((n, _) => n.contains("lengthLoop"))
       assert(lengths.nonEmpty && lengths.values.forall(_.contains(".in, %entry ]")), s"$mode: length")
+      val folds = loops.filter((n, _) => n.contains("foldDown") || n.contains("foldUp"))
+      assert(folds.sizeIs >= 4 && folds.values.forall(_.contains(".in, %entry ]")), s"$mode: fold ${folds.keys}")
       loops.keys.foreach(n => assert(!calls(n)(n), s"$mode: $n calls itself"))
       def acyclic(n: String, path: Set[String]): Boolean = !path(n) && calls(n).forall(acyclic(_, path + n))
       loops.keys.foreach(n => assert(acyclic(n, Set.empty), s"$mode: a cycle of calls through $n: $calls"))

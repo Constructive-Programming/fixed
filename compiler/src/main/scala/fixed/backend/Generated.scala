@@ -81,22 +81,84 @@ private[backend] trait Generated:
 
   /** Rule 7.4.a: `x.fold(onV1, ..., onVn)`, recursive fields folded first; Rule 7.4.a.1: a field
     * `F of ... Self` is mapped through `F`'s derived `map`, so the callback receives `F of ... R`.
+    * Linear data folds in two loops ([[foldDown]]).
     */
   protected def derivedFold(data: SymbolId, args: List[Type], r: Type, span: Span): String =
     val name = generatedName(data, args, "fold", shown(r))
     val ws = hidden(args :+ r)
     instance(name) {
       val x = typed(fresh("x", CType.Boxed), Type.TypeRef(data, args), span)
-      val callbacks = symbols.variantsOf(data).toList.map(v => fresh(s"on${v.name}", CType.Boxed))
+      val callbacks = foldCallbacks(data)
       val rt = ctype(r, span)
-      val recurse =
-        recursive(data, t => Part(t, r, v => bound(Rhs.Call(name, ws ++ (v :: callbacks), runtime = false), rt)))
-      val branches = perVariant(data, args, x, span) { (tag, loaded) =>
-        rebuild(loaded, fieldTransform(data, tag, loaded, recurse, span))(as =>
-          result(Rhs.CallClosure(callbacks(tag), as), rt)
+      if linear(data) then
+        Fn(
+          name,
+          ws ++ (x :: callbacks),
+          rt,
+          enterLoop(data, foldDown(data, args, r, ws, span), ws ++ (x :: callbacks), rt)
         )
+      else
+        val recurse =
+          recursive(data, t => Part(t, r, v => bound(Rhs.Call(name, ws ++ (v :: callbacks), runtime = false), rt)))
+        val branches = perVariant(data, args, x, span) { (tag, loaded) =>
+          rebuild(loaded, fieldTransform(data, tag, loaded, recurse, span))(as =>
+            result(Rhs.CallClosure(callbacks(tag), as), rt)
+          )
+        }
+        Fn(name, ws ++ (x :: callbacks), rt, switch(x, branches, rt))
+    }
+
+  /** A fresh callback parameter per variant of `data`, for its `fold`. */
+  private def foldCallbacks(data: SymbolId): List[Var] =
+    symbols.variantsOf(data).toList.map(v => fresh(s"on${v.name}", CType.Boxed))
+
+  /** Rule 7.4.a for linear data ([[linear]]) as two loops, so the native stack does not grow with
+    * the data. `foldDown(x, callbacks, rev)` moves the cells of `x` onto `rev`, which starts as a
+    * fresh cell of the first variant without fields, each rebuilt by `Rhs.Con` with its `Self`
+    * field pointing back: the ownership passes reuse a cell after an `rc == 1` test and else
+    * allocate one, so from the first shared cell on the value is copied and the original is left
+    * unchanged. At the original last cell, a variant without a `Self` field, it applies that
+    * variant's callback and hands the result to `foldUp`, which walks the reversed cells from the
+    * original last to the first, applying each variant's callback to the value folded so far: the
+    * order of the recursive form. Each step is a self call in tail position, which `EmitLLVM`
+    * makes a jump.
+    */
+  private def foldDown(data: SymbolId, args: List[Type], r: Type, ws: List[Var], span: Span): String =
+    val t = Type.TypeRef(data, args)
+    val rt = ctype(r, span)
+    val (down, up) = (generatedName(data, args, "foldDown", shown(r)), generatedName(data, args, "foldUp", shown(r)))
+    instance(up) {
+      val (rev, acc, cbs) = (typed(fresh("rev", CType.Boxed), t, span), fresh("acc", rt), foldCallbacks(data))
+      val branches = perVariant(data, args, rev, span) { (tag, loaded) =>
+        val i = recursiveField(data, tag)
+        if i < 0 then Expr.Ret(acc)
+        else
+          val next = fresh("acc", rt)
+          val as = loaded.zipWithIndex.map((f, j) => if j == i then acc else f._2)
+          val step = Rhs.Call(up, ws ++ (loaded(i)._2 :: next :: cbs), runtime = false)
+          Expr.Let(next, Rhs.CallClosure(cbs(tag), as), result(step, rt))
       }
-      Fn(name, ws ++ (x :: callbacks), rt, switch(x, branches, rt))
+      Fn(up, ws ++ (rev :: acc :: cbs), rt, switch(rev, branches, rt))
+    }
+    instance(down) {
+      val (x, cbs, rev) =
+        (typed(fresh("x", CType.Boxed), t, span), foldCallbacks(data), typed(fresh("rev", CType.Boxed), t, span))
+      val branches = perVariant(data, args, x, span) { (tag, loaded) =>
+        val i = recursiveField(data, tag)
+        if i < 0 then
+          val acc = fresh("acc", rt)
+          val start = Rhs.Call(up, ws ++ (rev :: acc :: cbs), runtime = false)
+          Expr.Let(acc, Rhs.CallClosure(cbs(tag), loaded.map(_._2)), result(start, rt))
+        else
+          val cell = typed(fresh("cell", CType.Boxed), t, span)
+          val fs = loaded.zipWithIndex.map((f, j) => if j == i then rev else f._2)
+          Expr.Let(
+            cell,
+            Rhs.Con(tag, fs),
+            result(Rhs.Call(down, ws ++ (loaded(i)._2 :: cbs) :+ cell, runtime = false), rt)
+          )
+      }
+      Fn(down, ws ++ (x :: cbs) :+ rev, rt, switch(x, branches, rt))
     }
 
   /** Rule 7.4.b: `D.unfold(seed, step)`. The step returns one layer whose recursive fields hold
@@ -211,13 +273,13 @@ private[backend] trait Generated:
     }
     switch(obj, branches, CType.Boxed)
 
-  /** The entry of a linear member: `go(args, acc)`, the cells built so far starting as the variant
-    * without fields.
+  /** The entry of a linear member of result type `rt`: `go(args, acc)`, the cells built so far
+    * starting as the variant without fields.
     */
-  private def enterLoop(data: SymbolId, go: String, args: List[Atom]): Expr =
+  private def enterLoop(data: SymbolId, go: String, args: List[Atom], rt: CType = CType.Boxed): Expr =
     val empty = fresh("empty", CType.Boxed)
     val tag = symbols.variantsOf(data).toList.indexWhere(v => symbols.fieldsOf(v.id).isEmpty)
-    Expr.Let(empty, Rhs.Con(tag, Nil), result(Rhs.Call(go, args :+ empty, runtime = false), CType.Boxed))
+    Expr.Let(empty, Rhs.Con(tag, Nil), result(Rhs.Call(go, args :+ empty, runtime = false), rt))
 
   /** One step of a loop that reads its input in order and builds linear data `data` at `args` in
     * reverse: variant `tag` rebuilt from `loaded` (fields transformed by `leaf`). A variant with a

@@ -2,7 +2,8 @@
 // known arguments: one native frame per element would overflow an 8 MiB stack. Unfold and map run
 // as loops (Generated.loopStep); so do those of N, whose last cell has a field and whose nullary
 // variant is not the first, and of L, with two recursive variants. `length` runs as `lengthLoop`; on
-// a list still used after it, clang does not turn the old recursion into a loop.
+// a list still used after it, clang does not turn the old recursion into a loop. The derived fold
+// of N and L (`nsum`, `lsum`) runs as foldDown and foldUp.
 use std.io.Console
 
 data N of A:
