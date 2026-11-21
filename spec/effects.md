@@ -423,7 +423,7 @@ Multiple clauses for the same effect are permitted (one per operation of that ef
 
 ### 5.4 Top-level handling (Rule E5.4)
 
-`fn main()` may declare any `with` clause. The compiler-installed runtime provides handlers for the **stdlib effect set**: `Console`, `FileSystem`, `Clock`, `Random`, `Async`, and the arithmetic effects `Overflow` and `DivideByZero`, whose handler ends the program with the position of the operation (Rule E3.6.j) — exact set defined by stdlib. Effects in `main`'s row that are not in the stdlib set are compile errors.
+`fn main()` may declare any `with` clause. The compiler-installed runtime provides handlers for the **stdlib effect set**: `Console`, `FileSystem`, `Clock`, `Random`, `Async`, and the arithmetic effects `Overflow` and `DivideByZero`, whose handler ends the program with the position of the operation (Rule E3.6.j), `Decode` (`spec/stdlib.md` Rule S3.7.a), which ends the program in the same way, and `Diverge`, which has no operation and needs no handler (`spec/type_system.md` Rule 7.4.h) — exact set defined by stdlib. Effects in `main`'s row that are not in the stdlib set are compile errors.
 
 Other top-level entry points (test mains, library entry points) may declare different sets, configurable at the runtime.
 

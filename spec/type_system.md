@@ -145,7 +145,7 @@ Decided by the owner (`docs/decisions/P6-resolution-round-2026-11-20.md`, fourth
 2. the **package**: its top-level declarations, in any of its files, and the names that the `use` declarations of the site's file bring in;
 3. the **prelude**, the package `std.prelude` (Rule 4.3.e).
 
-**Rule 4.3.a (Hiding a prelude name).** A package may declare at top level a name that the prelude declares: a data type, a capability, an effect, a type alias or a function. In the package the name then means the package's declaration (level 2). The compiler warns at the declaration: the option the owner chose included the warning, and the answer did not repeat the word)*: The warning `W060` is confirmed by the owner and is always given for a hidden name. Selecting a named satisfaction with `using` (Rule 8.4.c) hides no name and gives no warning.
+**Rule 4.3.a (Hiding a prelude name).** A package may declare at top level a name that the prelude declares: a data type, a capability, an effect, a type alias or a function. In the package the name then means the package's declaration (level 2). The compiler warns at the declaration. The warning `W060` is confirmed by the owner and is always given for a hidden name. Selecting a named satisfaction with `using` (Rule 8.4.c) hides no name and gives no warning.
 
 ```
 warning[W060]: `List` hides the prelude's data type `std.prelude.List` in this package
