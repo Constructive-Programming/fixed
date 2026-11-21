@@ -116,7 +116,7 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
   - **Fixed** (`Symbols.satisfactionsOf`, `Namer`, `Tables.table`): satisfactions and constructor mappings are keyed by the satisfying type's symbol, with no fall-back to the name. A shadowed prelude data type is named `prelude.<name>`, so its generated members do not collide with the program's type.
 - The backend did not lower the bodies of `satisfies` blocks; they were type-checked only.
   - **Fixed** (`backend/Satisfied.scala`): the bodies are lowered and serve direct calls, table entries and `==`, in both build modes. A program's body takes precedence over a generated member; the prelude's bodies fill the members for which nothing is generated. `==` on a boxed value other than `String` called the runtime's string comparison; it now calls the `Eq` body or is `B005`. A closure that captured a value of a type parameter could copy it before loading its witness, which was invalid IR.
-- The backend built no derived `Show` or `Eq` for a data type. **Fixed** (`Generated.derivedShow`, `derivedEq`) at known type arguments; a program's `satisfies` body takes precedence. `Json` still cannot use them: its field `is Map of (String, Json)` has no representing data type, so lowering fails with `B005`. Derived `Ord` is not built.
+- The backend built no derived `Show` or `Eq` for a data type. **Fixed** (`Generated.derivedShow`, `derivedEq`) at known type arguments; a program's `satisfies` body takes precedence. `Json` still cannot use them: its field `is Map of (String, Json)` has no representing data type, so lowering fails with `B005`.
 - A named bound `T is C` is not checked where the function is called.
   - **Fixed** (`Members.go`, `Unifier.bind`, `Members.freshArgs`, `TyperState.tryUnify`): every variable instantiated from a bounded type parameter, named or anonymous, raises an obligation when it is solved. A bounded `of` parameter of a data type, effect or capability does too, and a trial unification fails if it breaks a bound. Examples 02 and 11 passed a `List` where `ArrayLike` / `Sized + Sorted` was required and were corrected.
 - `show` and `==` on `List of T` with an unbounded `T`, and `<` on an unbounded `T`, were accepted.
@@ -139,30 +139,44 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
   - **Fixed** (`Members.candidates`, `Members.static`, `Lower.static`).
 - Two anonymous bounds printed the same in a type mismatch ("expected is Show, got is Show").
   - **Fixed** (`Typer.mismatch`): each is named by the parameter it comes from.
+- A branch that returned a call to a `-> !` function failed at clang with a phi type error.
+  - **Fixed** (`EmitLLVM.value`): every unit result is the zero of the type the join or return expects. A `-> !` self call stays a jump.
+- A generic function that recursed at a growing data type through a table (`deep(Pair.Pair(p, p), n - 1)` with `T is Show`) overflowed the compiler's stack or exhausted its heap.
+  - **Fixed** (`Atom.DynTable`, `fx_table` in the runtime, `TypeOps.derived`): the table of a growing type is built at run time from a static layout and the witnesses and tables of the type's arguments, and interned, so equal contents give one table. Derived `show` and `eq` can be built at arguments that are type parameters.
+- A `satisfies` body on a primitive type was not lowered; a member with several type parameters of its own was `B005`; `Ord` through a table did not build `lt` and `le` from a user's `compare`; `Maybe` had no `Folding.fold`.
+  - **Fixed** (`Satisfied.satisfier`, `directBody`, `Tables`, the prelude's `Maybe satisfies Folding`). A call of Folding's `fold` through an `is Optional` table used Optional's `fold` slot and crashed with `--no-specialise`; `Lower.tableCall` now refuses a slot of another capability's member of the same name.
+- A derived `Ord` was not built.
+  - **Fixed** (`Generated`): variants in declared order, then fields left to right; the result is the prelude's `Order`; a program's `satisfies Ord` body takes precedence. The comparison of the last field is a tail call, so two long lists compare in a loop.
+- The generated `length` of a list took one native frame per element.
+  - **Fixed** (`lengthLoop`).
 
 Found and not fixed:
 
-- A generic function that recurses at a growing data type through a table (`deep(Pair.Pair(p, p), n - 1)` with `T is Show`) overflows the compiler's stack.
-- A branch that returns a call to a `-> !` function fails at clang with a phi type error.
 - A type that refers to itself at other arguments gets only baseline versions of its generated members.
 - The result of a closure call is always taken as shared. Measured: 4.0 instructions per tested reuse, at most 0.30% on `records`. Left as it is.
-- A `satisfies` body on a primitive type is not lowered. A member with several type parameters of its own is `B005`. `Ord` through a table does not build `lt` and `le` from a user's `compare`.
 - The stand-in representation rule cannot see what a function returns: `fn l() -> is Show = [1, 2]` miscompiles.
-- `Maybe` has no `Folding.fold` body and no generated member for it.
 - The type of a list literal is not specified. The typer gives it `List`; examples 02 and 11 assumed a collection that the compiler picks. Open for the owner.
 - Signed `MIN / -1` and `MIN % -1` emit a bare `sdiv`/`srem`, which is undefined behaviour. The spec does not say what integer overflow does (trap, wrap or abort). Open for the owner.
 - A prelude offset within the program file's length is shown at a wrong position, because spans carry no file.
 - `Console` and the runtime's effects are recognised by name (`Lower.static`, `Effects.runtimeNames`): a program's own `effect Console` is taken for the runtime's.
 - `Lower.nestedFn` finds a nested function by name and span.
-- Trees, rose trees, snoc lists, the derived `fold` and the generated `length` still take one native frame per level; only derived `unfold` and `map` of linear data run as loops.
 - `Json` cannot use the derived `show` and `==`: its field `is Map of (String, Json)` has no representing data type, so lowering fails with `B005`.
-- A derived `Ord` is not built by the backend.
 - `i128` and `u128` do not satisfy `Numeric`, though `spec/stdlib.md` §4.9 says they do. The backend has no 128-bit integers: `Lower.scalar` stops at 64 bits, the runtime formats only 64-bit integers, and there is no boxed integer. Blocked on OQ-CM7.
 - The backend lowers no literal pattern: `match n: 0 => …` on a `u64` is `B005`, as is a literal inside a tuple or variant pattern.
 - An abstract value of another origin (a `-> is C` result, a field `x: is Show`, a parameter typed with a bare capability `C`) still reaches a concrete type that has `C` and runs with a wrong value: Rule 5.1.2 is not enforced.
 - The arguments of a capability bound are not compared by `Satisfaction.holds` when the satisfying type has none (`B is Sized of (u8, A)` accepts `Sized of (u8, u16)`).
 - Integer literals are not range-checked (`256` as a `u8` is 0).
 - `3.add(2.5)` reaches clang with an invalid constant, as `3 + 2.5` does.
+- Trees, rose trees, snoc lists and the derived `fold` still take one native frame per level; derived `unfold` and `map` of linear data and the generated `length` run as loops, and a derived `compare` loops on its last field. A loop form of the derived `fold` of linear data (in-place reversal, then a fold from the end) measured on `nat_loop` +8.1% instructions and -23% best cycles; it waits for the owner.
+- A program's `satisfies` body for a member that the compiler provides on a scalar (`i64 satisfies Eq: fn eq = …`) is ignored, in both modes. Open for the owner.
+- `compare` on a scalar or a `String` has no table entry, and a `String` field makes a derived `compare` `B005`, reported at 1:1.
+- The typer rejects `x.compare(y)` written directly on a data value (`T001`).
+- Tables built at run time for growing types are interned and kept until exit, where Rule CM4.2 says a stack record per frame: a closure can capture the table and outlive the frame.
+- `Ord` or `Numeric` tables through a growing type whose data type has a program `satisfies Ord` body are `B005`.
+- A `satisfies` body of a data type with a bounded parameter that uses the parameter's table does not take that table (`B005` through a run-time table; invalid IR in a static table).
+- A `handle` with no `return` clause around a `-> !` subject fails at clang.
+- With `--no-specialise`, a `satisfies` body that calls a generic function at its own data type crashes the compiler ("takes 2 arguments, called with 0").
+- In a program that declares its own `cap Show`, `self.a.show()` inside its `satisfies Show` block asks for the prelude's `Show` (`T022`).
 
 Limits and gaps of the first implementation, against the spec:
 
