@@ -1208,7 +1208,7 @@ cap Two:
 
 The check reads the capability's declarations alone. A cycle among its default bodies is an error even if a satisfaction gives a body for one of the members on it and so breaks the cycle for that type *(author's choice, owner to confirm)*. A call on `Self` in a capability that others extend reaches every default body by which an extending capability restates the member; restatements by two capabilities that extend one base and not each other are read together, so a cycle that only a type satisfying both would run is an error too *(author's choice, owner to confirm; a check per extends chain would admit it)*. Calls through a value of another type bounded by the capability (`x: T is Sz`, `x: is Sz`) go through another table and are not on the graph (Rule 7.4.h).
 
-The bodies of a `satisfies` block are ordinary functions under Rule 7.4.h *(author's choice, owner to confirm)*: structural recursion on the data is how a user writes a fold for it, and a body whose receiver's type is known is an edge to the body it reaches, so a call of the same member on `self` unchanged is not structural and is `T027`. Not seen: a cycle that passes through a `satisfies` body and back into a default body (a default calls a member that the satisfaction gives a body, and that body calls the default), and a cycle through a function that takes the value at a bound (`fn g(x: T is Sz) = x.sz()`), since such a call goes through a table. Built (`typer/Totality.scala`).
+The bodies of a `satisfies` block are ordinary functions under Rule 7.4.h *(confirmed by the owner)*: structural recursion on the data is how a user writes a fold for it, and a body whose receiver's type is known is an edge to the body it reaches, so a call of the same member on `self` unchanged is not structural and is `T027`. Not seen: a cycle that passes through a `satisfies` body and back into a default body (a default calls a member that the satisfaction gives a body, and that body calls the default), and a cycle through a function that takes the value at a bound (`fn g(x: T is Sz) = x.sz()`), since such a call goes through a table. Built (`typer/Totality.scala`).
 
 **Rule 7.5.a (Auto-derivation does not apply across non-singleton SCCs) — resolves L7.** Auto-derivations from §7.4 (`fold`/Rule 7.4.a, `unfold`/Rule 7.4.b, `Functor`/Rule 7.4.c, accessors/Rule 7.4.d, `para`/Rule 7.4.g) **are disabled** for `data` declarations whose dependency graph forms an SCC of size ≥ 2. Each member of such an SCC requires explicit `satisfies` declarations for any capabilities it must satisfy.
 
@@ -1407,7 +1407,7 @@ fn sortAll(xs: List of Money) -> List of Money = sort(xs)
 fn sortAll(xs: List of (T is Ord)) -> List of T = sort(xs)   // accepted
 ```
 
-*(Owner's decision, fourth round of P6, "No deferred sites". It withdraws the deferred sites of P6 D12, which left such a site open in a library and bound it at link. The removal of the fifth level and the rule for a choice point's pool (§6.5.2) are the author's consequences, owner to confirm.)*
+*(Owner's decision, fourth round of P6, "No deferred sites". It withdraws the deferred sites of P6 D12, which left such a site open in a library and bound it at link. The removal of the fifth level and the rule for a choice point's pool (§6.5.2) are the author's consequences, confirmed by the owner.)*
 
 **Worked examples.**
 
