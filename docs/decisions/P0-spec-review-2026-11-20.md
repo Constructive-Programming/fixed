@@ -102,35 +102,21 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
 - A reuse token could be filled twice: the code after an `if` or `match` was analysed before its branches, so a cell a branch had reused was reused again after it. A branch that did not use the token leaked it.
 - Several cases in which the default build wrote into a cell that was still referenced: a result of an `if` or `match` that is one of the values its branches use; the payload of an abortive effect operation taken as fresh; a part held by a live variable while the cell around it was taken as exclusive.
 - Only 100 of the 2,000,000 reuses in `records` took the exclusive path (`Versions.construct`); see the second addendum of `docs/baselines/runtime-2026-11-20-phase-4.1.md`.
-
-Found and not fixed:
-
 - The derived `unfold` and `map` were not tail-recursive: one native frame per element, so `upto(2000000)` overflowed an 8 MiB stack.
   - **Fixed in part** (`Generated.loopStep`, `EmitLLVM`, `Aborts`, `Consume`): derived `unfold` and `map` of linear data (a list, `Nat`) run as loops that build in reverse and then reverse in place. `EmitLLVM` emits a self call in tail position as a jump, so the bound does not depend on the optimiser. Trees, rose trees, snoc lists, the derived `fold` and the generated `length` still take one native frame per level. The default build reuses `map`'s cells after an `rc == 1` test: `Demands` treats the tail of `x` as overlapping the cell reused from `x`. Measured against the commit before (instructions; best cycles of nine runs): `nat_loop` +10%, +19%; `list_pipeline` +23%, -8%; `records` +12%, -3%; `fail_chain` -2%, -26%; `bintrees` unchanged. The second pass is what destination passing would remove (`docs/plans/implementation-plan.md`, Phase 4.2).
 - Derived `unfold` through a functor field (a rose tree with `List of Rose`) crashed, and derived `map` did not map through such a field, in both build modes.
   - **Fixed** (`Generated`): one walk, decided on the declared field types, serves `fold`, `unfold` and `map`.
 - The typer and the backend disagreed on a derived `fold` through a type argument that is not the last (`Pair of (Self, u64)`), and on `Functor` for non-regular data.
   - **Fixed** (`Members.foldedSelf`, `through`, `functor`, `unmapped`): the typer and the backend share one rule for where a derived member reaches `Self` or the element: the parameter itself, or the last argument of a data type whose rightmost parameter is unbounded and itself rebuildable. `Self` anywhere else (`Pair of (Self, u64)`, `u64 -> Self`) is passed unfolded. `Functor` is derived only under that rule, which is narrower than Rule 7.4.c as written: non-regular `M of (A, B)`, `Tuple of (A, u64)`, `u64 -> A` and a bounded last parameter lose it, and the diagnostic names the field. The spec text of Rules 7.4.c and 7.4.a.1 is open for the owner.
-- A generic function that recurses at a growing data type through a table (`deep(Pair.Pair(p, p), n - 1)` with `T is Show`) overflows the compiler's stack.
-- A field type is not checked against the bounds of the type it names: `W(b: Box of A)` is accepted with `A` unbounded.
-- Tuple-literal patterns `(a, b)` never match.
-- A branch that returns a call to a `-> !` function fails at clang with a phi type error.
 - A polymorphically recursive type such as `N of List of A` made the compiler overflow its own stack in the default mode: a clone asked for itself at an ever larger key without end.
   - **Fixed** (`Lower.call`, `TypeOps.derived`): a call whose type argument nests the callee's own type parameter calls the baseline version, or is `B005` where there is none; finite chains keep their clones. Both modes also miscompiled such a function when it did not use its type parameter: its baseline version dropped a witness that its recursive call still passed. `EmitLLVM.direct` now requires the argument count to equal the parameter count.
 - The default build reused a shared cell when the result of an `if` or `match` was a value that is still live after the join, or held a part of one (`Versions.walk`, the `Ret` case): invariant I1 did not hold there.
   - **Fixed**: a branch result runs the same `Demands.exclusive` test as a call argument. Found by adversarial programs in the checked runtime mode (`FX_CHECK_EXCL`), in which every untested reuse first asserts that the cell is exclusively owned; every `EmitSuite` run uses it. Closures, abort payloads, handler results, fields of fields, polymorphic results and `satisfies` bodies held under attack (126 runs over three modes).
-- A type that refers to itself at other arguments gets only baseline versions of its generated members.
-- The result of a closure call is always taken as shared. Measured: 4.0 instructions per tested reuse, at most 0.30% on `records`. Left as it is.
 - Satisfactions were looked up by the name of the type, not by its symbol: a program that declared its own `data Order` picked up the prelude's `Order satisfies Ordering` and crashed the backend.
   - **Fixed** (`Symbols.satisfactionsOf`, `Namer`, `Tables.table`): satisfactions and constructor mappings are keyed by the satisfying type's symbol, with no fall-back to the name. A shadowed prelude data type is named `prelude.<name>`, so its generated members do not collide with the program's type.
 - The backend did not lower the bodies of `satisfies` blocks; they were type-checked only.
   - **Fixed** (`backend/Satisfied.scala`): the bodies are lowered and serve direct calls, table entries and `==`, in both build modes. A program's body takes precedence over a generated member; the prelude's bodies fill the members for which nothing is generated. `==` on a boxed value other than `String` called the runtime's string comparison; it now calls the `Eq` body or is `B005`. A closure that captured a value of a type parameter could copy it before loading its witness, which was invalid IR.
-- A prelude name is still resolved through the program's scope in many places: the types `Tuple`, `Maybe`, `Result`, `List` and `String`, capabilities matched by name in the backend and in the derivation rules, and functions found by name. A program that declares `data Tuple`, `List`, `String` or `Nat`, or `cap Show`, breaks typing or changes behaviour. Prelude function bodies are typed in the program's scope, and their diagnostics, which carry prelude spans, crash the compiler.
-- A `satisfies` body on a primitive type is not lowered. A member with several type parameters of its own is `B005`. `Ord` through a table does not build `lt` and `le` from a user's `compare`. A program that declares any name the prelude declares loses the prelude's `satisfies` bodies.
 - The backend built no derived `Show` or `Eq` for a data type. **Fixed** (`Generated.derivedShow`, `derivedEq`) at known type arguments; a program's `satisfies` body takes precedence. `Json` still cannot use them: its field `is Map of (String, Json)` has no representing data type, so lowering fails with `B005`. Derived `Ord` is not built.
-- Constructor resolution with no fitting candidate leaves the call abstract; a concrete expected type then receives a value of another type.
-- The stand-in representation rule cannot see what a function returns: `fn l() -> is Show = [1, 2]` miscompiles.
-- `Maybe` has no `Folding.fold` body and no generated member for it.
 - A named bound `T is C` is not checked where the function is called.
   - **Fixed** (`Members.go`, `Unifier.bind`, `Members.freshArgs`, `TyperState.tryUnify`): every variable instantiated from a bounded type parameter, named or anonymous, raises an obligation when it is solved. A bounded `of` parameter of a data type, effect or capability does too, and a trial unification fails if it breaks a bound. Examples 02 and 11 passed a `List` where `ArrayLike` / `Sized + Sorted` was required and were corrected.
 - `show` and `==` on `List of T` with an unbounded `T`, and `<` on an unbounded `T`, were accepted.
@@ -139,17 +125,32 @@ Found and not fixed:
   - **Fixed** (`Namer.member`, `Declarations.memberBody`). A nested `fn` and a bound inside a function-typed parameter (`f: (is C) -> u64`) keep the bound as written: the backend cannot compile a generic nested function, and nothing reports a type that the caller of a function-typed parameter leaves unpicked. An anonymous result (`-> is C`) is a structural type, not yet a choice point (P6 D2, Phase 4.2).
 - `Numeric` and `Eq` members called by name on a primitive (`x.negate`, `x.add(y)`, `x.eq(y)`) failed with `B005`.
   - **Fixed** (`Lower.resolved`).
+- A derived `map` through a bounded last parameter did not check the new element type. **Fixed**: `Functor` is not derived over a bounded last parameter.
+- `Json` had no `Show` or `Eq` in the prelude. **Fixed**: its fields carry `Show + Eq` as `spec/stdlib.md` §3.2 says, and `Json` satisfies both again in the typer; the backend part is the missing derived `Show` and `Eq` above.
+
+Found and not fixed:
+
+- A generic function that recurses at a growing data type through a table (`deep(Pair.Pair(p, p), n - 1)` with `T is Show`) overflows the compiler's stack.
+- A field type is not checked against the bounds of the type it names: `W(b: Box of A)` is accepted with `A` unbounded.
+- Tuple-literal patterns `(a, b)` never match.
+- A branch that returns a call to a `-> !` function fails at clang with a phi type error.
+- A type that refers to itself at other arguments gets only baseline versions of its generated members.
+- The result of a closure call is always taken as shared. Measured: 4.0 instructions per tested reuse, at most 0.30% on `records`. Left as it is.
+- A prelude name is still resolved through the program's scope in many places: the types `Tuple`, `Maybe`, `Result`, `List` and `String`, capabilities matched by name in the backend and in the derivation rules, and functions found by name. A program that declares `data Tuple`, `List`, `String` or `Nat`, or `cap Show`, breaks typing or changes behaviour. Prelude function bodies are typed in the program's scope, and their diagnostics, which carry prelude spans, crash the compiler.
+- A `satisfies` body on a primitive type is not lowered. A member with several type parameters of its own is `B005`. `Ord` through a table does not build `lt` and `le` from a user's `compare`. A program that declares any name the prelude declares loses the prelude's `satisfies` bodies.
+- Constructor resolution with no fitting candidate leaves the call abstract; a concrete expected type then receives a value of another type.
+- The stand-in representation rule cannot see what a function returns: `fn l() -> is Show = [1, 2]` miscompiles.
+- `Maybe` has no `Folding.fold` body and no generated member for it.
 - The type of a list literal is not specified. The typer gives it `List`; examples 02 and 11 assumed a collection that the compiler picks. Open for the owner.
 - Bounds of `of` parameters are not checked in written types (`Tag of Box`, `with Ping of Box`).
-- A derived `map` through a bounded last parameter did not check the new element type. **Fixed**: `Functor` is not derived over a bounded last parameter.
 - Signed `MIN / -1` and `MIN % -1` emit a bare `sdiv`/`srem`, which is undefined behaviour. The spec does not say what integer overflow does (trap, wrap or abort). Open for the owner.
 - A member called on a numeric literal (`3.add(4)`) is not resolved.
 - `N.fromI64(...)` on a type parameter is accepted by the typer and refused by the backend.
 - `i128` and `u128` do not satisfy `Numeric`, though `spec/stdlib.md` §4.9 says they do.
 - A user `cap Numeric` with `i64 satisfies Numeric` crashes the diagnostic formatter (a prelude span formatted against the user's file).
-- `Json` had no `Show` or `Eq` in the prelude. **Fixed**: its fields carry `Show + Eq` as `spec/stdlib.md` §3.2 says, and `Json` satisfies both again in the typer; the backend part is the missing derived `Show` and `Eq` above.
-- Rule 5.1.3 of `spec/type_system.md` does not mention `<` and `Ord`; `spec/stdlib.md` does not list `char satisfies Eq` and `char satisfies Ord`.
-- The backend does not lower the bodies of `satisfies` blocks; they are type-checked only.
+- Trees, rose trees, snoc lists, the derived `fold` and the generated `length` still take one native frame per level; only derived `unfold` and `map` of linear data run as loops.
+- `Json` cannot use the derived `show` and `==`: its field `is Map of (String, Json)` has no representing data type, so lowering fails with `B005`.
+- A derived `Ord` is not built by the backend.
 
 Limits and gaps of the first implementation, against the spec:
 

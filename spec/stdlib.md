@@ -352,6 +352,12 @@ pub bool satisfies Boolean              // built in: `yes` is `true`, `no` is `f
 
 pub Nat satisfies Folding               // auto-derived from Zero + Succ
 
+pub String satisfies Eq                 // built in, like the `Eq` and `Ord` that the primitive
+pub String satisfies Ord                // numeric types have through `Numeric` (§4.9)
+pub bool satisfies Eq
+pub char satisfies Eq
+pub char satisfies Ord
+
 pub String satisfies Clone              // Clone is derived only on request (§4.11):
 pub List satisfies Clone                // each declaration, without a body, asks for the
 pub Maybe satisfies Clone               // derived `clone`. `Json` declares none until its

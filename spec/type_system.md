@@ -175,7 +175,7 @@ Reason: if the convention followed from the body, a change to a body could chang
 
 #### 5.1.3 Operations on a type parameter (Rule 5.1.3)
 
-A value whose type is a type parameter or a choice point has the members of its bounds and nothing else. `show`, `==`, `!=` and `clone` are members of `Show`, `Eq` and `Clone` (`spec/stdlib.md` §4). On a value of an unbounded type parameter, each of them is a type error, `error[T022]: <member> needs a bound on <T>`. Write `T is Show`, `T is Eq` or `T is Clone`.
+A value whose type is a type parameter or a choice point has the members of its bounds and nothing else. `show`, `==`, `!=`, `<`, `<=`, `>`, `>=` and `clone` are members of `Show`, `Eq`, `Ord` and `Clone` (`spec/stdlib.md` §4). On a value of an unbounded type parameter, each of them is a type error, `error[T022]: <member> needs a bound on <T>`. Write `T is Show`, `T is Eq`, `T is Ord` or `T is Clone`. The same holds inside a type: `show` on a `List of T` needs `T is Show`, because the derived `Show` of `List` calls the `Show` of its element.
 
 A value of an unbounded type parameter can only be moved: bound to a name, passed, returned, stored in a field or captured. Nothing else may be done with it, except to hand it to a diagnostic sink (below).
 
