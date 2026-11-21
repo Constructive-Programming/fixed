@@ -72,10 +72,14 @@ private[backend] trait Tables extends Satisfied:
     * tables, the table of `cap` itself where it is `Show`, `Eq` or `Ord`, which the derived member needs.
     * A type that grows under polymorphic recursion has no static table to enumerate. The entries
     * are built once, at the data type's own parameters; a member they call that needs a hidden
-    * parameter the table does not hold makes it an error.
+    * parameter the table does not hold makes it an error. A tuple of other than two elements has
+    * none: the entries would be built at `Tuple`'s two own parameters.
     */
   private def dynamicTable(t: Type, cap: SymbolId): Either[String, Atom.DynTable] =
-    dataOf(t).toRight(s"no table at `${symbols.render(t)}`, which has type parameters").flatMap { (data, args) =>
+    dataOf(t).toRight(s"no table at `${symbols.render(t)}`, which has type parameters").filterOrElse(
+      (data, args) => symbols.typeParamsOf(data).sizeIs == args.size,
+      s"no table built at run time for `${symbols.render(t)}`, a tuple of ${dataOf(t).fold(0)(_._2.size)} elements (only pairs have one)"
+    ).flatMap { (data, args) =>
       val own = symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil))
       val derivedCap = Option.when(Set("Show", "Eq", "Ord")(symbols.preludeName(cap)))(cap)
       assumed.withValue(derivedCap.fold(Map.empty)(c => own.map(_ -> c).toMap)) {

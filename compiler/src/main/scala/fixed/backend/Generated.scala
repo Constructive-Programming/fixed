@@ -504,7 +504,7 @@ private[backend] trait Generated:
 
   /** The type parameters `t` mentions, in order of first occurrence, [[Generated.R]] included. */
   protected def typeParamsIn(t: Type): List[Type] =
-    if isTypeParam(t) then List(t) else t.children.flatMap(typeParamsIn)
+    if isTypeParam(t) then List(t) else t.children.flatMap(typeParamsIn).distinct
 
   /** Whether `t` is a type parameter: a declared one, [[Generated.R]] or an implicit one. */
   protected def isTypeParam(t: Type): Boolean =
@@ -517,7 +517,8 @@ private[backend] trait Generated:
     * witness of each of `args` and of `r`, and a `satisfies` body also their tables ([[hiddenArgsOf]]); the
     * clone for known `args` and `r`, if chosen, and an instance where the baseline version cannot be
     * built, are built at `args` and `r` and take the hidden parameters of the type parameters they
-    * mention, which the caller has under the same names.
+    * mention, which the caller has under the same names. A tuple of other than two elements has
+    * none: its declaration's members are `Tuple`'s, of two (`B005`).
     */
   protected def member(data: SymbolId, args: List[Type], r: Option[Type])(
       gen: (List[Type], Type) => String
@@ -526,18 +527,24 @@ private[backend] trait Generated:
       val f = gen(args, r.getOrElse(Type.UnitType))
       (f, hiddenParams(f).getOrElse(hidden(args ++ r)))
     val own = symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil))
-    attempt(gen(own, Generated.R)) match
-      case Right(name) =>
-        baselines += name
-        (if nonRegular(data) then None else specialised(name, args ++ r)) match
-          case Some(key) =>
-            typeClones(perInstance._1) = (name, key)
-            perInstance
-          case None => (name, hiddenArgsOf(name, own ++ r.map(_ => Generated.R), args ++ r))
-      case Left(why) =>
-        val (name, ws) = perInstance
-        if ws.isEmpty && !nonRegular(data) then instances(name) = why else report(why)
-        (name, ws)
+    if own.sizeIs != args.size then
+      report(
+        s"a generated member of `${symbols(data).name}` at ${args.size} type arguments, where it declares ${own.size}"
+      )
+      ("", Nil)
+    else
+      attempt(gen(own, Generated.R)) match
+        case Right(name) =>
+          baselines += name
+          (if nonRegular(data) then None else specialised(name, args ++ r)) match
+            case Some(key) =>
+              typeClones(perInstance._1) = (name, key)
+              perInstance
+            case None => (name, hiddenArgsOf(name, own ++ r.map(_ => Generated.R), args ++ r))
+        case Left(why) =>
+          val (name, ws) = perInstance
+          if ws.isEmpty && !nonRegular(data) then instances(name) = why else report(why)
+          (name, ws)
 
   private def listParam(data: SymbolId, args: List[Type], span: Span): Var =
     typed(fresh("xs", CType.Boxed), Type.TypeRef(data, args), span)

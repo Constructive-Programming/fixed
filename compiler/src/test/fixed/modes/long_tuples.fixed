@@ -1,0 +1,24 @@
+// Tuples of three and four elements are the prelude's `Tuple` at their element types, one field
+// each (`Lower.fieldTypes`): `==`, `<` and `show` reach every element, also through a static table
+// and at type parameters. They were lowered as pairs, so `(1, 2, 3) == (1, 2, 4)` was true.
+use std.io.Console
+
+fn same(a: T is Eq, b: T, c: T) -> bool = (a, b, c) == (a, b, a)
+
+fn less(a: T is Ord, b: T) -> bool = (a, a, a) < (a, a, b)
+
+fn say(x: T is Show) -> String = x.show()
+
+fn triple(a: A is Show) -> String = say((a, a, a))
+
+fn third(t: (u64, String, bool)) -> String =
+    match t:
+        (_, s, true) => s
+        (n, _, _) => n.show()
+
+fn main() -> () with Console =
+    Console.printLine(((1, 2, 3) == (1, 2, 4)).show().concat(" ").concat(((1, 2, 3) == (1, 2, 3)).show()))
+    Console.printLine(((1, 2, 3, 4) == (1, 2, 3, 5)).show().concat(" ").concat(((1, 2, 3, 4) < (1, 2, 3, 5)).show()).concat(" ").concat(((1, 2, 4) < (1, 2, 3)).show()))
+    Console.printLine((1, "a", true).show().concat(" ").concat(say((1, "b", 2, "c"))).concat(" ").concat(triple(5)))
+    Console.printLine(same(1, 2, 1).show().concat(" ").concat(same(1, 2, 3).show()).concat(" ").concat(less(1, 2).show()).concat(" ").concat(less(2, 1).show()))
+    Console.printLine(third((1, "x", true)).concat(" ").concat(third((2, "y", false))))
