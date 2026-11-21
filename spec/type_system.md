@@ -1143,31 +1143,45 @@ Representation: data types in a strongly-connected component of the data depende
 
 Self-recursion (a single data type referencing itself) is the trivial 1-element SCC and is handled by the same rule.
 
-**Rule 7.4.h (No recursion between functions).** Every `fn` is total. A named function that can reach itself in the static call graph of named functions is an error: a direct call to itself, a cycle through other functions, or a call from a nested function or a lambda inside it that names it. A call through a capability table, or through a closure value that the function receives, is not an edge of that graph. The prelude and the generated members obey the same rule.
+**Rule 7.4.h (Recursion between functions).** A named function that can reach itself in the static call graph of named functions is **recursive**: a direct call to itself, a cycle through other functions, or a call from a nested function or a lambda inside it that names it. A call through a capability table, or through a closure value that the function receives, is not an edge of that graph. The prelude and the generated members obey the same rule. A recursive function is accepted in two cases and is otherwise an error.
 
-The error is `error[T027]: <f> calls itself` (or `<f> and <g> call each other`, naming the cycle). The diagnostic must show how to write the function with the derived member that fits the shape of the recursion:
+1. **Structural recursion.** Every recursive call of the function to itself passes, in one fixed parameter position, a **strict sub-value** of that parameter: a variable bound by a pattern of a `match` (or of the parameter's own pattern) on the parameter, or on a strict sub-value of it. Such a function is total, and its row is unchanged. This is how a user writes a fold that the derivation does not provide: a traversal of a type that refers to itself at other arguments (`M of (B, A)` inside `M of (A, B)`), or through a position that the derived `fold` passes unfolded (Rule 7.4.a.1). The recursive call may be at other type arguments than the caller's.
+
+2. **`Diverge`.** A function whose row has the effect `Diverge` may recurse without restriction: `fn spin(n: u64) -> ! with Diverge = spin(n + 1)`. `Diverge` says that the function may not return. It has no operations and no handler removes it; it propagates to every caller, `main` included. A function with `Diverge` in its row is not total: its props are not proved by enumeration over it, it is never a fork site, and a cost bound on it is a bound per step, not on the call.
+
+A recursive function that is neither is `error[T027]: <f> calls itself` (or `<f> and <g> call each other`, naming the cycle). The diagnostic must show the ways out, the one that fits the shape of the recursion first:
 
 - `fold` (Rule 7.4.a), when every recursive call is on a field of the matched parameter and only its result is used;
 - `para` (Rule 7.4.g), when the body also uses that field itself;
-- `unfold`, when the function builds a structure from a seed.
+- `unfold`, when the function builds a structure from a seed;
+- matching on the parameter, when the call would be structural if the argument were bound by a pattern;
+- `with Diverge`, when the recursion is not on a sub-value at all.
 
 ```
-fn total(xs: L) -> u64 =                    // ERROR T027
+fn total(xs: L) -> u64 =                    // accepted: structural on xs
     match xs:
         L.C(h, t) => h + total(t)
         L.E => 0
-fn total(xs: L) -> u64 =                    // with fold
+fn total(xs: L) -> u64 =                    // the same with fold; runs in bounded stack (Rule 7.4.b.3)
     xs.fold((h, rest) -> h + rest, () -> 0)
 
-fn insert(x: u64, xs: L) -> L =             // ERROR T027: the body also uses `t`
-    match xs:
-        L.C(h, t) => if x <= h: L.C(x, L.C(h, t)) else: L.C(h, insert(x, t))
-        L.E => L.C(x, L.E)
-fn insert(x: u64, xs: L) -> L =             // with para: (t, rest) is the tail and the tail with x inserted
-    xs.para((h, t, rest) -> if x <= h: L.C(x, L.C(h, t)) else: L.C(h, rest), () -> L.C(x, L.E))
+fn size(m: M of (A, B)) -> u64 =            // accepted: structural, at other type arguments
+    match m:
+        M.Leaf(a, b) => 1
+        M.Flip(r) => 1 + size(r)
+
+fn deep(p: T is Show, n: u64) -> String =   // ERROR T027: `n - 1` is not a sub-value of `n`
+    if n == 0: p.show() else: deep(Pair.Pair(p, p), n - 1)
+fn deep(p: T is Show, n: u64) -> String with Diverge = …   // accepted
+fn deep(p: T is Show, n: Nat) -> String =   // accepted: structural on n
+    match n:
+        Nat.Zero => p.show()
+        Nat.Succ(k) => deep(Pair.Pair(p, p), k)
 ```
 
-Not built: the compiler accepts recursion today, and `para` is not derived yet. (Owner's decision, fourth round of P6.)
+*(Author's choices, owner to confirm.)* A cycle through several functions is structural only when every call on the cycle passes a strict sub-value in the position that the cycle returns to; otherwise it needs `Diverge`. A structurally recursive function takes one native frame per level; the derived members of linear data do not (Rule 7.4.b.3), so `fold` remains the form to prefer for long lists. A function of type `-> !` that recurses needs `Diverge` like any other.
+
+Not built: the compiler accepts every recursion today. (Owner's decisions, fourth round of P6: first "enforce", then structural recursion and `Diverge` admitted.)
 
 **Rule 7.5.a (Auto-derivation does not apply across non-singleton SCCs) — resolves L7.** Auto-derivations from §7.4 (`fold`/Rule 7.4.a, `unfold`/Rule 7.4.b, `Functor`/Rule 7.4.c, accessors/Rule 7.4.d, `para`/Rule 7.4.g) **are disabled** for `data` declarations whose dependency graph forms an SCC of size ≥ 2. Each member of such an SCC requires explicit `satisfies` declarations for any capabilities it must satisfy.
 
@@ -1524,7 +1538,7 @@ Subtyping in Fixed is intentionally narrow:
 
 - **OQ-T1 — Mutual-fold convenience** (deferred). Generated combinators over the members of a mutually recursive SCC (§7.5); a backwards-compatible extension of Rule 7.5.a.
 - ~~**OQ-T2 — Type variables of variant fields.**~~ Closed in v0.5.0 by Rule 4.1.a: such a variable, and an anonymous bound in a field, is a choice point bound once per link unit (P6 D3).
-- **OQ-T4 — Totality of `unfold`.** Nothing says what a derived `unfold` means when its step never yields a variant without a seed: the function then does not terminate, and Rule 7.4.h does not see it. Open for the owner.
+- **OQ-T4 — Totality of `unfold`.** Nothing says what a derived `unfold` means when its step never yields a variant without a seed: the function then does not terminate, and Rule 7.4.h does not see it. Open for the owner. With `Diverge` (Rule 7.4.h) a candidate rule exists: an `unfold` whose termination is not proved has `Diverge` in its row.
 - **OQ-T3 — Dependent types for integer ranges** (open direction, not a decision). The owner's note on the arithmetic effects (P6, fourth round): "we might need to introduce dependent types as a better solution to 'raise integer size'. It might even start simplifying other parts of our system." The widening form `widen` (`spec/effects.md` Rule E3.6.h) fixes one wider type; a type that carried its range would let the result of `a * b` have the range the operands give it. The specs already show three places where values meet types: refinement capabilities with value parameters (§6.3, `cap Between(min, max)`, `fn between(min, max) -> cap of N`), `boundedPositive(lo, hi)` in `examples/11_properties.fixed`, and the static prover removing `Overflow` from an operation whose result range it proves from those refinements (`spec/effects.md` Rule E3.6.d). Nothing is designed.
 
 **Pre-resolved deferrals (lift into the indicated spec doc when drafted):**
