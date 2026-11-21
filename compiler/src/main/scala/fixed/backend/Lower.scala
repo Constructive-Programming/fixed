@@ -544,6 +544,11 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
             expr(m.receiver, sc)(r => expr(arg, sc)(a => runtime("fx_str_concat", List(r, a), m, sc)(k)))
           case ("Show", "show", Nil) if Lower.scalar(recvType).isDefined || isStringType(recvType) =>
             expr(m.receiver, sc)(r => show(r, recvType, m, sc)(k))
+          case ("Numeric", "negate", Nil) if Lower.scalar(recvType).isDefined =>
+            expr(m.receiver, sc)(r => bind(Rhs.Prim(PrimOp.Neg, List(r)), m, sc)(k))
+          case (c, name, List(arg)) if Lower.scalar(recvType).isDefined && Tables.scalarBinary.contains((c, name)) =>
+            val op = Tables.scalarBinary((c, name))
+            expr(m.receiver, sc)(r => expr(arg, sc)(a => bind(Rhs.Prim(op, List(r, a)), m, sc)(k)))
           case ("Folding", "fold", List(_, _)) if listLike =>
             generatedCall(recvType, m, sc, Some(typeOf(m, sc)))(foldLeft(_, _, _, m.span))(k)
           case (_, "fold", _) if mappedFold(cap, recvType, args.size).isDefined =>

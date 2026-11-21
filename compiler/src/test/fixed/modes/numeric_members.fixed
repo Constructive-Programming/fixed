@@ -1,0 +1,41 @@
+// Numeric arithmetic by operator and by member (spec/stdlib.md §4.9). `ops`
+// works on a value of a type parameter: through its table, or through
+// `Lower.resolved` once a default build specialises it. The `direct`
+// functions call the members by name on a primitive, which `Lower.resolved`
+// lowers to primitive operations in both builds.
+use std.io.Console
+
+fn ops(a: N is Numeric + Show, b: N) -> String =
+    let s = a + b
+    let d = a - b
+    let m = a * b
+    let q = a / b
+    let r = a % b
+    let n = -a
+    let l = a + 1
+    let c = a.add(b).mul(b).sub(a).div(b).rem(b).negate
+    let lt = a < b
+    let eq = a == b
+    s.show().concat(" ").concat(d.show()).concat(" ").concat(m.show()).concat(" ")
+        .concat(q.show()).concat(" ").concat(r.show()).concat(" ").concat(n.show()).concat(" ")
+        .concat(l.show()).concat(" ").concat(c.show()).concat(" ").concat(lt.show()).concat(" ").concat(eq.show())
+
+fn main() -> () with Console =
+    Console.printLine(ops(asI64(17), 5))
+    Console.printLine(ops(asF64(7.5), 2.0))
+    Console.printLine(ops(asI64(5), 17))
+    Console.printLine(ops(asU8(200), 7))
+    Console.printLine(direct(3))
+    Console.printLine(directU8(200))
+    Console.printLine(directF64(7.5))
+
+fn asI64(x: i64) -> i64 = x
+fn asF64(x: f64) -> f64 = x
+fn asU8(x: u8) -> u8 = x
+
+fn direct(x: i64) -> String =
+    x.add(4).mul(2).sub(1).rem(5).div(2).negate.show().concat(" ").concat(x.eq(3).show())
+
+fn directU8(x: u8) -> String = x.add(100).mul(3).sub(1).rem(50).div(3).negate.show()
+
+fn directF64(x: f64) -> String = x.add(0.5).mul(2.0).sub(1.0).rem(4.0).div(2.0).negate.show()

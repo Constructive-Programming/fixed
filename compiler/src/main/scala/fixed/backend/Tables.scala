@@ -222,6 +222,10 @@ object Tables:
   private val arithmetic =
     Map("add" -> PrimOp.Add, "sub" -> PrimOp.Sub, "mul" -> PrimOp.Mul, "div" -> PrimOp.Div, "rem" -> PrimOp.Rem)
 
+  /** The (capability, member) pairs that are one binary primitive operation on a scalar. */
+  private[backend] val scalarBinary: Map[(String, String), PrimOp] =
+    arithmetic.map((name, op) => ("Numeric", name) -> op) + (("Eq", "eq") -> PrimOp.Eq)
+
   /** Members of the language the backend builds no entry for yet: `compare`, whose result is the
     * prelude's `Order` (P6 D17), and the others, which are not derived (`find` only for list-shaped
     * data).
