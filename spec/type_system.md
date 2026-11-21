@@ -139,7 +139,7 @@ Decided by the owner (`docs/decisions/P6-resolution-round-2026-11-20.md`, fourth
 2. the **package**: its top-level declarations, in any of its files, and the names that the `use` declarations of the site's file bring in;
 3. the **prelude**, the package `std.prelude` (Rule 4.3.e).
 
-**Rule 4.3.a (Hiding a prelude name).** A package may declare at top level a name that the prelude declares: a data type, a capability, an effect, a type alias or a function. In the package the name then means the package's declaration (level 2). The compiler warns at the declaration *(author's choice, owner to confirm: the option the owner chose included the warning, and the answer did not repeat the word)*:
+**Rule 4.3.a (Hiding a prelude name).** A package may declare at top level a name that the prelude declares: a data type, a capability, an effect, a type alias or a function. In the package the name then means the package's declaration (level 2). The compiler warns at the declaration: the option the owner chose included the warning, and the answer did not repeat the word)*: The warning `W060` is confirmed by the owner and is always given for a hidden name. Selecting a named satisfaction with `using` (Rule 8.4.c) hides no name and gives no warning.
 
 ```
 warning[W060]: `List` hides the prelude's data type `std.prelude.List` in this package
@@ -1143,6 +1143,32 @@ Representation: data types in a strongly-connected component of the data depende
 
 Self-recursion (a single data type referencing itself) is the trivial 1-element SCC and is handled by the same rule.
 
+**Rule 7.4.h (No recursion between functions).** Every `fn` is total. A named function that can reach itself in the static call graph of named functions is an error: a direct call to itself, a cycle through other functions, or a call from a nested function or a lambda inside it that names it. A call through a capability table, or through a closure value that the function receives, is not an edge of that graph. The prelude and the generated members obey the same rule.
+
+The error is `error[T027]: <f> calls itself` (or `<f> and <g> call each other`, naming the cycle). The diagnostic must show how to write the function with the derived member that fits the shape of the recursion:
+
+- `fold` (Rule 7.4.a), when every recursive call is on a field of the matched parameter and only its result is used;
+- `para` (Rule 7.4.g), when the body also uses that field itself;
+- `unfold`, when the function builds a structure from a seed.
+
+```
+fn total(xs: L) -> u64 =                    // ERROR T027
+    match xs:
+        L.C(h, t) => h + total(t)
+        L.E => 0
+fn total(xs: L) -> u64 =                    // with fold
+    xs.fold((h, rest) -> h + rest, () -> 0)
+
+fn insert(x: u64, xs: L) -> L =             // ERROR T027: the body also uses `t`
+    match xs:
+        L.C(h, t) => if x <= h: L.C(x, L.C(h, t)) else: L.C(h, insert(x, t))
+        L.E => L.C(x, L.E)
+fn insert(x: u64, xs: L) -> L =             // with para: (t, rest) is the tail and the tail with x inserted
+    xs.para((h, t, rest) -> if x <= h: L.C(x, L.C(h, t)) else: L.C(h, rest), () -> L.C(x, L.E))
+```
+
+Not built: the compiler accepts recursion today, and `para` is not derived yet. (Owner's decision, fourth round of P6.)
+
 **Rule 7.5.a (Auto-derivation does not apply across non-singleton SCCs) — resolves L7.** Auto-derivations from §7.4 (`fold`/Rule 7.4.a, `unfold`/Rule 7.4.b, `Functor`/Rule 7.4.c, accessors/Rule 7.4.d, `para`/Rule 7.4.g) **are disabled** for `data` declarations whose dependency graph forms an SCC of size ≥ 2. Each member of such an SCC requires explicit `satisfies` declarations for any capabilities it must satisfy.
 
 Rationale: auto-derivation operates on a single declaration's variants and fields; mutually recursive types require interleaved fold/para callbacks (Tree's fold needs Node's fold, and vice versa). Specifying that interleaving as a generated mutual-fold combinator is non-trivial and not justified by current example code; refusing auto-derivation for v0.4.5 keeps the spec simple. Singleton SCCs (a single self-recursive data type) continue to receive auto-derivations under §7.4 — including paramorphism (Rule 7.4.g) for self-recursive types like `Tree` or `Expr` in `examples/07_recursive_data.fixed`.
@@ -1361,6 +1387,23 @@ using ByAmount                           // level 5: the default of the link uni
 
 and the link binds the library's site to `ByAmount`, with a note naming the site.
 
+**Rule 8.4.c (A satisfaction where one already exists).** A package's satisfaction of a (type, capability) pair that already has a built-in satisfaction (`i64 satisfies Eq`) or a satisfaction declared by the prelude (`List satisfies Show`) must carry a name:
+
+```
+i64 satisfies Eq named Loose:
+    fn eq(other: i64) = self / 10 == other / 10
+```
+
+An unnamed one is `error[E066]: <type> already satisfies <capability>; add `named X``. The rule covers every type of the prelude, not only the scalar types.
+
+1. Where no `using` applies, the built-in or prelude satisfaction is the one in force. It is the default of its pair and is not ambiguous with a named one. (For a package's own types Rule 8.4.a is unchanged: a derived and a named satisfaction of one pair are ambiguous without a `using`.)
+2. The named satisfaction is selected by `using` in every form of Rule 8.4: at a call site, in a type (`Set of i64[Eq = Loose]`), at file scope, at package scope (`package.fixed`) and at the application root. Scalar types have no narrower rule.
+3. Where it is selected, the operators follow it. `==` and `!=` call its `eq`; `<`, `<=`, `>` and `>=` are built from its `compare`; every table entry of the capability is built from it. An operator and a table cannot disagree.
+4. A specialised version in which it is selected calls its bodies in place of the machine instruction. Code where it is not selected is unchanged.
+5. Selecting it is the stated intent of the program and gives no warning.
+
+Not built: the compiler today accepts an unnamed body on a scalar and uses it in part (`docs/decisions/P0-spec-review-2026-11-20.md` §4). (Owner's decision, fourth round of P6.)
+
 ### 8.5 Constructor resolution
 
 A call `Cap.ctor(args...)` resolves by the **expected type** at the call site: the function's return type, a field type, or the parameter type at a call.
@@ -1481,6 +1524,7 @@ Subtyping in Fixed is intentionally narrow:
 
 - **OQ-T1 — Mutual-fold convenience** (deferred). Generated combinators over the members of a mutually recursive SCC (§7.5); a backwards-compatible extension of Rule 7.5.a.
 - ~~**OQ-T2 — Type variables of variant fields.**~~ Closed in v0.5.0 by Rule 4.1.a: such a variable, and an anonymous bound in a field, is a choice point bound once per link unit (P6 D3).
+- **OQ-T4 — Totality of `unfold`.** Nothing says what a derived `unfold` means when its step never yields a variant without a seed: the function then does not terminate, and Rule 7.4.h does not see it. Open for the owner.
 - **OQ-T3 — Dependent types for integer ranges** (open direction, not a decision). The owner's note on the arithmetic effects (P6, fourth round): "we might need to introduce dependent types as a better solution to 'raise integer size'. It might even start simplifying other parts of our system." The widening form `widen` (`spec/effects.md` Rule E3.6.h) fixes one wider type; a type that carried its range would let the result of `a * b` have the range the operands give it. The specs already show three places where values meet types: refinement capabilities with value parameters (§6.3, `cap Between(min, max)`, `fn between(min, max) -> cap of N`), `boundedPositive(lo, hi)` in `examples/11_properties.fixed`, and the static prover removing `Overflow` from an operation whose result range it proves from those refinements (`spec/effects.md` Rule E3.6.d). Nothing is designed.
 
 **Pre-resolved deferrals (lift into the indicated spec doc when drafted):**

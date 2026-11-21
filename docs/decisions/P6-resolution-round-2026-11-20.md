@@ -283,7 +283,7 @@ The option as it was put: a program may declare a top-level name that the prelud
 
 Written into `spec/type_system.md` §4.3 (Rules 4.3–4.3.h), grammar v0.4.15 (`UseRename`), `spec/stdlib.md` §1, §3.5, §5 and `spec/diagnostics.md` Rule DG3.1. The scope order is local binders, then the package's declarations and its files' `use`s, then the prelude. Author's choices, each marked in the spec:
 
-- The warning is kept (`warning[W060]`), owner to confirm: the owner's answer did not repeat the word.
+- The warning is kept (`warning[W060]`); confirmed by the owner.
 - The prelude is the package `std.prelude`; a hidden entity is reached with `use std.prelude.List as PreludeList`. `use` gains renaming (`as` was already reserved); types are never written with a path in a signature or an expression.
 - Diagnostics print the name that means the entity at the site, otherwise its path (`std.prelude.List`, `geometry.List`), never `prelude.<name>`, and suggest the `use … as` that makes it nameable.
 - The specs said nothing about collisions inside a package: a declaration and a `use`d name, or two `use`s of different entities, with one name, are `T003`; the same entity twice is allowed.
@@ -291,3 +291,11 @@ Written into `spec/type_system.md` §4.3 (Rules 4.3–4.3.h), grammar v0.4.15 (`
 - The prelude's satisfactions stay always in scope when their names are hidden: hiding changes what a name means, not which satisfactions exist. A program's `List` takes list literals only by satisfying `std.prelude.Sequencing`, and `[1, 2] is List of u8` names the program's `List`. `==` always needs `std.prelude.Eq`. A `pub data List` hides nothing in an importer until the importer `use`s it.
 
 Built: the prelude's own scope, syntax and derivation naming the prelude, no derivation of a program's capability (P0 §4), and `T004` for `IDENT is Bound` (`Namer.introduce`). Not built: `W060`, the path and `use … as`, paths in diagnostics, `T003` for `use`d names, `T004` for a bare `of` parameter and a row variable (`docs/plans/implementation-plan.md`, Phase 4.2, item 23).
+
+### Confirmations and further decisions (fourth round, 2026-11-21)
+
+- Arithmetic effects: "T is Numeric function always declares Overflow, even when called at f64. Simplest sound rule. Yes." "Refinements on bounded integers must be proved or assumed. Yes." (`E107`.)
+- Hiding of prelude names: "Keep Shadowing warning (unless a named using is present of course)", clarified as "I just meant using of named satisfaction": `W060` is always given for a hidden name; selecting a named satisfaction with `using` gives no warning.
+- A satisfaction where one already exists: "A, with file-scope and package-scope using allowed". A package's satisfaction of a pair that has a built-in or prelude satisfaction must be `named`; it is selected by `using` at any scope; where selected, operators and tables follow it (`spec/type_system.md` Rule 8.4.c, `E066`).
+- Totality: "A. Enforce spec, and suggest in the error how to rephrase using para". Recursion between named functions is an error whose diagnostic shows the rewrite with `fold`, `para` or `unfold` (`spec/type_system.md` Rule 7.4.h, `T027`). The totality of a derived `unfold` is open (OQ-T4).
+

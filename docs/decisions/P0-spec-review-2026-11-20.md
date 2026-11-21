@@ -191,7 +191,7 @@ Found and not fixed:
 - `i128` and `u128` do not satisfy `Numeric`, though `spec/stdlib.md` §4.9 says they do. The backend has no 128-bit integers: `Lower.scalar` stops at 64 bits, the runtime formats only 64-bit integers, and there is no boxed integer. Blocked on OQ-CM7.
 - An abstract value of another origin (a `-> is C` result, a field `x: is Show`, a parameter typed with a bare capability `C`) still reaches a concrete type that has `C` and runs with a wrong value: Rule 5.1.2 is not enforced.
 - Trees, rose trees and snoc lists still take one native frame per level in every derived member.
-- A program's `satisfies` body for a member that the compiler provides on a scalar (`i64 satisfies Eq: fn eq = …`) is ignored, in both modes. Open for the owner.
+- A program's `satisfies` body for a member that the compiler provides on a scalar (`i64 satisfies Eq: fn eq = …`) is ignored, in both modes. **Decided** (Rule 8.4.c): such a satisfaction must be `named` and is selected by `using`; not built.
 - Tables built at run time for growing types are interned and kept until exit, where Rule CM4.2 says a stack record per frame: a closure can capture the table and outlive the frame.
 - A hint can name `prelude.X`, which a program cannot write, when the program's own `X` lacks the member, for `==` and `<` with a program `Eq` or `Ord`, and on a concrete receiver over a parameter. `spec/type_system.md` Rule 4.3.f now requires the path `std.prelude.X` and a `use … as` hint; not built.
 - The type variables of a `satisfies` clause are fresh parameters, not the data type's; the typer maps them by name when it compares arguments.
@@ -207,7 +207,7 @@ Found and not fixed:
 - An out-of-range literal that reaches its type through a type parameter (`order(18446744073709551615, 1)` with `T is Ord`) defaults to `i64` and wraps.
 - `Box of (A is Eq)` reached from `T is Ord` through a growing type is `B005` ("no table of `Eq`").
 - The scanner reads the escape `\0` as a space.
-- The compiler accepts a function that calls itself, which the spec makes a compile error (totality); test programs rely on it. Open for the owner.
+- The compiler accepts a function that calls itself, which the spec makes a compile error (totality); test programs rely on it. **Decided** (Rule 7.4.h, `T027`): enforce, with a diagnostic that shows the rewrite; `para` is specified and not built, and the check depends on it. In progress.
 
 Limits and gaps of the first implementation, against the spec:
 
