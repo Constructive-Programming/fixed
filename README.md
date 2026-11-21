@@ -40,11 +40,13 @@ Where Koka still has `struct`, `enum`, and named data types, Fixed pushes the la
 
 The programmer writes **capabilities** — what values can do — and the compiler decides how to lay them out in memory. Request `Sequencing + Folding`? The compiler might choose a linked list. Add `RandomAccess + Sized`? Now it *should* use a contiguous array. The capability set narrows the representation space.
 
-The choice is made late. A package is compiled once, to code that works for every representation; where a representation depends on how the rest of the program uses a type, it is chosen when the application is linked, from usage summaries, and recorded in a lock file. Nothing is recompiled when a choice changes. Declarations are private unless marked `pub`. Several satisfactions of one capability by one type may coexist (`Money satisfies Ord named ByAmount`), and `using` chooses between them (`sort(xs) using ByAmount`).
+The choice is made late. A package is compiled once, to code that works for every representation; where a representation depends on how the rest of the program uses a type, it is chosen when the application is linked, from usage summaries, and recorded in a lock file. Nothing is recompiled when a choice changes. Declarations are private unless marked `pub`. Several satisfactions of one capability by one type may coexist (`Money satisfies Ord named ByAmount`), and `using` chooses between them (`sort(xs) using ByAmount`); an ambiguity that no `using` settles is an error where it occurs. (Specified; the link step, `pub` and `using` are not built yet.)
 
 This is the tagless final encoding applied to an entire language: programs are written against abstract interfaces, and the "interpreter" (the compiler) chooses the concrete semantics.
 
 ## Quick tour
+
+The tour writes bodies with braces and commas for brevity. The grammar has no braced blocks: a body is inline or indented after `=`, `:` or `=>`, and `data` variants are one per line after `:` (`spec/syntax_grammar.ebnf`, and the programs in `examples/`).
 
 ### Hello world
 
@@ -79,14 +81,14 @@ type ArrayLike = Sequencing + RandomAccess + Sized + Empty
 
 // Requires index based access — compiler SHOULD choose a contiguous representation
 fn binarySearch(
-    sorted: C is ArrayLike of (A is Ordered),
+    sorted: C is ArrayLike of (A is Ord),
     target: A,
 ) -> R is Optional of u64 + Empty {
     ...
 }
 ```
 
-The output types themselves are also left for the compiler to select.
+The result here is named (`R is …`), so the caller picks its type. An anonymous result, `-> is Optional of u64`, is left for the compiler to select when the application is linked.
 
 ### The `is` / `of` syntax
 
@@ -95,13 +97,13 @@ main reason Fixed exists:
 
 ```
 // The type of the collection isn't needed here
-fn sum(collection: is Folding of Numeric) -> u64 with Overflow {
+fn sum(collection: is Folding of u64) -> u64 with Overflow {
   collection.fold(0, (acc, n) -> acc + n)
 }
 ```
 
-the type of `collection` (**C**) above doesn't even show up in the previous
-example. However, we still know it contains numbers and can be folded over.
+the type of `collection` doesn't even show up in the example. However, we
+still know it contains numbers and can be folded over.
 
 
 ### Data types — planning structure
@@ -140,13 +142,13 @@ handle compute("42") {
 }
 ```
 
-Effects are declared, tracked, and handled — never implicit. Unhandled effects are compile errors.
+Effects are declared, tracked, and handled — never implicit. An effect not handled before `main` is a compile error, except those the runtime handles at `main` (an arithmetic effect aborts with status `101`) and `Diverge`, which has no handler.
 
 Integer overflow and division by zero are effects too (`Overflow`, `DivideByZero`): nothing wraps silently. The effect disappears where the prover or a refinement shows the result in range, and the prelude handles it into an optional value, a result, or a computation at a wider integer type (`spec/effects.md` §3.6; not built yet).
 
 ### Properties — lightweight theorem proving
 
-`prop` declares invariants directly alongside the code they govern. Properties are checked by the compiler — via static analysis where possible, and via property-based testing otherwise:
+`prop` declares invariants directly alongside the code they govern. Properties are checked by the static prover where possible, and by property-based testing in a separate test build (`fixed verify`) otherwise; only a proved prop, or one the program states with `assume prop`, steers what the compiler does (not built yet):
 
 ```
 cap Sorted extends Sequencing {
@@ -221,7 +223,7 @@ Refinement capabilities are zero-cost: compile-time only, no wrapping, the value
 1. **`cap` is the primary abstraction** — capabilities describe what values can do, not what they are
 2. **`data` is where structure gets planned** — `data` lets you express the shape of your data when you need a specific closed set of variants
 3. **`prop` invariants are specified in place** — properties (from property-based testing) are built into the language as a form of lightweight theorem proving
-4. **Functions are total** — only capabilities and data can self-reference; all recursion is structural via fold/unfold
+4. **Functions are total unless they declare `Diverge`** — recursion goes through `fold`, `para` and `unfold` on recursive data, or is structural (each recursive call passes, in the same parameter position, a strict sub-value bound by a `match` on that parameter); other recursion between functions needs `with Diverge`, otherwise it is an error (`T027`); a capability's default bodies may not recurse through `self` at all (`T028`)
 5. **No mutation** — purely functional; the compiler optimizes in-place updates via FBIP
 6. **Everything is an expression** — no statements, no semicolons; blocks return their last expression
 7. **No explicit layouts** — the programmer never writes references; the compiler handles borrowing/moving/cloning via Perceus
@@ -266,6 +268,8 @@ sbt "run -- compile examples/01_basics.fixed --explain-memory" # memory and clon
 
 `--no-specialise` builds no clones beyond the mandatory ones. There is one package and no link step yet.
 
+Specified and not built: `fixed link` (the application link and its lock file), `fixed release` (the release executable: clones built at link, `inspect` and `trace` stripped unless `--keep-diagnostics`; `fixed ship` stays the development build, and there is no `--release` flag), `fixed verify` (the test build), and exit codes by error class (`spec/reports.md` Rule RP5.5). Today the compiler exits `1` on a compile error, `2` on a usage error and `3` when `clang` fails.
+
 ## Quality checks
 
 ```
@@ -300,7 +304,9 @@ scanner, parser and end-to-end throughput over `examples/`, with allocation per 
 
 ## Status
 
-Phases 0 (design), 2 and 2.1 (parser), 4.0 (naive backend) and most of 4.1 (polymorphic baseline and specialiser) are done. Phase 1 (specification) exists as drafts under `spec/`. Of the type checker (Phase 3), the base typer, capability closure, effect inference and quantity, demand and lifetime inference are done; property verification and representation selection are not. Examples `01`, `03`, `04` and `05` compile to native code and run. The application link, visibility, `using` and the other decisions of `docs/decisions/P6-resolution-round-2026-11-20.md` are specified but not built.
+Phases 0 (design), 2 and 2.1 (parser), 4.0 (naive backend) and most of 4.1 (polymorphic baseline and specialiser) are done. Phase 1 (specification) exists as drafts under `spec/`. Of the type checker (Phase 3), the base typer, capability closure, effect inference and quantity, demand and lifetime inference are done; property verification and representation selection are not. Examples `01`, `03`, `04` and `05` compile to native code and run, in the default and `--no-specialise` modes, against pinned output (`examples/golden/`); the others are parsed and type-checked by the test suite but not compiled.
+
+Phase 4.2, the decisions of `docs/decisions/P6-resolution-round-2026-11-20.md`, is in progress. Built: the totality check (structural recursion and recursion under `Diverge` are accepted, other recursion is `T027`, a cycle among a capability's default bodies is `T028`); derived `para`; `fold`, `para`, `unfold` and `map` of lists and `Nat` in bounded native stack (trees still take one frame per level); derived `Show`, `Eq` and `Ord`; literal patterns; `satisfies` bodies lowered and satisfactions keyed by symbol; `show`, `==` and `clone` on an unbounded type parameter as an error (`T022`); `Clone` on request; camelCase names. Specified and not built: the application link, visibility, `using` and named satisfactions, list literals as choice points, `inspect` and `trace`, and the arithmetic effects `Overflow` and `DivideByZero` (today `+`, `-` and `*` wrap; division by zero aborts with status `101`). Each item's state is in Phase 4.2 of the implementation plan.
 
 The language design is explored through 11 example programs covering:
 
