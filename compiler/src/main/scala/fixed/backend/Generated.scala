@@ -58,6 +58,21 @@ private[backend] trait Generated:
   /** The hidden parameters of type parameter `p`: its witness, then its tables (`Tables.hiddenOf`). */
   protected def hiddenOf(p: Type): List[Var]
 
+  /** The hidden arguments of function `f`, built at `own` and called at `args` (`Tables.hiddenArgsOf`). */
+  protected def hiddenArgsOf(f: String, own: List[Type], args: List[Type]): List[Atom]
+
+  /** The function built under `name` (`Lower.functionNamed`). */
+  protected def functionNamed(name: String): Fn
+
+  /** The leading hidden parameters (witnesses and tables) of function `f`; `None` while `f` is a
+    * generated member still being built, which has no parameters yet (a function lowered from
+    * source has its signature from the start, `Lower.code`).
+    */
+  protected def hiddenParams(f: String): Option[List[Var]] =
+    Option(functionNamed(f).params).filter(_.nonEmpty).map(_.takeWhile(p =>
+      p.ctype == CType.Witness || p.ctype == CType.Table
+    ))
+
   /** Record `x`'s typer type for `Demands`; returns `x`. */
   protected def typed(x: Var, t: Type, span: Span): Var
 
@@ -497,16 +512,19 @@ private[backend] trait Generated:
       case Type.TypeRef(p, Nil) => symbols(p).kind == fixed.core.SymKind.TypeParam
       case _                    => t == Generated.R || implicitBounds.contains(t)
 
-  /** Generated member `gen(args, r)` of `data`, with the hidden witnesses to call it with. Its
+  /** Generated member `gen(args, r)` of `data`, with the hidden arguments to call it with. Its
     * baseline version is built once, at `data`'s own parameters and [[Generated.R]], and takes the
-    * witness of each of `args` and of `r`; the clone for known `args` and `r`, if chosen, and an
-    * instance where the baseline version cannot be built, are built at `args` and `r` and take the
-    * witnesses of the type parameters they mention.
+    * witness of each of `args` and of `r`, and a `satisfies` body also their tables ([[hiddenArgsOf]]); the
+    * clone for known `args` and `r`, if chosen, and an instance where the baseline version cannot be
+    * built, are built at `args` and `r` and take the hidden parameters of the type parameters they
+    * mention, which the caller has under the same names.
     */
   protected def member(data: SymbolId, args: List[Type], r: Option[Type])(
       gen: (List[Type], Type) => String
   ): (String, List[Atom]) =
-    lazy val perInstance = (gen(args, r.getOrElse(Type.UnitType)), hidden(args ++ r))
+    lazy val perInstance =
+      val f = gen(args, r.getOrElse(Type.UnitType))
+      (f, hiddenParams(f).getOrElse(hidden(args ++ r)))
     val own = symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil))
     attempt(gen(own, Generated.R)) match
       case Right(name) =>
@@ -515,7 +533,7 @@ private[backend] trait Generated:
           case Some(key) =>
             typeClones(perInstance._1) = (name, key)
             perInstance
-          case None => (name, (args ++ r).map(witnessAtom))
+          case None => (name, hiddenArgsOf(name, own ++ r.map(_ => Generated.R), args ++ r))
       case Left(why) =>
         val (name, ws) = perInstance
         if ws.isEmpty && !nonRegular(data) then instances(name) = why else report(why)

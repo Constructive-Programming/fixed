@@ -90,7 +90,7 @@ private[backend] trait Satisfied extends Generated:
     else
       val rs = own.map(ownTypeArgs(member, argTypes, result).getOrElse(_, Type.UnitType))
       val args = dataOf(t).fold(Nil)(_._2)
-      satisfier(t).flatMap(satisfactionBody(_, member, args, rs)).map(_ -> hidden(args ++ rs))
+      satisfier(t).flatMap(satisfactionBody(_, member, args, rs)).map(_ -> bodyHidden(args ++ rs))
 
   /** Whether `t` is the built-in `String`, which `==` compares in the runtime. */
   protected def isStringType(t: Type): Boolean =
@@ -196,7 +196,7 @@ private[backend] trait Satisfied extends Generated:
     val compare = symbols.prelude.get("Ord").flatMap(symbols.membersOf(_).find(_.name == "compare")).map(_.id)
     dataOf(t).flatMap((data, args) =>
       compare.filter(hasBody(t, _, fromPrelude = false)) match
-        case Some(c) => satisfactionBody(Type.TypeRef(data, Nil), c, args, Nil).map(_ -> hidden(args))
+        case Some(c) => satisfactionBody(Type.TypeRef(data, Nil), c, args, Nil).map(_ -> bodyHidden(args))
         case None    => derived(t, derivedCompare)
     )
 
@@ -275,7 +275,8 @@ private[backend] trait Satisfied extends Generated:
   /** The function of the `satisfies` body that defines capability member `member` for satisfying
     * type `head` (a data type at no arguments, or a scalar type), built at the data type's
     * arguments `args` and at `types`, one per type parameter of the member's own: it takes the
-    * witnesses of the type parameters these mention, `self`, then the member's parameters. The
+    * witnesses and tables of the type parameters these mention ([[bodyHidden]]), `self`, then the
+    * member's parameters. The
     * capability's own parameters are the arguments the declaration writes, where the member is the
     * capability's own rather than inherited.
     */
@@ -301,6 +302,6 @@ private[backend] trait Satisfied extends Generated:
         val params = (("self", fn.span) -> self) ::
           fn.params.map(p => (p.name, p.span)).zip(declared)
         val sigma = ownIds.zip(args).toMap ++ rs
-        inPrelude.withValue(b.prelude)(code(name, params, ret, fn, sigma, Map.empty, hidden(args ++ rs.map(_._2))))
+        inPrelude.withValue(b.prelude)(code(name, params, ret, fn, sigma, Map.empty, bodyHidden(args ++ rs.map(_._2))))
       }
     }

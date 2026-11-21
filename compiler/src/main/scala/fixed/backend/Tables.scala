@@ -133,13 +133,31 @@ private[backend] trait Tables extends Satisfied:
     */
   protected def hiddenOf(p: Type): List[Atom.Var] = witnessVar(p) :: boundCaps(p).map(tableOf(p, _))
 
+  /** The hidden parameters of a `satisfies` body at `types`: the witness and the tables of the
+    * declared bounds (not those [[assumed]] adds) of each type parameter they mention.
+    */
+  private[backend] def bodyHidden(types: List[Type]): List[Atom.Var] =
+    assumed.withValue(Map.empty)(types.flatMap(typeParamsIn).distinct.flatMap(hiddenOf))
+
+  /** Each hidden parameter of type parameter `p` with its argument at type `a`, built when asked for. */
+  private def hiddenFor(p: Type, a: Type): List[(Atom.Var, () => Either[String, Atom])] =
+    (witnessVar(p) -> (() => Right(witnessAtom(a)))) :: boundCaps(p).map(c => tableOf(p, c) -> (() => tableAtom(a, c)))
+
+  /** The arguments for hidden parameters `params` of a function built at `own`, called at `args`. */
+  private def hiddenAt(params: List[Atom.Var], own: List[Type], args: List[Type]): List[Atom] =
+    val at = own.zip(args).flatMap(hiddenFor).toMap
+    params.map(p => at(p)().fold(why => { report(why); Atom.UnitC }, identity))
+
+  /** [[hiddenAt]] for `f`; a generated member still being built takes only witnesses. */
+  protected def hiddenArgsOf(f: String, own: List[Type], args: List[Type]) =
+    hiddenParams(f).fold(args.map(witnessAtom))(hiddenAt(_, own, args))
+
   /** The hidden arguments of a call that instantiates each type parameter of `params` at its type:
     * per parameter in the order of [[hiddenOf]], the witness of its type and its tables; or why a
     * table cannot be had.
     */
   protected def hiddenArgs(params: List[(Type, Type)]): Either[String, List[Atom]] =
-    val (whys, args) =
-      params.flatMap((p, t) => Right(witnessAtom(t)) :: boundCaps(p).map(tableAtom(t, _))).partitionMap(identity)
+    val (whys, args) = params.flatMap(hiddenFor).map(_._2()).partitionMap(identity)
     whys.headOption.toLeft(args)
 
   /** The table of capability `cap` at type `t` where the code being lowered runs: the table
@@ -260,7 +278,7 @@ private[backend] trait Tables extends Satisfied:
   /** An entry over generated member `g`, built at the data type's own parameters `own`. It takes
     * the table, the member's own witnesses, the receiver, then `g`'s callbacks in the capability's
     * order, where `variantOrder(v)` is the capability position of `g`'s callback `v` (identity if
-    * empty). `g` gets the static witness of each argument in `args` for its parameter in `own`.
+    * empty). `g` gets the static witness and tables of each of `args` for its parameter in `own`.
     */
   private def adapter(
       name: String,
@@ -271,10 +289,10 @@ private[backend] trait Tables extends Satisfied:
   ): String =
     instance(name) {
       val fn = functionNamed(g)
-      val (ws, params) = fn.params.span(p => p.ctype == CType.Witness || p.ctype == CType.Table)
-      val fixed = own.zip(args).collect {
-        case (Type.TypeRef(p, _), a) if a != Type.TypeRef(p, Nil) => witnessOf(p) -> witnessAtom(a)
-      }.toMap
+      val (ws, params) = fn.params.splitAt(hiddenParams(g).fold(0)(_.size))
+      val moved = own.zip(args).filter((p, a) => p != a)
+      val movedHidden = ws.filter(w => moved.exists((p, _) => hiddenOf(p).contains(w)))
+      val fixed = movedHidden.zip(hiddenAt(movedHidden, moved.map(_._1), moved.map(_._2))).toMap
       val (entries, captured) = capturing.value
       val callbacks = params.drop(1)
       val inCapOrder =

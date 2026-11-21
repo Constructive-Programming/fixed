@@ -1,0 +1,50 @@
+// Generated members called while they are being built: `map` of two mutually recursive types
+// (`Ta`, `Tb`) and of a nested type (`Nest`) calls itself before its signature exists. The call
+// passes the witnesses of its arguments (`Generated.hiddenParams`), not the parameters of the
+// placeholder `Lower.instance` enters.
+use std.io.Console
+
+data Ta of A:
+    Na
+    Ca(v: A, rest: Tb of A)
+
+data Tb of A:
+    Cb(v: A, rest: Ta of A)
+
+Ta satisfies Functor
+Tb satisfies Functor
+
+fn sa(t: Ta of u64) -> u64 =
+    match t:
+        Ta.Na => 0
+        Ta.Ca(v, r) => v + sb(r)
+
+fn sb(t: Tb of u64) -> u64 =
+    match t:
+        Tb.Cb(v, r) => v + sa(r)
+
+fn gm(t: Ta of (List of T), f: T -> u64) -> Ta of u64 = t.map((xs) -> xs.fold(0, (n, x) -> n + f(x)))
+
+data Nest of A:
+    Flat(v: A)
+    Deep(inner: Nest of (List of A))
+
+Nest satisfies Functor
+
+fn size(n: Nest of A) -> u64 =
+    match n:
+        Nest.Flat(v) => 1
+        Nest.Deep(i) => 1 + size(i)
+
+fn total(n: Nest of u64) -> u64 =
+    match n:
+        Nest.Flat(v) => v
+        Nest.Deep(i) => 0
+
+fn main() -> () with Console =
+    let t = Ta.Ca(1, Tb.Cb(2, Ta.Ca(3, Tb.Cb(4, Ta.Na))))
+    Console.printLine(sa(t.map((x) -> x * 10)).show())
+    Console.printLine(sa(gm(Ta.Ca([1, 2], Tb.Cb([3], Ta.Na)), (x) -> x)).show())
+    let n = Nest.Deep(Nest.Deep(Nest.Flat([[1, 2], [3]])))
+    Console.printLine(size(n.map((x) -> x * 10)).show())
+    Console.printLine(total(Nest.Flat(4).map((x) -> x + 1)).show())
