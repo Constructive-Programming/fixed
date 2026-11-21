@@ -1,8 +1,10 @@
 # Fixed Properties
 
-**Status:** Draft v0.3.2
+**Status:** Draft v0.3.3
 **Specifies:** `prop` declarations, `forall` / `implies` / `suchThat` constructs, the three verifiers (static prover, cost checker, property-based testing) and where each runs, verification statuses and the two lanes they feed, measurement during testing, property-based test generation, and how verified properties feed compiler decisions for Fixed v0.4.5 source.
-**Last revised:** 2026-11-20
+**Last revised:** 2026-11-21
+
+**Changes from v0.3.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"), decision 1. Rule P7.7.b no longer gives an exit code of its own: the exit code follows the one table of `spec/reports.md` Rule RP5.5.
 
 **Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). `assumed` arises only when the programmer writes `assume prop` (provisional keyword). A prop nobody checked is open and steers nothing: `--no-pbt` and an undecided asymptotic cost bound leave a prop open. The order of Rule P7.7 is open < `tested` < `assumed` < `proved`. OQ-P8 is closed.
 
@@ -428,7 +430,7 @@ A satisfaction that received no run for a prop (one that sampling never picked, 
 props: 41 proved, 6 tested, 1 assumed, 3 open, 0 failed
 ```
 
-With `--format json` the same counts appear together with one record per prop: name, location, status and, for `tested`, the iteration count and the satisfactions it ran under. The exit code is `2` when any prop failed, or when `--require-proved` is set and any prop is `tested`, `assumed` or open.
+With `--format json` the same counts appear together with one record per prop: name, location, status and, for `tested`, the iteration count and the satisfactions it ran under. The exit code follows the table of `spec/reports.md` Rule RP5.5: a failed prop is class `11`, a missing generator `19`, and a prop that is not proved under `--require-proved` `20`.
 
 **Rule P7.7.c (what a status licenses).** A status decides which lane a prop may enter (Rule P7.8): `proved` and `assumed` props enter the facts lane, `tested` props do not. Every accepted prop, whatever its status, is still an obligation on every satisfaction. A refinement relies on its props, since later code takes them as true of the value; so a refinement-cap candidate is viable only by `proved` and `assumed` props (`spec/type_system.md` §6.5.3), a facts-lane decision (Rule P7.8.a).
 

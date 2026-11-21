@@ -533,7 +533,7 @@ The `+` operator composes commands. Each stage is incremental — if source hasn
 - **Structured errors**: every diagnostic has a code (e.g., `E042`), a location, and a human-readable explanation. Copy-pasteable suggestions where applicable (see ambiguity resolution below).
 - **No noise**: successful compilation produces no output. Only errors and warnings print.
 - **Incremental feedback**: long-running `verify` reports progress per `prop` — which properties passed, which are being tested, which failed.
-- **Exit codes**: `0` = success, `1` = compile error, `2` = usage error, `3` = build failure, as `Main` implements them. Earlier drafts of this plan gave `2` to verification failure; `verify` does not exist yet and has no code of its own.
+- **Exit codes**: `0` for no failure and one number per error class, for every command, in the one table of `spec/reports.md` Rule RP5.5 (P6, fourth round; the class list is proposed and waits for the owner's confirmation). `Main` today implements only `1` = compile error, `2` = usage error, `3` = build failure.
 - **JSON output**: `--format json` flag on any command for structured output. Same information, machine-parseable. Useful for editor integrations, AI agents, and CI pipelines.
 - **Incremental and partial-result-tolerant by default**: every phase consumes possibly-incomplete input and emits as much output as it can. The parser produces an AST with explicit gap nodes when a production fails, instead of halting; the typer types as much of the AST as it can, leaving holes for unresolvable references; capability closure proceeds with whatever satisfaction declarations resolved. This is the precondition for LSP / IDE integration and for incremental compilation, and it makes the compiler usable mid-edit rather than only at quiescence. See `docs/plans/phase-2.1-incremental-parser.md` for the parser's instantiation of this contract.
 
@@ -976,6 +976,12 @@ Added by the owner's decisions after the consistency review (P6, third round), i
 
 | 16 | **Bounded native stack for derived `unfold` and `map`.** Each builds its cell after the recursive call returns. Destination passing needs a constructor with an unfilled slot and a later store into it, understood by demand inference, ownership versions, reference counting, abort handling and the emitter; data with several recursive fields needs a heap work list of (seed, slot) pairs in addition | `spec/memory_management.md` §7.1, Rule PR7.3 | nothing; it is a change to how constructors flow through every backend pass |
 | 17 | **Satisfactions keyed by symbol**, and the bodies of `satisfies` blocks lowered by the backend | `spec/type_system.md` Rule 8.4 | 4 |
+
+Added by the owner's decisions of the fourth round (P6, "Owner's decisions (fourth round)"):
+
+| # | Work | Spec | Depends on |
+|---|---|---|---|
+| 18 | **Exit codes by error class.** `Main` maps the errors of a run to the classes of the table and exits with the smallest class number; every diagnostic code is given its class; `a + b` stops at the first stage that fails | `spec/reports.md` Rule RP5.5 | the owner's confirmation of the class list; classes of commands not built yet (`link`, `verify`) come with them |
 
 Also open from P6 and not listed as work: the suspected compiler fault behind the ownership-clone measurement (OQ-CM16), the unexplained 4% on `list_pipeline` and `records` and `fx_drop`'s recursion on children other than the last (OQ-CM17), and the 8-byte header hypothesis (OQ-CM15).
 

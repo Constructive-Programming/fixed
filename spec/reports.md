@@ -1,8 +1,10 @@
 # Fixed Reports: Coverage, Cardinality and the Tool Interface
 
-**Status:** Draft v0.2.2
-**Specifies:** two analyses the compiler runs and reports — coverage of code by verification, and cardinality of types — the report of what the link step chose, the files a build reads besides its sources, and the interface external tools use.
-**Last revised:** 2026-11-20
+**Status:** Draft v0.2.3
+**Specifies:** two analyses the compiler runs and reports — coverage of code by verification, and cardinality of types — the report of what the link step chose, the files a build reads besides its sources, the interface external tools use, and the exit codes of every command.
+**Last revised:** 2026-11-21
+
+**Changes from v0.2.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"), decision 1. New Rule RP5.5: exit code `0` for no failure and one number per error class, for every command; the smallest class number wins when a run has several. The table is proposed by the author; the owner confirms the class list.
 
 **Changes from v0.2.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule RP3.2: the specification status follows the order of Rule P7.7.
 
@@ -129,6 +131,7 @@ The compiler has no plugin interface. An external tool reads:
 - the **interface tier** of a compiled package, and the **body tier** where a package ships one (`spec/compilation_model.md` §7);
 - the **reports**: `--explain-memory`, `--explain-cardinality`, `--explain-selection` (Rule RP5.4) and `verify --coverage`, each with `--format json`;
 - the **lock file** and the **profile file** (Rule RP5.3).
+- the **exit code** of every command (Rule RP5.5).
 
 A tool that only reads cannot change what a program means or whether it compiles, and it does not break when a compiler pass changes.
 
@@ -166,6 +169,46 @@ Tools read both files as they read the reports. A tool that rewrites the lock fi
 
 The report is the place to see why a representation was chosen; it is not needed to reproduce the choice, which the lock file records.
 
+### 5.5 Exit codes (Rule RP5.5)
+
+**Status: proposed by the author, owner to confirm the class list** (`docs/decisions/P6-resolution-round-2026-11-20.md`, fourth round, decision 1). Not built: the compiler today exits `1` on any compile error, `2` on a usage error and `3` when `clang` fails.
+
+The exit code is the first thing a tool reads from a run, so it is specified here, with the other things tools read. No spec specifies the command line as a whole (`spec/properties.md` Rule P7.6 gives the verification flags); `docs/plans/implementation-plan.md` lists the commands and flags.
+
+Every command uses this one table: the checker `fixed <file>...`, `fixed compile`, `fixed link`, `fixed ship`, `fixed verify`, and a composition `a + b`. Exit code `0` means no failure. Every other exit code is the number of one **error class**. A command returns only the classes of the phases it runs.
+
+| Exit code | Class | Where it arises | Diagnostic codes |
+|---|---|---|---|
+| `0` | no failure | — | none; warnings (`W…`, `T005` where the typer reports a gap, `T017`, `warning[E081]`) and notes never set an exit code, unless a flag makes one an error (`--strict-pbt`, class `11`) |
+| `1` | internal compiler error | any command | none: the compiler itself faulted (an uncaught exception, a failed assertion); it is also what the JVM returns for an uncaught exception |
+| `2` | usage error | the command line, before any phase runs | none: an unknown command or flag, a missing or extra argument, flags that exclude each other (`--no-pbt` with `--strict-pbt`, `spec/properties.md` Rule P7.6), an input file that cannot be read |
+| `3` | scan error | package compile: scanner | `E001`–`E009` |
+| `4` | parse error | package compile: parser | `P001`–`P099` |
+| `5` | name error | package compile: namer and typer | `T001`, `T003`, `T004`; `E063` |
+| `6` | type error | package compile: typer | `T002`, `T006`, `T007`, `T008`, `T010`, `T013`, `T014`, `T022`, `T023`; `E062`, `E065` |
+| `7` | ambiguous satisfaction | package compile: typer; application link: deferred sites | `E061`; `T011` |
+| `8` | effect error | package compile: typer (effect inference) | `E080`, `E084`, `E093`; `T009`, `T015`, `T016`, `T018`, `T019` |
+| `9` | pattern error | package compile: typer | `E090`, `E091`, `E092`, `E094`, `E095`; `T020` |
+| `10` | malformed prop | package compile: typer and static prover | `E100`, `E104`, `E105` |
+| `11` | prop failed | package compile: static prover; test build | `E102`; under `--strict-pbt`, a budget overrun (`W103`) |
+| `12` | quantity error | package compile: quantity inference | `E070`, `E072`, `E083` |
+| `13` | not supported yet | package compile: a limit of the compiler, found by the namer or by lowering | `T005` where the namer reports it as an error; `B001`, `B002`, `B003`, `B005` |
+| `14` | `fip` contract or confinement violated | package compile and the clones of a release link: demand and memory inference | `E071`, `E110`, `E085` |
+| `15` | cost bound not met | package compile: cost checker | `E120` |
+| `16` | no viable representation | selection, at package compile or application link | `E060` |
+| `17` | link error | application link | none yet: a package or symbol the link unit lacks, a lock file or profile file that cannot be read |
+| `18` | toolchain failure | `ship`, `link`: the native toolchain | `B004` (`clang` missing or failed); an output file that cannot be written |
+| `19` | no generator | test build | `E101`, `E101a` |
+| `20` | prop not proved | after the verifiers, under `--require-proved` | `E106` |
+
+**Several classes in one run.** The exit code is the smallest class number among the errors the run reported. The rule is deterministic and does not depend on the order in which diagnostics are printed. A phase that fails stops the phases after it, so the errors of one run come from the first phase that failed, or from the front end (scanner, parser, typer), which keeps going on partial input; the classes of errors in the program that the front end finds (`3` to `10`) come first and in front-end order, so the code names the first phase that failed. A limit of the compiler that the namer finds (`T005`, class `13`) ranks below them: an error in the program is fixed first. The application link and the test build run only after a package compile that succeeded, and among their own classes the number decides. An internal compiler error outranks everything the run reported; a usage error stops the run before any phase.
+
+**Composed commands.** `a + b` runs `a`, then `b` only when `a` exited `0`. Its exit code is that of the first stage that did not exit `0`, or `0`. `fixed verify + ship` with a failed prop exits `11` and builds nothing.
+
+**Range.** Classes take the numbers `1` to `64`; `21` to `64` are free for classes added later, and `65` to `125` are not used. The shell reserves `126` and above (`126` cannot execute, `127` not found, `128 + n` killed by signal `n`), so a class never collides with them. A run killed by a signal shows the shell's code, not a class. The exit code of a program that `fixed ship` built is the program's own and is not covered here.
+
+**Classes and diagnostic codes.** A class is not computed from a code. Codes are grouped by origin: in the compiler, `E` for the scanner and a few later checks (`E072`, `E110`), `P` for the parser, `T` for the typer and `B` for the backend (`compiler/src/main/scala/fixed/util/Reporter.scala`); in the specs, `E` codes by decade per document (`E06x` satisfactions and selection, `E07x` quantities, `E08x` effects, `E09x` patterns, `E10x` props, `E11x` memory, `E12x` cost). A class gathers codes by what the user must fix, which cuts across both: the `T` family spans five classes, and the `B` family two. Where the compiler and the specs number the same error differently (`T015` and `E080` for an undeclared effect, `T020` and `E091` for a match that is not exhaustive), both are in one class. Every code that is an error belongs to exactly one class, and a new code is given its class in this table when it is introduced.
+
 ## 6. Open questions
 
 - **OQ-RP1 — Typed-tree access for tools.** A tool that needs the typed tree of a package's own source has no format to read (`spec/compilation_model.md` Rule CM7.4 serialises none). A JSON dump is the obvious candidate; wait for a tool that needs it.
@@ -178,7 +221,7 @@ The report is the place to see why a representation was chosen; it is not needed
 
 | Document | Relationship |
 |---|---|
-| `spec/properties.md` | Statuses (Rule P7.7), lanes (Rule P7.8), measurement (Rule P7.9), `unreachable` (Rule P9.2), sampling (Rule P5.3.b), enumeration (Rule P8.5) |
+| `spec/properties.md` | Statuses (Rule P7.7), the verdict and its exit code (Rule P7.7.b, Rule RP5.5), lanes (Rule P7.8), measurement (Rule P7.9), `unreachable` (Rule P9.2), sampling (Rule P5.3.b), enumeration (Rule P8.5) |
 | `spec/compilation_model.md` | Clone keys label counters; request counters are the measured weight of Rule CM5.4; the interface tier carries cardinality; choice points (Rule CM8.1), summaries (Rule CM8.3), the lock file (Rule CM8.5), the profile file (Rule CM8.6) |
 | `spec/cost.md` | Rule CT8.2 reads the counters as usage; Rule CT8.1 viability is shown in the link report |
 | `spec/diagnostics.md` | Rule DG3.3 keeps diagnostics out of the parametric count |

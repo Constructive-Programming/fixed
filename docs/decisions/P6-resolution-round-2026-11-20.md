@@ -210,6 +210,12 @@ The writers of the specs and the reviewer left thirteen questions for the owner.
 
 The error for an unbounded `show`, `==` or `clone` is `T022`: the compiler's catalogue numbers typer errors `T0xx`, and the spec's first choice, `E064`, was withdrawn. Still not decided: the exit code of `fixed verify`; how a release build is requested; minors 7, 8 and 14 of the review.
 
+## Owner's decisions (fourth round, 2026-11-21)
+
+Three questions left open by the earlier rounds and by `docs/decisions/P0-spec-review-2026-11-20.md` §4. The owner's words are quoted; the rest is how they were written into the specs.
+
+1. **Exit codes.** "Exit code: 0 no failure, then let's give each error class a number, we have space for 64 error numbers." One table for every command (`spec/reports.md` Rule RP5.5): `0` for no failure, `1` for an internal compiler error, `2` for a usage error, and one number per error class from `3` on (twenty classes so far), numbered in the order of the pipeline, at most 64 classes, clear of the codes the shell reserves (`126` and above). A run with errors of several classes exits with the smallest class number, which is the class of the first phase that failed. `a + b` stops at the first stage that fails and returns its code. Rule P7.7.b refers to the table. This settles the exit code of `fixed verify`, left open in the third round. *(Author's choices, owner to confirm: the class list and its numbers; `1` for an internal error, since the JVM already returns it for an uncaught exception; `2` kept for usage errors, as the shell and the compiler use it today; the smallest-number rule.)*
+
 ## Corrections to statements made in this debate
 
 - "The reference map costs 6–8%" was wrong about the cause (D16).
