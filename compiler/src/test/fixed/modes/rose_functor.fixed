@@ -1,0 +1,56 @@
+// Derived unfold and map (Rules 7.4.b, 7.4.c) through the last argument of a data type: a rose tree
+// whose children are a List of Rose, generic and at known arguments; Bag, whose List of A and List
+// of List of A map rewrites; Rg, whose children are a List of Maybe of Rg.
+use std.io.Console
+
+data Rose of A:
+    Node(value: A, children: List of Rose of A)
+
+Rose satisfies Functor
+
+data Bag of A:
+    Bag(xs: List of A, ys: List of List of A)
+
+Bag satisfies Functor
+
+data Rg of A:
+    G(v: Maybe of A, kss: List of Maybe of Rg of A)
+
+Rg satisfies Functor
+
+fn sum(r: Rose of u64) -> u64 = r.fold((v, ks) -> ks.fold(v, (n, k) -> n + k))
+
+fn build(n: u64) -> Rose of u64 =
+    Rose.unfold(n, (k) -> if k == 0: Rose.Node(k, []) else: Rose.Node(k, [k - 1, k - 1]))
+
+fn gbuild(x: A, n: u64) -> Rose of A =
+    Rose.unfold(n, (k) -> if k == 0: Rose.Node(x, []) else: Rose.Node(x, [k - 1]))
+
+fn gmap(r: Rose of A, f: A -> B) -> Rose of B = r.map(f)
+
+fn bagSum(b: Bag of u64) -> u64 =
+    match b:
+        Bag.Bag(xs, ys) => ys.fold(xs.fold(0, (n, x) -> n + x), (n, y) -> y.fold(n, (m, x) -> m + x))
+
+fn mb(m: Maybe of u64) -> u64 =
+    match m:
+        Maybe.Just(x) => x
+        Maybe.Nothing => 0
+
+fn rg(r: Rg of u64) -> u64 = r.fold((v, kss) -> kss.fold(mb(v), (n, k) -> n + mb(k)))
+
+fn gm2(r: Rg of A, f: A -> B, g: B -> C) -> Rg of C = r.map(f).map(g)
+
+fn rgu(s: S, x: A, step: S -> List of Maybe of S) -> Rg of A = Rg.unfold(s, (k) -> Rg.G(Maybe.Just(x), step(k)))
+
+fn main() -> () with Console =
+    let t = Rose.Node(1, [Rose.Node(2, []), Rose.Node(3, [Rose.Node(4, [])])])
+    Console.printLine(sum(t.map((v) -> v * 10)).show())
+    Console.printLine(sum(gmap(t, (v) -> v + 100)).show())
+    Console.printLine(sum(build(3)).show())
+    Console.printLine(sum(gbuild(7, 4)).show())
+    Console.printLine(sum(gmap(gbuild(t, 2), (r) -> sum(r))).show())
+    Console.printLine(bagSum(Bag.Bag([1, 2], [[3], [4, 5]]).map((v) -> v * 10)).show())
+    let r = Rg.G(Maybe.Just(1), [Maybe.Nothing, Maybe.Just(Rg.G(Maybe.Nothing, [Maybe.Just(Rg.G(Maybe.Just(4), []))]))])
+    Console.printLine(rg(gm2(r, (v) -> v + 1, (v) -> v * 10)).show())
+    Console.printLine(rg(rgu(3, 2, (k) -> if k == 0: [] else: [Maybe.Nothing, Maybe.Just(k - 1)])).show())

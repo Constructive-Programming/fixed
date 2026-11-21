@@ -59,26 +59,12 @@ private[backend] trait Generated:
     val ws = hidden(args :+ r)
     instance(name) {
       val x = typed(fresh("x", CType.Boxed), Type.TypeRef(data, args), span)
-      val self = selfType(data, args)
       val callbacks = symbols.variantsOf(data).toList.map(v => fresh(s"on${v.name}", CType.Boxed))
       val rt = ctype(r, span)
-      def through(t: Type, v: Atom)(k: K): Expr =
-        t match
-          case _ if t == self =>
-            val rec = fresh("rec", rt)
-            Expr.Let(rec, Rhs.Call(name, ws ++ (v :: callbacks), runtime = false), k(rec))
-          case Type.TypeRef(f, fargs) if fargs.lastOption.exists(TypeOps.mentions(_, self)) && dataOf(t).isDefined =>
-            val elem = fargs.last
-            val param = fresh("e", ctype(elem, span))
-            val folded = TypeOps.replaceAll(elem, Map(self -> r))
-            closure(List(param), through(elem, param)(Expr.Ret(_)), ctype(folded, span)) { c =>
-              val mapped = fresh("mapped", CType.Boxed)
-              val (map, ws) = member(f, fargs, Some(folded))((a, b) => derivedMap(f, a, b, span))
-              Expr.Let(mapped, Rhs.Call(map, ws ++ List(v, c), runtime = false), k(mapped))
-            }
-          case _ => k(v)
+      val recurse =
+        recursive(data, t => Part(t, r, v => bound(Rhs.Call(name, ws ++ (v :: callbacks), runtime = false), rt)))
       val branches = perVariant(data, args, x, span) { (tag, loaded) =>
-        rebuild(loaded, (t, v) => Option.when(TypeOps.mentions(t, self))(through(t, v)))(as =>
+        rebuild(loaded, fieldTransform(data, tag, loaded, recurse, span))(as =>
           result(Rhs.CallClosure(callbacks(tag), as), rt)
         )
       }
@@ -86,7 +72,8 @@ private[backend] trait Generated:
     }
 
   /** Rule 7.4.b: `D.unfold(seed, step)`. The step returns one layer whose recursive fields hold
-    * seeds; each is unfolded in turn. (The layer is a separate allocation: fusion is Phase 4.)
+    * seeds, also inside the last argument of a data type (`List of S` for `List of Self`); each is unfolded in turn.
+    * (The layer is a separate allocation: fusion is Phase 4.)
     */
   protected def derivedUnfold(data: SymbolId, args: List[Type], seed: Type, span: Span): String =
     val seedType = ctype(seed, span)
@@ -96,12 +83,13 @@ private[backend] trait Generated:
       val s = fresh("seed", seedType)
       val step = fresh("step", CType.Boxed)
       val layer = fresh("layer", CType.Boxed)
-      val self = selfType(data, args)
-      val recurse = (t: Type, v: Var) =>
-        Option.when(t == self)(bound(Rhs.Call(name, ws ++ List(v, step), runtime = false), CType.Boxed))
-          .flatten
-      val branches = perVariant(data, args, layer, span, Some(seedType)) {
-        (tag, loaded) => construction(tag, loaded, recurse, Type.TypeRef(data, args))
+      val recurse =
+        recursive(
+          data,
+          t => Part(seed, t, v => bound(Rhs.Call(name, ws ++ List(v, step), runtime = false), CType.Boxed))
+        )
+      val branches = perVariant(data, args, layer, span, Some(seedType)) { (tag, loaded) =>
+        construction(tag, loaded, fieldTransform(data, tag, loaded, recurse, span), Type.TypeRef(data, args))
       }
       Fn(
         name,
@@ -111,27 +99,74 @@ private[backend] trait Generated:
       )
     }
 
-  /** Rule 7.4.c: `x.map(f)` over the rightmost type parameter; recursive fields are mapped too. */
+  /** Rule 7.4.c: `x.map(f)` over the rightmost type parameter. Elements and recursive fields are
+    * mapped, also inside the last argument of a data type (`List of A`, `List of Self`).
+    */
   protected def derivedMap(data: SymbolId, args: List[Type], newElem: Type, span: Span): String =
     val name = generatedName(data, args, "map", shown(newElem))
     val ws = hidden(args :+ newElem)
     instance(name) {
       val (x, f) = (typed(fresh("x", CType.Boxed), Type.TypeRef(data, args), span), fresh("f", CType.Boxed))
-      val elemParam = symbols.typeParamsOf(data).lastOption
-      val variants = symbols.variantsOf(data).toList
+      val elemParam = symbols.typeParamsOf(data).lastOption.map(Type.TypeRef(_, Nil))
+      val newSelf = selfType(data, args.dropRight(1) :+ newElem)
+      val recurse =
+        recursive(
+          data,
+          t => Part(t, newSelf, v => bound(Rhs.Call(name, ws ++ List(v, f), runtime = false), CType.Boxed))
+        )
+      val leaf: Leaf = (d, t) =>
+        if elemParam.contains(d) then
+          Some(Part(t, newElem, v => bound(Rhs.CallClosure(f, List(v)), ctype(newElem, span))))
+        else recurse(d, t)
       val branches = perVariant(data, args, x, span) { (tag, loaded) =>
-        val declared = symbols.fieldsOf(variants(tag).id).map(_.info).toList
-        val mapField = (_: Type, v: Var) =>
-          declared(loaded.indexWhere(_._2 == v)) match
-            case Type.TypeRef(p, Nil) if elemParam.contains(p) =>
-              bound(Rhs.CallClosure(f, List(v)), ctype(newElem, span))
-            case d if d == declaredSelf(data) =>
-              bound(Rhs.Call(name, ws ++ List(v, f), runtime = false), CType.Boxed)
-            case _ => None
-        construction(tag, loaded, mapField, Type.TypeRef(data, args.dropRight(1) :+ newElem))
+        construction(
+          tag,
+          loaded,
+          fieldTransform(data, tag, loaded, leaf, span),
+          Type.TypeRef(data, args.dropRight(1) :+ newElem)
+        )
       }
       Fn(name, ws ++ List(x, f), CType.Boxed, switch(x, branches, CType.Boxed))
     }
+
+  /** A part of a field that a generated member rebuilds: its type before and after, and how to
+    * rebuild a value of it.
+    */
+  final private case class Part(in: Type, out: Type, build: Atom => K => Expr)
+
+  /** The part a generated member rebuilds at a declared type, given that type and its instantiation, if any. */
+  private type Leaf = (Type, Type) => Option[Part]
+
+  /** The [[Leaf]] of a recursive field (one of declared type `Self`, Rule 7.4.a): `at` its instantiated type. */
+  private def recursive(data: SymbolId, at: Type => Part): Leaf =
+    (d, t) => Option.when(d == declaredSelf(data))(at(t))
+
+  /** The field transform of variant `tag`'s fields `loaded`: each field rebuilt where `leaf` applies, directly or inside a data type ([[part]]). */
+  private def fieldTransform(data: SymbolId, tag: Int, loaded: List[(Type, Var)], leaf: Leaf, span: Span): Transform =
+    val declared = symbols.fieldsOf(symbols.variantsOf(data).toList(tag).id).map(_.info).toList
+    (t, v) => part(declared(loaded.indexWhere(_._2 == v)), t, leaf, span).map(_.build(v))
+
+  /** What rebuilds a value of declared type `d`, instantiated as `t`: `leaf` where it applies;
+    * else, for `F of (..., X)` with `F` a data type and a part in `X`, `F`'s derived `map` with a
+    * closure that rebuilds each `X` (Rule 7.4.a.1 for `fold`); else nothing, and the value is kept.
+    */
+  private def part(d: Type, t: Type, leaf: Leaf, span: Span): Option[Part] =
+    leaf(d, t).orElse((d, t) match
+      case (Type.TypeRef(_, ds), Type.TypeRef(f, ts)) if ds.nonEmpty && dataOf(t).isDefined =>
+        part(ds.last, ts.last, leaf, span).map { e =>
+          Part(
+            Type.TypeRef(f, ts.init :+ e.in),
+            Type.TypeRef(f, ts.init :+ e.out),
+            v =>
+              k =>
+                val param = fresh("e", ctype(e.in, span))
+                closure(List(param), e.build(param)(Expr.Ret(_)), ctype(e.out, span)) { c =>
+                  val (map, ws) = member(f, ts.init :+ e.in, Some(e.out))((a, b) => derivedMap(f, a, b, span))
+                  bound(Rhs.Call(map, ws ++ List(v, c), runtime = false), CType.Boxed)(k)
+                }
+          )
+        }
+      case _ => None)
 
   /** `Folding.fold(init, f)` on a list-shaped data type: a left fold. ponytail: generated here until
     * `satisfies` bodies in Fixed are lowered; spec §7.4 does not derive it. Same for `length` and
@@ -276,7 +311,7 @@ private[backend] trait Generated:
       val branches = perVariant(data, args, x, span) { (tag, loaded) =>
         val slots = Layout.slots(loaded.map((ft, _) => ctype(ft, span)))
         val copyField = (ft: Type, v: Var) =>
-          dataOf(ft).filter(_ => parts((key(t), slots(loaded.indexWhere(_._2 == v))))).flatMap((d, a) =>
+          dataOf(ft).filter(_ => parts((key(t), slots(loaded.indexWhere(_._2 == v))))).map((d, a) =>
             bound(Rhs.Call(copyOf(d, a, parts, key, span), List(v), runtime = false), CType.Boxed)
           )
         construction(tag, loaded, copyField, t)
@@ -322,9 +357,9 @@ private[backend] trait Generated:
       Expr.Let(res, Rhs.Con(tag, as), Expr.Ret(res))
     }
 
-  /** A field transform for [[rebuild]]: bind `rhs` and continue with the result. */
-  private def bound(rhs: Rhs, t: CType): Option[K => Expr] =
-    Some((k: K) => { val y = fresh("y", t); Expr.Let(y, rhs, k(y)) })
+  /** Bind `rhs` and continue with the result: how a [[Part]] or a field transform rebuilds a value. */
+  private def bound(rhs: Rhs, t: CType): K => Expr =
+    k => { val y = fresh("y", t); Expr.Let(y, rhs, k(y)) }
 
   private def result(rhs: Rhs, rt: CType): Expr =
     val res = fresh("r", rt)
