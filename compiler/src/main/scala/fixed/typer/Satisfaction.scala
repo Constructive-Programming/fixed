@@ -19,7 +19,7 @@ object Satisfaction:
   private val fieldDerived = Set("Show", "Eq", "Clone", "Ord")
 
   /** `Clone` is derived only on request: a data type has it only through `T satisfies Clone`. */
-  def onRequest(s: TyperState, cap: SymbolId): Boolean = s.symbols(cap).name == "Clone"
+  def onRequest(s: TyperState, cap: SymbolId): Boolean = s.symbols.preludeName(cap) == "Clone"
 
   /** Some capability in `bounds` reaches `cap` through its `extends` closure. */
   def boundsReach(s: TyperState, bounds: List[Type], cap: SymbolId): Boolean =
@@ -37,8 +37,8 @@ object Satisfaction:
     s.unifier.resolve(t) match
       case Type.NeverType                     => Some(s)
       case Type.TupleType(ts) if ts.size == 2 =>
-        s.symbols.scope.get("Tuple").flatMap(tuple => holds(s, Type.TypeRef(tuple, ts), cap, args, assumed))
-      case Type.TupleType(ts) if fieldDerived(s.symbols(cap).name) =>
+        s.symbols.prelude.get("Tuple").flatMap(tuple => holds(s, Type.TypeRef(tuple, ts), cap, args, assumed))
+      case Type.TupleType(ts) if fieldDerived(s.symbols.preludeName(cap)) =>
         Option.when(ts.forall(holds(s, _, cap, Nil, assumed).isDefined))(s)
       case Type.TypeRef(id, _) if assumed(id) => Some(s)
       case Type.TypeRef(id, recvArgs)         =>
@@ -62,7 +62,7 @@ object Satisfaction:
           case _ => Some(s)
       case Type.PrimType(n) =>
         val numeric = Members.isNumeric(s, Type.PrimType(n)) &&
-          s.symbols.scope.get("Numeric").exists(nu => s.members.closure(nu).contains(cap.toInt))
+          s.symbols.prelude.get("Numeric").exists(nu => s.members.closure(nu).contains(cap.toInt))
         val clone = primitives(n) && onRequest(s, cap)
         Option.when(numeric || clone || declared(s, Type.PrimType(n), cap))(s)
       case Type.IsBound(bs)       => Option.when(boundsReach(s, bs, cap))(s)
@@ -118,7 +118,10 @@ object Satisfaction:
   def constructor(s: TyperState, cap: SymbolId, call: fixed.ast.Trees.StaticCall, pt: fixed.core.Proto)
       : Option[(TyperState, Type)] =
     val expected = pt.expected.map(s.unifier.resolve)
+
+    /** In the prelude's code, only the prelude's data types are candidates (Rule 8.6). */
     val candidates = s.symbols.constructorsOf(cap, call.method)
+      .filter((data, _) => !s.inPrelude || s.symbols(data).owner == SymbolId.Prelude)
     def fits(data: SymbolId): Boolean =
       expected match
         case Some(Type.TypeRef(d, _)) if s.symbols(d).kind == SymKind.Data => d == data
@@ -192,7 +195,8 @@ object Satisfaction:
       * whether some instance derives it.
       */
     val anyInstance = s.symbols.typeParamsOf(data).map(_ => Type.NeverType)
-    fold || accessor || (s.symbols(m.owner).name != "Folding" && derived(s, data, m.owner, anyInstance, Set.empty))
+    fold || accessor ||
+    (s.symbols.preludeName(m.owner) != "Folding" && derived(s, data, m.owner, anyInstance, Set.empty))
 
   /** Rule 7.4: `Folding` for any data with variants, `Functor` over the rightmost type parameter
     * when a derived `map` can rebuild it (`Members.functor`), and `Show` / `Eq` / `Clone` / `Ord`
@@ -204,7 +208,7 @@ object Satisfaction:
     * applies both).
     */
   def derived(s: TyperState, data: SymbolId, cap: SymbolId, args: List[Type], assumed: Set[SymbolId]): Boolean =
-    val capName = s.symbols(cap).name
+    val capName = s.symbols.preludeName(cap)
     lazy val variants = s.symbols.variantsOf(data).toList
     capName match
       case "Folding"                  => variants.nonEmpty

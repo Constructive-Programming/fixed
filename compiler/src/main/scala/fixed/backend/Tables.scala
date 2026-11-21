@@ -99,14 +99,23 @@ private[backend] trait Tables extends Satisfied:
       )
     else table(t, cap)
 
-  /** The entry of `member`: its adapter, `""` for a null entry, `None` if `t` does not define it. */
+  /** The entry of `member`: its adapter, `""` for a null entry, `None` if `t` does not define it.
+    * Compiler-provided and null entries are for members of the prelude's capabilities (and the
+    * hidden `lt` and `le`), not for a program's capability that declares a member of the same name.
+    */
   private def entry(t: Type, c: CType, cap: SymbolId, member: String): Option[String] =
     val name = s"${symbols.render(t)}:${symbols(cap).name}.$member"
+    val preludeMember = declared(cap, member).forall(d => symbols.preludeName(d.owner).nonEmpty)
     val built = (dataOf(t), productFields(t)) match
       case (Some((data, args)), _)   => dataEntry(t, data, args, cap, member, name)
       case (_, Some((ctor, fields))) => productEntry(ctor, fields, member, name)
-      case _                         => primitive(symbols.render(t), c, member)
-    built.orElse(Option.when(Tables.unbuilt(member))(""))
+      case _ if preludeMember        => primitive(symbols.render(t), c, member)
+      case _                         => None
+    built.orElse(Option.when(preludeMember && Tables.unbuilt(member))(""))
+
+  /** The declaration of `member` in `cap` or the nearest capability its `extends` chain reaches. */
+  private def declared(cap: SymbolId, member: String) =
+    Tables.reached(symbols, cap).flatMap(symbols.membersOf).find(_.name == member)
 
   /** A data type's entry `name`: an adapter over a generated member, or a constructor. */
   private def dataEntry(
@@ -119,7 +128,7 @@ private[backend] trait Tables extends Satisfied:
   ): Option[String] =
     val own = symbols.typeParamsOf(data).map(p => Type.TypeRef(p, Nil))
     val list = listShaped(data)
-    val decl = Tables.reached(symbols, cap).flatMap(symbols.membersOf).find(_.name == member)
+    val decl = declared(cap, member)
     val r = decl.flatMap(d =>
       typeParamsIn(d.info).collectFirst { case Type.TypeRef(p, _) if symbols(p).owner == d.id => Generated.R }
     )
@@ -130,7 +139,7 @@ private[backend] trait Tables extends Satisfied:
       decl.filter(d => hasBody(t, d.id, fromPrelude))
         .flatMap(d => satisfactionBody(data, d.id, own, r.getOrElse(Type.UnitType)))
         .map(adapter(name, _, args, own))
-    body(fromPrelude = false).orElse((decl.map(d => symbols(d.owner).name), member, r) match
+    body(fromPrelude = false).orElse((decl.map(d => symbols.preludeName(d.owner)), member, r) match
       case (_, ctor, _) if decl.exists(_.kind == SymKind.StaticMethod) =>
         capVariant(cap, ctor, t).map(tag =>
           constructor(name, tag, fieldTypes(data, args, symbols.variantsOf(data).toList(tag).id))
@@ -141,7 +150,7 @@ private[backend] trait Tables extends Satisfied:
         Some(adapter(name, foldLeft(data, own, r, Span.NoSpan), args, own))
       case (Some("Folding"), "find", _) if list =>
         /** ponytail: the result is the prelude's `Maybe`; a callee-chosen result returns its witness record later. */
-        val maybe = symbols.scope.get("Maybe").map(Type.TypeRef(_, own.lastOption.toList))
+        val maybe = symbols.prelude.get("Maybe").map(Type.TypeRef(_, own.lastOption.toList))
         maybe.map(m => adapter(name, find(data, own, cap, m, Span.NoSpan), args, own))
       case (Some("Sequencing"), "length", _) if list =>
         Some(adapter(name, length(data, own, Type.PrimType("u64"), Span.NoSpan), args, own))
@@ -269,7 +278,7 @@ object Tables:
   def members(symbols: SymbolTable, cap: SymbolId): List[String] =
     val caps = reached(symbols, cap)
     val declared = caps.flatMap(symbols.membersOf).filter(m => Set(SymKind.Method, SymKind.StaticMethod)(m.kind))
-    (declared.map(_.name) ++ (if caps.exists(symbols(_).name == "Ord") then ordEntries else Nil)).distinct
+    (declared.map(_.name) ++ (if caps.exists(symbols.preludeName(_) == "Ord") then ordEntries else Nil)).distinct
 
   /** `cap` and the capabilities its `extends` chain reaches, depth first in the order written. */
   def reached(symbols: SymbolTable, cap: SymbolId): List[SymbolId] =

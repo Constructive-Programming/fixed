@@ -45,8 +45,9 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   /** The function instances declared `fip fn`, with their contract (3.4.M5). */
   val fips: mutable.Map[String, Trees.Fip] = mutable.HashMap.empty
 
-  /** Top-level functions with bodies: the prelude's, then the unit's (which shadow them). */
-  private val decls: Map[String, Trees.FnDecl] = fixed.typer.Stdlib.functions(unit.tree)
+  /** Top-level functions with bodies, the prelude's and the unit's, by the name of their symbol. */
+  private val decls: Map[String, (SymbolId, Trees.FnDecl)] =
+    fixed.typer.Stdlib.functions(unit.tree, symbols).map((id, f) => symbols(id).name -> (id, f))
 
   /** The baseline versions built: functions and generated members compiled once for all
     * instantiations of their type parameters (Rule CM3.1).
@@ -160,15 +161,18 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     * parameters.
     */
   private def function(
-      decl: Trees.FnDecl,
+      fn: (SymbolId, Trees.FnDecl),
       sigma: Sigma,
       bounds: Map[Type, Type],
       name: String,
       hidden: List[Var] = Nil
   ): Fn =
-    val (paramTypes, ret) = TypeOps.signature(symbols(symbols.scope(decl.name)).info)
+    val (id, decl) = fn
+    val (paramTypes, ret) = TypeOps.signature(symbols(id).info)
     decl.fip.foreach(fips(name) = _)
-    code(name, decl.params.map(p => (p.name, p.span)).zip(paramTypes), ret, decl, sigma, bounds, hidden)
+    inPrelude.withValue(symbols(id).owner == SymbolId.Prelude)(
+      code(name, decl.params.map(p => (p.name, p.span)).zip(paramTypes), ret, decl, sigma, bounds, hidden)
+    )
 
   /** Function `name` over `body`: `hidden`, then `params` at their types made concrete. */
   private[backend] def code(
@@ -200,7 +204,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
         ctype(t, l.span) match
           case f: CType.Float => k(Atom.FloatC(BigDecimal(l.value), f))
           case _: CType.Slot  =>
-            tableCall(t, "Numeric", "fromI64", List(Atom.IntC(l.value, CType.Int(64, signed = true))), l, sc)(k)
+            val n = Atom.IntC(l.value, CType.Int(64, signed = true))
+            tableCall(t, symbols.prelude("Numeric"), "fromI64", List(n), l, sc)(k)
           case c => k(Atom.IntC(l.value, c))
       case l: Trees.FloatLit =>
         ctype(typeOf(l, sc), l.span) match
@@ -235,9 +240,10 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   /** `fn(args)`, typed as `result`: a top-level function instance, or a closure call. */
   private def application(fn: Tree, args: List[Tree], result: Tree, sc: Scope)(k: K): Expr =
     fn match
-      case f @ Trees.Ident(name, span) if !sc.env.contains(name) && isFn(name) =>
-        if decls.contains(name) then call(name, f, args, result, sc)(k)
-        else unsupported(span, s"call of `$name`, which has no body", k)
+      case f @ Trees.Ident(name, span) if !sc.env.contains(name) && fnNamed(name).isDefined =>
+        fnNamed(name).map(symbols(_).name).filter(decls.contains) match
+          case Some(key) => call(key, f, args, result, sc)(k)
+          case None      => unsupported(span, s"call of `$name`, which has no body", k)
       case _ => expr(fn, sc)(c => all(args, sc)(as => bind(Rhs.CallClosure(c, as), result, sc)(k)))
 
   /** A list literal: `Cons` cells built from the last element back, ending in the static `Nil`. */
@@ -327,7 +333,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     */
   private def slotOp(op: Trees.BinOperator, l: Atom, r: Atom, t: Type, b: Tree, sc: Scope)(k: K): Expr =
     import Trees.BinOperator.*
-    val call = (cap: String, member: String, args: List[Atom]) => tableCall(t, cap, member, args, b, sc)
+    val call =
+      (cap: String, member: String, args: List[Atom]) => tableCall(t, symbols.prelude(cap), member, args, b, sc)
     op match
       case Add      => call("Numeric", "add", List(l, r))(k)
       case Sub      => call("Numeric", "sub", List(l, r))(k)
@@ -346,31 +353,34 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     * through the table of type parameter `t`'s bound set that holds `cap`'s members; the result is
     * bound as the value of `tree`.
     */
-  private def tableCall(t: Type, cap: String, member: String, args: List[Atom], tree: Tree, sc: Scope)(k: K): Expr =
-    val found = (t, symbols.scope.get(cap)) match
-      case (_, Some(owner)) if isTypeParam(t) =>
-        boundCaps(t).find(Tables.reached(symbols, _).contains(owner)).map(c =>
+  private def tableCall(t: Type, cap: SymbolId, member: String, args: List[Atom], tree: Tree, sc: Scope)(k: K): Expr =
+    val found =
+      if isTypeParam(t) then
+        boundCaps(t).find(Tables.reached(symbols, _).contains(cap)).map(c =>
           (tableOf(t, c), Tables.members(symbols, c).indexOf(member))
         )
-      case _ => None
+      else None
     found match
       case Some((table, i)) if i >= 0 =>
         calledEntries(t) += member
         bind(Rhs.CallTable(table, i, args), tree, sc)(k)
-      case _ => unsupported(tree.span, s"`$cap.$member` on a value of type ${symbols.render(t)} without that bound", k)
+      case _ =>
+        val what = s"`${symbols(cap).name}.$member` on a value of type ${symbols.render(t)}"
+        unsupported(tree.span, s"$what without that bound", k)
 
   private def unaryOp(u: Trees.UnaryOp, sc: Scope)(k: K): Expr =
     val op = u.op match
       case Trees.UnaryOperator.Neg => PrimOp.Neg
       case Trees.UnaryOperator.Not => PrimOp.Not
     expr(u.operand, sc)(a =>
-      if a.tpe.slot && op == PrimOp.Neg then tableCall(typeOf(u.operand, sc), "Numeric", "negate", List(a), u, sc)(k)
+      if a.tpe.slot && op == PrimOp.Neg then
+        tableCall(typeOf(u.operand, sc), symbols.prelude("Numeric"), "negate", List(a), u, sc)(k)
       else bind(Rhs.Prim(op, List(a)), u, sc)(k)
     )
 
   /** A call of function `ref` at its type, or of the baseline under polymorphic recursion ([[TypeOps.derived]]). */
   private def call(name: String, ref: Tree, args: List[Tree], t: Tree, sc: Scope)(k: K): Expr =
-    val id = symbols.scope(name)
+    val id = decls(name)._1
     val params = symbols.typeParamsOf(id)
     val solved = TypeOps.solve(params.toSet, symbols(id).info, typeOf(ref, sc), Map.empty, Members.boundsOf(symbols, _))
     val sigma = params.map(p => p -> solved.getOrElse(p, Type.UnitType)).toMap
@@ -568,7 +578,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case Some(Resolution.CapMember(_, member)) if hasBody(recvType, member, fromPrelude = false) =>
         bodyCall(m, member, recvType, sc)(k)
       case Some(Resolution.CapMember(cap, member)) =>
-        (symbols(cap).name, m.method, args) match
+        (symbols.preludeName(cap), m.method, args) match
           case ("Concat", "concat", List(arg)) =>
             expr(m.receiver, sc)(r => expr(arg, sc)(a => runtime("fx_str_concat", List(r, a), m, sc)(k)))
           case ("Show", "show", Nil)
@@ -590,20 +600,14 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
           case ("Sequencing", "length", Nil) if listLike =>
             generatedCall(recvType, m, sc)((d, a, _) => length(d, a, typeOf(m, sc), m.span))(k)
           case ("Folding", "find", List(_)) if listLike =>
-            val raw = unit.typeOf(m).getOrElse(Type.NeverType)
-            val optional = Members.expandAliases(
-              symbols,
-              raw match
-                case Type.IsBound(bs) => bs
-                case other            => List(other)
-            ).collectFirst { case Type.CapRef(c, _) => c }
-            optional match
+            capOf(m) match
               case Some(opt) =>
                 val dargs = dataOf(recvType).fold(Nil)(_._2)
                 generatedCall(recvType, m, sc)((d, a, _) =>
                   find(d, a, opt, TypeOps.replaceAll(typeOf(m, sc), dargs.zip(a).toMap), m.span)
                 )(k)
-              case None => unsupported(m.span, s"`find` returning ${symbols.render(raw)}", k)
+              case None =>
+                unsupported(m.span, s"`find` returning ${symbols.render(unit.typeOf(m).getOrElse(Type.NeverType))}", k)
           case (_, name, Nil) if productField(recvType, name).isDefined => fieldRead(recvType, m, sc)(k)
           case _ if hasBody(recvType, member, fromPrelude = true)       => bodyCall(m, member, recvType, sc)(k)
           case (c, name, _)                                             =>
@@ -624,7 +628,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case None    =>
         val witnesses = own.map(solved andThen witnessAtom)
         expr(m.receiver, sc)(r =>
-          all(args, sc)(as => tableCall(t, symbols(d.owner).name, m.method, witnesses ++ (r :: as), m, sc)(k))
+          all(args, sc)(as => tableCall(t, d.owner, m.method, witnesses ++ (r :: as), m, sc)(k))
         )
 
   /** `m`, a call of capability `member` on `recvType`, through its `satisfies` body. */
@@ -650,11 +654,11 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
         }
 
   /** `builtin.parseU64(s)`: the C side parses; the result is built with the constructors that
-    * `Result.ok` and `Result.err` map to on the representing data type.
+    * `ok` and `err` of the result's capability (a `Result`) map to on the representing data type.
     */
   private def intrinsic(m: Trees.MethodCall, sc: Scope)(k: K): Expr =
     val result = typeOf(m, sc)
-    (m.method, m.args.getOrElse(Nil), dataOf(result), symbols.scope.get("Result")) match
+    (m.method, m.args.getOrElse(Nil), dataOf(result), capOf(m)) match
       case ("parseU64", List(arg), Some((data, _)), Some(cap)) =>
         val tagOf = (ctor: String) =>
           symbols.constructorsOf(cap, ctor).find(_._1 == data)
@@ -710,7 +714,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   private def static(s: Trees.StaticCall, sc: Scope)(k: K): Expr =
     val args = s.args.getOrElse(Nil)
     lazy val result = typeOf(s, sc)
-    val owner = symbols.scope.get(s.qualifier)
+    val owner = globals.get(s.qualifier)
     val resolved = unit.typing.flatMap(_.constructors.find(_._1 eq s)).map((_, d, v) => (d, v))
     (s.qualifier, s.method, args) match
       case ("Console", "printLine", List(arg)) => expr(arg, sc)(a => runtime("fx_print_line", List(a), s, sc)(k))
@@ -731,7 +735,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
           case _ =>
             owner.map(symbols(_)) match
               case Some(cap) if cap.kind == SymKind.Cap && isTypeParam(result) =>
-                all(args, sc)(as => tableCall(result, cap.name, s.method, as, s, sc)(k))
+                all(args, sc)(as => tableCall(result, cap.id, s.method, as, s, sc)(k))
               case Some(cap) if cap.kind == SymKind.Cap && capVariant(cap.id, s.method, result).isDefined =>
                 construct(capVariant(cap.id, s.method, result).getOrElse(0), args, s, sc)(k)
               case Some(cap) if represent.constructor(cap.id).exists(_.name == s.method) =>
@@ -782,7 +786,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       h.returnClause.fold(Expr.Ret(v): Expr)(rc => bindPattern(rc.param, v, subjectType, sc)(tail(rc.body, _)))
     val normal = guarded("fx_aborting", Expr.Ret(Atom.UnitC), returned, resultType)
     val dispatch = h.operationClauses.foldRight(normal) { (c, otherwise) =>
-      symbols.scope.get(c.effect) match
+      globals.get(c.effect) match
         case Some(effect) =>
           val caught = Rhs.Call(
             "fx_abort_catch",
@@ -822,7 +826,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   /** A nested `fn` is a closure bound to its name. */
   private def nestedFn(f: Trees.FnDecl, sc: Scope)(k: Var => Expr): Expr =
     symbols.denotations.find(d =>
-      d.kind == SymKind.Fn && d.name == f.name && d.span.start >= f.span.start && d.span.end <= f.span.end
+      d.kind == SymKind.Fn && d.name == f.name && d.span.start >= f.span.start && d.span.end <= f.span.end &&
+        d.owner != SymbolId.Prelude
     ) match
       case Some(d) =>
         val ps = symbols.membersOf(d.id).filter(_.kind == SymKind.ValueParam).toList
@@ -868,7 +873,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   protected def dataOf(t: Type): Option[(SymbolId, List[Type])] =
     t match
       case Type.TypeRef(id, args) if symbols(id).kind == SymKind.Data && !isStringType(t) => Some(id -> args)
-      case Type.TupleType(ts)     => symbols.scope.get("Tuple").map(_ -> ts)
+      case Type.TupleType(ts)     => symbols.prelude.get("Tuple").map(_ -> ts)
       case Type.Layer(d, args, _) => Some(d -> args)
       case _                      => None
 
@@ -922,7 +927,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   private def concrete(t: Type, sigma: Sigma, bounds: Map[Type, Type] = Map.empty): Type =
     represent(TypeOps.subst(TypeOps.replaceAll(t, bounds), sigma))
 
-  private def isFn(name: String): Boolean = symbols.scope.get(name).exists(symbols(_).kind == SymKind.Fn)
+  /** The top-level function that `name` refers to in the scope of the code being lowered. */
+  private def fnNamed(name: String): Option[SymbolId] = globals.get(name).filter(symbols(_).kind == SymKind.Fn)
 
   protected def ctype(t: Type, span: Span): CType =
     Lower.scalar(t).getOrElse(t match
@@ -942,8 +948,10 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
 
   private def unsupported(span: Span, what: String, k: K): Expr = unsupportedThen(span, what, k(Atom.UnitC))
 
+  /** A problem in the prelude's code has no span in the program's file, and says where it is. */
   private def problem(code: DiagCode, span: Span, message: String): Diagnostic =
-    Diagnostic(Severity.Error, code, span, message)
+    if inPrelude.value then Diagnostic(Severity.Error, code, Span.NoSpan, s"in the prelude: $message")
+    else Diagnostic(Severity.Error, code, span, message)
 
 object Lower:
 

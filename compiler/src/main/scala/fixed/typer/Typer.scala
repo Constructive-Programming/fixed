@@ -44,7 +44,8 @@ final case class BoundCheck(value: Type, cap: SymbolId, op: String, span: Span, 
   * `rigidBounds` are the bounds of a capability member's own type parameters while one of its
   * bodies is typed, with `Self`, `Part` and the capability's arguments substituted
   * (`Declarations.memberBody`); the unifier's `paramBounds` reads them too. Member bodies do not
-  * nest, so the map is empty outside one.
+  * nest, so the map is empty outside one. `inPrelude` holds while the prelude's own code is typed
+  * (`TyperPhase.inPrelude`).
   */
 final case class TyperState(
     types: TypeTable,
@@ -58,7 +59,8 @@ final case class TyperState(
     row: List[(EffectBound, Span)],
     rowChecks: List[RowCheck],
     boundChecks: List[BoundCheck],
-    rigidBounds: IntMap[List[Type]] = IntMap.empty
+    rigidBounds: IntMap[List[Type]] = IntMap.empty,
+    inPrelude: Boolean = false
 ):
   def record(tree: Tree, t: Type): TyperState = copy(types = types.updated(tree, t))
 
@@ -119,7 +121,7 @@ object TyperState:
     TyperState(
       TypeTable.empty,
       symbols,
-      Unifier.empty.copy(tuple = symbols.scope.get("Tuple"), paramBounds = Members.boundsOf(symbols, _)),
+      Unifier.empty.copy(tuple = symbols.prelude.get("Tuple"), paramBounds = Members.boundsOf(symbols, _)),
       Nil,
       0,
       MemberTables(symbols),
@@ -144,7 +146,7 @@ object Typer:
     val (s1, t) = tree match
       case _: Trees.IntLit           => literal(s, i64)
       case _: Trees.FloatLit         => literal(s, f64)
-      case _: Trees.StringLit        => (s, ctx.lookup("String").fold(Type.PrimType("String"))(Type.TypeRef(_, Nil)))
+      case _: Trees.StringLit        => (s, Type.TypeRef(s.symbols.prelude("String"), Nil))
       case _: Trees.CharLit          => (s, Type.PrimType("char"))
       case _: Trees.BoolLit          => (s, bool)
       case _: Trees.UnitLit          => (s, Type.UnitType)
@@ -233,7 +235,7 @@ object Typer:
         val (s2, _) = typedExpr(s1, t.rhs, Proto.ExpectedType(l))
 
         /** `==` and `!=` are `Eq.eq`; `<`, `<=`, `>` and `>=` are `Ord.compare` (`spec/stdlib.md` §4.7, §4.8). */
-        val cap = s2.symbols.scope.get(if t.op == Eq || t.op == Neq then "Eq" else "Ord")
+        val cap = s2.symbols.prelude.get(if t.op == Eq || t.op == Neq then "Eq" else "Ord")
         (cap.fold(s2)(c => requireBound(s2, BoundCheck(l, c, t.op.symbol, t.span, ctx.owner))), bool)
       case And | Or =>
         val (s1, _) = typedExpr(s, t.lhs, Proto.ExpectedType(bool))
@@ -278,7 +280,7 @@ object Typer:
   private def typedList(s: TyperState, elems: List[Tree])(using ctx: Context): (TyperState, Type) =
     val (s0, elem) = s.fresh
     val s1 = elems.foldLeft(s0)((si, e) => typedExpr(si, e, Proto.ExpectedType(elem))._1)
-    (s1, ctx.lookup("List").fold(Type.NeverType)(Type.TypeRef(_, List(elem))))
+    (s1, Type.TypeRef(s1.symbols.prelude("List"), List(elem)))
 
   /** `if c: a else: b` — `c` is `bool`; both branches meet the prototype (or the first branch's type). */
   private def typedIf(s: TyperState, t: Trees.IfExpr, pt: Proto)(using Context): (TyperState, Type) =
@@ -347,7 +349,7 @@ object Typer:
                             DiagCode.T001,
                             t.span,
                             s"not found: member ${t.method} of ${show(s1, resolved)}",
-                            s1.symbols.scope.get("Functor")
+                            s1.symbols.prelude.get("Functor")
                               .filter(s1.symbols.membersOf(_).exists(_.name == t.method))
                               .flatMap(Members.notFunctor(s1.symbols, resolved, _))
                           ),

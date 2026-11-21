@@ -4,7 +4,7 @@ import scala.collection.mutable
 
 import fixed.CompilationUnit
 import fixed.ast.{Tree, Trees}
-import fixed.core.{Phase, SymKind}
+import fixed.core.{Phase, SymKind, SymbolId}
 import fixed.typer.{Members, Resolution, Stdlib}
 import fixed.util.{DiagCode, Diagnostic, Severity}
 
@@ -62,8 +62,8 @@ object HandlerKind:
     else if shapes.contains(Shape.Tail) then TailResumptive
     else Abortive
 
-/** Runs after the typer, on the trees the backend lowers: the unit's functions and the prelude
-  * function bodies it does not shadow.
+/** Runs after the typer, on the trees the backend lowers: the unit's functions and the prelude's,
+  * each in its own scope.
   */
 object QuantityPhase extends Phase:
   val name: String = "quantities"
@@ -92,7 +92,9 @@ final private class Quantities(unit: CompilationUnit):
   private val ids = java.util.IdentityHashMap[Tree, Integer]()
   private val signatures = java.util.IdentityHashMap[Trees.FnDecl, List[Quantity]]()
   private val diags = mutable.ArrayBuffer.empty[Diagnostic]
-  private val quiet = scala.util.DynamicVariable(false)
+
+  /** Whether a prelude function is being walked: it reports nothing, and resolves names in the prelude's scope. */
+  private val inPrelude = scala.util.DynamicVariable(false)
 
   /** Walk state per function this round: absent, in progress (`false`) or done (`true`). */
   private val walked = java.util.IdentityHashMap[Trees.FnDecl, java.lang.Boolean]()
@@ -100,7 +102,10 @@ final private class Quantities(unit: CompilationUnit):
   /** Signatures read while their function was still being walked (recursion), as read. */
   private val early = mutable.ArrayBuffer.empty[(Trees.FnDecl, List[Quantity])]
 
-  private val tops: Map[String, Trees.FnDecl] = Stdlib.functions(unit.tree)
+  private val tops: Map[SymbolId, Trees.FnDecl] = Stdlib.functions(unit.tree, symbols)
+
+  /** The top-level scope of the function being walked: the prelude's for a prelude function. */
+  private def scope: Map[String, SymbolId] = symbols.scopeFor(inPrelude.value)
 
   def table: QuantityTable = QuantityTable(binders, signatures, handlers)
 
@@ -117,7 +122,7 @@ final private class Quantities(unit: CompilationUnit):
     if early.exists((d, read) => signatures.get(d) != read) then run() else diags.toList
 
   private def top(d: Trees.FnDecl): Unit =
-    if !walked.containsKey(d) then quiet.withValue(Stdlib.prelude.exists(_ eq d))(fn(d, Map.empty)): Unit
+    if !walked.containsKey(d) then inPrelude.withValue(Stdlib.prelude.exists(_ eq d))(fn(d, Map.empty)): Unit
 
   /** The parameter quantities of `d`, walking it first if no one has yet. */
   private def signature(d: Trees.FnDecl, isTop: Boolean): List[Quantity] =
@@ -170,7 +175,7 @@ final private class Quantities(unit: CompilationUnit):
 
   /** `T021` for a binder used nowhere, unless its name starts with `_` (Rule Q5.1). */
   private def unused(b: Tree): Unit =
-    name(b).filterNot(n => n.startsWith("_") || quiet.value).foreach(n =>
+    name(b).filterNot(n => n.startsWith("_") || inPrelude.value).foreach(n =>
       diags += Diagnostic(Severity.Warning, DiagCode.T021, b.span, s"`$n` is never used; name it `_$n` if intended")
     )
 
@@ -251,12 +256,12 @@ final private class Quantities(unit: CompilationUnit):
 
   private def clause(params: List[Tree], body: Tree, env: Env): Usage =
     val bs = params.flatMap(binderPats)
-    if resumes(body) == Many && !quiet.value then
+    if resumes(body) == Many && !inPrelude.value then
       diags += Diagnostic(Severity.Error, DiagCode.E072, body.span, "`resume` may run twice on one path (Rule Q5.11)")
     record(bs, expr(body, env ++ locals(bs)))
 
   private def abortiveOp(c: Trees.OperationClause): Boolean =
-    symbols.scope.get(c.effect).exists(Members.abortive(symbols, _, c.op))
+    scope.get(c.effect).exists(Members.abortive(symbols, _, c.op))
 
   /** How often `resume` runs on one path through `t`. A lambda's `resume` is a continuation
     * capture, not a path (M2 records it as an escape); a nested `handle` has its own clauses.
@@ -279,7 +284,7 @@ final private class Quantities(unit: CompilationUnit):
       case Trees.Ident(n, _) =>
         env.get(n) match
           case Some(Bound.LocalFn(d)) => Some(signature(d, isTop = false))
-          case None                   => tops.get(n).map(signature(_, isTop = true))
+          case None                   => scope.get(n).flatMap(tops.get).map(signature(_, isTop = true))
           case _                      => None
       case _ => None
     callee match
@@ -313,7 +318,7 @@ final private class Quantities(unit: CompilationUnit):
     */
   private def staticCall(s: Trees.StaticCall, env: Env): Usage =
     val raw = s.args.getOrElse(Nil)
-    val owner = symbols.scope.get(s.qualifier)
+    val owner = scope.get(s.qualifier)
     val isData = owner.exists(symbols(_).kind == SymKind.Data)
     val construct =
       owner.exists(o => symbols.membersOf(o).exists(v => v.kind == SymKind.Variant && v.name == s.method)) ||

@@ -83,8 +83,8 @@ object Declarations:
     val bodies = d.mappings.collect { case fn: Trees.FnLike if fn.body.isDefined => fn.name }.toSet
     val self = data.fold(Type.PrimType(d.typeName))(Type.TypeRef(_, Nil))
     val own = s.symbols.satisfactionsOf(self).collect { case Type.CapRef(c, _) => c }.toSet
-    val builtin = data.isEmpty || d.typeName == "String"
-    def needed(k: SymbolId) = (k == cap || !own(k)) && !(builtin && provided(d.typeName, s.symbols(k).name))
+    val builtin = data.isEmpty || data == s.symbols.prelude.get("String")
+    def needed(k: SymbolId) = (k == cap || !own(k)) && !(builtin && provided(d.typeName, s.symbols.preludeName(k)))
     def defined(m: Denotation) = bodies(m.name) || s.symbols.hasDefault(m.id) ||
       data.exists(Satisfaction.derives(s, _, m))
     MemberTables.table(s.symbols, cap).values.flatMap(_.values.map(_.head)).toList

@@ -3,6 +3,7 @@ package fixed.typer
 import scala.io.Source
 
 import fixed.ast.{Tree, Trees}
+import fixed.core.{SymbolId, SymbolTable}
 import fixed.parsing.Parser
 import fixed.util.SourceFile
 
@@ -14,10 +15,14 @@ object Stdlib:
 
   lazy val modules: Map[String, List[Tree]] = Map("std.io" -> load("io"))
 
-  /** Top-level functions with bodies, by name: the prelude's, then `unit`'s, which shadow them. */
-  def functions(unit: Option[Tree]): Map[String, Trees.FnDecl] =
+  /** Top-level functions with bodies, by symbol: the prelude's, each found in the prelude's scope,
+    * and `unit`'s, found in the program's.
+    */
+  def functions(unit: Option[Tree], symbols: SymbolTable): Map[SymbolId, Trees.FnDecl] =
     val own = unit.toList.flatMap { case Trees.CompilationUnit(items, _) => items; case _ => Nil }
-    (prelude ++ own).collect { case f: Trees.FnDecl if f.body.isDefined => f.name -> f }.toMap
+    def bodies(items: List[Tree], scope: Map[String, SymbolId]) =
+      items.collect { case f: Trees.FnDecl if f.body.isDefined => scope.get(f.name).map(_ -> f) }.flatten
+    (bodies(prelude, symbols.prelude) ++ bodies(own, symbols.scope)).toMap
 
   private def load(name: String): List[Tree] =
     val path = s"stdlib/$name.fixed"

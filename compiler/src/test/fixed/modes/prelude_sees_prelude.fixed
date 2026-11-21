@@ -1,0 +1,26 @@
+// A program's capability with a member named like a prelude capability's (`concat`), and a
+// program's own satisfier of the prelude's `Optional`, change nothing in the prelude's code:
+// `repeatStr` and `join` still concat strings, and the prelude's `List` bodies `head` and `find`
+// still resolve `Optional.some` and `none` to `Maybe` alone, not ambiguously to `Opt2` as well.
+use std.io.Console
+
+cap Glue:
+    fn concat(other: Self) -> Self
+
+String satisfies Glue:
+    fn concat(other: Self) = "glued"
+
+data Opt2 of A:
+    Yes(v: A)
+    No
+
+Opt2 satisfies Optional:
+    Yes as some
+    No as none
+    fn foldRight(init: R, f: (Part, R) -> R) = init
+    fn find(pred: Part -> bool) = self
+
+fn main() -> () with Console =
+    Console.printLine(repeatStr("ab", 3))
+    Console.printLine(join(["x", "y"], "-"))
+    Console.printLine([5, 6].foldRight(0, (x, acc) -> acc * 10 + x).show())

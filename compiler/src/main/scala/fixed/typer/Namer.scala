@@ -25,19 +25,15 @@ object Namer:
       case other                           => List(other)
     val (entered, decls) = mapAccum(stdlib.copy(owner = SymbolId.Root), items)(enterTopLevel)
     val typed = typeAll(entered, decls.flatten)
-    (unshadowed(typed.table, typed.global).copy(scope = typed.global), typed.diags.reverse)
+    (unshadowed(typed.table, typed.global).copy(scope = typed.global, prelude = stdlib.global), typed.diags.reverse)
 
-  /** A stdlib data type whose name a top-level declaration of the program takes is renamed
-    * `prelude.<name>`: the backend names generated code and tables after the type, and the two must
-    * not meet under one name. Diagnostics of the later phases show the qualified name. `String`
-    * keeps its name: the backend recognises the built-in by it.
+  /** A prelude declaration whose name a top-level declaration of the program takes is renamed
+    * `prelude.<name>`: the backend names functions, generated code and tables after it, and the two
+    * must not meet under one name. Diagnostics of the later phases show the qualified name.
     */
   private def unshadowed(table: SymbolTable, scope: Map[String, SymbolId]): SymbolTable =
-    table.denotations.foldLeft(table) { (t, d) =>
-      val shadowed = scope.get(d.name).exists(_ != d.id) && d.name != "String"
-      if d.owner == SymbolId.Prelude && d.kind == SymKind.Data && shadowed then
-        t.rename(d.id, s"prelude.${d.name}")
-      else t
+    stdlib.global.foldLeft(table) { case (t, (name, id)) =>
+      if scope.get(name).exists(_ != id) then t.rename(id, s"prelude.$name") else t
     }
 
   /** The stdlib, indexed once: prelude names bound, modules recorded for `use`. Pure, so shared. */

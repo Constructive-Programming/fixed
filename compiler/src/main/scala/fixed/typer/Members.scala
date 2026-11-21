@@ -35,7 +35,7 @@ object Members:
     t match
       case Type.PrimType(n)                                               => numericPrims(n)
       case Type.TypeRef(id, _) if s.symbols(id).kind == SymKind.TypeParam =>
-        s.symbols.scope.get("Numeric").exists(numeric => Satisfaction.boundsReach(s, boundsOf(s, id), numeric))
+        s.symbols.prelude.get("Numeric").exists(numeric => Satisfaction.boundsReach(s, boundsOf(s, id), numeric))
       case _ => false
 
   /** How to rewrite a signature: explicit replacements, owners whose type variables become fresh,
@@ -151,7 +151,7 @@ object Members:
 
   /** The capability among [[autoDerived]] that declares `member`: what an abstract receiver lacks. */
   def autoDerivedCap(s: TyperState, member: String): Option[SymbolId] =
-    autoDerived.flatMap(s.symbols.scope.get).find(s.symbols.membersOf(_).exists(_.name == member))
+    autoDerived.flatMap(s.symbols.prelude.get).find(s.symbols.membersOf(_).exists(_.name == member))
 
   /** Every instance member `name` on `recv`, best first: a data type's own field, then its
     * capabilities, then its derived `fold`. Calls with several candidates pick by argument shape.
@@ -160,7 +160,7 @@ object Members:
   def candidates(s: TyperState, resolved: Type, name: String): List[Candidate] =
     val own: List[Candidate] = resolved match
       case Type.TupleType(ts) =>
-        s.symbols.scope.get("Tuple").toList.flatMap(t => candidates(s, Type.TypeRef(t, ts), name))
+        s.symbols.prelude.get("Tuple").toList.flatMap(t => candidates(s, Type.TypeRef(t, ts), name))
       case t @ Type.TypeRef(id, args) =>
         val d = s.symbols(id)
         d.kind match
@@ -173,7 +173,7 @@ object Members:
           case SymKind.TypeParam => capMember(s, boundsOf(s, id), t, name)
           case _                 => Nil
       case t @ Type.PrimType(_) =>
-        val numeric = if isNumeric(s, t) then s.symbols.scope.get("Numeric").map(Type.CapRef(_, Nil)).toList else Nil
+        val numeric = if isNumeric(s, t) then s.symbols.prelude.get("Numeric").map(Type.CapRef(_, Nil)).toList else Nil
         capMember(s, s.symbols.satisfactionsOf(t) ++ numeric, t, name)
       case t @ Type.CapRef(_, _)  => capMember(s, List(t), t, name)
       case Type.IsBound(bs)       => capMember(s, bs, resolved, name)
@@ -185,7 +185,7 @@ object Members:
       case _: Type.TupleType   => true
       case _                   => false
     val fallback =
-      autoDerived.flatMap(s.symbols.scope.get).filterNot(c => data && Satisfaction.onRequest(s, c))
+      autoDerived.flatMap(s.symbols.prelude.get).filterNot(c => data && Satisfaction.onRequest(s, c))
     if own.nonEmpty || abstractType(s, resolved) then own
     else capMember(s, fallback.map(Type.CapRef(_, Nil)), resolved, name)
 
@@ -202,7 +202,9 @@ object Members:
       case _ => None
 
   /** Member `name` of `kind` in `caps` or their `extends` chains, instantiated for receiver `recv`:
-    * one table lookup per capability (see [[MemberTables]]).
+    * one table lookup per capability (see [[MemberTables]]). In the prelude's own code only the
+    * prelude's capabilities count; in the program, a member of the program's capability comes
+    * before, and so is preferred over, a prelude capability's member of the same name.
     */
   private def capMember(
       s: TyperState,
@@ -215,20 +217,21 @@ object Members:
     val recvArgs = recv match
       case Type.TypeRef(_, as) => as
       case _                   => Nil
-    expandAliases(s.symbols, caps).flatMap {
-      case Type.CapRef(root, rootArgs) =>
-        s.members.lookup(root, kind, name).map { e =>
-          val capArgs = e.written.getOrElse(rootArgs)
-          val params = typeParamsOf(s, e.cap)
-          val args = if capArgs.nonEmpty then capArgs else recvArgs.takeRight(params.size)
-          val part = partOverride.orElse(capArgs.lastOption).orElse(recvArgs.lastOption)
-          Candidate(
-            Resolution.CapMember(e.cap, e.member.id),
-            () =>
-              instantiate(s, e.member.info, Subst(Subst.of(params, args), Set(e.member.id, e.cap), Some(recv), part))
-          )
-        }
-      case _ => Nil
+    val found = expandAliases(s.symbols, caps).flatMap {
+      case Type.CapRef(root, rootArgs) => s.members.lookup(root, kind, name).map(_ -> rootArgs)
+      case _                           => Nil
+    }
+    val prelude = (e: MemberEntry) => s.symbols(e.cap).owner == SymbolId.Prelude
+    val visible = if s.inPrelude then found.filter((e, _) => prelude(e)) else found.sortBy((e, _) => prelude(e))
+    visible.map { (e, rootArgs) =>
+      val capArgs = e.written.getOrElse(rootArgs)
+      val params = typeParamsOf(s, e.cap)
+      val args = if capArgs.nonEmpty then capArgs else recvArgs.takeRight(params.size)
+      val part = partOverride.orElse(capArgs.lastOption).orElse(recvArgs.lastOption)
+      Candidate(
+        Resolution.CapMember(e.cap, e.member.id),
+        () => instantiate(s, e.member.info, Subst(Subst.of(params, args), Set(e.member.id, e.cap), Some(recv), part))
+      )
     }
 
   /** Replace type-alias references in a bound chain by their constituents; arguments given to
@@ -444,7 +447,7 @@ object Members:
     */
   def notFunctor(symbols: SymbolTable, t: Type, cap: SymbolId): Option[String] =
     t match
-      case Type.TypeRef(id, _) if symbols(cap).name == "Functor" && symbols(id).kind == SymKind.Data =>
+      case Type.TypeRef(id, _) if symbols.preludeName(cap) == "Functor" && symbols(id).kind == SymKind.Data =>
         (boundedLast(symbols, id), unmapped(symbols, id)) match
           case (Some(p), _) =>
             val bound = boundsOf(symbols, p).map(symbols.render).mkString(" + ")

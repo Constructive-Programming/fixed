@@ -569,6 +569,24 @@ class EmitSuite extends munit.FunSuite:
       (0 until bits - Layout.closureCode).map(i => s"a$i").mkString + "\n"
     )
 
+  /** Calls stay B005 until `satisfies` bodies on primitive types are lowered; after that, both print `mine`. */
+  test("a program's own Show on u64 is never the prelude's: a direct and a table call are B005, not `5`"):
+    val own = header +
+      "cap Show:\n    fn show -> String\nu64 satisfies Show:\n    fn show = \"mine\"\nfn five() -> u64 = 5\n"
+    List(
+      "direct" -> "fn main() -> () with Console = Console.printLine(five().show())\n",
+      "table" ->
+        "fn d(x: T is Show) -> String = x.show()\nfn main() -> () with Console = Console.printLine(d(five()))\n"
+    ).foreach { (name, main) =>
+      val ds = lowered(s"own_show_$name", own + main).fold(identity, _ => fail(s"$name lowered"))
+      assert(ds.exists(d => d.code == DiagCode.B005 && d.message.contains("show")), ds)
+    }
+
+  test("a problem in the prelude's code says so and has no span in the program's file"):
+    val src = header + "fn main() -> () with Console = Console.printLine(join(Maybe.Just(\"q\"), \"-\"))\n"
+    val ds = lowered("prelude_problem", src).fold(identity, _ => fail("lowered"))
+    assert(ds.exists(d => d.message.startsWith("in the prelude: ") && d.span == fixed.util.Span.NoSpan), ds)
+
   test("a reference beyond the reference map is B005, not a leak (4.1.M2)"):
     List(wide(bits + 1) -> "wide_over", captures(bits - Layout.closureCode + 1) -> "captures_over").foreach {
       (src, name) =>

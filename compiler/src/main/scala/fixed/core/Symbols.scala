@@ -34,9 +34,14 @@ final case class Denotation(
 )
 
 /** Every symbol of a compilation, by id, plus what the Namer learns alongside: each owner's
-  * members in entry order, the top-level scope and the `satisfies` declarations by satisfying type
-  * (a data type's symbol, not its name, which a program's own declaration may shadow).
-  * Persistent: entering or refining returns a new table.
+  * members in entry order, the top-level scope, the prelude's own scope and the `satisfies`
+  * declarations by satisfying type (a data type's symbol, not its name, which a program's own
+  * declaration may shadow). Persistent: entering or refining returns a new table.
+  *
+  * `scope` is the program's: its declarations shadow the prelude's names. `prelude` is the
+  * prelude's, in which the prelude's own code is resolved and through which the compiler finds
+  * the entities literals and built-in operations mean (`List`, `Tuple`, `Eq`), whatever the
+  * program declares.
   */
 final case class SymbolTable(
     entries: Vector[Denotation],
@@ -44,6 +49,7 @@ final case class SymbolTable(
     children: IntMap[Vector[SymbolId]],
     typeParams: IntMap[List[SymbolId]],
     scope: Map[String, SymbolId],
+    prelude: Map[String, SymbolId],
     private[core] val satisfies: Map[Type, List[Type]],
     constructors: Map[(Int, String), List[(SymbolId, String)]],
     defaulted: scala.collection.immutable.BitSet
@@ -95,6 +101,17 @@ final case class SymbolTable(
   /** The top-level data type called `name`, if any. */
   def dataNamed(name: String): Option[SymbolId] = scope.get(name).filter(apply(_).kind == SymKind.Data)
 
+  /** The top-level scope of the prelude's code, or of the program's. */
+  def scopeFor(prelude: Boolean): Map[String, SymbolId] = if prelude then this.prelude else scope
+
+  /** `id`'s name if `id` is the prelude's top-level declaration of that name, else `""`: what the
+    * compiler compares where it gives a prelude entity a meaning of its own (`Show.show` on a
+    * scalar), so that a program's own `cap Show` never takes it.
+    */
+  def preludeName(id: SymbolId): String =
+    val name = apply(id).name.stripPrefix("prelude.")
+    if prelude.get(name).contains(id) then name else ""
+
   /** Record `data satisfies cap` mapping `variant as ctor` (for constructor resolution). */
   def mapConstructor(cap: SymbolId, ctor: String, data: SymbolId, variant: String): SymbolTable =
     val key = (cap.toInt, ctor)
@@ -139,7 +156,17 @@ object SymbolTable:
       case other               => other
 
   val empty: SymbolTable =
-    SymbolTable(Vector.empty, firstId, IntMap.empty, IntMap.empty, Map.empty, Map.empty, Map.empty, BitSet.empty)
+    SymbolTable(
+      Vector.empty,
+      firstId,
+      IntMap.empty,
+      IntMap.empty,
+      Map.empty,
+      Map.empty,
+      Map.empty,
+      Map.empty,
+      BitSet.empty
+    )
 
 extension (table: SymbolTable)
   /** Source-like rendering of `t`, with symbol names resolved through `table`. */

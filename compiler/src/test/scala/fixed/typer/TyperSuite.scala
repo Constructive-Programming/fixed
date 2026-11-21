@@ -777,19 +777,28 @@ class TyperSuite extends munit.FunSuite:
     val bad = typedUnit("cap Sized2:\n    fn size -> u64\n    fn empty -> bool = self.length == 0\n")
     assertEquals(codes(bad), List(DiagCode.T001))
 
+  /** Constructor resolutions to the program's own data types. The prelude's `satisfies` bodies,
+    * typed even where the program declares its own `Maybe`, add resolutions to the prelude's `Maybe`.
+    */
+  private def programConstructors(s: TyperState) =
+    s.constructors.filter((_, d, _) => s.symbols(d).owner == SymbolId.Root)
+
   private val optSat = optionalCap + "Maybe satisfies Opt:\n    Just as some\n    Nothing as none\n"
 
   test("3.1.M5: Cap.ctor resolves through the expected type to the one satisfying constructor"):
     val s = typedUnit(optSat +
       "fn wrap(x: u64) -> is Opt of u64 = Opt.some(x)\nfn direct(x: u64) -> Maybe of u64 = Opt.some(x)\n")
     assertEquals(s.diags, Nil)
-    assertEquals(s.constructors.map((_, d, v) => s"${s.symbols(d).name}.$v").sorted, List("Maybe.Just", "Maybe.Just"))
+    assertEquals(
+      programConstructors(s).map((_, d, v) => s"${s.symbols(d).name}.$v").sorted,
+      List("Maybe.Just", "Maybe.Just")
+    )
 
   test("3.1.M5: refinement calls are stripped before resolving (spec 8.5.1)"):
     val s = typedUnit(optSat +
       "fn between(lo: N is Ord, hi: N) -> cap of N\nfn wrap(x: u64) -> is Opt of u64 + between(1, 99) = Opt.some(x)\n")
     assertEquals(s.diags, Nil)
-    assertEquals(s.constructors.size, 1)
+    assertEquals(programConstructors(s).size, 1)
 
   test("3.1.M5: two satisfying constructors are ambiguous (T011); none in scope stays abstract"):
     val two = optSat +
@@ -797,7 +806,7 @@ class TyperSuite extends munit.FunSuite:
     assertEquals(codes(typedUnit(two + "fn wrap(x: u64) -> is Opt of u64 = Opt.some(x)\n")), List(DiagCode.T011))
     val none = typedUnit(optionalCap + "fn wrap(x: u64) -> is Opt of u64 = Opt.some(x)\n")
     assertEquals(none.diags, Nil)
-    assertEquals(none.constructors, Nil)
+    assertEquals(programConstructors(none), Nil)
 
   test("Rule 8.1.a: trailing fields with defaults may be absent from the requirement"):
     val cap = "cap Queue:\n    Self.fn empty -> Self\n    fn size -> u64\n"

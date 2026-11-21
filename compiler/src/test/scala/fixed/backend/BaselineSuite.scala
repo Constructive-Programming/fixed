@@ -43,7 +43,8 @@ class BaselineSuite extends munit.FunSuite:
   private val programs = List(
     "examples/01_basics" -> 5,
     "examples/03_option_result" -> 1,
-    "examples/04_json" -> 11,
+    /** `04_json` declares its own `Json`; the prelude's `satisfies` bodies fill its list tables. */
+    "examples/04_json" -> 12,
     "examples/05_phantom_types" -> 14,
     "bench/runtime/bintrees" -> 2,
     "bench/runtime/nat_loop" -> 4,

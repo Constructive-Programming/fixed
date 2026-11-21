@@ -9,6 +9,8 @@ import fixed.typer.{Members, TyperPhase}
   * type's capability table, run the body. The program's bodies take the place of what the compiler
   * would generate; the prelude's fill only members it generates nothing for, since a generated
   * `fold`, `length` or `find` on a list computes what the prelude's body computes, in a loop.
+  * Since prelude bodies are lowered in the prelude's scope, the trait also holds which top-level
+  * scope the code being lowered runs in, for all of `Lower`.
   */
 private[backend] trait Satisfied extends Generated:
   this: Lower =>
@@ -25,6 +27,21 @@ private[backend] trait Satisfied extends Generated:
   protected def ownTypeArg(member: SymbolId, args: List[Type], result: Type): Option[Type] =
     symbols.typeParamsOf(member).headOption.map(ownTypeArgs(member, args, result).getOrElse(_, Type.UnitType))
 
+  /** Whether the code being lowered is the prelude's: a prelude function or `satisfies` body. */
+  protected lazy val inPrelude = scala.util.DynamicVariable(false)
+
+  /** The top-level scope of the code being lowered. */
+  protected def globals: Map[String, SymbolId] = symbols.scopeFor(inPrelude.value)
+
+  /** The first capability of the type the typer gave `t`, aliases expanded. */
+  protected def capOf(t: fixed.ast.Tree): Option[SymbolId] =
+    Members.expandAliases(
+      symbols,
+      unit.typeOf(t) match
+        case Some(Type.IsBound(bs)) => bs
+        case other                  => other.toList
+    ).collectFirst { case Type.CapRef(c, _) => c }
+
   /** A typed `satisfies` method body, its capability's arguments as declared, and whether it is the prelude's. */
   private case class Body(cap: SymbolId, capArgs: List[Type], fn: Trees.InstanceMethod, prelude: Boolean)
 
@@ -34,17 +51,19 @@ private[backend] trait Satisfied extends Generated:
     */
   private lazy val satisfactionBodies: Map[(SymbolId, SymbolId), Body] =
     val own = unit.tree.toList.flatMap { case Trees.CompilationUnit(items, _) => items; case _ => Nil }
-    val prelude = TyperPhase.preludeSatisfactions(symbols)
+    val prelude = TyperPhase.preludeSatisfactions
     (for
       typing <- unit.typing.toList
       case d @ Trees.SatisfiesDecl(typeName, Trees.CapRef(capName, _, _), methods, _) <- prelude ++ own
-      data <- symbols.dataNamed(typeName).toList
-      cap <- symbols.scope.get(capName).filter(symbols(_).kind == SymKind.Cap).toList
+      fromPrelude = prelude.exists(_ eq d)
+      visible = symbols.scopeFor(fromPrelude)
+      data <- visible.get(typeName).filter(symbols(_).kind == SymKind.Data).toList
+      cap <- visible.get(capName).filter(symbols(_).kind == SymKind.Cap).toList
       capArgs = symbols.satisfactionsOf(Type.TypeRef(data, Nil)).collectFirst { case Type.CapRef(`cap`, as) => as }
       case fn: Trees.InstanceMethod <- methods if fn.body.isDefined
       entry <- typing.members.lookup(cap, SymKind.Method, fn.name).headOption.toList
       if symbols.typeParamsOf(entry.member.id).sizeIs <= 1
-    yield (data, entry.member.id) -> Body(cap, capArgs.getOrElse(Nil), fn, prelude.exists(_ eq d))).toMap
+    yield (data, entry.member.id) -> Body(cap, capArgs.getOrElse(Nil), fn, fromPrelude)).toMap
 
   /** Whether `t` has a `satisfies` body for `member` that is the prelude's exactly when `fromPrelude`. */
   protected def hasBody(t: Type, member: SymbolId, fromPrelude: Boolean): Boolean =
@@ -53,9 +72,8 @@ private[backend] trait Satisfied extends Generated:
   /** Whether `t` is the built-in `String`, which `==` compares in the runtime. */
   protected def isStringType(t: Type): Boolean =
     t match
-      case Type.TypeRef(id, Nil)   => symbols(id).name == "String" && symbols(id).owner == SymbolId.Prelude
-      case Type.PrimType("String") => true
-      case _                       => false
+      case Type.TypeRef(id, Nil) => symbols.prelude.get("String").contains(id)
+      case _                     => false
 
   /** `l == r` on boxed values of type `t`: the runtime's string comparison for `String`, the body of
     * the program's `t satisfies Eq` for a data type, else its derived `eq` ([[derivedEq]]).
@@ -66,7 +84,7 @@ private[backend] trait Satisfied extends Generated:
       val body =
         for
           (data, args) <- dataOf(t)
-          eq <- symbols.scope.get("Eq").flatMap(symbols.membersOf(_).find(_.name == "eq"))
+          eq <- symbols.prelude.get("Eq").flatMap(symbols.membersOf(_).find(_.name == "eq"))
           if hasBody(t, eq.id, fromPrelude = false)
         yield
           val (f, ws) = member(data, args, None)((a, _) => satisfactionBody(data, eq.id, a, Type.UnitType).get)
@@ -95,7 +113,7 @@ private[backend] trait Satisfied extends Generated:
       case None if v.tpe == CType.Unit => k(Atom.StrC("()"))
       case None if isStringType(t)     => k(v)
       case None                        =>
-        val show = symbols.scope.get("Show").flatMap(symbols.membersOf(_).find(_.name == "show"))
+        val show = symbols.prelude.get("Show").flatMap(symbols.membersOf(_).find(_.name == "show"))
         val body = show.filter(m => hasBody(t, m.id, fromPrelude = false)).flatMap(m =>
           dataOf(t).map((data, args) =>
             member(data, args, None)((a, _) => satisfactionBody(data, m.id, a, Type.UnitType).get)
@@ -144,6 +162,6 @@ private[backend] trait Satisfied extends Generated:
         val params = (("self", fn.span) -> self) ::
           fn.params.map(p => (p.name, p.span)).zip(declared)
         val sigma = symbols.typeParamsOf(data).zip(args).toMap ++ rs
-        code(name, params, ret, fn, sigma, Map.empty, hidden(args ++ rs.map(_._2)))
+        inPrelude.withValue(b.prelude)(code(name, params, ret, fn, sigma, Map.empty, hidden(args ++ rs.map(_._2))))
       }
     }
