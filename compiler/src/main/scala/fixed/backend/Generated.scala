@@ -412,21 +412,29 @@ private[backend] trait Generated:
       Fn(name, ws ++ List(xs, init, f), rt, switch(xs, branches, rt))
     }
 
+  /** The generated `length` of list-shaped data: a loop (`lengthLoop`, a self call in tail position
+    * that `EmitLLVM` emits as a jump) that counts the cells into an accumulator.
+    */
   protected def length(data: SymbolId, args: List[Type], resultType: Type, span: Span): String =
     val name = generatedName(data, args, "length", symbols.render(resultType))
     val ws = hidden(args)
-    instance(name) {
-      val rt = ctype(resultType, span)
-      val xs = listParam(data, args, span)
-      val branches = listBranches(data, args, xs, span, Expr.Ret(Atom.IntC(0, rt))) { (_, rest) =>
+    val rt = ctype(resultType, span)
+    val go = generatedName(data, args, "lengthLoop", symbols.render(resultType))
+    instance(go) {
+      val (xs, acc) = (listParam(data, args, span), fresh("acc", rt))
+      val branches = listBranches(data, args, xs, span, Expr.Ret(acc)) { (_, rest) =>
         val n = fresh("n", rt)
         Expr.Let(
           n,
-          Rhs.Call(name, ws :+ rest, runtime = false),
-          result(Rhs.Prim(PrimOp.Add, List(n, Atom.IntC(1, rt))), rt)
+          Rhs.Prim(PrimOp.Add, List(acc, Atom.IntC(1, rt))),
+          result(Rhs.Call(go, ws ++ List(rest, n), runtime = false), rt)
         )
       }
-      Fn(name, ws :+ xs, rt, switch(xs, branches, rt))
+      Fn(go, ws ++ List(xs, acc), rt, switch(xs, branches, rt))
+    }
+    instance(name) {
+      val xs = listParam(data, args, span)
+      Fn(name, ws :+ xs, rt, result(Rhs.Call(go, ws ++ List(xs, Atom.IntC(0, rt)), runtime = false), rt))
     }
 
   /** `find(p)`: the first element satisfying `p`, built with the constructors that `optional`'s

@@ -308,15 +308,19 @@ class EmitSuite extends munit.FunSuite:
     * of an exclusive clone, say), so the calls between versions must not form a cycle: the native
     * stack depth is then bounded by the number of versions, whatever the length of the list.
     */
-  test("unfold and map of a list run as loops"):
+  test("unfold, map and length of a list run as loops"):
     val src = java.nio.file.Files.readString(Path.of("compiler", "src", "test", "fixed", "modes", "long_lists.fixed"))
     (Mode.Default.copy(ownership = false) :: modes).foreach { mode =>
       val fns = ir("long_lists", src, mode).split("\ndefine ").toList.tail.map(f =>
         f.dropWhile(_ != '@').takeWhile(_ != '(') -> f
       )
-      val loops = fns.filter((n, _) => List("unfoldLoop", "mapLoop", "reverseOnto").exists(n.contains)).toMap
-      val calls = loops.map((n, f) => n -> loops.keySet.filter(g => f.contains(s"call ptr $g(")))
+      val loops =
+        fns.filter((n, _) => List("unfoldLoop", "mapLoop", "reverseOnto", "length").exists(n.contains)).toMap
+      val calls =
+        loops.map((n, f) => n -> loops.keySet.filter(g => f.contains(s"call ptr $g(") || f.contains(s"call i64 $g(")))
       assert(loops.values.exists(_.contains(".in, %entry ]")), s"$mode: no loop jumps back")
+      val lengths = loops.filter((n, _) => n.contains("lengthLoop"))
+      assert(lengths.nonEmpty && lengths.values.forall(_.contains(".in, %entry ]")), s"$mode: length")
       loops.keys.foreach(n => assert(!calls(n)(n), s"$mode: $n calls itself"))
       def acyclic(n: String, path: Set[String]): Boolean = !path(n) && calls(n).forall(acyclic(_, path + n))
       loops.keys.foreach(n => assert(acyclic(n, Set.empty), s"$mode: a cycle of calls through $n: $calls"))
