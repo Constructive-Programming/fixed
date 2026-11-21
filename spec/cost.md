@@ -1,8 +1,10 @@
 # Fixed Cost Contracts
 
-**Status:** Draft v0.2.2
+**Status:** Draft v0.2.3
 **Specifies:** what a cost contract bounds (steps, constructions, releases), how one is written (cost props, `fip`), the size index, how cost is inferred and verified, when a change to a contract is an ABI change, and how representation selection uses contracts and measured costs.
-**Last revised:** 2026-11-20
+**Last revised:** 2026-11-21
+
+**Changes from v0.2.2.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"). Rule CT8.1: the satisfaction of a data type that enters the pool is resolved at the site that created the choice point; if that site does not decide, the type is not a candidate there. Nothing is resolved at link.
 
 **Changes from v0.2.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule CT6.2: an asymptotic bound the checker cannot decide is open, and `assumed` only if the programmer wrote `assume`.
 
@@ -257,7 +259,7 @@ Contracts are part of a package's interface (`spec/compilation_model.md` Rule CM
 
 ### 8.1 Viability (Rule CT8.1)
 
-The selector's **candidates** at a choice point (`spec/compilation_model.md` Rule CM8.1) are satisfactions. For each data type that satisfies the bound set, the one satisfaction that the resolution order of `spec/type_system.md` Rule 8.4 picks is the candidate: at the site that created the choice point, by levels 1–4 there; if that leaves several, by levels 5–6 at link. Two satisfactions of the same (type, capability) are never ranked against each other, because they differ in results and not in speed.
+The selector's **candidates** at a choice point (`spec/compilation_model.md` Rule CM8.1) are satisfactions. For each data type that satisfies the bound set, the one satisfaction that the resolution order of `spec/type_system.md` Rule 8.4 picks at the site that created the choice point is the candidate. If the resolution there does not decide between several satisfactions of the pair, that data type is not a candidate at the choice point; no satisfaction is resolved at link (`spec/type_system.md` Rule 8.4.b, §6.5.2). Two satisfactions of the same (type, capability) are never ranked against each other, because they differ in results and not in speed.
 
 A candidate that fails a cost prop of a capability in the bound set (Rule CT6.2, step 1) is **not viable**. A candidate whose cost prop is `tested` or `assumed` meets it, and an open prop (`spec/properties.md` Rule P7.1, step 3) does not make a candidate non-viable: a wrong cost is a performance fault, not an unsound program (Rule CT6.5).
 

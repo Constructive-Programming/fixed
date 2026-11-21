@@ -1,8 +1,10 @@
 # Fixed Compilation Model
 
-**Status:** Draft v0.3.3
+**Status:** Draft v0.3.4
 **Specifies:** how Fixed v0.4.4 source becomes code: the baseline version of every function, the travel form and the rest form of a value, immediates, accessors, witnesses, specialisation (clones, budget, score, mandatory cases), build modes, packages and the package ABI, visibility, satisfactions in a link unit, the interface and body tiers, and the application link (choice points, summaries, selection, the lock file, the profile file, clones at link, the type table).
 **Last revised:** 2026-11-21
+
+**Changes from v0.3.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"). Rule CM6.6: every satisfaction site is resolved at package compile, and an ambiguous one is `E061` there (`spec/type_system.md` Rule 8.4.b); the deferred sites are withdrawn, and with them the resolution level `using` in the application root. The interface tier (Rule CM7.1), the application link (§8) and the lock file (Rule CM8.5) no longer record or resolve them; Rule CM6.7 no longer speaks of a link error for one. Rule CM8.4: a data type whose pair the site that created a choice point does not decide does not enter the pool, so selection resolves no satisfaction and its only error stays zero viable candidates. §8: a test build's application root is no longer a resolution level.
 
 **Changes from v0.3.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"). Rule CM8.1: a list literal whose type is not fixed is a choice point (`spec/type_system.md` Rule 5.10).
 
@@ -471,13 +473,13 @@ Two packages that build the same clone of an imported function, under the same s
 
 A link unit may hold several satisfactions of one pair (`data` type, capability with its `of` arguments). A package may declare a satisfaction for a type and a capability neither of which it declares. Coherence per link unit, which earlier drafts required, is withdrawn.
 
-- **Resolution.** Which satisfaction a site uses is decided by `using`, innermost first, as `spec/type_system.md` Rule 8.4 specifies: at the call site, in a type, at file or package scope, the one satisfaction of the pair in scope (by `use`, by declaration in the site's package, or because it is always in scope), `using` in the application root. Otherwise it is an error. A derived satisfaction counts like a declared one, so a pair with a derived and a named satisfaction in scope is ambiguous until a `using` chooses. A private satisfaction counts only in its own package (`spec/type_system.md` Rule 8.6.a). Two satisfactions of one pair differ in results, not in speed, so the score, the lock file and declaration order never choose between them.
-- **Deferred sites.** A site in a library that sees (`spec/type_system.md` Rule 8.4) several satisfactions of the pair and has no `using` is not an error when the library is compiled. It is bound at the application link by `using` in the application root (level 5), and the link reports it as a note. If level 5 does not give one satisfaction, the link fails with the error of Rule 8.4. A site that sees none is a type error, as before.
+- **Resolution.** Which satisfaction a site uses is decided by `using`, innermost first, as `spec/type_system.md` Rule 8.4 specifies: at the call site, in a type, at file or package scope, the one satisfaction of the pair in scope (by `use`, by declaration in the site's package, or because it is always in scope). Otherwise it is an error. A derived satisfaction counts like a declared one, so a pair with a derived and a named satisfaction in scope is ambiguous until a `using` chooses. A private satisfaction counts only in its own package (`spec/type_system.md` Rule 8.6.a). Two satisfactions of one pair differ in results, not in speed, so the score, the lock file and declaration order never choose between them.
+- **Resolved at package compile.** Every satisfaction site is resolved when its package is compiled. A site that sees (`spec/type_system.md` Rule 8.4) several satisfactions of the pair and that no `using` decides is `E061` there, in a library as in an application (`spec/type_system.md` Rule 8.4.b). The application link resolves no satisfaction (Rule CM8.4).
 - **The satisfaction is part of the type.** For a bound declared on a type's own parameter (`data Tree of K is Ord`), the elaborated type records the satisfaction (`spec/type_system.md` Rule 8.4.a). This is what keeps a set built under one order from being searched under another, without a record of the satisfaction in the value. The witness record of the instance carries that satisfaction's tables (Rule CM4.2), and the symbols of its clones name it (Rule CM6.5).
 
 Satisfactions the compiler derives (`spec/type_system.md` §7.4) or builds in (§6.6) are determined by the `data` declaration alone. Every package derives the same one, so they have one identity and the linker keeps one copy of the table (Rule CM6.5).
 
-Each package's interface lists the satisfactions it declares, with their identities (Rule CM7.1), so the link step resolves deferred sites without bodies.
+Each package's interface lists the satisfactions it declares, with their identities (Rule CM7.1), so the link step forms the pools of choice points (Rule CM8.4) without bodies.
 
 ### 6.7 What is an ABI change (Rule CM6.7)
 
@@ -492,7 +494,7 @@ Not an ABI change (importers need not be recompiled, and keep their meaning):
 - for packages that only **use** a capability: adding a default-bodied method at its end;
 - turning off the shipping of bodies (Rule CM7.3): importers then use floor entries and exported versions.
 
-Adding a satisfaction is not an ABI change either, but it can change what an importer means when it is next compiled or linked: a second satisfaction of a pair that a site sees without `using` makes that site an error, or, for a deferred site, a link error (Rule CM6.6). A satisfaction for another type adds a candidate to selection at link; that may change a choice point's choice, which shows as a diff of the lock file (Rule CM8.5) and never halts the build.
+Adding a satisfaction is not an ABI change either, but it can change what an importer means when it is next compiled or linked: a second satisfaction of a pair that a site sees without `using` makes that site an error when the importer is next compiled (Rule CM6.6); at link it takes that type out of the pool of a choice point whose creating site does not decide between the two (Rule CM8.4), which can leave the choice point without a viable candidate. A satisfaction for another type adds a candidate to selection at link; that may change a choice point's choice, which shows as a diff of the lock file (Rule CM8.5) and never halts the build.
 
 An ABI change:
 
@@ -525,7 +527,6 @@ And for the package as a whole:
 
 - its **choice points** that the package's compilation did not decide (Rule CM8.1): the identity of each, its bound set, and the symbols its object code leaves undefined for it (Rule CM8.2);
 - its **usage summaries** (Rule CM8.3): a usage vector per choice point, and per parameter of a public function a usage vector with the edges to other packages' functions;
-- the names of the deferred sites it contains (Rule CM6.6), with the pair each needs;
 - optionally, a **reference cost table**: measured costs of its satisfactions' members per size class and target (Rule CM8.6).
 
 ### 7.2 Props travel as typed expressions (Rule CM7.2)
@@ -557,10 +558,12 @@ The three builds and what each decides:
 | Build | Steps |
 |---|---|
 | Package compile | typer; static prover; quantity inference; lowering to polymorphic Core; demand and memory inference; cost checker; selection of the choice points that do not escape (Rule CM8.1); baseline code, clones (§5), interface tier, body tier, summaries |
-| Application link | resolution of deferred satisfaction sites (Rule CM6.6); selection of the remaining choice points (Rule CM8.4); binding (Rule CM8.2); accessors (Rule CM3.7); the type table (Rule CM8.8); clones, in a release build (Rule CM8.7) |
+| Application link | selection of the remaining choice points (Rule CM8.4); binding (Rule CM8.2); accessors (Rule CM3.7); the type table (Rule CM8.8); clones, in a release build (Rule CM8.7) |
 | Test build | property-based testing, and measurement (`spec/properties.md` Rule P7.9) |
 
-A test build is a link unit of its own. It has no `main`; its application root, for level 5 of `spec/type_system.md` Rule 8.4 and for any `using` that serves as the default of the link unit, is the `package.fixed` of the package under test.
+The application link resolves no satisfaction site: each was resolved when its package was compiled (Rule CM6.6).
+
+A test build is a link unit of its own. It has no `main`, and it resolves no satisfaction: the sites of the package under test were resolved when it was compiled.
 
 ### 8.1 Choice points (Rule CM8.1)
 
@@ -610,7 +613,7 @@ At the application link, the link step adds vectors along the edges, from each c
 
 For each choice point the link step selects one candidate.
 
-- **Candidates.** The satisfactions of the choice point's bound set in the link unit that count at the choice point (`spec/type_system.md` Rule 8.6.a), and the built-in candidates of `spec/type_system.md` §6.6, which count as declared in the standard library package (Rule 6.5.5). The selector chooses freely among satisfactions of different data types. Among several satisfactions of one pair it does not choose: the one that enters the pool is resolved at the site that created the choice point, by levels 1–4 of `spec/type_system.md` Rule 8.4 there; if that leaves several, by level 5 at link; if that gives none, the link fails with the error of Rule 8.4 (`spec/type_system.md` §6.5.2).
+- **Candidates.** The satisfactions of the choice point's bound set in the link unit that count at the choice point (`spec/type_system.md` Rule 8.6.a), and the built-in candidates of `spec/type_system.md` §6.6, which count as declared in the standard library package (Rule 6.5.5). The selector chooses freely among satisfactions of different data types. Among several satisfactions of one pair it does not choose: the one that enters the pool is resolved at the site that created the choice point, by `spec/type_system.md` Rule 8.4 there. If it does not decide, that data type is not a candidate at this choice point (`spec/type_system.md` §6.5.2). The link resolves no satisfaction, and selection never meets two satisfactions of one pair.
 - **Viability.** A candidate that fails a cost prop of the requirements of its capabilities is not viable (`spec/cost.md` Rule CT8.1, which also says what this check at link catches that the package compile did not). Nor is a candidate whose variant fields refine a requirement parameter (`spec/type_system.md` Rule 8.1.a) so that an argument of one of the choice point's abstract constructor calls is rejected; the argument types come from the summaries (Rule CM8.3). Zero viable candidates is a link error, which names the choice point and the candidate that came closest.
 - **Score.** The score of `spec/type_system.md` Rule 6.5.4, with usage from the vector of Rule CM8.3 and cost from measurements (Rule CM8.6) where they exist, and otherwise the fallback of `spec/cost.md` Rule CT8.2.
 - **Disambiguation.** The first rule that decides, in the order of `spec/type_system.md` Rule 6.5.5: a pin written by the user in the lock file, if the pinned candidate is viable; the choice recorded in the lock file, while its score is within ε of the best; the highest score; the satisfaction declared in the capability's own package; declaration order, then qualified name.
@@ -627,7 +630,7 @@ The application link writes, for each choice point it selects, the identity of t
 - **Pins.** The application may pin a choice in the lock file. A pin decides first (Rule CM8.4) while its candidate is viable; a pin whose candidate is not viable is reported, and selection continues with the next rule.
 - **Diffs.** A choice that changes changes the lock file, so it shows in review as a diff.
 
-The lock file also records the deferred satisfaction sites of Rule CM6.6 and how each was bound, so that a change in their binding shows as a diff as well.
+The lock file records no satisfaction site: every site is resolved at package compile (Rule CM6.6), and the lock file never chooses between two satisfactions of one pair.
 
 ### 8.6 The profile file and measured costs (Rule CM8.6)
 

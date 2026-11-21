@@ -1,8 +1,10 @@
 # Fixed Memory Management
 
-**Status:** Draft v0.5.3
+**Status:** Draft v0.5.4
 **Specifies:** how the compiler places, frees and reference-counts runtime values for Fixed v0.4.4 source: lifetime classes, immediates, data-stack regions, counted regions, the Perceus heap, destinations, value witnesses, reuse (FBIP), borrowing, effect-handler memory, structured parallelism, the `fip` contract and the memory report.
 **Last revised:** 2026-11-21
+
+**Changes from v0.5.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"): the application link (§20) resolves no satisfaction site (`spec/compilation_model.md` Rule CM6.6).
 
 **Changes from v0.5.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"), decision 3. OQ-PR5: derived `fold`, `unfold` and `map` of linear data run in bounded native stack (`spec/type_system.md` Rule 7.4.b.3); trees do not yet.
 
@@ -839,7 +841,7 @@ The work is split over three builds (P6 D6). Property verification is three sepa
 | Representation selection, M11 (`spec/type_system.md` §6.5), for choice points whose values do not leave the package | Representations at origination sites and their witnesses, `Inline` demotions, N, copy-out sites, fingerprints. Decided on the facts of baseline versions; never repeated for a clone |
 | Code generation | Baseline code, interface tier, body tier, summaries (`spec/compilation_model.md` §6, §8) |
 
-**Application link** (`spec/compilation_model.md` §8): resolution of deferred satisfaction sites (Rule CM6.6), selection of the remaining choice points (Rule CM8.4), binding (Rule CM8.2), accessors (Rule CM3.7), the type table and link-unique tags (Rule CM8.8, Rule PR3.1), and in a release build the clones (Rule CM8.7), on each of which M10 runs again.
+**Application link** (`spec/compilation_model.md` §8): selection of the remaining choice points (Rule CM8.4), binding (Rule CM8.2), accessors (Rule CM3.7), the type table and link-unique tags (Rule CM8.8, Rule PR3.1), and in a release build the clones (Rule CM8.7), on each of which M10 runs again.
 
 **Test build:** property-based testing and measurement (`spec/properties.md` Rule P7.9). Its results never enter the facts lane of the package compile that preceded it. A `proved` status obtained there by enumeration (`spec/properties.md` Rule P8.5) is a proof: it is recorded in the interface when `fixed verify` has run, and it reaches the facts lane of importers only (Rule P7.8.c).
 

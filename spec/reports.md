@@ -1,8 +1,10 @@
 # Fixed Reports: Coverage, Cardinality and the Tool Interface
 
-**Status:** Draft v0.2.5
+**Status:** Draft v0.2.6
 **Specifies:** two analyses the compiler runs and reports — coverage of code by verification, and cardinality of types — the report of what the link step chose, the files a build reads besides its sources, the interface external tools use, and the exit codes of every command.
 **Last revised:** 2026-11-21
+
+**Changes from v0.2.5.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"): the lock file (Rule RP5.3) and the link report (Rule RP5.4) hold no deferred satisfaction site, and class `7` of Rule RP5.5 arises at package compile only.
 
 **Changes from v0.2.4.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Shadowing of prelude names"): `W` codes are warnings numbered in the decade of the document that defines them, as `E` codes are (`W060`, `spec/type_system.md` Rule 4.3.a).
 
@@ -149,7 +151,7 @@ A way for a library to add a checked discipline to the type system (a third grad
 
 Two files besides the sources are inputs of an application build:
 
-- The **lock file** (`spec/compilation_model.md` Rule CM8.5) holds, per choice point bound at link, the satisfaction chosen, its score, and any pin the user wrote, and per deferred satisfaction site (`spec/type_system.md` Rule 8.4.b) the satisfaction it was bound to. It is checked in.
+- The **lock file** (`spec/compilation_model.md` Rule CM8.5) holds, per choice point bound at link, the satisfaction chosen, its score, and any pin the user wrote. It records no satisfaction site: every site is resolved at package compile (`spec/type_system.md` Rule 8.4.b). It is checked in.
 - The **profile file** (Rule CM8.6), one per target, holds the measurements of `spec/properties.md` Rule P7.9: the supply side (cost of one call per capability method, satisfaction, size class and target; machine facts) and the demand side (region, request and usage counters). Each record carries its source (production or test run) and its target label.
 
 A build **reads** these files; it never measures. Measurement is a separate step (a test build, or a production run of an instrumented binary) that writes the profile file. A build is therefore a function of its sources, its dependencies, the lock file and the profile file: two machines with the same four inputs make the same choices and the same clones. A profile whose target label differs from the build's target is ignored, and the build uses static data (`spec/cost.md` Rule CT8.2). Continuous integration builds from the checked-in lock file and does not re-measure.
@@ -167,7 +169,6 @@ Tools read both files as they read the reports. A tool that rewrites the lock fi
 - the chosen satisfaction and the **disambiguation rule that decided** (`spec/type_system.md` Rule 6.5.5): a pin, the choice recorded in the lock file within `ε`, the highest score, the capability's own package, or declaration order;
 - whether the choice differs from the one in the lock file before this link;
 - the cardinality of the chosen type (Rule RP4.2);
-- deferred satisfaction sites bound at link (`spec/type_system.md` Rule 8.4.b), as notes;
 - props whose `tested` status was obtained under another binding of a choice point than this link's (`spec/properties.md` Rule P7.4);
 - the facts-lane decisions that rest on `assumed` props (`spec/properties.md` Rule P7.8.a), with the props.
 
@@ -190,7 +191,7 @@ Every command uses this one table: the checker `fixed <file>...`, `fixed compile
 | `4` | parse error | package compile: parser | `P001`–`P099` |
 | `5` | name error | package compile: namer and typer | `T001`, `T003`, `T004`; `E063` |
 | `6` | type error | package compile: typer | `T002`, `T006`, `T007`, `T008`, `T010`, `T013`, `T014`, `T022`, `T023`, `T024`, `T025`, `T027`; `E062`, `E065`, `E066` |
-| `7` | ambiguous satisfaction | package compile: typer; application link: deferred sites | `E061`; `T011` |
+| `7` | ambiguous satisfaction | package compile: typer (`spec/type_system.md` Rule 8.4.b) | `E061`; `T011` |
 | `8` | effect error | package compile: typer (effect inference) | `E080`, `E084`, `E093`; `T009`, `T015`, `T016`, `T018`, `T019` |
 | `9` | pattern error | package compile: typer | `E090`, `E091`, `E092`, `E094`, `E095`; `T020` |
 | `10` | malformed prop | package compile: typer and static prover | `E100`, `E104`, `E105` |

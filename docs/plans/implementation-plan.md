@@ -229,7 +229,7 @@ sort(prices) using ByAmount          // at the call site
 fn byAmount(s: Set of Money using ByAmount) -> u64   // in a type
 ```
 
-Resolution is innermost first: `using` at the call site, in a type, at file or package scope; the one satisfaction in scope by `use`; `using` in the application root; the only one in the link unit. Otherwise the site is an error that suggests a named `using`, because two satisfactions of one pair differ in results, not in speed (`spec/type_system.md` Rule 8.4). For a bound on a data type's own parameter the satisfaction is part of the type (`Tree of Money[Ord = ByAmount]`, Rule 8.4.a), so a set built under one order cannot be searched under another. (`named` is a provisional keyword.)
+Resolution is innermost first: `using` at the call site, in a type, at file or package scope; the one satisfaction in scope by `use`. Otherwise the site is an error that suggests a named `using`, because two satisfactions of one pair differ in results, not in speed (`spec/type_system.md` Rule 8.4). For a bound on a data type's own parameter the satisfaction is part of the type (`Tree of Money[Ord = ByAmount]`, Rule 8.4.a), so a set built under one order cannot be searched under another. (`named` is a provisional keyword.)
 
 Constructor requirements that the satisfying type does not implement are marked `impossible`. Calls to them through the cap lower to a runtime panic (see spec/type_system.md §8.2 for the precise rule):
 
@@ -501,7 +501,7 @@ Everything starts from the CLI. The compiler works in two stages with a separate
 |---|---|---|
 | `fixed <file>...` | Checks each file and prints its diagnostics | built |
 | `fixed compile` | Package compile to LLVM IR: typer, static prover, quantity inference, polymorphic Core, demand and memory inference, cost checker, baseline code and clones, interface tier, body tier, usage summaries | built for one package, without the static prover, the cost checker, the tiers and the summaries |
-| `fixed link` | Application link: resolves deferred satisfaction sites, selects the remaining choice points from the summaries, writes the **lock file**, binds the choice points' symbols, generates accessors and the type table; a release build also builds clones for the chosen types | planned (Phase 4.2) |
+| `fixed link` | Application link: selects the remaining choice points from the summaries, writes the **lock file**, binds the choice points' symbols, generates accessors and the type table; a release build also builds clones for the chosen types | planned (Phase 4.2) |
 | `fixed release` | Builds the release executable: application link with link-time clones, `inspect` and `trace` stripped unless `--keep-diagnostics` (`spec/compilation_model.md` §8). `fixed ship` builds the development executable | planned |
 | `fixed ship` | Builds a native executable (compile, link, `clang`) | built; there is no link step yet, the IR goes straight to `clang` |
 | `fixed verify` | Builds and runs the test build: property-based testing of the props the static prover left open, and measurement into the **profile file** (`spec/properties.md` Rules P7.6, P7.9) | planned |
@@ -509,7 +509,7 @@ Everything starts from the CLI. The compiler works in two stages with a separate
 
 The application link reads and writes two files kept with the application (`spec/compilation_model.md` Rules CM8.5, CM8.6; their encoding is OQ-CM2):
 
-- the **lock file**: the choice made at each choice point and how each deferred satisfaction site was bound. It is checked in; a build from it is reproducible, the application may pin a choice in it, and a changed choice shows as a diff;
+- the **lock file**: the choice made at each choice point (no satisfaction site: each is resolved at package compile, `spec/type_system.md` Rule 8.4.b). It is checked in; a build from it is reproducible, the application may pin a choice in it, and a changed choice shows as a diff;
 - the **profile file**, one per target: what the test build or a production run measured. Continuous integration builds from the lock file and does not re-measure.
 
 Flags named in the specs:
@@ -830,7 +830,7 @@ Key design rules:
 - **Satisfaction declarations are separate** from data definitions — they can live in the same module or a different one. Third parties can write them.
 - **Brought into scope via `use`**: `use shop.box.Box satisfies Optional` makes the satisfaction mapping available at the use site.
 - **Multiple satisfactions possible**: different packages can map the same data to different caps, and to the same cap more than once; `using` chooses between satisfactions of one pair (`spec/type_system.md` Rule 8.4).
-- **No orphan surprises**: a satisfaction is visible only where a `use` imports it or in its own package. Where several satisfactions of one pair are visible and nothing chooses, the site is an error, or, in a library, is bound at link (Rule 8.4.b).
+- **No orphan surprises**: a satisfaction is visible only where a `use` imports it or in its own package. Where several satisfactions of one pair are visible and nothing chooses, the site is an error when its package is compiled, in a library as in an application (Rule 8.4.b).
 
 ### Constructor resolution
 
@@ -957,7 +957,7 @@ Work not started. What must be built for the compiler to meet decision P6 (`docs
 | 1 | **Table-call convention derived from signatures.** A requirement's parameter is `own` if a type variable of its type occurs in the result type, `read` otherwise; the exclusive pointer covers only `own` parameters of type `Self`. Today every table call passes every argument under `own` | Rule CM4.6, P6 D9 | the capability tables and adapters of 4.1.M6 (built) |
 | 2 | **Benchmark with capability-bounded parameters**, measuring the convention of 1 against `own` everywhere, before the convention is frozen | OQ-CM18, P6 D9 | 1, with the current convention kept selectable |
 | 3 | **`pub`.** A production for `Visibility`, private by default, and the typer's check that another package names only public declarations. The parser reports `pub` as unsupported today. Dropping private baselines and unreferenced floor entries needs packages | Rule 8.6, Rule CM6.2, grammar §2 | parser and typer only; its compilation consequences, packages |
-| 4 | **`using`, named satisfactions, and the satisfaction recorded in a type.** Grammar (`using`, `named`), resolution in five levels replacing the coherence check of capability closure, `Tree of Money[Ord = ByAmount]` in type equality, and table and clone symbols formed from the satisfaction's identity | Rules 8.4, 8.4.a, CM6.5, CM6.6 | capability closure (Phase 3.1, built); deferred sites (Rule 8.4.b) also on 7 |
+| 4 | **`using`, named satisfactions, and the satisfaction recorded in a type.** Grammar (`using`, `named`), resolution in four levels replacing the coherence check of capability closure, `E061` at package compile for a site that levels 1–4 do not decide, with both ways out in its help (Rule 8.4.b), `Tree of Money[Ord = ByAmount]` in type equality, and table and clone symbols formed from the satisfaction's identity | Rules 8.4, 8.4.a, 8.4.b, CM6.5, CM6.6 | capability closure (Phase 3.1, built); the satisfaction in a choice point's pool, on 7 |
 | 5 | **`inspect` and `trace`.** Prelude bindings, interpolation allowed for unbounded types only inside a diagnostic sink, a diagnostic channel in the runtime, stripping in a release build. With it, `show`, `==` and `clone` on an unbounded type parameter become type errors (P6 D10); the typer accepts them today | `spec/diagnostics.md`, Rule CM8.8, P6 D10, D11 | typer and runtime; printing a cell reached through generic code, on 8 |
 | 6 | **Immediates, `width` and accessors.** The value witness family `imm1`, `imm2`, `imm4`, `imm8`, `ref` (two witnesses exist today), the immediate rule for every data type, flat containers at the witness's width, and accessors for types whose layout depends on argument witnesses | Rules CM3.5, CM3.6, CM3.7, MM7.3, P6 D7, D8 | the witnesses of 4.1 (built); accessors for a layout that depends on a choice point, on 7 |
 | 7 | **The link stage.** Choice points, usage summaries in the interface tier, selection at link with viability by cost props, the lock file, the profile file, binding of undefined symbols, and clones built at link from shipped Core in a release build | §8, Rules CM8.1–CM8.7, P6 D1, D4, D5, D6 | packages and both tiers; representation selection (M11, not started; `Representation.scala` stands in); cost bounds (`spec/cost.md`, not built); the test build of `fixed verify` for measured costs (not built) |
@@ -1013,7 +1013,6 @@ Package compile (once per package)
     interface tier, body tier (polymorphic Core), usage summaries
 
 Application link
-  → Resolution of deferred satisfaction sites
   → Selection of the remaining choice points (summaries, lock file, profile file)
   → Binding of the choice points' undefined symbols; accessors; type table and link-unique tags
   → Release build: clones for the chosen types from the shipped Core

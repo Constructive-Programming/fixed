@@ -489,7 +489,7 @@ UseSel  = ( UPPER_IDENT | LOWER_IDENT ) UseRename? ;
 
 (* v0.4.11. A top-level `using` names satisfactions that decide, for this
    file, which satisfaction of a pair a site uses (spec/type_system.md
-   Rule 8.4, level 3; in the application root, level 5). Each name must
+   Rule 8.4, level 3). Each name must
    be a named satisfaction in scope. `use` imports a name; `using`
    chooses a satisfaction. The two never start the same production. *)
 UsingDecl
@@ -1294,7 +1294,8 @@ Whitespace       = (* space; tab is a v0.3 error *) ;
         `UsePath` may name a function.
 
    N8 — Package scope for `using`. spec/type_system.md Rule 8.4 places
-        package scope and the application root in a file named
+        package scope (which in the application package is the
+        application root) in a file named
         `package.fixed` (decided by the owner). There is no package
         declaration in the grammar.
 

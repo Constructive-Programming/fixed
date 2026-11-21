@@ -1,8 +1,10 @@
 # Fixed Type System
 
-**Status:** Draft v0.5.5
+**Status:** Draft v0.5.6
 **Specifies:** typing of Fixed source as defined by `spec/syntax_grammar.ebnf` v0.4.15.
 **Last revised:** 2026-11-21
+
+**Changes from v0.5.5.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"). Rule 8.4.b is rewritten: a site that the levels of Rule 8.4 do not decide is `E061` when its package is compiled, in a library as in an application, and the diagnostic suggests a `using` or an explicit bound on a type parameter. There are no deferred sites, and the link stage resolves no satisfaction. Rule 8.4 loses its fifth level, `using` in the application root, which now decides nothing; a data type whose pair the site that created a choice point does not decide does not enter that choice point's pool (§6.5.2). Rules 8.4.c and 8.6.a no longer mention the fifth level or deferred sites.
 
 **Changes from v0.5.4.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Shadowing of prelude names"). New §4.3: the scope order (local binders, the package's declarations and `use`s, the prelude); a package may hide a prelude name, with `warning[W060]` (Rule 4.3.a), and so may a `use` (Rule 4.3.b); collisions inside a package are `T003` (Rule 4.3.c); a type-level local binder named like a prelude type is `T004` (Rule 4.3.d); the prelude is the package `std.prelude`, reached with `use std.prelude.List as PreludeList` (Rule 4.3.e, grammar v0.4.15); diagnostics print paths, never internal names (Rule 4.3.f); syntax and derivation always mean the prelude's entities (Rule 4.3.g); interactions with list literals, ascription, satisfactions, visibility and exports (Rule 4.3.h). New Rule 4.1.b states `T004` for every binder position. The example of Rule 8.4 imports a satisfaction from a program package (`shop.box`) instead of `std.maybe.Maybe`: `Maybe` is the prelude's, whose satisfactions are always in scope.
 
@@ -757,7 +759,7 @@ The candidates are **satisfactions**, from two sources:
 - **Declared satisfactions.** A `T satisfies C` for some C in the bound set, or inherited by one. At package compile, the pool is the satisfactions the package can see. At link, it is the satisfactions of the link unit that count at the choice point (Rule 8.6).
 - **Built-in candidates**: the §6.6 pool. Each carries a precondition expressing which bound sets it can satisfy.
 
-**Two satisfactions of the same pair are never ranked.** When the link unit holds several satisfactions of one (type, capability), Rule 8.4 picks the one that serves the choice point: at the site that created the choice point, by levels 1–4 there; if that leaves several, by level 5 at link (`spec/compilation_model.md` Rule CM8.4, `spec/cost.md` Rule CT8.1). Only that satisfaction enters the pool for that type. Two satisfactions of one pair differ in results, not in speed, so the score must not choose between them. The pool therefore holds at most one candidate per data type and capability.
+**Two satisfactions of the same pair are never ranked.** If the link unit holds several satisfactions of one (type, capability) that count at the choice point, Rule 8.4 picks the one that serves it at the site that created the choice point, by levels 1–4 there. If they do not decide, that data type does not enter the pool: no satisfaction is resolved at link (Rule 8.4.b), and selection never meets two satisfactions of one pair (`spec/compilation_model.md` Rule CM8.4, `spec/cost.md` Rule CT8.1). Only that satisfaction enters the pool for that type. Two satisfactions of one pair differ in results, not in speed, so the score must not choose between them. The pool therefore holds at most one candidate per data type and capability.
 
 Per Rule 6.6, built-in and declared candidates have **equal priority**; the score of Rule 6.5.4 and the disambiguation of Rule 6.5.5 choose.
 
@@ -1339,14 +1341,13 @@ Without the `satisfies` clause, a `use` imports only the type, and its satisfact
 1. `using` at the call site: `sort(xs) using ByAmount`;
 2. `using` in a type: `Set of Money using ByAmount`;
 3. `using` at file or package scope;
-4. the one satisfaction of the pair in scope: by `use`, by declaration in the site's package, or because it is always in scope;
-5. `using` in the application root, as the default of the link unit.
+4. the one satisfaction of the pair in scope: by `use`, by declaration in the site's package, or because it is always in scope.
 
-Otherwise the site is ambiguous, and that is an error (`E061`). (Earlier drafts had a sixth level, "the only satisfaction of the pair in the link unit". It could never decide: a site that sees one satisfaction is decided at level 4, and a site that sees several is not unique in the link unit.)
+Otherwise the site is ambiguous, and that is an error (`E061`) when its package is compiled (Rule 8.4.b). (Earlier drafts had two more levels. The sixth, "the only satisfaction of the pair in the link unit", could never decide: a site that sees one satisfaction is decided at level 4, and a site that sees several is not unique in the link unit. The fifth, "`using` in the application root, as the default of the link unit", decided only sites left open for the link, which no longer exist (Rule 8.4.b): in the application package the application root is the package scope, level 3.)
 
 **Derived and unnamed satisfactions get no preference.** A derived satisfaction (§7.4, `spec/stdlib.md` §5) counts like a declared one, and an unnamed satisfaction like a named one. A pair that has a derived satisfaction and a named one in scope has two, and a site that no `using` decides is ambiguous. Declaring a named satisfaction for a pair that already has one therefore makes every site that sees both ambiguous until a `using` chooses. A `using` names a named satisfaction by its name, and an unnamed or derived one by its pair: `using Money satisfies Ord`.
 
-A `using` names satisfactions, and each name determines its pair. At the call site it covers every resolution made in the call expression, including its arguments, unless an inner `using` decides first. In a type it covers the whole type expression it is written in (`spec/syntax_grammar.ebnf` §10). A top-level `using` declaration in a source file applies to that file. Package scope is a `using` declaration in the file `package.fixed` at the root of the package. The application root is that file in the package that declares `main`; in a test build it is the `package.fixed` of the package under test (`spec/compilation_model.md` §8). In the application package that file is therefore both its package scope (level 3) and the application root (level 5); for a site of the application package level 3 decides first, and level 5 matters only for deferred sites of other packages. A level that names two satisfactions of one pair is itself ambiguous.
+A `using` names satisfactions, and each name determines its pair. At the call site it covers every resolution made in the call expression, including its arguments, unless an inner `using` decides first. In a type it covers the whole type expression it is written in (`spec/syntax_grammar.ebnf` §10). A top-level `using` declaration in a source file applies to that file. Package scope is a `using` declaration in the file `package.fixed` at the root of the package. The application root is that file in the package that declares `main`. Its `using` declarations are the application package's package scope (level 3) and reach no other package: a site of another package is decided when that package is compiled (Rule 8.4.b). A level that names two satisfactions of one pair is itself ambiguous.
 
 **The ambiguity error halts on purpose.** Two satisfactions of one pair differ in results, not in speed. The score, the lock file and declaration order (Rule 6.5.5) therefore never choose between them. The message states the level at which the ambiguity arose, suggests a named `using`, and lists as examples the satisfactions of the pair in scope:
 
@@ -1366,9 +1367,24 @@ A bound on a function's type parameter (`fn sort(xs: is Sequencing of (T is Ord)
 
 A field-local choice point (Rule 4.1.a) is bound once per link unit, so a satisfaction recorded inside it is fixed for the whole program. A `using` in a type can name a satisfaction only for the type's parameters, never for its field-local choice points.
 
-**Rule 8.4.b (Deferred sites).** A site in a library that sees several satisfactions of a pair and has no `using` is not an error in the library. It is bound at link by level 5, and reported as a note. If level 5 does not decide, the link fails with the ambiguity error (`E061`), naming the library site. A site that sees no satisfaction of the pair is a type error, as before. A site in the application package that levels 1–4 do not decide is resolved the same way, at its link.
+**Rule 8.4.b (Ambiguity is an error where it occurs).** A site that sees several satisfactions of a pair, and that no level of Rule 8.4 decides, is `error[E061]` when its package is compiled, in a library as in an application. Nothing is left for the link: a package's interface records no open site, and the application link resolves no satisfaction site (`spec/compilation_model.md` Rule CM6.6). A site that sees no satisfaction of the pair is a type error, as before.
 
-*(Rule 8.4.b is the author's choice in P6 D12.)*
+Besides the level and the satisfactions in scope (above), the diagnostic must suggest both ways out:
+
+1. **Choose here.** A `using` at the call, in a type, at the top of the file, or in `package.fixed`.
+2. **Let the caller choose.** Take the satisfaction as an explicit bound on a type parameter. The caller's site resolves the pair, and its choice reaches the function as an ordinary witness, bound per use (Rule 5.1.1, item 1).
+
+```
+// package reports, which sees ByAmount and ByDate
+fn sortAll(xs: List of Money) -> List of Money = sort(xs)
+// error[E061]: two satisfactions of (Money, Ord) are in scope, and nothing chooses between them
+//   help: write `using ByAmount` at the call, in the type, at the top of the file or in `package.fixed`,
+//         or let the caller choose: `fn sortAll(xs: List of (T is Ord)) -> List of T`
+
+fn sortAll(xs: List of (T is Ord)) -> List of T = sort(xs)   // accepted
+```
+
+*(Owner's decision, fourth round of P6, "No deferred sites". It withdraws the deferred sites of P6 D12, which left such a site open in a library and bound it at link. The removal of the fifth level and the rule for a choice point's pool (§6.5.2) are the author's consequences, owner to confirm.)*
 
 **Worked examples.**
 
@@ -1394,14 +1410,14 @@ fn combine(
 //        help: pass a set built `using ByAmount`, or convert it explicitly
 ```
 
-An application sets a default for a dependency. A library `reports` sorts `Money` with no `using`, and sees both satisfactions. The site is deferred (Rule 8.4.b). The application's `package.fixed` holds
+An application's `package.fixed` that holds
 
 ```
 use shop.money.ByAmount
-using ByAmount                           // level 5: the default of the link unit
+using ByAmount
 ```
 
-and the link binds the library's site to `ByAmount`, with a note naming the site.
+decides the sites of the application package (level 3). It decides no site of a library: a library that sorts `Money` and sees both satisfactions chooses, or lets its caller choose, when it is compiled (Rule 8.4.b).
 
 **Rule 8.4.c (A satisfaction where one already exists).** A package's satisfaction of a (type, capability) pair that already has a built-in satisfaction (`i64 satisfies Eq`) or a satisfaction declared by the prelude (`List satisfies Show`) must carry a name:
 
@@ -1413,7 +1429,7 @@ i64 satisfies Eq named Loose:
 An unnamed one is `error[E066]: <type> already satisfies <capability>; add `named X``. The rule covers every type of the prelude, not only the scalar types.
 
 1. Where no `using` applies, the built-in or prelude satisfaction is the one in force. It is the default of its pair and is not ambiguous with a named one. (For a package's own types Rule 8.4.a is unchanged: a derived and a named satisfaction of one pair are ambiguous without a `using`.)
-2. The named satisfaction is selected by `using` in every form of Rule 8.4: at a call site, in a type (`Set of i64[Eq = Loose]`), at file scope, at package scope (`package.fixed`) and at the application root. Scalar types have no narrower rule.
+2. The named satisfaction is selected by `using` in every form of Rule 8.4: at a call site, in a type (`Set of i64[Eq = Loose]`), at file scope and at package scope (`package.fixed`, which in the application package is the application root). Scalar types have no narrower rule.
 3. Where it is selected, the operators follow it. `==` and `!=` call its `eq`; `<`, `<=`, `>` and `>=` are built from its `compare`; every table entry of the capability is built from it. An operator and a table cannot disagree.
 4. A specialised version in which it is selected calls its bodies in place of the machine instruction. Code where it is not selected is unchanged.
 5. Selecting it is the stated intent of the program and gives no warning.
@@ -1480,7 +1496,7 @@ pub fn newStack() -> is Stack = Stack.empty     // the caller sees only Stack
 
 **Rule 8.6.a (Private names in public signatures).** A public declaration must not name a private one in its signature, in the fields of its variants, or in its bounds (`error[E063]`). A public function that returns a value of a private data type declares the result as `-> is C`. Reason: an importer could not name the type, and an importer is compiled from the interface alone.
 
-A private satisfaction is visible only in its package: it counts as a candidate for the package's own choice points (§6.5.2) and in the resolution of Rule 8.4 at the package's own sites, and nowhere else. It does not count for level 5 of Rule 8.4, nor for the deferred sites of other packages. A type that records it (Rule 8.4.a) may not appear in a `pub` signature, as a private data type may not (`E063`). A `pub` satisfaction of a private data type is allowed. It makes the type a candidate at choice points of the whole link unit, and code outside the package then uses it only through the capability.
+A private satisfaction is visible only in its package: it counts as a candidate for the package's own choice points (§6.5.2) and in the resolution of Rule 8.4 at the package's own sites, and nowhere else. A type that records it (Rule 8.4.a) may not appear in a `pub` signature, as a private data type may not (`E063`). A `pub` satisfaction of a private data type is allowed. It makes the type a candidate at choice points of the whole link unit, and code outside the package then uses it only through the capability.
 
 A private function needs no floor entry. A private data type needs no accessors (`spec/compilation_model.md` Rule CM3.7).
 
