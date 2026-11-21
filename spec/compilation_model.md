@@ -1,8 +1,10 @@
 # Fixed Compilation Model
 
-**Status:** Draft v0.3.2
+**Status:** Draft v0.3.3
 **Specifies:** how Fixed v0.4.4 source becomes code: the baseline version of every function, the travel form and the rest form of a value, immediates, accessors, witnesses, specialisation (clones, budget, score, mandatory cases), build modes, packages and the package ABI, visibility, satisfactions in a link unit, the interface and body tiers, and the application link (choice points, summaries, selection, the lock file, the profile file, clones at link, the type table).
-**Last revised:** 2026-11-20
+**Last revised:** 2026-11-21
+
+**Changes from v0.3.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"). Rule CM8.1: a list literal whose type is not fixed is a choice point (`spec/type_system.md` Rule 5.10).
 
 **Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). No witness travels with an anonymous result: its choice point is bound by symbol, and a requirement's anonymous result is one choice point shared by every implementation (Rules CM4.2, CM4.5). A link unit is an application; a library is not one (Rule CM6.1). The sixth resolution level is removed, and derived satisfactions get no preference (Rule CM6.6).
 
@@ -575,7 +577,7 @@ A **choice point** is one of these sites:
 - an anonymous bound in a result: `fn parse(s: String) -> is Optional of u64` (Rule CM4.5);
 - an anonymous bound in a field: `xs: is Sequencing of Json`;
 - a type variable introduced in a variant field without an `of` parameter: `data Color: RGB(red: N is Numeric, green: N, blue: N)`;
-- an abstract constructor call whose type is not a named type parameter of the caller.
+- an abstract constructor call whose type is not a named type parameter of the caller, which includes a list literal whose type no concrete expected type or ascription fixes (`spec/type_system.md` Rules 5.10, 5.11): `[1, 2, 3]` alone is a choice point bounded by `Sequencing of i64`.
 
 A choice point in a data type gives one choice for all values of that type. A user who wants to choose per use writes the parameter: `data Color of N is Numeric`.
 

@@ -226,7 +226,7 @@ Money satisfies Ord named ByAmount:
     fn compare(other: Self) -> is Ordering = self.amount.compare(other.amount)
 
 sort(prices) using ByAmount          // at the call site
-let s: Set of Money using ByAmount   // in a type
+fn byAmount(s: Set of Money using ByAmount) -> u64   // in a type
 ```
 
 Resolution is innermost first: `using` at the call site, in a type, at file or package scope; the one satisfaction in scope by `use`; `using` in the application root; the only one in the link unit. Otherwise the site is an error that suggests a named `using`, because two satisfactions of one pair differ in results, not in speed (`spec/type_system.md` Rule 8.4). For a bound on a data type's own parameter the satisfaction is part of the type (`Tree of Money[Ord = ByAmount]`, Rule 8.4.a), so a set built under one order cannot be searched under another. (`named` is a provisional keyword.)
@@ -842,11 +842,11 @@ When a `Self.fn` constructor is called on a capability (e.g., `Optional.some(x)`
 fn wrap(x: A) -> is Optional of A =
     Optional.some(x)   // resolves via in-scope satisfaction
 
-// Assignment target constrains:
-let x: is Optional of u64 = Optional.some(42)
+// A field or parameter type constrains (there is no `let x: T`, P6 M18):
+fn answer() -> is Optional of u64 = Optional.some(42)
 ```
 
-**Several satisfying types are not an ambiguity.** When the expected type is an anonymous bound (`-> is Optional of u64`, `let y: is Optional of u64`), the call is a choice point and the satisfying types are its candidates, selected at package compile or at link (`spec/type_system.md` §8.5). **Two satisfactions of the same pair are**: the site is an error unless `using` chooses (Rule 8.4):
+**Several satisfying types are not an ambiguity.** When the expected type is an anonymous bound (`-> is Optional of u64`, a field `y: is Optional of u64`), the call is a choice point and the satisfying types are its candidates, selected at package compile or at link (`spec/type_system.md` §8.5). **Two satisfactions of the same pair are**: the site is an error unless `using` chooses (Rule 8.4):
 
 ```
 error: two satisfactions of (Money, Ord) are in scope, and nothing chooses between them
@@ -982,6 +982,7 @@ Added by the owner's decisions of the fourth round (P6, "Owner's decisions (four
 | # | Work | Spec | Depends on |
 |---|---|---|---|
 | 18 | **Exit codes by error class.** `Main` maps the errors of a run to the classes of the table and exits with the smallest class number; every diagnostic code is given its class; `a + b` stops at the first stage that fails | `spec/reports.md` Rule RP5.5 | the owner's confirmation of the class list; classes of commands not built yet (`link`, `verify`) come with them |
+| 19 | **List literals as choice points, and type ascription.** The parser's `AscribedExpr` (`e is T`); the typer types a list literal as an abstract constructor call through `Sequencing` (today it gives every literal `List of E`), gathers the context's requirements into the bound of its choice point, and checks ascriptions (`T024`); then examples 02 and 11 return to literals (`[1, 3, 5, …]`, `[5, 2, 8, 1, 9, 3]`) | `spec/type_system.md` Rules 5.10, 5.11, grammar v0.4.14 | the parser and typer for the ascription and for cases 1 and 2 of Rule 5.10; a choice point bound at link (case 3), on 7 |
 
 Also open from P6 and not listed as work: the suspected compiler fault behind the ownership-clone measurement (OQ-CM16), the unexplained 4% on `list_pipeline` and `records` and `fx_drop`'s recursion on children other than the last (OQ-CM17), and the 8-byte header hypothesis (OQ-CM15).
 

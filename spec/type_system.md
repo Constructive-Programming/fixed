@@ -1,8 +1,10 @@
 # Fixed Type System
 
-**Status:** Draft v0.5.2
-**Specifies:** typing of Fixed source as defined by `spec/syntax_grammar.ebnf` v0.4.12.
-**Last revised:** 2026-11-20
+**Status:** Draft v0.5.3
+**Specifies:** typing of Fixed source as defined by `spec/syntax_grammar.ebnf` v0.4.14.
+**Last revised:** 2026-11-21
+
+**Changes from v0.5.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"). New Rule 5.10: a list literal is an abstract constructor call through `Sequencing`, and a choice point unless a concrete expected type or an ascription fixes its type; its bound set is `Sequencing of E` and what the context requires. New Rule 5.11: the type ascription `e is T` on any expression fixes its type and is not a conversion (`T024` when `T` is a bound). Rule 5.1.1 and Rule 5.7 refer to both. The example of Rule 7.3.c, which wrote `let x: T = …`, uses an ascription.
 
 **Changes from v0.5.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule 5.1.2: no witness travels with an anonymous result, and a requirement's anonymous result is one choice point shared by its implementations. Rule 8.4: the sixth resolution level is removed; a derived or unnamed satisfaction gets no preference over a named one, so the ambiguity error stands, and `using Money satisfies Ord` names such a satisfaction by its pair.
 
@@ -150,7 +152,7 @@ fn evenDoubled(numbers: C is Filtering of (N is Numeric) + Functor of N) -> C
 An abstract type is bound at one of three times.
 
 1. **Per use: a type parameter.** A named bound (`x: T is C`, `-> R is C`), an `of` parameter (`data D of T`), and an anonymous bound in a parameter position (`c: is Folding`). The user of the declaration picks the type: the caller of a function, or the writer of `D of u8`. The witness is a hidden parameter (`spec/compilation_model.md` Rule CM4.3).
-2. **Per link unit: a choice point** (Rule CM8.1). An anonymous bound in a result position (`-> is C`) or in a field (`xs: is Sequencing of Json`). A type variable local to a `data` variant field (Rule 4.1.a). An abstract constructor call whose type is not a type parameter of the enclosing function (`Optional.some(42)` where `is Optional of u64` is expected, §8.5). There is one choice for the whole program. It is made at application link from summaries (Rule CM8.4) and bound by the linker (Rule CM8.2).
+2. **Per link unit: a choice point** (Rule CM8.1). An anonymous bound in a result position (`-> is C`) or in a field (`xs: is Sequencing of Json`). A type variable local to a `data` variant field (Rule 4.1.a). An abstract constructor call whose type is not a type parameter of the enclosing function (`Optional.some(42)` where `is Optional of u64` is expected, §8.5); a list literal whose type no concrete expected type or ascription fixes is one (Rule 5.10). There is one choice for the whole program. It is made at application link from summaries (Rule CM8.4) and bound by the linker (Rule CM8.2).
 3. **Per package: a choice point whose values never leave the package.** This is decided when the package is compiled (§6.5). It is an optimisation of item 2 and is not visible in the language: the program means the same thing either way.
 
 Nothing is bound per value: no cell stores a witness.
@@ -314,7 +316,7 @@ fn median(...) -> N =
 
 The typer resolves the concrete representation from context:
 
-1. The expected type at the literal's position (function parameter, return position, assignment LHS, comparison operand).
+1. The expected type at the literal's position (function parameter, return position, an ascription `e is T` (Rule 5.11), the element type of a list literal (Rule 5.10), comparison operand).
 2. Operand-unification: in `a + 1`, `1` resolves to whatever `a`'s type is.
 
 If still unresolved, **defaults** apply:
@@ -387,6 +389,39 @@ cap Sized of (Part, Size is Numeric):           // both Part and Size are non-ph
     fn size -> Size                              //   (Size appears in fn signature; Part is referenced
                                                  //    by `Part`-using inheritors via §5.3)
 ```
+
+### 5.10 List literals (Rule 5.10)
+
+**Rule 5.10.** A list literal `[e1, …, en]` builds a sequence of its elements, in order, through the constructor requirements `cons` and `empty` of the prelude capability `Sequencing`. It means `S.cons(e1, S.cons(e2, … S.cons(en, S.empty)))`, where `S` is its type, and every inner call is at `S` too, although the prelude types the tail of `cons` as `is Sequencing of Part` (`compiler/src/main/resources/stdlib/prelude.fixed`; `spec/stdlib.md` does not list `Sequencing` yet). It is an abstract constructor call (§8.5), and its type is decided as for one:
+
+1. **A concrete expected type** `T`: a parameter, field or result typed `List of u8`, or an ascription (Rule 5.11). The literal has type `T` and is built through the satisfaction of (`T`, `Sequencing`) that Rule 8.4 resolves (§8.5, case 1). A `T` with no such satisfaction is a type error (`T010`).
+2. **A type parameter `R` of the enclosing function.** The literal stays abstract and is built through the capability table in `R`'s witness (§8.5, case 2). The bounds of `R` must include `Sequencing` (`T010` otherwise).
+3. **Otherwise**: an anonymous bound in a result or a field, a bound on a parameter of the function the literal is passed to (`total([1, 2, 3])` with `xs: is Folding of u64`; `binarySearch(sorted, 7)` with `sorted: C is ArrayLike of (A is Ord)`), or no requirement at all. The literal is a **choice point** (Rule 5.1.1, item 2; `spec/compilation_model.md` Rule CM8.1). Its bound set is `Sequencing of E`, where `E` is the element type, together with every capability the context requires of it. Selection binds it at application link by the rules of §6.5, like every other choice point, or at package compile when its values never leave the package (Rule 5.1.1, item 3). With no requirement from context the bound set is `Sequencing of E`: the least a literal needs to be built, since `Sequencing` is the prelude capability that declares both `empty` and `cons` (`Empty` declares only `empty`).
+
+**What the context requires.** The typer gathers it within the enclosing function, as obligations on the literal's type: the expected type at the literal, and the bounds of every parameter its value reaches through `let` bindings and calls. `let sorted = [1, 3, 5]` followed by `binarySearch(sorted, 7)` requires `ArrayLike of i64`. A member called on the value adds no bound: it must be a member of the bound set (Rule 5.1.3). A program that needs a member of another capability passes the value where that capability is required, or ascribes a type. An ascription on a value bound to the literal fixes it as an ascription on the literal does: in `let xs = [1, 2]` followed by `f(xs is List of u8)`, the literal is a `List of u8` (case 1). With no requirement, the value has only the members of `Sequencing`: `let xs = [1, 2, 3]` followed by `xs.fold(0, (a, x) -> a + x)` alone is a type error, since `fold` belongs to `Folding`, while `total(xs)` with `xs: is Folding of i64` adds `Folding` to the bound set. Where the typer unifies the types of several literals (the branches of an `if`, the elements of a list of lists), they are one choice point, with the union of their bound sets. A literal that a function with an anonymous result returns is that function's choice point (Rule 5.1.2, case 3 of §8.5): its bound set is the signature's together with `Sequencing of E`, and uses inside the function add nothing, since the result is opaque.
+
+**Elements.** Each element is typed against the element type `E`, and is evaluated left to right, as arguments are (`spec/quantities.md` Rule Q9.2). Integer and float literals among the elements take `E` (Rule 5.7): in `[1, 2, 3] is List of u8` each element is a `u8`, and in `[1, 256] is List of u8` the `256` is `T023`. If nothing fixes `E`, the defaults of Rule 5.7 apply, so `[1, 2, 3]` alone is a choice point bounded by `Sequencing of i64`. An empty literal `[]` whose element type nothing fixes takes `E = ()` *(author's choice)*: it holds no element and nothing inspects one, so the choice changes no result.
+
+**Built today.** Not built. The typer gives every list literal the type `List of E`, whatever the context, so a literal where the context requires a capability `List` lacks (`Sized`, `RandomAccess`) is a type error. Examples 02 and 11 were edited for that reason: they take their collection from a function whose result type the caller picks (`range`, `sample`). They return to literals once the choice point is built (`docs/plans/implementation-plan.md`, Phase 4.2, item 19).
+
+Reason: a list literal names no type, so the representation of its value has no user, which is what a choice point is (Rule 5.1.1). Fixing it to `List` would make every literal a linked list whatever the program does with it.
+
+### 5.11 Type ascription (Rule 5.11)
+
+**Rule 5.11.** `e is T` (grammar `AscribedExpr`, `spec/syntax_grammar.ebnf` §13) fixes the type of the expression `e` to `T`.
+
+1. **Typing.** `e` is checked against `T` as its expected type (§10.2), and `e is T` has the type `T`. `T` must fit the context as the type of any expression must (§10.4): equal to a concrete expected type, a satisfier of an expected anonymous bound (`T010` otherwise), or, where the expected type is a type parameter `R`, `R` itself and nothing else (Rule 5.1.2: `[1] is List of u8` where `R is Sequencing of u8` is expected is `T002`).
+2. **Not a conversion.** An ascription generates no code and changes no value. It decides only what inference would otherwise leave open: the defaults of Rule 5.7, a choice point of the enclosing function that selection would decide (§6.5), and the `of` arguments of a constructor call, which come from the type it is constructed at (Rule 7.3.c). An `e` whose type is already another type is a mismatch (`T002`): `xs is Vec of u8`, where `xs` is a `List of u8`, is an error, not a copy. So is an opaque value of another function's choice point: `parse(s) is Maybe of u64`, where `parse` returns `-> is Optional of u64`, is `T002`, because only the link step chooses that representation (Rule 5.1.2).
+3. **`T` is a type, not a bound.** `T` is a data type or a primitive type with its `of` arguments, a tuple or function type, `!`, or a type parameter in scope. An anonymous bound (`is C`), a named bound (`A is C`), `cap …`, or the name of a capability or of a type alias of capabilities is `error[T024]: an ascription names a type, not a bound` *(author's choice: a requirement on a value is written in a signature, where it already has a meaning)*.
+4. **One rule for every expression.** The ascription is not a form for lists:
+   - a list literal: `[1, 2, 3] is List of u8` is case 1 of Rule 5.10, and no choice point is made;
+   - an integer or float literal: `255 is u8`, `1.5 is f32`; the type replaces the default of Rule 5.7, and the range check of `T023` applies at it; `-128 is i8` is valid, because the ascription applies to the negated literal (grammar §13);
+   - a string, character or boolean literal: each has one type (`String`, `char`, `bool`), so an ascription can only restate it, and another type is `T002`;
+   - an abstract constructor call: `Optional.some(1) is Maybe of u64` resolves by §8.5, case 1, instead of becoming a choice point;
+   - any other expression: the ascription checks its type, and fixes the literals inside it that take their type from it (`(n + 1) is u8` needs `n` to be a `u8`).
+5. **Ascriptions and pins.** An ascription fixes a type in the source and removes the choice point. A pin in the lock file (Rule 6.5.5, rule 1) fixes the choice of a choice point at link and leaves the source generic. A program that depends on a representation uses one or the other.
+
+Not built: the grammar has had no annotation on an expression before v0.4.14 (`let x: T = …` is not admitted, P6 amendment M18), and the parser and typer do not know the form yet (`docs/plans/implementation-plan.md`, Phase 4.2, item 19).
 
 ## 6. Capability declarations
 
@@ -628,7 +663,7 @@ Selection is **staged**. A choice point whose values never leave the package is 
 
 For each choice point, the pass collects:
 
-- **Bound set.** The bounds declared at the choice point, closed under `extends` (§6.2) and alias distribution (§5.8). Its values are opaque to their users (Rule 5.1.2), so no use can add a bound.
+- **Bound set.** The bounds declared at the choice point, closed under `extends` (§6.2) and alias distribution (§5.8). Its values are opaque to their users (Rule 5.1.2), so no use can add a bound. The one exception is a list literal that is a choice point of its own (Rule 5.10, case 3): it declares nothing, and its bound set is `Sequencing of E` together with what the uses in its enclosing function require.
 - **Usage vector.** Which members of the bound set are called on its values, with what weight. At link, the usage vectors in the summaries are added along the edges "passed on to `g`, parameter `i`" (`spec/compilation_model.md` Rule CM8.3), so usage is whole-program, and no body is read. The weight is the first available of: a production profile, the usage measured in test runs (`spec/properties.md` Rule P7.9), and the static weights of the summary.
 - **Cost contracts.** The cost props of the capabilities in the bound set, and the claims each candidate makes for its members (`spec/cost.md` §4.4).
 - **Measured costs.** Where they exist, the cost of each member per (satisfaction, size class, target), from the profile file of the target or the reference cost table a package ships in its interface (`spec/compilation_model.md` Rule CM8.6). These are measurements, so they enter only decisions among correct alternatives (`spec/properties.md` Rule P7.8).
@@ -861,8 +896,8 @@ Omitting an arg with no declared default is a compile error.
 **Rule 7.3.c (Constructor calls).** A variant constructor call passes only the variant's **declared fields** positionally. The values of the data type's `of` value-params come from the type at which the variant is being constructed:
 
 ```
-let x: Bounded of (i64, 0, 10) = Bounded.Bounded(5)
-//                                ^value=5, lo=0, hi=10 from type
+let x = Bounded.Bounded(5) is Bounded of (i64, 0, 10)
+//                 ^value=5, lo=0, hi=10 from the ascribed type (Rule 5.11)
 ```
 
 ### 7.4 Auto-derived capabilities (resolves OQ3)
@@ -1243,7 +1278,7 @@ A call `Cap.ctor(args...)` resolves by the **expected type** at the call site: t
 
 1. **A concrete data type** `T` (`fn f() -> Maybe of u64 = Optional.some(42)`). The call resolves to the variant that the satisfaction of (`T`, `Cap`) maps to `ctor`. Rule 8.4 picks the satisfaction. If no satisfaction of the pair is in scope, the call is a type error.
 2. **A type parameter** `R` of the enclosing function (`-> R is Optional of u64`). The call stays abstract. It resolves at the caller, through the capability table in `R`'s witness (Rule 5.1.2).
-3. **An anonymous bound** (`-> is Optional of u64`, a field `xs: is Optional of u64`). The call is a choice point (Rule 5.1.1, item 2), and representation selection decides it (§6.5). If the body also constructs a data type directly for the same result, that type is the choice (Rule 5.1.2). Several satisfying types are not an ambiguity here: they are the candidates. The only failure is zero viable candidates (§6.5.3).
+3. **An anonymous bound** (`-> is Optional of u64`, a field `xs: is Optional of u64`), a bound on a parameter of the function the call is passed to, or no requirement at all (Rule 5.1.1, item 2). The call is a choice point (Rule 5.1.1, item 2), and representation selection decides it (§6.5). If the body also constructs a data type directly for the same result, that type is the choice (Rule 5.1.2). Several satisfying types are not an ambiguity here: they are the candidates. The only failure is zero viable candidates (§6.5.3).
 
 The call's arguments are typed against the requirement's parameters. In case 1 they are also typed against the variant's fields, which may refine the parameters (Rule 8.1.a). In case 3 that check is part of viability (§6.5.3). In case 2 the caller's type fixes the variant.
 
@@ -1338,6 +1373,8 @@ When typing an expression `e` against an expected type that includes a capabilit
 1. Synthesizes `e`'s natural type `T`.
 2. Resolves the satisfaction of (`T`, `C`) by Rule 8.4 (directly, transitively via `extends`, or via auto-derivation §7.4).
 3. Records the satisfaction so subsequent method calls on `e` can resolve to `C`'s methods.
+
+An expression whose type is a choice point of its own (a list literal, Rule 5.10, case 3) has no natural type to synthesize. Its type is an inference variable until the enclosing function is typed; each bound it meets is recorded as an obligation on it, and at the end the obligations are its bound set.
 
 ### 10.4 Subtyping
 

@@ -3,9 +3,20 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4.13
+   Status:        DRAFT v0.4.14
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
-   Last revised:  2026-11-20
+   Last revised:  2026-11-21
+
+   Refinements in v0.4.14
+   ----------------------
+   Owner's decisions of 2026-11-21, fourth round (docs/decisions/P6):
+   type ascription `e is T` on any expression (`AscribedExpr`, §13),
+   e.g. `[1, 2, 3] is List of u8`. It binds tighter than `*` and looser
+   than prefix `-` and `!`, so `-128 is i8` ascribes the negated
+   literal. Its meaning (it fixes the type; it is not a conversion) is
+   spec/type_system.md Rule 5.11; the type of a list literal is Rule
+   5.10. Before this version an expression had no annotation form:
+   `let x: T = …` is not admitted (consistency review, M18).
 
    Refinements in v0.4.13
    ----------------------
@@ -927,6 +938,7 @@ PatternList
      comparison    == != < > <= >=
      additive      + -                     (binary)
      multiplicative * / %
+     ascription    e is T                   (postfix; one per operand, v0.4.14)
      unary         -  !                     (prefix; single-arity, v0.4.5)
      application/method  f(args)  e.m(args)  e.field
      atom
@@ -995,7 +1007,27 @@ AddExpr
     ;
 
 MulExpr
-    = UnaryExpr ( ( "*" | "/" | "%" ) UnaryExpr )*
+    = AscribedExpr ( ( "*" | "/" | "%" ) AscribedExpr )*
+    ;
+
+(* Type ascription (v0.4.14). `e is T` fixes the type of `e` to `T`
+   (spec/type_system.md Rule 5.11): `[1, 2, 3] is List of u8`,
+   `255 is u8`, `Optional.some(1) is Maybe of u64`. It is not a
+   conversion. `is` cannot follow an expression anywhere else, so the
+   form is not ambiguous; inside a type, `is` keeps its meaning of a
+   bound (§10): `e is A is B` reads `A is B` as a named bound
+   (`NamedAlias`), which Rule 5.11 rejects, since an ascription names
+   a type, not a bound.
+   Inside the ascribed type an OfArg is a LiteralExpr or a TypeExpr,
+   never an OfValueParam, so `if xs is List of n:` and
+   `match e is Maybe of u8:` end the type before the `:`. Otherwise
+   the type extends as far as TypeExpr reads, `of` arguments, a
+   `using` clause and `->` included: parenthesise the ascription where
+   a following `->` belongs to the context (`suchThat (x is u8) -> P`,
+   a lambda body), and before a member access:
+   `([1, 2] is List of u8).length`. *)
+AscribedExpr
+    = UnaryExpr ( "is" TypeExpr )?
     ;
 
 (* Prefix unary operators (v0.4.5): single-arity prefix `-` (numeric

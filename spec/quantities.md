@@ -1,8 +1,10 @@
 # Fixed Quantities (QTT)
 
-**Status:** Draft v0.6.2
+**Status:** Draft v0.6.3
 **Specifies:** quantity and demand inference for Fixed v0.4.4 source.
-**Last revised:** 2026-11-20
+**Last revised:** 2026-11-21
+
+**Changes from v0.6.2.** The example of §10.3 that wrote `let x: T = …`, which the grammar does not admit, uses the type ascription of the owner's decisions of 2026-11-21, fourth round (`spec/type_system.md` Rule 5.11).
 
 **Changes from v0.6.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule Q5.13.a: fork site 3 takes facts-lane props (`proved` or `assumed`); a closure carries a bit for captured evidence, and a fork site that would call a function-typed parameter tests it.
 
@@ -521,7 +523,7 @@ data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
     Bounded(value: N)
     prop inRange: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
 
-let x: Bounded of (i64, 0, 10) = Bounded.Bounded(5)
+let x = Bounded.Bounded(5) is Bounded of (i64, 0, 10)   // ascription, spec/type_system.md Rule 5.11
 let result = x.value + x.lo                     // x.value: runtime read; x.lo: compile-time constant
 ```
 
