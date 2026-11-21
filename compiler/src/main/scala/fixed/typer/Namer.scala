@@ -148,7 +148,7 @@ object Namer:
             case Some(other) => ci1.table.satisfy(typeName, other)
             case None        => ci1.table
           (ci1.copy(table = withCtors), Type.UnitType)
-        case t: Trees.FnDecl                         => fnSignature(ci, t, anonymousParams = true)
+        case t: Trees.FnDecl                         => fnSignature(ci, t, anonymousBounds = true)
         case t: Trees.CapDecl                        => capSignature(ci, t)
         case t: Trees.DataDecl                       => dataSignature(ci, t, id)
         case t: Trees.EffectDecl                     => effectSignature(ci, t, id)
@@ -162,14 +162,18 @@ object Namer:
   /** `(params) -> ret with fx`. Parameters become `ValueParam` symbols in scope for the rest of the
     * signature (refinement calls such as `between(lo, hi)` refer to them).
     */
-  private def fnSignature(c: Ctx, fn: Trees.FnLike, anonymousParams: Boolean = false): (Ctx, Type) =
+  private def fnSignature(c: Ctx, fn: Trees.FnLike, anonymousBounds: Boolean): (Ctx, Type) =
     val c0 = fn.typeParamsHint.foldLeft(c)((ci, name) => introduce(ci, name, Nil, fn.span)._1)
-    val (c1, params) = mapAccum(c0, fn.params)(valueParam(_, _, anonymousParams))
+    val (c1, params) = mapAccum(c0, fn.params)(valueParam(_, _, anonymousBounds))
     val (c2, ret) = fn.returnType.fold((c1, Type.UnitType))(typeOf(c1, _))
     arrow(c2, Type.TupleType(params), ret, fn.withClause)
 
-  /** Each anonymous bound `is C` in a parameter type of a top-level `fn` becomes a type parameter
-    * of its own, named as written (`spec/type_system.md` §5.1).
+  /** Each anonymous bound `is C` in a parameter type of a top-level `fn`, a capability method, a
+    * static method or an effect operation becomes a type parameter of its own, named as written
+    * (`spec/type_system.md` §5.1). Two places keep the bound as written for now. A nested `fn`
+    * would become generic, and the backend cannot compile a generic nested function. A bound
+    * inside a function-typed parameter (`f: (is C) -> u64`, not matched below) would be a type the
+    * caller picks, and when a lambda without annotations leaves it unsolved, nothing reports it.
     */
   private def anonymous(c: Ctx, t: Type, span: Span): (Ctx, Type) =
     t match
@@ -239,10 +243,10 @@ object Namer:
     }
     (c2, Type.TypeRef(id, params))
 
-  /** Enter a method or operation and type its signature in its own frame. */
+  /** Enter a method, operation or nested `fn` and type its signature in its own frame. */
   private def member(c: Ctx, fn: Trees.FnLike, kind: SymKind): (Ctx, SymbolId) =
     val (c1, id) = c.enter(fn.name, kind, Type.UnitType, fn.span)
-    val (c2, info) = c1.nested(id)(fnSignature(_, fn))
+    val (c2, info) = c1.nested(id)(fnSignature(_, fn, anonymousBounds = kind != SymKind.Fn))
     (c2.copy(table = c2.table.refine(id, info)), id)
 
   /** An `of (...)` declaration list: bare names and `N is C` introduce type variables, value

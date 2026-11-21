@@ -151,8 +151,7 @@ object Declarations:
     withBodies(s, d.body) { (si, fn, kind) =>
       si.symbols.membersOf(cap).find(m => m.kind == kind && m.name == fn.name).fold(si) { m =>
         val sub = Members.Subst(Members.Subst.of(Nil, Nil), Set.empty, Some(self), None)
-        val (si1, sig) = Members.instantiate(si, m.info, sub)
-        method(si1, fn, sig, cap, params ++ si1.symbols.typeParamsOf(m.id), Option.when(kind == SymKind.Method)(self))
+        memberBody(si, fn, m, sub, cap, params, Option.when(kind == SymKind.Method)(self))
       }
     }
 
@@ -176,10 +175,36 @@ object Declarations:
           case None    => si.error(DiagCode.T014, fn.span, s"${si.symbols(cap).name} has no member ${fn.name}")
           case Some(e) =>
             val sub = Members.Subst(Members.Subst.of(Nil, Nil), Set(e.cap), Some(self), part)
-            val (si1, sig) = Members.instantiate(si, e.member.info, sub)
-            method(si1, fn, sig, cap, si1.symbols.typeParamsOf(e.member.id), Option.when(kind == SymKind.Method)(self))
+            memberBody(si, fn, e.member, sub, cap, Nil, Option.when(kind == SymKind.Method)(self))
       }
     }
+
+  /** A body of capability member `m`, typed against its signature under `sub`. The member's own
+    * type parameters stay rigid; their bounds, instantiated under the same `sub` (`Self`, `Part`,
+    * the capability's arguments), hold while the body is typed: for member lookup and satisfaction
+    * (`TyperState.rigidBounds`) and for unification (`Unifier.paramBounds`). The signature and the
+    * bounds are instantiated as one tuple so that both get the same fresh variables.
+    */
+  private def memberBody(
+      s: TyperState,
+      fn: Trees.FnLike,
+      m: Denotation,
+      sub: Members.Subst,
+      cap: SymbolId,
+      scoped: List[SymbolId],
+      self: Option[Type]
+  ): TyperState =
+    val params = s.symbols.typeParamsOf(m.id)
+    val bounds = params.map(p => Type.IsBound(Members.boundsOf(s.symbols, p)))
+    val (s1, Type.TupleType(sig :: instantiated)) =
+      Members.instantiate(s, Type.TupleType(m.info :: bounds), sub): @unchecked
+    val rigid = scala.collection.immutable.IntMap.from(params.zip(instantiated).collect { case (p, Type.IsBound(bs)) =>
+      p.toInt -> bs
+    })
+    val declared = s1.unifier.paramBounds
+    val inBody = s1.unifier.copy(paramBounds = p => rigid.getOrElse(p.toInt, declared(p)))
+    val typed = method(s1.copy(rigidBounds = rigid, unifier = inBody), fn, sig, cap, scoped ++ params, self)
+    typed.copy(rigidBounds = rigid.empty, unifier = typed.unifier.copy(paramBounds = declared))
 
   /** Fold `f` over the methods in `items` that have a body, with their member kind. */
   private def withBodies(s: TyperState, items: List[Tree])(f: (TyperState, Trees.FnLike, SymKind) => TyperState)

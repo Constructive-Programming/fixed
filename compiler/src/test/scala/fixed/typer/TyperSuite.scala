@@ -414,6 +414,56 @@ class TyperSuite extends munit.FunSuite:
       "Mb satisfies Clone\nfn need(x: is Clone) -> () = ()\nfn f() -> () = need(Mb.Nothing)\n"
     assertEquals(typedUnit(clone).diags, Nil)
 
+  test("spec 5.1: anonymous bounds in member parameters are distinct type parameters"):
+    /** `if c: a else: rhs` needs `a` and `rhs` to have one type. Each program types it in another
+      * kind of body: a capability's default method, a satisfaction's method (typed against the
+      * capability's signature) and a capability's default static method.
+      */
+    val pick = "if c: a else: rhs"
+    def programs(params: String) = List(
+      s"cap Picker:\n    fn pick(c: bool, $params) -> u64 =\n        let x = $pick\n        0\n",
+      s"cap Picker:\n    fn pick(c: bool, $params) -> u64\ndata P:\n    P(n: u64)\n" +
+        s"P satisfies Picker:\n    fn pick(c: bool, $params) =\n        let x = $pick\n        0\n",
+      s"cap Picker:\n    Self.fn pick(c: bool, $params) -> u64 =\n        let x = $pick\n        0\n"
+    )
+    programs("a: is Show, rhs: is Show").foreach { code =>
+      val ds = typedUnit(code).diags
+      assertEquals(ds.map(_.code), List(DiagCode.T002), code)
+      assertEquals(ds.head.span.start, code.indexOf(pick) + pick.indexOf("rhs"), code)
+    }
+    programs("a: T is Show, rhs: T").foreach(code => assertEquals(typedUnit(code).diags, Nil, code))
+
+    /** Not yet: a nested `fn` and a bound inside a function-typed parameter keep the bound as written. */
+    val unchanged = List(
+      s"fn outer() -> u64 =\n    fn inner(c: bool, a: is Show, rhs: is Show) -> u64 =\n        let x = $pick\n        0\n    0\n",
+      s"fn hof(c: bool, a: (is Show) -> u64, rhs: (is Show) -> u64) -> u64 =\n    let x = $pick\n    0\n"
+    )
+    unchanged.foreach(code => assertEquals(typedUnit(code).diags, Nil, code))
+
+  test("spec 5.1: a member's bound that names Self, Part or the capability's parameter is read at the satisfying type"):
+    val merge =
+      "cap Merge:\n    fn merge(o: is Folding of Self) -> Self\ndata M1:\n    M1(n: u64)\ndata M2:\n    M2(s: String)\n" +
+        "M2 satisfies Merge:\n    fn merge(o: is Folding of Self) = self\n" +
+        "fn firstOr(d: M1, ys: is Folding of M1) -> M1 = ys.fold(d, (acc, x) -> x)\n"
+    def m1(body: String) = merge + s"M1 satisfies Merge:\n    fn merge(o: is Folding of Self) =\n        $body\n"
+    List(
+      "cap Coll of E:\n    fn addAll(xs: is Folding of E) -> Self\ndata Bag of E:\n    Bag(x: E)\n" +
+        "Bag satisfies Coll:\n    fn addAll(xs: is Folding of E) = xs.fold(self, (acc, x) -> Bag.Bag(x))\n",
+      "cap Coll of E:\n    fn addAll(xs: is Folding of E) -> u64\nfn total(ys: is Folding of u64) -> u64 = 0\n" +
+        "data Bag:\n    Bag(n: u64)\nBag satisfies Coll of u64:\n    fn addAll(xs: is Folding of u64) = total(xs)\n",
+      "cap Grow:\n    fn grow(xs: is Folding of Part) -> Self\ndata Box of A:\n    Box(x: A)\n" +
+        "Box satisfies Grow:\n    fn grow(xs: is Folding of Part) = xs.fold(self, (acc, x) -> Box.Box(x))\n",
+      m1("o.fold(self, (acc, x) -> x)"),
+      m1("firstOr(self, o)"),
+      m1("M2.M2(\"a\").merge(List.Cons(M2.M2(\"b\"), List.Nil))\n        self"),
+      "cap Merge:\n    fn merge(o: T is Folding of Self) -> Self\ndata M:\n    M(n: u64)\n" +
+        "M satisfies Merge:\n    fn merge(o: T is Folding of Self) = o.fold(self, (acc, x) -> x)\n"
+    ).foreach(code => assertEquals(typedUnit(code).diags, Nil, code))
+    val wrong = m1("let bad = M2.M2(\"a\").merge(List.Cons(M1.M1(1), List.Nil))\n        self")
+    val ds = typedUnit(wrong).diags
+    assertEquals(ds.map(_.code), List(DiagCode.T010), wrong)
+    assertEquals(ds.head.message, "List of M1 does not satisfy Folding of M2")
+
   test("spec 5.1: a named type inside two anonymous bounds is shared"):
     val q = "cap Quantity of U:\n    Self.fn new(value: f64) -> Self\n    fn value -> f64\ncap Meters\ncap Seconds\n" +
       "fn add(a: is Quantity of U, b: is Quantity of U) -> is Quantity of U = Quantity.new(a.value + b.value)\n"

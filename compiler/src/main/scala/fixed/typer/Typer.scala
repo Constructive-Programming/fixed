@@ -41,6 +41,10 @@ final case class BoundCheck(value: Type, cap: SymbolId, op: String, span: Span, 
 
 /** Threaded typer state (`docs/plans/phase-3-typer.md` §3.4): the type side table, the symbol
   * table (local bindings join it), the unifier and the diagnostics so far (newest first).
+  * `rigidBounds` are the bounds of a capability member's own type parameters while one of its
+  * bodies is typed, with `Self`, `Part` and the capability's arguments substituted
+  * (`Declarations.memberBody`); the unifier's `paramBounds` reads them too. Member bodies do not
+  * nest, so the map is empty outside one.
   */
 final case class TyperState(
     types: TypeTable,
@@ -53,7 +57,8 @@ final case class TyperState(
     constructors: List[(Trees.StaticCall, SymbolId, String)],
     row: List[(EffectBound, Span)],
     rowChecks: List[RowCheck],
-    boundChecks: List[BoundCheck]
+    boundChecks: List[BoundCheck],
+    rigidBounds: IntMap[List[Type]] = IntMap.empty
 ):
   def record(tree: Tree, t: Type): TyperState = copy(types = types.updated(tree, t))
 

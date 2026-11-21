@@ -79,7 +79,9 @@ object Members:
         /** The variable first, so that its bounds, instantiated under the same mapping, may name it. */
         val numeric = isNumeric(s, Type.TypeRef(id, Nil)) && !anonymousParam(s, id)
         val (u, v) = s.unifier.fresh(numeric = numeric, default = None)
-        val (s1, m1, bounds) = rebuildAll(s.copy(unifier = u), boundsOf(s, id), sub, m.updated(id.toInt, v))
+
+        /** The declared bounds: a member body's substituted ones (`rigidBounds`) are for its rigid uses. */
+        val (s1, m1, bounds) = rebuildAll(s.copy(unifier = u), boundsOf(s.symbols, id), sub, m.updated(id.toInt, v))
         val withBounds = v match
           case Type.TypeVar(n) if bounds.nonEmpty =>
             s1.copy(unifier = s1.unifier.copy(varBounds = s1.unifier.varBounds.updated(n, bounds)))
@@ -248,8 +250,11 @@ object Members:
       case other => List(other)
     }
 
-  /** A type variable's bound chain, aliases expanded. */
-  def boundsOf(s: TyperState, param: SymbolId): List[Type] = boundsOf(s.symbols, param)
+  /** A type parameter's bound chain, aliases expanded; while one of its member's bodies is typed,
+    * the bounds as substituted there (`TyperState.rigidBounds`).
+    */
+  def boundsOf(s: TyperState, param: SymbolId): List[Type] =
+    s.rigidBounds.getOrElse(param.toInt, boundsOf(s.symbols, param))
 
   def boundsOf(symbols: SymbolTable, param: SymbolId): List[Type] =
     symbols(param).info match
