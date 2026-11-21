@@ -68,7 +68,7 @@ final class EmitLLVM:
     */
   private def value(e: Expr, label: String, tail: Option[Fn]): (String, String) =
     e match
-      case Expr.Ret(a)        => (operand(a), label)
+      case Expr.Ret(a)        => (if a.tpe == CType.Unit then "0" else operand(a), label)
       case Expr.Dup(x, body)  => count(x, "dup", EmitLLVM.witnessDup); value(body, label, tail)
       case Expr.Drop(x, body) => count(x, "drop", EmitLLVM.witnessDrop); value(body, label, tail)
 
@@ -345,7 +345,9 @@ final class EmitLLVM:
       case (PrimOp.Eq | PrimOp.Ne, CType.Unit) => emit(s"icmp ${if op == PrimOp.Eq then "eq" else "ne"} i8 0, 0")
       case _                                   => emit(s"${EmitLLVM.instruction(op, t)} $ty $ops")
 
-  /** A unit operand used at another type is dead code after an abort or `!`: a zero of that type. */
+  /** A unit operand used at another type is dead code after an abort or a call of a `-> !`
+    * function (`value` returns every unit result as `0`): a zero of that type.
+    */
   private def zeroIfUnit(v: String, t: CType): String =
     if v != "0" then v
     else

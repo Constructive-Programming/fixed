@@ -1,0 +1,34 @@
+// A branch whose value is a call of a function that never returns (`-> !`): the join after it
+// takes the zero of its own type for the dead branch, for a scalar and for a reference result.
+// `count` recurses ten million times through a `-> !` self call in tail position; EmitSuite checks
+// that the IR makes it a jump.
+use std.io.Console
+
+fn spin(n: u64) -> ! = spin(n + 1)
+
+fn name(m: Maybe of String) -> String =
+    match m:
+        Maybe.Just(s) => s
+        Maybe.Nothing => spin(0)
+
+fn pick(n: u64) -> u64 =
+    if n > 5: n
+    else: spin(n)
+
+fn count(n: u64) -> ! with Fail of String =
+    if n == 0: Fail.fail("done")
+    else: count(n - 1)
+
+fn go(n: u64) -> String with Fail of String =
+    count(n)
+    "unreachable"
+
+fn run(n: u64) -> String =
+    handle go(n):
+        Fail.fail(e) => e
+        return(v) => v
+
+fn main() -> () with Console =
+    Console.printLine(pick(7).show())
+    Console.printLine(name(Maybe.Just("just")))
+    Console.printLine(run(10000000))

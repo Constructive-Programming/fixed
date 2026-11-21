@@ -291,6 +291,18 @@ class EmitSuite extends munit.FunSuite:
       "    Console.printLine(twice(() -> first(bump(a))).show())\n"
     check("closure_twice", src, "4\n")
 
+  /** A self call of a `-> !` function in tail position is a jump in the IR itself, so its depth
+    * does not rest on clang's optimiser: binding the call's unit result must not stop it from
+    * being a tail call.
+    */
+  test("a `-> !` self call in tail position is a jump"):
+    val src = java.nio.file.Files.readString(Path.of("compiler", "src", "test", "fixed", "modes", "never_branch.fixed"))
+    modes.foreach { mode =>
+      val count = ir("never_branch", src, mode).split("\ndefine ").find(_.startsWith("i8 @\"fx_u_count\"("))
+        .getOrElse(fail(s"$mode: no fx_u_count in the IR"))
+      assert(count.contains(".in, %entry ]") && !count.contains("call i8 @\"fx_u_count\""), s"$mode: $count")
+    }
+
   /** No version of a loop calls itself: a self call in tail position is a jump back to the `loop`
     * block (`EmitLLVM`). A version may call another version of the same loop once (the first step
     * of an exclusive clone, say), so the calls between versions must not form a cycle: the native
