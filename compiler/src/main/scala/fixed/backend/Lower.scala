@@ -124,7 +124,9 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       }
     }
 
-  /** Build function `name` once. A recursive request meets the placeholder entered first. */
+  /** Build function `name` once. A request made while `build` runs meets a placeholder with no
+    * parameters, which [[code]] replaces with the function's signature before it lowers a body.
+    */
   protected def instance(name: String)(build: => Fn): String =
     if !fns.contains(name) then
       fns(name) = Fn(name, Nil, CType.Unit, Expr.Ret(Atom.UnitC))
@@ -174,7 +176,10 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       code(name, decl.params.map(p => (p.name, p.span)).zip(paramTypes), ret, decl, sigma, bounds, hidden)
     )
 
-  /** Function `name` over `body`: `hidden`, then `params` at their types made concrete. */
+  /** Function `name` over `body`: `hidden`, then `params` at their types made concrete. Run inside
+    * `instance(name)`, it records the signature in `fns` before lowering the body, which may need a table
+    * with an entry over this very function (`Tables.adapter` reads the parameters and result).
+    */
   private[backend] def code(
       name: String,
       params: List[((String, Span), Type)],
@@ -190,12 +195,9 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     }
     spans(name) = body.span
     val sc = Scope(params.map(_._1._1).zip(vars).toMap, sigma, bounds)
-    Fn(
-      name,
-      hidden ++ vars,
-      ctype(concrete(ret, sigma, bounds), body.span),
-      body.body.fold(Expr.Ret(Atom.UnitC))(tail(_, sc))
-    )
+    val rt = ctype(concrete(ret, sigma, bounds), body.span)
+    fns(name) = Fn(name, hidden ++ vars, rt, Expr.Ret(Atom.UnitC))
+    Fn(name, hidden ++ vars, rt, body.body.fold(Expr.Ret(Atom.UnitC))(tail(_, sc)))
 
   private def expr(t: Tree, sc: Scope)(k: K): Expr =
     t match
