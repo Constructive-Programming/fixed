@@ -111,6 +111,23 @@ Found and not fixed:
 - A polymorphically recursive type such as `N of List of A` makes the compiler overflow its own stack in the default mode; a type that refers to itself at other arguments gets only baseline versions of its generated members.
 - Satisfactions are looked up by the name of the type, not by its symbol: a program that declares its own `data Order` picks up the prelude's `Order satisfies Ordering` and crashes the backend.
 - A named bound `T is C` is not checked where the function is called.
+  - **Fixed** (`Members.go`, `Unifier.bind`, `Members.freshArgs`, `TyperState.tryUnify`): every variable instantiated from a bounded type parameter, named or anonymous, raises an obligation when it is solved. A bounded `of` parameter of a data type, effect or capability does too, and a trial unification fails if it breaks a bound. Examples 02 and 11 passed a `List` where `ArrayLike` / `Sized + Sorted` was required and were corrected.
+- `show` and `==` on `List of T` with an unbounded `T`, and `<` on an unbounded `T`, were accepted.
+  - **Fixed** (`Satisfaction.derived`, `Typer.requireBound`): a derived `Show`, `Eq` or `Ord` is decided at the instance's arguments, and `<`, `<=`, `>`, `>=` require `Ord`. Example 02's `Color` field needs `N is Numeric + Show`. The prelude gains `char satisfies Eq` and `char satisfies Ord`, which `spec/stdlib.md` does not list.
+- Anonymous bounds in the parameters of capability methods, static methods and effect operations were one shared type.
+  - **Fixed** (`Namer.member`, `Declarations.memberBody`). A nested `fn` and a bound inside a function-typed parameter (`f: (is C) -> u64`) keep the bound as written: the backend cannot compile a generic nested function, and nothing reports a type that the caller of a function-typed parameter leaves unpicked. An anonymous result (`-> is C`) is a structural type, not yet a choice point (P6 D2, Phase 4.2).
+- `Numeric` and `Eq` members called by name on a primitive (`x.negate`, `x.add(y)`, `x.eq(y)`) failed with `B005`.
+  - **Fixed** (`Lower.resolved`).
+- The type of a list literal is not specified. The typer gives it `List`; examples 02 and 11 assumed a collection that the compiler picks. Open for the owner.
+- Bounds of `of` parameters are not checked in written types (`Tag of Box`, `with Ping of Box`).
+- A derived `map` through a bounded last parameter does not check the new element type.
+- Signed `MIN / -1` and `MIN % -1` are undefined behaviour in the emitted IR.
+- A member called on a numeric literal (`3.add(4)`) is not resolved.
+- `N.fromI64(...)` on a type parameter is accepted by the typer and refused by the backend.
+- `i128` and `u128` do not satisfy `Numeric`, though `spec/stdlib.md` §4.9 says they do.
+- A user `cap Numeric` with `i64 satisfies Numeric` crashes the diagnostic formatter (a prelude span formatted against the user's file).
+- `Json` has no `Show` or `Eq` in the prelude, so `==` and `show` on it are rejected; `spec/stdlib.md` §3.2 gives its fields `+ Show + Eq`.
+- Rule 5.1.3 of `spec/type_system.md` does not mention `<` and `Ord`; `spec/stdlib.md` does not list `char satisfies Eq` and `char satisfies Ord`.
 - The backend does not lower the bodies of `satisfies` blocks; they are type-checked only.
 
 Limits and gaps of the first implementation, against the spec:
