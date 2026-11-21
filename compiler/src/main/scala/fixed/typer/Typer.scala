@@ -105,15 +105,19 @@ final case class TyperState(
 
   /** Check the arguments of every applied type the program writes against the bounds of the
     * type's parameters, check the effect rows recorded while typing (their arguments may solve
-    * literal variables), default unsolved literal variables, discharge the capability obligations,
-    * and order the diagnostics. Recorded types stay as typed; `typeOf` substitutes on read.
+    * literal variables), let the obligations that hold solve the capability arguments they meet,
+    * default unsolved literal variables, discharge the capability obligations, and order the
+    * diagnostics. Recorded types stay as typed; `typeOf` substitutes on read.
     */
   def finish: TyperState =
     val wellFormed = symbols.written.reverse.foldLeft(this) { case (si, (t, span)) =>
       Satisfaction.checkWritten(si, t, span)
     }
     val rows = rowChecks.reverse.foldLeft(wellFormed)(Effects.discharge)
-    val defaulted = rows.copy(unifier = rows.unifier.applyDefaults)
+    val adopted = obligations.reverse.foldLeft(rows) { case (si, (value, bound, _)) =>
+      Satisfaction.adopt(si, value, bound)
+    }
+    val defaulted = adopted.copy(unifier = adopted.unifier.applyDefaults)
     val checked = obligations.reverse.foldLeft(defaulted) { case (si, (value, bound, span)) =>
       Satisfaction.discharge(si, value, bound, span)
     }

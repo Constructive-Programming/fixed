@@ -86,6 +86,17 @@ object Satisfaction:
           si.tryUnify(named, value).getOrElse(fail(si, value, entry, span))
     }
 
+  /** `s` with the arguments of each capability in `bound` unified with what `value` provides,
+    * where `value` satisfies it; nothing is reported. It runs before literal variables take their
+    * defaults, so a satisfying type solves them: `Optional.some(7)` passed as a `Maybe of u64` holds a
+    * `u64`, not an `i64`.
+    */
+  def adopt(s: TyperState, value: Type, bound: Type): TyperState =
+    entries(s, bound).foldLeft(s) {
+      case (si, Type.CapRef(c, args)) => holds(si, value, c, args).getOrElse(si)
+      case (si, _)                    => si
+    }
+
   /** [[discharge]] as a test, which reports nothing and keeps no binding. */
   def satisfies(s: TyperState, value: Type, bound: Type): Boolean =
     entries(s, bound).forall {
@@ -135,7 +146,12 @@ object Satisfaction:
     val hint = entry match
       case Type.CapRef(c, _) => Members.notFunctor(s.symbols, s.unifier.zonk(value), c)
       case _                 => None
-    s.error(DiagCode.T010, span, s"${r(s.unifier.zonk(value))} does not satisfy ${r(s.unifier.zonk(entry))}", hint)
+
+    /** Arguments not solved yet say nothing: `Ordering`, not `Ordering of ?2` (`Members.static`). */
+    val shown = s.unifier.zonk(entry) match
+      case Type.CapRef(c, args) if args.forall { case _: Type.TypeVar => true; case _ => false } => Type.CapRef(c, Nil)
+      case other                                                                                 => other
+    s.error(DiagCode.T010, span, s"${r(s.unifier.zonk(value))} does not satisfy ${r(shown)}", hint)
 
   /** Constructor resolution (spec §8.5, §8.5.1): `Cap.ctor(args)` against the expected type. The
     * candidates are the data types whose `satisfies` maps `ctor`; a candidate fits when it
@@ -145,7 +161,8 @@ object Satisfaction:
     * - **One fits:** the call constructs that variant and is recorded in `constructors`.
     * - **Several fit:** `T011`.
     * - **None fits, or the expected type is unknown:** `None`, so the call stays abstract until
-    *   representation selection.
+    *   representation selection. A type the abstract value meets must satisfy the capability
+    *   (`Unifier`): `f(Ordering.gt)` where `f` takes a data type without `Ordering` is `T010`.
     */
   def constructor(s: TyperState, cap: SymbolId, call: fixed.ast.Trees.StaticCall, pt: fixed.core.Proto)
       : Option[(TyperState, Type)] =

@@ -94,7 +94,7 @@ final case class Unifier(
       case (t, Type.TypeVar(y))                                         => bind(y, t, numeric)
       case (bound @ Capabilities(xs), value @ Capabilities(ys))   => oblige(value, bound).unifyShared(xs, ys, numeric)
       case (bound: Type.IsBound, value)                           => Right(oblige(value, bound))
-      case (_, _: Type.IsBound)                                   => Right(this)
+      case (expected, value: Type.IsBound)                        => Right(oblige(expected, value))
       case (Type.ArrowType(l1, r1, _), Type.ArrowType(l2, r2, _)) =>
         unify(l1, l2, numeric).flatMap(_.unify(r1, r2, numeric))
       case (Type.TupleType(xs), Type.TupleType(ys)) if xs.size == ys.size => unifyAll(xs, ys, numeric)
@@ -108,8 +108,8 @@ final case class Unifier(
         unifyAll(List(x, y), List(a, b), numeric)
 
       /** A capability used as a type is an anonymous bound: checked by capability closure (M6). */
-      case (bound: Type.CapRef, value) => Right(oblige(value, bound))
-      case (_, _: Type.CapRef)         => Right(this)
+      case (bound: Type.CapRef, value)    => Right(oblige(value, bound))
+      case (expected, value: Type.CapRef) => Right(oblige(expected, value))
       case (Type.Layer(d1, xs, s1), Type.Layer(d2, ys, s2)) if d1 == d2 && xs.size == ys.size =>
         unifyAll(xs :+ s1, ys :+ s2, numeric)
       case (x, y) if x == y => Right(this)
@@ -124,7 +124,9 @@ final case class Unifier(
 
   /** `value` must satisfy the expected `bound`: an obligation the capability-closure pass checks
     * once types are solved (`docs/plans/phase-3.1-capability-closure.md` §3.1). An abstract value
-    * met where a concrete type is expected is not yet an obligation (constructor resolution, §3.7).
+    * of `is C` or `C` met where a type `T` is expected obliges `T`, in the value position, to
+    * satisfy `C`: only such a type can represent it (`f(Ordering.gt)` where `f` takes a data type
+    * without `Ordering`).
     */
   private def oblige(value: Type, bound: Type): Unifier = copy(obligations = (value, bound) :: obligations)
 

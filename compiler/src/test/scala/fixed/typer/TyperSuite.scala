@@ -871,6 +871,37 @@ class TyperSuite extends munit.FunSuite:
     assertEquals(none.diags, Nil)
     assertEquals(programConstructors(none), Nil)
 
+  test("3.1.M5: a value built by a capability's constructor is not a type that lacks the capability"):
+    val decls = "data Color:\n    Red\n    Green(n: u64)\nfn f(c: Color) -> u64 = 1\nfn h(n: u64) -> u64 = n\n" +
+      "fn id(x: T) -> T = x\n"
+
+    /** Each program passes an abstract constructor call, directly or through a variable, at `at`
+      * (`o)` and `x)` find the argument of `f`).
+      */
+    val rejected = List(
+      "fn g() -> u64 = f(Ordering.gt)\n" -> "Ordering.gt",
+      "fn g() -> u64 = h(Ordering.lt)\n" -> "Ordering.lt",
+      "fn g() -> u64 = f(id(Ordering.gt))\n" -> "id(Ordering.gt)",
+      "fn g() -> u64 =\n    let o = Ordering.gt\n    f(o)\n" -> "o)",
+      "fn g() -> Color = Optional.some(1)\n" -> "Optional.some(1)",
+      "fn g(x: Ordering) -> u64 = f(x)\n" -> "x)"
+    )
+    rejected.foreach { (code, at) =>
+      val ds = typedUnit(decls + code).diags
+      assertEquals(ds.map(d => (d.code, d.span.start)), List((DiagCode.T010, (decls + code).lastIndexOf(at))), code)
+    }
+    assertEquals(typedUnit(decls + rejected.head._1).diags.map(_.message), List("Color does not satisfy Ordering"))
+
+    /** The value meets a type that has the capability; the base compiler accepted these too. The
+      * capability's arguments solve the literal's type before it defaults to `i64`.
+      */
+    List(
+      "fn g() -> bool = Boolean.yes\n",
+      "fn g() -> Maybe of u64 =\n    let o = Optional.some(7)\n    o\n",
+      "fn g() -> (u64, u64) = Pair.pair(1, 2)\n",
+      "fn o(x: is Ordering) -> u64 = 1\nfn g() -> u64 = o(Ordering.eq)\n"
+    ).foreach(code => assertEquals(typedUnit(decls + code).diags, Nil, code))
+
   test("Rule 8.1.a: trailing fields with defaults may be absent from the requirement"):
     val cap = "cap Queue:\n    Self.fn empty -> Self\n    fn size -> u64\n"
     val withDefault =
