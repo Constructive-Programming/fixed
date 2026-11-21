@@ -19,3 +19,7 @@ class SourceFileSuite extends FunSuite:
     /** EOF */
     assertEquals(sf.lineColumn(8), (4, 2))
     assertEquals(SourceFile("e", "").lineColumn(0), (1, 1))
+
+  test("a diagnostic whose span is past the end of the file is formatted without a position"):
+    val d = Diagnostic(Severity.Error, DiagCode.B005, Span(40, 41), "m")
+    assertEquals(Reporter(SourceFile("t", "ab")).format(d), "t: error[B005]: m")
