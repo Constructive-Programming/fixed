@@ -1,9 +1,11 @@
 # Phantom types
 
-Marker capabilities — no methods, zero-sized at runtime — plus a
-phantom type parameter give you compile-time state tracking and
-unit safety for free ([`spec/type_system.md`
-§5.9](../type_system.md)).
+Unit `data` types — one zero-sized variant, no fields — used as a
+phantom type parameter give you compile-time state tracking and unit
+safety for free ([`spec/type_system.md` §5.9](../type_system.md)).
+Tags are data, not caps: a cap declares requirements, and a tag
+provides nothing to satisfy ([`spec/type_system.md`
+§6.4](../type_system.md)).
 
 ## State machines in the type
 
@@ -13,9 +15,14 @@ just functions between the phantom instantiations; the invalid ones
 don't exist, so they can't be called:
 
 ```
-cap Locked
-cap Unlocked
-cap Open
+data Locked:
+    Locked
+
+data Unlocked:
+    Unlocked
+
+data Open:
+    Open
 
 cap Door of (State):
     Self.fn new(name: String) -> Self
@@ -54,9 +61,14 @@ Established` for a TCP socket, with `send` only accepting
 Tag a quantity with its unit the same way:
 
 ```
-cap Meters
-cap Seconds
-cap MetersPerSecond
+data Meters:
+    Meters
+
+data Seconds:
+    Seconds
+
+data MetersPerSecond:
+    MetersPerSecond
 
 cap Quantity of (Unit):                    // Unit inferred phantom
     Self.fn new(value: f64) -> Self

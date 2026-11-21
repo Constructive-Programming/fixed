@@ -181,9 +181,12 @@
    Handle subjects are single expressions. For multi-line subjects, use
    a parenthesised do-block: `handle (do: …): …`.
 
-   Empty cap / data / satisfies bodies omit the `:` entirely:
-       cap Locked
-       cap Open
+   Empty cap / satisfies bodies omit the `:` entirely (`cap Foo` —
+   a memberless cap; see type_system.md §6.4). Data bodies are never
+   empty: the smallest data type is a unit variant, which is also the
+   form for pure type-level tags (state labels, unit tags):
+       data Locked:
+           Locked
 
    Changes from v0.2.4 (history retained for context)
    --------------------------------------------------
@@ -376,8 +379,10 @@ CapExtends
     = "extends" CapBound ( "+" CapBound )*
     ;
 
-(* `cap Foo:` introduces an indented body of members. Empty caps omit
-   the `:` entirely (`cap Locked`, `cap Meters`). *)
+(* `cap Foo:` introduces an indented body of members. A memberless cap
+   omits the `:` entirely — grammatical, but a cap that declares
+   nothing has no use: pure type-level tags are unit data types
+   (`data Locked:` + variant `Locked`), not caps. *)
 CapBody
     = ":" CapMemberList
     ;
