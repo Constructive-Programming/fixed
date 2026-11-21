@@ -179,6 +179,8 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
   - **Fixed**: a minus applied to a nonzero integer literal is lowered as one literal.
 - The derived `fold` of linear data took one native frame per element.
   - **Fixed** (`Generated.foldDown`, `foldUp`; owner's decision, Rule 7.4.b.3): two loops, reversing in place where the value is exclusively owned. A shared value is copied from its first shared cell on, one allocation per cell, and its stack stays bounded. Measured on `nat_loop`: +8.1% instructions, -22.7% best cycles; the other four benchmarks are unchanged.
+- The compiler accepted any recursion between functions, and `para` was not derived.
+  - **Fixed** (owner's decision, Rule 7.4.h): `typer/Totality.scala` accepts structural recursion and recursion under the effect `Diverge`, and reports the rest as `T027` with the ways out. `para` (Rule 7.4.g) is derived in both build modes; for linear data it runs in bounded stack, keeps every original sub-value alive on a stack of frames (one allocation per cell, no reuse in place). Benchmarks are unchanged.
 
 Found and not fixed:
 
@@ -207,7 +209,11 @@ Found and not fixed:
 - An out-of-range literal that reaches its type through a type parameter (`order(18446744073709551615, 1)` with `T is Ord`) defaults to `i64` and wraps.
 - `Box of (A is Eq)` reached from `T is Ord` through a growing type is `B005` ("no table of `Eq`").
 - The scanner reads the escape `\0` as a space.
-- The compiler accepts a function that calls itself, which the spec makes a compile error (totality); test programs rely on it. **Decided** (Rule 7.4.h, `T027`): enforce, with a diagnostic that shows the rewrite; `para` is specified and not built, and the check depends on it. In progress.
+- Termination is not seen through a capability's default body that calls its own member (`self.sz()` goes through the table) or through a data type that holds a function of itself. Open for the owner.
+- The recursion check rejects three shapes that terminate: a nested `fn` calling its enclosing function on a sub-value, a `match` on a tuple of parameters, and `t > t2` inside `compare`.
+- The derived `show` of a type that holds itself at a growing argument (`Nest of (List of A)`) overflows the compiler's stack.
+- A `fold` whose result type would be `!` leaves the result type unsolved (`B005`).
+- `spec/quantities.md` §10.1 shows `fibIter`, which is now `T027`; Rule 7.4.b.3 does not list `para`.
 
 Limits and gaps of the first implementation, against the spec:
 
