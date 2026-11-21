@@ -1,0 +1,83 @@
+// Polymorphic recursion at a type that grows (Rule CM4.2): each call passes a capability table for
+// a larger type, built at run time from the witnesses and tables of its arguments, through the
+// derived show and eq, satisfies bodies, Clone, and a data type with a bounded parameter. `named`
+// and `copies` find the same table at every level; `wrap` builds 100 distinct tables. `twice`
+// reaches the growth from a generic caller, whose clone must not enumerate the types it reaches.
+// `k` shows a `Box` at a parameter with another bound set than the one `deep` built it at.
+use std.io.Console
+
+data Pair of (A, B):
+    Pair(a: A, b: B)
+
+data Bag of A:
+    Bag(items: List of A, tag: u64)
+
+data Box of A:
+    Box(v: A)
+
+cap Named:
+    fn name() -> String
+
+cap Sz:
+    fn sz() -> u64
+
+data Leaf:
+    Leaf(k: u64)
+
+Leaf satisfies Sz:
+    fn sz() = self.k
+
+data Sorted of A is Sz:
+    Sorted(v: A)
+
+Sorted satisfies Sz:
+    fn sz() = 1
+
+Pair satisfies Named:
+    fn name() = "pair"
+
+Box satisfies Named:
+    fn name() = "box"
+
+Box satisfies Clone:
+    fn clone() = self
+
+fn deep(p: T is Show, n: u64) -> String =
+    if n == 0: p.show()
+    else: deep(Pair.Pair(p, Box.Box(p)), n - 1)
+
+fn twice(p: T is Show) -> String = deep(Pair.Pair(p, 1), 1)
+
+fn same(p: T is Eq, q: T, n: u64) -> bool =
+    if n == 0: p == q
+    else: same(Bag.Bag([p, q], n), Bag.Bag([q, p], n), n - 1)
+
+fn wrap(p: T is Eq, n: u64) -> bool =
+    if n == 0: p == p
+    else: wrap(Box.Box(p), n - 1)
+
+fn named(p: T is Named, n: u64) -> String =
+    if n == 0: p.name()
+    else: named(Pair.Pair(p, n), n - 1)
+
+fn copies(p: T is Clone, n: u64) -> u64 =
+    if n == 0: 0
+    else: copies(Box.Box(p.clone()), n - 1) + 1
+
+fn sorted(p: T is Show + Sz, n: u64) -> String =
+    if n == 0: p.show().concat(" ").concat(p.sz().show())
+    else: sorted(Sorted.Sorted(p), n - 1)
+
+fn k(x: Box of (A is Eq + Show)) -> String = x.show()
+
+fn main() -> () with Console =
+    Console.printLine(deep(7, 2))
+    Console.printLine(deep("s", 1))
+    Console.printLine(twice(3))
+    Console.printLine(same(1, 1, 3).show())
+    Console.printLine(same(1, 2, 3).show())
+    Console.printLine(wrap(5, 100).show())
+    Console.printLine(named(Box.Box(1), 100000))
+    Console.printLine(copies(Box.Box(1), 1000).show())
+    Console.printLine(sorted(Leaf.Leaf(40), 2))
+    Console.printLine(k(Box.Box("u".concat("v"))))

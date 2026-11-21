@@ -54,7 +54,8 @@ object TypeOps:
     * type parameters `params` and signature `info` has the type `written` in its caller, and `frame` holds each type
     * parameter of the enclosing clones and instances as the type it derives from. Returns `frame` with each of
     * `params` as the type it derives from, or as itself where its argument mentions no type parameter (`generic`),
-    * and whether one of them nests a parameter of `params` (`N of A` calling itself at `List of A`). A chain that
+    * and whether one of them, as derived or as written, nests a parameter of `params` (`N of A` calling itself at
+    * `List of A`; as written also where `frame` has replaced the parameter by what an outer clone derives it from). A chain that
     * passes known types (`f` calling `g(7)`, `g` calling `f([b])`) ends, and is not taken for one.
     */
   def derived(
@@ -68,7 +69,8 @@ object TypeOps:
     val own = params.map(Type.TypeRef(_, Nil))
     val types =
       params.zip(own).map((p, self) => p -> source.get(p).map(subst(_, frame)).filter(generic).getOrElse(self))
-    (frame ++ types, types.exists((_, t) => own.exists(q => t != q && mentions(t, q))))
+    val nests = (t: Type) => own.exists(q => t != q && mentions(t, q))
+    (frame ++ types, types.exists((_, t) => nests(t)) || source.values.exists(nests))
 
   /** Whether `t` mentions type `self` anywhere. */
   def mentions(t: Type, self: Type): Boolean = t == self || t.children.exists(mentions(_, self))

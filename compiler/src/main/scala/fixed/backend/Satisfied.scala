@@ -89,14 +89,14 @@ private[backend] trait Satisfied extends Generated:
         yield
           val (f, ws) = member(data, args, None)((a, _) => satisfactionBody(data, eq.id, a, Type.UnitType).get)
           Rhs.Call(f, ws ++ List(l, r), runtime = false)
-      body.orElse(knownDerived(t, derivedEq).map(Rhs.Call(_, List(l, r), runtime = false)))
+      body.orElse(derived(t, derivedEq).map((f, ws) => Rhs.Call(f, ws ++ List(l, r), runtime = false)))
 
-  /** The derived member `gen` builds for data type `t` (Rule 7.4), at known arguments only: a field
-    * of a type parameter's type would need that parameter's `Show` or `Eq` table, which these
-    * members do not take.
+  /** The derived member `gen` builds for data type `t` (Rule 7.4), with the hidden arguments to call
+    * it with: none at known arguments; else those of the type parameters `t` mentions, whose tables
+    * reach a field of a parameter's type.
     */
-  protected def knownDerived(t: Type, gen: (SymbolId, List[Type]) => String): Option[String] =
-    dataOf(t).filter(_ => typeParamsIn(t).isEmpty).map(gen.tupled)
+  protected def derived(t: Type, gen: (SymbolId, List[Type]) => String): Option[(String, List[Atom])] =
+    dataOf(t).map((data, args) => gen(data, args) -> typeParamsIn(t).flatMap(hiddenOf))
 
   /** `v` of type `t` shown (Rule 7.4, [[derivedShow]]): a scalar by the runtime, `()` as `"()"`, a
     * `String` as it is, a data type by the program's `satisfies Show` body or else its derived
@@ -119,11 +119,13 @@ private[backend] trait Satisfied extends Generated:
             member(data, args, None)((a, _) => satisfactionBody(data, m.id, a, Type.UnitType).get)
           )
         )
-        body.orElse(knownDerived(t, derivedShow).map(_ -> Nil)) match
+        body.orElse(derived(t, derivedShow)) match
           case Some((f, ws)) => Expr.Let(s, Rhs.Call(f, ws :+ v, runtime = false), k(s))
           case None          =>
-            report(s"`show` on ${symbols.render(t)}")
-            k(Atom.StrC(""))
+            throughTable(t, "Show", "show", List(v), CType.Boxed)(k).getOrElse {
+              report(s"`show` on ${symbols.render(t)}")
+              k(Atom.StrC(""))
+            }
 
   /** Whether `a` and `b` of type `t` are equal: units always, scalars by a comparison, else by
     * [[equality]]; a type it cannot compare is a problem (`B005`).
@@ -136,8 +138,22 @@ private[backend] trait Satisfied extends Generated:
       equality(t, a, b) match
         case Some(rhs) => Expr.Let(r, rhs, k(r))
         case None      =>
-          report(s"`==` on ${symbols.render(t)}")
-          k(Atom.BoolC(false))
+          throughTable(t, "Eq", "eq", List(a, b), CType.Bool)(k).getOrElse {
+            report(s"`==` on ${symbols.render(t)}")
+            k(Atom.BoolC(false))
+          }
+
+  /** Member `member` of capability `cap` called on `args`, values of type parameter `t`, through
+    * its table of `cap`; `None` if `t` is not a type parameter or has no table of `cap` (its bound
+    * set, or the capability a table built at run time assumes for it, `Tables.assumed`).
+    */
+  private def throughTable(t: Type, cap: String, member: String, args: List[Atom], rt: CType)(k: K): Option[Expr] =
+    for
+      c <- symbols.prelude.get(cap) if isTypeParam(t)
+      table <- tableAtom(t, c).toOption
+    yield
+      val r = fresh("r", rt)
+      Expr.Let(r, Rhs.CallTable(table, Tables.members(symbols, c).indexOf(member), args), k(r))
 
   /** The function of the `satisfies` body that defines capability member `member` for `data`,
     * built at `data`'s arguments `args` and, for a member with a type parameter of its own, at `r`

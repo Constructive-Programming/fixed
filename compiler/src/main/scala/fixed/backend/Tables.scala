@@ -42,17 +42,60 @@ private[backend] trait Tables extends Satisfied:
 
   /** The table of capability `cap` at type `t`, or why there is none. */
   def table(t: Type, cap: SymbolId): Either[String, Atom.StaticTable] =
+    if typeParamsIn(t).nonEmpty then Left(s"no static table at `${symbols.render(t)}`, which has type parameters")
+    else entries(t, cap)
+
+  /** The table of `cap` at `t` with an entry per member, or why there is none. */
+  private def entries(t: Type, cap: SymbolId): Either[String, Atom.StaticTable] =
     val known = Lower.scalar(t).isDefined || dataOf(t).isDefined || isStringType(t) || productFields(t).isDefined
     val name = symbols(cap).name
     Option.when(known)(ctype(t, Span.NoSpan)) match
-      case _ if typeParamsIn(t).nonEmpty =>
-        Left(s"a table at `${symbols.render(t)}` needs a witness record built at run time, which is not built yet")
       case Some(c) =>
         val (missing, entries) = Tables.members(symbols, cap).partitionMap(m => entry(t, c, cap, m).toRight(m))
         missing.headOption match
           case Some(m) => Left(s"`${symbols.render(t)}` does not define `$name.$m`")
           case None    => Right(Atom.StaticTable(s"${symbols.render(t)}:$name", entries.map((_, ""))))
       case None => Left(s"no table of `$name` at `${symbols.render(t)}`")
+
+  /** The number of entries and the captured hidden variables of the run-time table being built. */
+  private val capturing = scala.util.DynamicVariable((0, List.empty[Atom.Var]))
+
+  /** The capability a data type's own parameters have while its run-time table is built: the
+    * derived `show` and `eq` reach a field of a parameter's type through its table of it. */
+  private val assumed = scala.util.DynamicVariable(Map.empty[Type, SymbolId])
+
+  /** The table of `cap` at `t`, a data type whose arguments mention type parameters, built at run
+    * time from the hidden arguments of its own parameters ([[Atom.DynTable]]): their witnesses and
+    * tables, the table of `cap` itself where it is `Show` or `Eq`, which the derived member needs.
+    * A type that grows under polymorphic recursion has no static table to enumerate. The entries
+    * are built once, at the data type's own parameters; a member they call that needs a hidden
+    * parameter the table does not hold makes it an error.
+    */
+  private def dynamicTable(t: Type, cap: SymbolId): Either[String, Atom.DynTable] =
+    dataOf(t).toRight(s"no table at `${symbols.render(t)}`, which has type parameters").flatMap { (data, args) =>
+      val own = symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil))
+      val derivedCap = Option.when(Set("Show", "Eq")(symbols.preludeName(cap)))(cap)
+      assumed.withValue(derivedCap.fold(Map.empty)(c => own.map(_ -> c).toMap)) {
+        val layout = own.flatMap(hiddenOf)
+        val tooMany = s"a table at `${symbols.render(t)}` holds more than ${Tables.maxCaptures} witnesses and tables"
+        for
+          captures <- hiddenArgs(own.zip(args))
+          _ <- Either.cond(captures.size <= Tables.maxCaptures, (), tooMany)
+          table <-
+            capturing.withValue((Tables.members(symbols, cap).size, layout))(entries(Type.TypeRef(data, own), cap))
+          entryFns = table.entries.map(_._1).filter(_.nonEmpty)
+          _ <- (entryFns ++ entryFns.flatMap(e => Core.callees(functionNamed(e).body))).distinct.map(functionNamed)
+            .collectFirst {
+              case f if (Core.freeVars(f.body) -- f.params).nonEmpty =>
+                s"`${f.name}` needs ${(Core.freeVars(f.body) -- f.params).map(_.name).mkString(", ")}, which it does not take"
+            }.toLeft(())
+        yield Atom.DynTable(table, captures)
+      }
+    }
+
+  /** The entries of the table of `cap` at `t`: static, or built at run time where `t` mentions type parameters. */
+  protected def layoutOf(t: Type, cap: SymbolId): Option[Atom.StaticTable] =
+    if typeParamsIn(t).nonEmpty then dynamicTable(t, cap).toOption.map(_.layout) else table(t, cap).toOption
 
   /** The capabilities of type parameter `p`'s bound set that get a table (Rule CM4.3): aliases
     * expanded, in the order written; a capability without members has none, and neither has one
@@ -65,7 +108,9 @@ private[backend] trait Tables extends Satisfied:
     match
       case Type.IsBound(bs) => bs
       case c                => List(c)
-    val caps = Members.expandAliases(symbols, bounds).collect { case Type.CapRef(c, _) => c }.distinct
+    val caps =
+      (Members.expandAliases(symbols, bounds).collect { case Type.CapRef(c, _) => c } ++
+        assumed.value.get(p)).distinct
     val tabled = caps.filter(Tables.members(symbols, _).nonEmpty)
     tabled.filterNot(c => tabled.exists(d => d != c && Tables.reached(symbols, d).contains(c)))
 
@@ -95,7 +140,8 @@ private[backend] trait Tables extends Satisfied:
     whys.headOption.toLeft(args)
 
   /** The table of capability `cap` at type `t` where the code being lowered runs: the table
-    * parameter of a type parameter whose bound set has `cap`, else the static table of a known type.
+    * parameter of a type parameter whose bound set has `cap`, the static table of a known type,
+    * else a table built at run time.
     */
   protected def tableAtom(t: Type, cap: SymbolId): Either[String, Atom] =
     if isTypeParam(t) then
@@ -104,6 +150,7 @@ private[backend] trait Tables extends Satisfied:
         tableOf(t, cap),
         s"no table of `${symbols(cap).name}` for `${symbols.render(t)}`, whose bound set has none of its own"
       )
+    else if typeParamsIn(t).nonEmpty then dynamicTable(t, cap)
     else table(t, cap)
 
   /** The entry of `member`: its adapter, `""` for a null entry, `None` if `t` does not define it.
@@ -162,8 +209,8 @@ private[backend] trait Tables extends Satisfied:
       case (Some("Sequencing"), "length", _) if list =>
         Some(adapter(name, length(data, own, Type.PrimType("u64"), Span.NoSpan), args, own))
       case (Some("Functor"), "map", Some(b)) => Some(adapter(name, derivedMap(data, own, b, Span.NoSpan), args, own))
-      case (Some("Show"), "show", _)         => knownDerived(t, derivedShow).map(adapter(name, _, args, own))
-      case (Some("Eq"), "eq", _)             => knownDerived(t, derivedEq).map(adapter(name, _, args, own))
+      case (Some("Show"), "show", _)         => derived(t, derivedShow).map(_._1).map(adapter(name, _, args, own))
+      case (Some("Eq"), "eq", _)             => derived(t, derivedEq).map(_._1).map(adapter(name, _, args, own))
       case _                                 => body(fromPrelude = true))
 
   /** An auto-flat-struct's entry `name` (`spec/type_system.md` §6.6): its constructor `ctor` builds
@@ -194,16 +241,23 @@ private[backend] trait Tables extends Satisfied:
   ): String =
     instance(name) {
       val fn = functionNamed(g)
-      val (ws, params) = fn.params.span(_.ctype == CType.Witness)
-      val fixed = own.zip(args).collect { case (Type.TypeRef(p, _), a) => witnessOf(p) -> witnessAtom(a) }.toMap
+      val (ws, params) = fn.params.span(p => p.ctype == CType.Witness || p.ctype == CType.Table)
+      val fixed = own.zip(args).collect {
+        case (Type.TypeRef(p, _), a) if a != Type.TypeRef(p, Nil) => witnessOf(p) -> witnessAtom(a)
+      }.toMap
+      val (entries, captured) = capturing.value
       val callbacks = params.drop(1)
       val inCapOrder =
         if variantOrder.isEmpty then callbacks
         else callbacks.indices.map(i => callbacks(variantOrder.indexOf(i))).toList
       val result: Atom.Var = Atom.Var("r", fn.ret)
       val call = Rhs.Call(g, ws.map(w => fixed.getOrElse(w, w)) ++ params, runtime = false)
-      val entryParams = table :: ws.filterNot(fixed.contains) ++ params.take(1) ++ inCapOrder
-      Fn(name, entryParams, fn.ret, Expr.Let(result, call, Expr.Ret(result)))
+      val entryParams = table :: ws.filterNot(w => fixed.contains(w) || captured.contains(w)) ++ params.take(1) ++
+        inCapOrder
+      val loaded = captured.zipWithIndex.filter((v, _) => ws.contains(v) && !fixed.contains(v)).foldRight(
+        Expr.Let(result, call, Expr.Ret(result))
+      ) { case ((v, i), body) => Expr.Let(v, Rhs.Field(table, Layout.captured(entries, i)), body) }
+      Fn(name, entryParams, fn.ret, loaded)
     }
 
   /** A constructor requirement mapped to variant `tag`, whose fields have types `fields`: the
@@ -262,6 +316,9 @@ object Tables:
   /** The (capability, member) pairs that are one binary primitive operation on a scalar. */
   private[backend] val scalarBinary: Map[(String, String), PrimOp] =
     arithmetic.map((name, op) => ("Numeric", name) -> op) + (("Eq", "eq") -> PrimOp.Eq)
+
+  /** The most witnesses and tables a table built at run time holds (`fx_table` in the runtime). */
+  private val maxCaptures = 64
 
   /** Members of the language the backend builds no entry for yet: `compare`, whose result is the
     * prelude's `Order` (P6 D17), and the others, which are not derived (`find` only for list-shaped

@@ -264,11 +264,15 @@ final class Demands(
     */
   private def call(f: String, as: List[Atom], live: Set[String], ctx: Ctx): Map[String, Need] =
     val args = as.flatMap(Core.countedVar).map(_.name)
-    as.zipWithIndex.collect { case (v: Atom.Var, i) =>
-      val n = sig(f, i)
-      Map(v.name -> (if !v.ctype.counted || exclusive(v.name, args, live, ctx) then n else n.shared))
+    as.zipWithIndex.collect {
+      case (v: Atom.Var, i) =>
+        val n = sig(f, i)
+        Map(v.name -> (if !v.ctype.counted || exclusive(v.name, args, live, ctx) then n else n.shared))
+      case (t: Atom.DynTable, _) => uses(List(t), Need.read)
     }.foldLeft(Map.empty[String, Need])(join)
 
-  /** Every variable among `as`, scalars included (a used scalar is not erased), demanded `n`. */
+  /** Every variable among `as`, scalars and the captures of a table built at run time included (a
+    * used scalar is not erased), demanded `n`.
+    */
   private def uses(as: List[Atom], n: Need): Map[String, Need] =
-    as.collect { case v: Atom.Var => v.name -> n }.groupMapReduce(_._1)(_._2)(_ join _)
+    as.flatMap(Core.vars).map(_.name -> n).groupMapReduce(_._1)(_._2)(_ join _)

@@ -431,7 +431,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
         at.foreach(b => frame.withValue(inner)(instance(callee)(function(decls(name), sigma, b, callee))))
         all(args, sc)(as => bind(Rhs.Call(callee, ws ++ as, runtime = false), t, sc)(k))
 
-  /** That no static table among the hidden arguments `pairs` has a null entry ([[Tables.unbuilt]])
+  /** That no table among the hidden arguments `pairs` has a null entry ([[Tables.unbuilt]])
     * where the callee's code calls one, or why: such a call then goes to an instance.
     */
   private def checkEntries(pairs: List[(Type, Type)]): Either[String, Unit] =
@@ -440,7 +440,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       for
         (p, t) <- pairs if !isTypeParam(t)
         cap <- boundCaps(p)
-        table <- table(t, cap).toOption.toList
+        table <- layoutOf(t, cap).toList
         (m, e) <- Tables.members(symbols, cap).zip(table.entries) if e._1.isEmpty && calledEntries(p)(m)
       yield s"`${symbols.render(t)}` has no `${symbols(cap).name}.$m` the backend builds"
     missing.headOption.toLeft(())

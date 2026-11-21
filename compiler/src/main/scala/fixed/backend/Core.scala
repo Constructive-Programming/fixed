@@ -45,6 +45,12 @@ enum Atom:
   /** Table `key`: per entry its shared and exclusive code (or `""`); stored exclusive first (Rule CM4.2). */
   case StaticTable(key: String, entries: List[(String, String)])
 
+  /** A table built at run time (`fx_table`): the entries of `layout`, then `captures`, the
+    * witnesses and tables of the type's arguments, which the entries read as payload slots from
+    * [[Layout.captured]] on. Equal contents give the same table.
+    */
+  case DynTable(layout: StaticTable, captures: List[Atom])
+
   def tpe: CType =
     this match
       case Var(_, t)        => t
@@ -55,6 +61,7 @@ enum Atom:
       case StrC(_)          => CType.Boxed
       case _: StaticWitness => CType.Witness
       case _: StaticTable   => CType.Table
+      case _: DynTable      => CType.Table
 
 extension (rhs: Rhs)
   /** `rhs` with `f` applied to each branch of an `If` or `Switch`; other right-hand sides unchanged. */
@@ -229,7 +236,12 @@ object Core:
 
   /** The code of the tables `e` names anywhere, its results included. */
   def tableEntries(e: Expr): List[String] =
-    operands(e).collect { case Atom.StaticTable(_, es) => es.flatMap((s, x) => List(s, x)) }.flatten.filter(_.nonEmpty)
+    def of(a: Atom): List[String] =
+      a match
+        case Atom.StaticTable(_, es) => es.flatMap((s, x) => List(s, x))
+        case Atom.DynTable(l, cs)    => of(l) ++ cs.flatMap(of)
+        case _                       => Nil
+    operands(e).flatMap(of).filter(_.nonEmpty)
 
   def branches(rhs: Rhs): List[Expr] =
     rhs match
@@ -265,9 +277,16 @@ object Core:
     val next = from ++ from.flatMap(f => byName.get(f).toList.flatMap(g => callees(g.body)))
     if next == from then from else reach(next, byName)
 
+  /** The variables atom `a` reads: itself, or the captures of a table built at run time. */
+  def vars(a: Atom): List[Atom.Var] =
+    a match
+      case v: Atom.Var          => List(v)
+      case Atom.DynTable(_, cs) => cs.flatMap(vars)
+      case _                    => Nil
+
   /** Every variable `e` uses but does not bind (a slot's witness too): a lambda's captures. */
   def freeVars(e: Expr): Set[Atom.Var] =
-    def vars(as: List[Atom]): Set[Atom.Var] = as.collect { case v: Atom.Var => v :: witnessOf(v).toList }.flatten.toSet
+    def vars(as: List[Atom]): Set[Atom.Var] = as.flatMap(Core.vars).flatMap(v => v :: witnessOf(v).toList).toSet
     e match
       case Expr.Let(x, r, body) => vars(atoms(r)) ++ branches(r).flatMap(freeVars) ++ (freeVars(body) - x)
       case Expr.Ret(a)          => vars(List(a))
@@ -286,6 +305,11 @@ object Layout:
 
   /** Payload slots a closure spends on code pointers: the exclusive entry, then the shared one. */
   val closureCode: Int = 2
+
+  /** The payload slot of capture `i` of a table built at run time with `entries` entries
+    * ([[Atom.DynTable]]): the entries take two pointers each from offset 0, a payload from 16.
+    */
+  def captured(entries: Int, i: Int): Int = 2 * entries - 2 + i
 
   /** The width of the header's reference map: only slots below it can hold a reference. */
   val refMapBits: Int = 32

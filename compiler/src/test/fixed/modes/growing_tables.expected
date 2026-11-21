@@ -1,0 +1,10 @@
+Pair(Pair(7, Box(7)), Box(Pair(7, Box(7))))
+Pair(s, Box(s))
+Pair(Pair(3, 1), Box(Pair(3, 1)))
+true
+false
+true
+pair
+1000
+Sorted(Sorted(Leaf(40))) 1
+Box(uv)

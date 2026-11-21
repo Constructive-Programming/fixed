@@ -378,6 +378,14 @@ final class EmitLLVM:
         val ptrs = es.map((sh, ex) => s"{ ptr, ptr } { ptr ${code(orCode(ex, sh))}, ptr ${code(sh)} }")
         statics(name) = s"$name = private unnamed_addr constant [${es.size} x { ptr, ptr }] [${ptrs.mkString(", ")}]\n"
         name
+      case Atom.DynTable(layout, captures) =>
+        declared("fx_table") = "declare ptr @fx_table(ptr, i64, i64, ...)"
+        val args =
+          (s"ptr ${operand(layout)}" :: s"i64 ${layout.entries.size}" :: s"i64 ${captures.size}" ::
+            captures.map(c => s"ptr ${operand(c)}")).mkString(", ")
+        val n = ids.next()
+        line(s"  %dt.$n = call ptr (ptr, i64, i64, ...) @fx_table($args)")
+        s"%dt.$n"
 
   /** A string constant: a static heap object (`rc = -1`, never counted or freed). Layout as `fx_string`. */
   private def stringGlobal(name: String, s: String): String =

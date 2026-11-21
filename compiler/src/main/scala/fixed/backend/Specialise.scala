@@ -92,6 +92,7 @@ object Specialise:
     val hidden = (a: Atom) =>
       a match
         case Atom.Var(_, CType.Witness | CType.Table) => true
+        case _: Atom.DynTable                         => true
         case _                                        => false
     val sites = Core.lets(f.body).count {
       case (_, Rhs.CallTable(t, _, _, _)) => hidden(t)

@@ -503,4 +503,4 @@ class WitnessSuite extends munit.FunSuite:
       Left("`List of u64` does not define `Numeric.fromI64`")
     )
     val a = fixed.core.Type.TypeRef(symbols.typeParamsOf(symbols.scope("List")).head, Nil)
-    assert(Lower(unit).table(data("List", a), symbols.scope("Folding")).left.exists(_.contains("run time")))
+    assert(Lower(unit).table(data("List", a), symbols.scope("Folding")).left.exists(_.contains("no static table")))

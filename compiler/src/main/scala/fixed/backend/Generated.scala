@@ -8,7 +8,7 @@ import fixed.util.Span
   * per Rule 7.4.a.1), Rule 7.4.b `unfold`, Rule 7.4.c `map`, and for list-shaped data
   * `Folding.fold`, `length` and `find`: one baseline version per data type, at its own parameters,
   * and clones at known arguments ([[member]]). The derived `show` and `eq` are built at known
-  * arguments only.
+  * arguments, and at a data type's own parameters for a table built at run time.
   * Arguments that are type parameters make a polymorphic member with hidden witness parameters
   * ([[hidden]]).
   */
@@ -51,6 +51,9 @@ private[backend] trait Generated:
 
   /** Whether `a` and `b`, values of type `t`, are equal: `k` gets the `bool` ([[Satisfied]]). */
   protected def equalValues(t: Type, a: Atom, b: Atom)(k: K): Expr
+
+  /** The hidden parameters of type parameter `p`: its witness, then its tables (`Tables.hiddenOf`). */
+  protected def hiddenOf(p: Type): List[Var]
 
   /** Record `x`'s typer type for `Demands`; returns `x`. */
   protected def typed(x: Var, t: Type, span: Span): Var
@@ -254,13 +257,17 @@ private[backend] trait Generated:
       Fn(name, ws ++ List(acc, done), CType.Boxed, switch(acc, branches, CType.Boxed))
     }
 
-  /** Rule 7.4 derived `show` (`spec/stdlib.md` §4.10) at known arguments: a variant without
-    * fields shows its name, another `Name(f1, f2, ...)`, each field shown by [[showValue]].
+  /** Rule 7.4 derived `show` (`spec/stdlib.md` §4.10): a variant without fields shows its name,
+    * another `Name(f1, f2, ...)`, each field shown by [[showValue]]. At arguments that mention type
+    * parameters it takes their hidden parameters, their `Show` tables among them, which its name
+    * lists: they depend on the bound sets in scope (`Tables.assumed`).
     * ponytail: each concatenation copies the string so far, quadratic in the size of the value;
     * collect the parts and join them once if large values are shown.
     */
   protected def derivedShow(data: SymbolId, args: List[Type]): String =
-    val (name, t) = (generatedName(data, args, "show", ""), Type.TypeRef(data, args))
+    val t = Type.TypeRef(data, args)
+    val ws = typeParamsIn(t).flatMap(hiddenOf)
+    val name = generatedName(data, args, "show", ws.map(_.name).mkString(", "))
     instance(name) {
       val x = typed(fresh("x", CType.Boxed), t, Span.NoSpan)
       val concat = (a: Atom, b: Atom) => bound(Rhs.Call("fx_str_concat", List(a, b), runtime = true), CType.Boxed)
@@ -275,16 +282,17 @@ private[backend] trait Generated:
         if loaded.isEmpty then Expr.Ret(Atom.StrC(ctor)) else fields(loaded, Atom.StrC(s"$ctor("), first = true)
       }
       val shown = switch(x, branches, CType.Boxed)
-      Fn(name, List(x), CType.Boxed, shown)
+      Fn(name, ws :+ x, CType.Boxed, shown)
     }
 
-  /** Rule 7.4 derived `eq` (`spec/stdlib.md` §4.7, component-wise) at known arguments: the same
-    * variant, and each pair of fields equal by [[equalValues]]. ponytail: the variants are compared
+  /** Rule 7.4 derived `eq` (`spec/stdlib.md` §4.7, component-wise): the same variant, and each pair
+    * of fields equal by [[equalValues]]; hidden parameters as for [[derivedShow]]. ponytail: the variants are compared
     * by a switch in a switch, quadratic in their number; compare tags once Core can read one.
     */
   protected def derivedEq(data: SymbolId, args: List[Type]): String =
     val (t, span) = (Type.TypeRef(data, args), Span.NoSpan)
-    val name = generatedName(data, args, "eq", "")
+    val ws = typeParamsIn(t).flatMap(hiddenOf)
+    val name = generatedName(data, args, "eq", ws.map(_.name).mkString(", "))
     instance(name) {
       val (a, b) = (typed(fresh("a", CType.Boxed), t, span), typed(fresh("b", CType.Boxed), t, span))
       def all(pairs: List[((Type, Var), (Type, Var))]): Expr =
@@ -298,7 +306,7 @@ private[backend] trait Generated:
         }
         switch(b, inner, CType.Bool)
       }
-      Fn(name, List(a, b), CType.Bool, switch(a, branches, CType.Bool))
+      Fn(name, ws ++ List(a, b), CType.Bool, switch(a, branches, CType.Bool))
     }
 
   /** A part of a field that a generated member rebuilds: its type before and after, and how to

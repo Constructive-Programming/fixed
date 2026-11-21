@@ -15,6 +15,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <inttypes.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -176,6 +177,71 @@ static int64_t ref_copy(int64_t v) {
 
 const fx_witness fx_w_imm = {0, imm_keep, imm_keep, imm_copy};
 const fx_witness fx_w_ref = {1, ref_dup, ref_drop, ref_copy};
+
+/* ---- capability tables built at run time (spec/compilation_model.md Rule CM4.2) ---- */
+
+/* The table of a capability at a type whose arguments are known only at run time (a type that
+   grows under polymorphic recursion, `Pair of (T, T)` in a function generic in `T`): the `entries`
+   code pointer pairs of the static `layout`, then the `n` witnesses and tables of its arguments,
+   which the entries read. Rule CM4.2 builds such a record on the stack of the frame that forms it;
+   here it is interned on the heap instead, because a closure that captures it may outlive that
+   frame, and a record on the stack of a self call that is a loop would grow the stack. Equal
+   contents give the same table, so each type a run reaches has one table, kept until exit: as many
+   as the static tables an enumeration at compile time would need, which cannot be done for a type
+   that grows. The compiler keeps `n` at most 64 (`Tables.maxCaptures`). ponytail: an open-
+   addressing table with linear probing that doubles at half full, never freed; free tables with
+   the frames that form them if a run reaches too many types. */
+typedef struct fx_table_key {
+    const void *layout;
+    int64_t entries, n;
+    void **table;
+} fx_table_key;
+
+static fx_table_key *tables;
+static size_t tables_cap, tables_len;
+
+static size_t table_hash(const void *layout, int64_t n, void *const *args) {
+    size_t h = (size_t)(uintptr_t)layout * 0x9E3779B97F4A7C15u;
+    for (int64_t i = 0; i < n; i++) h = (h ^ (size_t)(uintptr_t)args[i]) * 0x100000001B3u;
+    return h;
+}
+
+static bool table_is(const fx_table_key *k, const void *layout, int64_t n, void *const *args) {
+    return k->layout == layout && k->n == n && memcmp(k->table + 2 * k->entries, args, (size_t)n * sizeof(void *)) == 0;
+}
+
+void *fx_table(const void *layout, int64_t entries, int64_t n, ...) {
+    void *args[64];
+    if (n > 64) fx_die("internal error: a table built at run time with more than 64 arguments", 103);
+    va_list ap;
+    va_start(ap, n);
+    for (int64_t i = 0; i < n; i++) args[i] = va_arg(ap, void *);
+    va_end(ap);
+    if (2 * (tables_len + 1) > tables_cap) {
+        size_t cap = tables_cap ? 2 * tables_cap : 64;
+        fx_table_key *grown = calloc(cap, sizeof *grown);
+        if (!grown) fx_die("out of memory", 102);
+        for (size_t i = 0; i < tables_cap; i++)
+            if (tables[i].layout) {
+                size_t j = table_hash(tables[i].layout, tables[i].n, tables[i].table + 2 * tables[i].entries) & (cap - 1);
+                while (grown[j].layout) j = (j + 1) & (cap - 1);
+                grown[j] = tables[i];
+            }
+        free(tables);
+        tables = grown;
+        tables_cap = cap;
+    }
+    size_t i = table_hash(layout, n, args) & (tables_cap - 1);
+    for (; tables[i].layout; i = (i + 1) & (tables_cap - 1))
+        if (table_is(&tables[i], layout, n, args)) return tables[i].table;
+    void **t = malloc((size_t)(2 * entries + n) * sizeof(void *));
+    if (!t) fx_die("out of memory", 102);
+    memcpy(t, layout, (size_t)(2 * entries) * sizeof(void *));
+    memcpy(t + 2 * entries, args, (size_t)n * sizeof(void *));
+    tables[i] = (fx_table_key){layout, entries, n, t};
+    tables_len++;
+    return t;
+}
 
 /* ---- checked abort for abortive effect operations (slice §4.6) ---- */
 
