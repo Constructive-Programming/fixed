@@ -14,19 +14,31 @@ import fixed.util.Span
   * or are consumed by the runtime function the entry calls, so no entry has a borrowed value to drop.
   * A data type's entries call members generated once, polymorphic in its own type parameters, and
   * pass them the static witnesses of the instance's arguments: the adapter is per instance, the
-  * member's body is shared. An adapter reaches its member through an ordinary call, so where the
-  * member only reads an argument, reference counting drops it in the adapter. An auto-flat-struct's
+  * member's body is shared. A member a `satisfies` body defines calls that body ([[Satisfied]]):
+  * the program's before anything generated, the prelude's where nothing is. An adapter reaches its
+  * member through an ordinary call, so where the member only reads an argument, reference counting drops it in the adapter. An auto-flat-struct's
   * entries are its constructor and a field reader per field, which drops the struct it receives.
   *
   * A member of the language the backend does not build yet ([[Tables.unbuilt]]) gets a null entry;
   * no lowering asks for one. Any other member a type does not define makes the table an error. The
   * hidden entries `lt` and `le` stand in for `compare` (plan §2).
   */
-private[backend] trait Tables extends Generated:
+private[backend] trait Tables extends Satisfied:
+  this: Lower =>
 
-  protected def mappedFold(cap: SymbolId, recvType: Type, arity: Int): Option[List[Int]]
-  protected def productFields(t: Type): Option[(String, List[(String, Type)])]
-  protected def functionNamed(name: String): Fn
+  /** A sum capability's `fold` on the data type representing it: callbacks follow the capability's
+    * constructor requirements; the data's derived fold takes them in variant order. For each
+    * variant, the index of the argument that handles it.
+    */
+  protected def mappedFold(cap: SymbolId, recvType: Type, arity: Int): Option[List[Int]] =
+    dataOf(recvType).flatMap { (data, _) =>
+      val ctors = symbols.membersOf(cap).filter(_.kind == SymKind.StaticMethod).map(_.name).toList
+      val variants = symbols.variantsOf(data).map(_.name).toList
+      val variantOf = ctors.map(c => symbols.constructorsOf(cap, c).find(_._1 == data).map(_._2))
+      Option.when(ctors.size == arity && variantOf.forall(_.isDefined) && variantOf.flatten.toSet == variants.toSet)(
+        variants.map(v => variantOf.indexOf(Some(v)))
+      )
+    }
 
   /** The table of capability `cap` at type `t`, or why there is none. */
   def table(t: Type, cap: SymbolId): Either[String, Atom.StaticTable] =
@@ -112,7 +124,13 @@ private[backend] trait Tables extends Generated:
       typeParamsIn(d.info).collectFirst { case Type.TypeRef(p, _) if symbols(p).owner == d.id => Generated.R }
     )
     val arity = decl.map(_.info).collect { case Type.ArrowType(lhs, _, _) => Members.params(lhs).size }.getOrElse(0)
-    (decl.map(d => symbols(d.owner).name), member, r) match
+
+    /** The entry over a `satisfies` body: the program's before a generated member, the prelude's after. */
+    def body(fromPrelude: Boolean) =
+      decl.filter(d => hasBody(t, d.id, fromPrelude))
+        .flatMap(d => satisfactionBody(data, d.id, own, r.getOrElse(Type.UnitType)))
+        .map(adapter(name, _, args, own))
+    body(fromPrelude = false).orElse((decl.map(d => symbols(d.owner).name), member, r) match
       case (_, ctor, _) if decl.exists(_.kind == SymKind.StaticMethod) =>
         capVariant(cap, ctor, t).map(tag =>
           constructor(name, tag, fieldTypes(data, args, symbols.variantsOf(data).toList(tag).id))
@@ -128,7 +146,7 @@ private[backend] trait Tables extends Generated:
       case (Some("Sequencing"), "length", _) if list =>
         Some(adapter(name, length(data, own, Type.PrimType("u64"), Span.NoSpan), args, own))
       case (Some("Functor"), "map", Some(b)) => Some(adapter(name, derivedMap(data, own, b, Span.NoSpan), args, own))
-      case _                                 => None
+      case _                                 => body(fromPrelude = true))
 
   /** An auto-flat-struct's entry `name` (`spec/type_system.md` §6.6): its constructor `ctor` builds
     * the struct from `fields`, and a member named like a field reads it.

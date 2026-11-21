@@ -334,7 +334,7 @@ private[backend] trait Generated:
     s"${symbols.render(Type.TypeRef(data, args))}.$member[$at]"
 
   /** `t` as a generated member's name shows it. */
-  private def shown(t: Type): String = if t == Generated.R then "R" else symbols.render(t)
+  protected def shown(t: Type): String = if t == Generated.R then "R" else symbols.render(t)
 
   /** One `Switch` branch per variant of `data`: `obj`'s fields loaded, then `body(tag, fields)`.
     * Inside an unfold layer, recursive fields hold a seed of type `seed`.

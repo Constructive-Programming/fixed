@@ -26,7 +26,16 @@ object TyperPhase extends Phase:
     val bodies = items.collect { case f: Trees.FnDecl => f }.foldLeft(TyperState(symbols))(typeFnBody)
     val withPrelude =
       Stdlib.prelude.collect { case f: Trees.FnDecl if f.body.isDefined => f }.foldLeft(bodies)(typePreludeFn)
-    Declarations.check(withPrelude, items).finish
+    Declarations.check(withPrelude, preludeSatisfactions(symbols) ++ items).finish
+
+  /** The prelude's `satisfies` declarations, whose method bodies are typed with the unit's and
+    * lowered where no generated member stands in for them; none when the unit declares a top-level
+    * name the prelude declares too, since the bodies are typed in the unit's scope.
+    */
+  def preludeSatisfactions(symbols: SymbolTable): List[Trees.SatisfiesDecl] =
+    val prelude = symbols.denotations.filter(_.owner == SymbolId.Prelude).map(_.name.stripPrefix("prelude.")).toSet
+    val shadowed = symbols.scope.exists((name, id) => symbols(id).owner == SymbolId.Root && prelude(name))
+    if shadowed then Nil else Stdlib.prelude.collect { case d: Trees.SatisfiesDecl => d }
 
   /** A prelude function with a body, unless the unit declares its own of the same name. */
   private def typePreludeFn(s: TyperState, fn: Trees.FnDecl): TyperState =

@@ -700,8 +700,10 @@ class TyperSuite extends munit.FunSuite:
         "fn lo() -> is Ordering = Ordering.lt\nfn same() -> is Ordering = Ordering.eq\nfn hi() -> is Ordering = Ordering.gt\n"
     )
     assertEquals(s.diags, Nil)
+
+    /** The prelude's own `satisfies` bodies resolve `Optional.some` and `none` to `Maybe`. */
     assertEquals(
-      s.constructors.map((_, d, v) => s"${s.symbols(d).name}.$v").sorted,
+      s.constructors.map((_, d, v) => s"${s.symbols(d).name}.$v").filterNot(Set("Maybe.Just", "Maybe.Nothing")).sorted,
       List("Order.Equal", "Order.Greater", "Order.Less")
     )
 
@@ -709,7 +711,10 @@ class TyperSuite extends munit.FunSuite:
     val cmp = "data Cmp:\n    Lo\n    Mid\n    Hi\nCmp satisfies Ordering:\n    Lo as lt\n    Mid as eq\n    Hi as gt\n"
     assertEquals(codes(typedUnit(cmp + "fn f() -> is Ordering = Ordering.gt\n")), List(DiagCode.T011))
     val c = typedUnit(cmp + "fn g() -> Cmp = Ordering.gt\n")
-    assertEquals((c.diags, c.constructors.map((_, _, v) => v)), (Nil, List("Hi")))
+    assertEquals(
+      (c.diags, c.constructors.collect { case (_, d, v) if c.symbols(d).name != "Maybe" => v }),
+      (Nil, List("Hi"))
+    )
 
   test("3.1.M3: the stdlib's own satisfies declarations pass the checks"):
     val (table, _) = Namer.index(Parser.parse(SourceFile.fromString("<empty>", "")).tree)
@@ -766,7 +771,10 @@ class TyperSuite extends munit.FunSuite:
     assertEquals(typedUnit(withDefault).diags, Nil)
     val resolved = typedUnit(withDefault + "fn make() -> Simple = Queue.empty\n")
     assertEquals(resolved.diags, Nil)
-    assertEquals(resolved.constructors.map((_, _, v) => v), List("Simple"))
+    assertEquals(
+      resolved.constructors.collect { case (_, d, v) if resolved.symbols(d).name != "Maybe" => v },
+      List("Simple")
+    )
     val noDefault = cap +
       "data Simple(tasks: List of u64)\nSimple satisfies Queue:\n    Simple as empty\n    fn size = 0\n"
     assertEquals(codes(typedUnit(noDefault)), List(DiagCode.T010))

@@ -22,7 +22,7 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
   * built is lowered per instance. Constructs beyond the current milestone are `B005`, and so is a
   * cell with a reference beyond its header's reference map (`refMapLimit`).
   */
-final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.empty) extends Tables:
+final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(String, String)] = Set.empty) extends Tables:
   private type Env = Map[String, Var]
   private type Sigma = Map[SymbolId, Type]
 
@@ -162,15 +162,32 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
       name: String,
       hidden: List[Var] = Nil
   ): Fn =
-    val (paramTypes, ret) = symbols(symbols.scope(decl.name)).info match
-      case Type.ArrowType(lhs, r, _) =>
-        (Members.params(lhs).map(concrete(_, sigma, bounds)), concrete(r, sigma, bounds))
-      case other => (Nil, other)
-    val params = decl.params.zip(paramTypes).map((p, t) => typed(fresh(p.name, ctype(t, p.span)), t, p.span))
-    spans(name) = decl.span
+    val (paramTypes, ret) = TypeOps.signature(symbols(symbols.scope(decl.name)).info)
     decl.fip.foreach(fips(name) = _)
-    val sc = Scope(decl.params.map(_.name).zip(params).toMap, sigma, bounds)
-    Fn(name, hidden ++ params, ctype(ret, decl.span), decl.body.fold(Expr.Ret(Atom.UnitC))(tail(_, sc)))
+    code(name, decl.params.map(p => (p.name, p.span)).zip(paramTypes), ret, decl, sigma, bounds, hidden)
+
+  /** Function `name` over `body`: `hidden`, then `params` at their types made concrete. */
+  private[backend] def code(
+      name: String,
+      params: List[((String, Span), Type)],
+      ret: Type,
+      body: Trees.FnLike,
+      sigma: Sigma,
+      bounds: Map[Type, Type],
+      hidden: List[Var]
+  ): Fn =
+    val vars = params.map { case ((p, span), t) =>
+      val at = concrete(t, sigma, bounds)
+      typed(fresh(p, ctype(at, span)), at, span)
+    }
+    spans(name) = body.span
+    val sc = Scope(params.map(_._1._1).zip(vars).toMap, sigma, bounds)
+    Fn(
+      name,
+      hidden ++ vars,
+      ctype(concrete(ret, sigma, bounds), body.span),
+      body.body.fold(Expr.Ret(Atom.UnitC))(tail(_, sc))
+    )
 
   private def expr(t: Tree, sc: Scope)(k: K): Expr =
     t match
@@ -289,12 +306,13 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
         expr(b.lhs, sc)(l =>
           expr(b.rhs, sc)(r =>
             (op, l.tpe) match
-              case (_, _: CType.Slot) => slotOp(op, l, r, typeOf(b.lhs, sc), b, sc)(k)
-              case (Eq, CType.Boxed)  => bind(Rhs.Call("fx_str_eq", List(l, r), runtime = true), b, sc)(k)
-              case (Neq, CType.Boxed) =>
-                val eq = fresh("eq", CType.Bool)
-                val ne = bind(Rhs.Prim(PrimOp.Not, List(eq)), b, sc)(k)
-                Expr.Let(eq, Rhs.Call("fx_str_eq", List(l, r), runtime = true), ne)
+              case (_, _: CType.Slot)      => slotOp(op, l, r, typeOf(b.lhs, sc), b, sc)(k)
+              case (Eq | Neq, CType.Boxed) =>
+                val (v, t) = (fresh("eq", CType.Bool), typeOf(b.lhs, sc))
+                def result = if op == Eq then k(v) else bind(Rhs.Prim(PrimOp.Not, List(v)), b, sc)(k)
+                equality(t, l, r).fold(unsupported(b.span, s"`${op.symbol}` on ${symbols.render(t)}", k))(
+                  Expr.Let(v, _, result)
+                )
               case (_, CType.Boxed) => unsupported(b.span, s"`${op.symbol}` on boxed values", k)
               case _                => bind(Rhs.Prim(Lower.prim(op), List(l, r)), b, sc)(k)
           )
@@ -538,7 +556,9 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
         generatedCall(recvType, m, sc, Some(typeOf(m, sc)))(derivedFold(_, _, _, m.span))(k)
       case Some(Resolution.CapMember(_, member)) if isTypeParam(recvType) =>
         tableMethod(m, member, recvType, args, sc)(k)
-      case Some(Resolution.CapMember(cap, _)) =>
+      case Some(Resolution.CapMember(_, member)) if hasBody(recvType, member, fromPrelude = false) =>
+        bodyCall(m, member, recvType, sc)(k)
+      case Some(Resolution.CapMember(cap, member)) =>
         (symbols(cap).name, m.method, args) match
           case ("Concat", "concat", List(arg)) =>
             expr(m.receiver, sc)(r => expr(arg, sc)(a => runtime("fx_str_concat", List(r, a), m, sc)(k)))
@@ -575,6 +595,7 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
                 )(k)
               case None => unsupported(m.span, s"`find` returning ${symbols.render(raw)}", k)
           case (_, name, Nil) if productField(recvType, name).isDefined => fieldRead(recvType, m, sc)(k)
+          case _ if hasBody(recvType, member, fromPrelude = true)       => bodyCall(m, member, recvType, sc)(k)
           case (c, name, _)                                             =>
             unsupported(m.span, s"member $c.$name on ${symbols.render(recvType)} (arrives in 4.0.M4)", k)
       case None => unsupported(m.span, s"member `${m.method}`", k)
@@ -587,9 +608,7 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
   private def tableMethod(m: Trees.MethodCall, member: SymbolId, t: Type, args: List[Tree], sc: Scope)(k: K): Expr =
     val d = symbols(member)
     val own = symbols.typeParamsOf(member)
-    val (declared, ret) = TypeOps.signature(d.info)
-    val actual = declared.zip(args.map(typeOf(_, sc))) :+ (ret -> typeOf(m, sc))
-    val solved = actual.foldLeft(Map.empty[SymbolId, Type])((acc, dc) => TypeOps.solve(own.toSet, dc._1, dc._2, acc))
+    val solved = ownTypeArgs(member, args.map(typeOf(_, sc)), typeOf(m, sc))
     own.find(!solved.contains(_)) match
       case Some(q) => unsupported(m.span, s"`${m.method}` whose `${symbols(q).name}` the call does not determine", k)
       case None    =>
@@ -598,19 +617,10 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
           all(args, sc)(as => tableCall(t, symbols(d.owner).name, m.method, witnesses ++ (r :: as), m, sc)(k))
         )
 
-  /** A sum capability's `fold` on the data type representing it: callbacks follow the capability's
-    * constructor requirements; the data's derived fold takes them in variant order. For each
-    * variant, the index of the argument that handles it.
-    */
-  protected def mappedFold(cap: SymbolId, recvType: Type, arity: Int): Option[List[Int]] =
-    dataOf(recvType).flatMap { (data, _) =>
-      val ctors = symbols.membersOf(cap).filter(_.kind == SymKind.StaticMethod).map(_.name).toList
-      val variants = symbols.variantsOf(data).map(_.name).toList
-      val variantOf = ctors.map(c => symbols.constructorsOf(cap, c).find(_._1 == data).map(_._2))
-      Option.when(ctors.size == arity && variantOf.forall(_.isDefined) && variantOf.flatten.toSet == variants.toSet)(
-        variants.map(v => variantOf.indexOf(Some(v)))
-      )
-    }
+  /** `m`, a call of capability `member` on `recvType`, through its `satisfies` body. */
+  private def bodyCall(m: Trees.MethodCall, member: SymbolId, recvType: Type, sc: Scope)(k: K): Expr =
+    val r = ownTypeArg(member, m.args.getOrElse(Nil).map(typeOf(_, sc)), typeOf(m, sc))
+    generatedCall(recvType, m, sc, r)((d, a, r) => satisfactionBody(d, member, a, r).get)(k)
 
   private def fieldRead(recvType: Type, m: Trees.MethodCall, sc: Scope)(k: K): Expr =
     expr(m.receiver, sc)(r => bind(Rhs.Field(r, productField(recvType, m.method).get), m, sc)(k))
@@ -806,7 +816,11 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
     */
   private def captures(body: Expr, params: List[Var]): List[Var] =
     val bound = params ++ Core.lets(body).map(_._1)
-    (Core.freeVars(body) ++ bound.flatMap(Core.witnessOf) -- params).toList.sortBy(_.name)
+
+    /** Witnesses first: captures load in order, and copying a slot needs its witness loaded. */
+    (Core.freeVars(body) ++ bound.flatMap(Core.witnessOf) -- params).toList.sortBy(v =>
+      (v.ctype != CType.Witness, v.name)
+    )
 
   /** A nested `fn` is a closure bound to its name. */
   private def nestedFn(f: Trees.FnDecl, sc: Scope)(k: Var => Expr): Expr =
@@ -912,12 +926,6 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
     represent(TypeOps.subst(TypeOps.replaceAll(t, bounds), sigma))
 
   private def isFn(name: String): Boolean = symbols.scope.get(name).exists(symbols(_).kind == SymKind.Fn)
-
-  protected def isStringType(t: Type): Boolean =
-    t match
-      case Type.TypeRef(id, Nil)   => symbols(id).name == "String" && symbols(id).owner == SymbolId.Prelude
-      case Type.PrimType("String") => true
-      case _                       => false
 
   protected def ctype(t: Type, span: Span): CType =
     Lower.scalar(t).getOrElse(t match
