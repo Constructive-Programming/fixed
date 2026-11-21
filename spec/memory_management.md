@@ -1,8 +1,10 @@
 # Fixed Memory Management
 
-**Status:** Draft v0.5.2
+**Status:** Draft v0.5.3
 **Specifies:** how the compiler places, frees and reference-counts runtime values for Fixed v0.4.4 source: lifetime classes, immediates, data-stack regions, counted regions, the Perceus heap, destinations, value witnesses, reuse (FBIP), borrowing, effect-handler memory, structured parallelism, the `fip` contract and the memory report.
-**Last revised:** 2026-11-20
+**Last revised:** 2026-11-21
+
+**Changes from v0.5.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"), decision 3. OQ-PR5: derived `fold`, `unfold` and `map` of linear data run in bounded native stack (`spec/type_system.md` Rule 7.4.b.3); trees do not yet.
 
 **Changes from v0.5.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Descriptors on every cell are decided; only the optimisation of omitting one stays open (OQ-MM7). Rule MM20.2: no witness travels with an anonymous result.
 
@@ -932,7 +934,7 @@ The `Lock` handler is installed once and consumed by `Lock.release`. Its continu
 - **OQ-PR2 — Atomic vs non-atomic counts.** Resolved for structured parallelism by Rule MM17.2. Reopens only if unstructured concurrency is added (§17.4).
 - **OQ-PR3 — Cyclic data.** Fixed data cannot form cycles. Deferred until mutability is in scope (it is not planned).
 - **OQ-PR4 — Borrow leakage through closures.** A borrowed parameter captured by a closure must not outlive the borrow. Rule MM5.2(a) and Rule PR5.6 cover escaping closures; the details belong to the borrow analyzer.
-- **OQ-PR5 — Tail-call guarantees.** Rule PR7.3 requires TCO for drop functions, and `fip(strict)` needs loops for list-shaped folds. The contract for general code is still open.
+- **OQ-PR5 — Tail-call guarantees.** Rule PR7.3 requires TCO for drop functions, and `fip(strict)` needs loops for list-shaped folds. Derived `fold`, `unfold` and `map` of linear data run in bounded native stack (`spec/type_system.md` Rule 7.4.b.3); derived members of trees do not yet. The contract for general code is still open.
 - **OQ-PR6 — Reuse fingerprint algorithm.** Implementation-defined until a second compiler exists.
 - ~~**OQ-MM1 — Grammar for `fip`.**~~ Resolved in v0.4. `fip`, `fip(n)` and `fip(strict)` are in `spec/syntax_grammar.ebnf` v0.4.10 (`FipModifier`), on function declarations, capability method requirements and `satisfies` methods (Rule MM18.5).
 - **OQ-MM2 — Chunk sizes and pools.** First-chunk size, the growth factor and fiber/lane pool policy are implementation-defined until measured.
