@@ -226,8 +226,10 @@ object Typer:
       case Lt | Le | Gt | Ge | Eq | Neq =>
         val (s1, l) = typedExpr(s, t.lhs, Proto.Wildcard)
         val (s2, _) = typedExpr(s1, t.rhs, Proto.ExpectedType(l))
-        val eq = s2.symbols.scope.get("Eq").filter(_ => t.op == Eq || t.op == Neq)
-        (eq.fold(s2)(cap => requireBound(s2, BoundCheck(l, cap, t.op.symbol, t.span, ctx.owner))), bool)
+
+        /** `==` and `!=` are `Eq.eq`; `<`, `<=`, `>` and `>=` are `Ord.compare` (`spec/stdlib.md` §4.7, §4.8). */
+        val cap = s2.symbols.scope.get(if t.op == Eq || t.op == Neq then "Eq" else "Ord")
+        (cap.fold(s2)(c => requireBound(s2, BoundCheck(l, c, t.op.symbol, t.span, ctx.owner))), bool)
       case And | Or =>
         val (s1, _) = typedExpr(s, t.lhs, Proto.ExpectedType(bool))
         val (s2, _) = typedExpr(s1, t.rhs, Proto.ExpectedType(bool))
@@ -367,26 +369,45 @@ object Typer:
     val hint = data.map(id => s"declare it: `${s.symbols(id).name} satisfies Clone`")
     s.error(DiagCode.T010, span, s"${show(s, t)} does not satisfy Clone", hint)
 
-  /** P6 D10: `c.op` needs `c.cap` when `c.value` is abstract ([[Members.abstractType]]). A value of a
-    * still unsolved variable may turn out abstract: it is checked again when the unit finishes.
+  /** P6 D10: `c.op` needs `c.cap` of `c.value`. A type that still holds unsolved variables is
+    * checked again when the unit finishes; then a variable never solved is left alone. A type that
+    * lacks the capability is `T022` when bounds on abstract types inside it would give it the
+    * capability (`List of T` and `Show`: the hint names `T`), and `T010` otherwise.
     */
   private[typer] def requireBound(s: TyperState, c: BoundCheck, last: Boolean = false): TyperState =
-    s.unifier.resolve(c.value) match
-      case Type.TypeVar(_) | Type.AppliedVar(_, _) if !last => s.copy(boundChecks = c :: s.boundChecks)
-      case t if Members.abstractType(s, t) && Satisfaction.holds(s, t, c.cap, Nil).isEmpty =>
-        missingBound(s, c.copy(value = t))
-      case _ => s
+    val t = s.unifier.zonk(c.value)
+    def lacks(u: Type) = Satisfaction.holds(s, u, c.cap, Nil).isEmpty
+    def unsolved(u: Type): Boolean = u match
+      case Type.TypeVar(_) | Type.AppliedVar(_, _) => true
+      case other                                   => other.children.exists(unsolved)
+    def abstracts(u: Type): List[Type] =
+      if Members.abstractType(s, u) then List(u).filter(lacks) else u.children.flatMap(abstracts)
 
-  /** `T022`, with the bound written out as the hint: on the type parameter or anonymous bound, or,
-    * for `self` in a capability's own default body, on the capability's `extends` clause.
+    /** `u` with each of `ps` replaced by `!`, which has every capability. */
+    def assuming(ps: List[Type])(u: Type): Type = if ps.contains(u) then Type.NeverType else u.mapChildren(assuming(ps))
+    t match
+      case Type.TypeVar(_) | Type.AppliedVar(_, _) if last => s
+      case _ if !last && unsolved(t)                       => s.copy(boundChecks = c :: s.boundChecks)
+      case _ if !lacks(t)                                  => s
+      case _                                               =>
+        val ps = abstracts(t).distinct
+        if ps.nonEmpty && !lacks(assuming(ps)(t)) then
+          /** The parameter that, alone without the bound, still makes the type lack it. */
+          val needed = ps.find(p => lacks(assuming(ps.filterNot(_ == p))(t))).getOrElse(ps.head)
+          missingBound(s, c.copy(value = t), needed)
+        else s.error(DiagCode.T010, c.span, s"${show(s, t)} does not satisfy ${s.symbols(c.cap).name}")
+
+  /** `T022`, with the bound written out as the hint: on `param` (the type parameter or anonymous
+    * bound that lacks it, `c.value` itself or a type inside it), or, for `self` in a capability's
+    * own default body, on the capability's `extends` clause.
     */
-  private def missingBound(s: TyperState, c: BoundCheck): TyperState =
+  private def missingBound(s: TyperState, c: BoundCheck, param: Type): TyperState =
     val r = s.symbols.render
     def written(bounds: List[Type]) = (bounds :+ Type.CapRef(c.cap, Nil)).map(r).mkString(" + ")
     def declared(id: SymbolId) = s.symbols(id).info match
       case Type.IsBound(bs) => bs
       case _                => Nil
-    val hint = c.value match
+    val hint = param match
       case Type.TypeRef(id, _) if Members.anonymousParam(s, id) => s"`is ${written(declared(id))}`"
       case Type.TypeRef(id, _)                                  =>
         val (param, owner) = (s"${s.symbols(id).name} is ${written(declared(id))}", s.symbols(s.symbols(id).owner))
@@ -402,7 +423,8 @@ object Typer:
     s.error(
       DiagCode.T022,
       c.span,
-      s"`${c.op}` on a value of type ${show(s, c.value)} needs the bound `${s.symbols(c.cap).name}`",
+      s"`${c.op}` on a value of type ${show(s, c.value)} needs the bound `${s.symbols(c.cap).name}`" +
+        (if param == c.value then "" else s" on ${show(s, param)}"),
       Some(s"write the bound: $hint")
     )
 

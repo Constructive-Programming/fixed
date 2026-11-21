@@ -179,6 +179,8 @@ bool satisfies Boolean:
 bool satisfies Show
 bool satisfies Eq
 char satisfies Show
+char satisfies Eq
+char satisfies Ord
 i8 satisfies Show
 i16 satisfies Show
 i32 satisfies Show

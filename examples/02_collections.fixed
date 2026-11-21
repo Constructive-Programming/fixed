@@ -110,12 +110,13 @@ data Direction:
     West
 
 // GADT with mixed variants — some carry data, some don't.
-// `N is Numeric` constrains all three fields to the same numeric type.
+// `N is Numeric` constrains all three fields to the same numeric type;
+// Color derives Show only if every field type has it, hence `Show` on N.
 data Color:
     Red
     Green
     Blue
-    RGB(red: N is Numeric, green: N, blue: N)
+    RGB(red: N is Numeric + Show, green: N, blue: N)
 
 // Phantom-typed data — the Tag parameter exists only at compile time.
 // (The typer infers Tag is phantom because it doesn't appear in any field;

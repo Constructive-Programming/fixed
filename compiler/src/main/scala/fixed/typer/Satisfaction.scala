@@ -28,13 +28,20 @@ object Satisfaction:
       case _                 => false
     }
 
-  /** `t` satisfies `cap of args`: the state with the capability's arguments unified, if it does. */
-  def holds(s: TyperState, t: Type, cap: SymbolId, args: List[Type]): Option[TyperState] =
+  /** `t` satisfies `cap of args`: the state with the capability's arguments unified, if it does.
+    * `assumed` are the data types whose derivation of `cap` is being decided: met again inside
+    * their own fields, they are taken to have it (recursion, direct or through other types).
+    */
+  def holds(s: TyperState, t: Type, cap: SymbolId, args: List[Type], assumed: Set[SymbolId] = Set.empty)
+      : Option[TyperState] =
     s.unifier.resolve(t) match
       case Type.NeverType                     => Some(s)
       case Type.TupleType(ts) if ts.size == 2 =>
-        s.symbols.scope.get("Tuple").flatMap(tuple => holds(s, Type.TypeRef(tuple, ts), cap, args))
-      case Type.TypeRef(id, recvArgs) =>
+        s.symbols.scope.get("Tuple").flatMap(tuple => holds(s, Type.TypeRef(tuple, ts), cap, args, assumed))
+      case Type.TupleType(ts) if fieldDerived(s.symbols(cap).name) =>
+        Option.when(ts.forall(holds(s, _, cap, Nil, assumed).isDefined))(s)
+      case Type.TypeRef(id, _) if assumed(id) => Some(s)
+      case Type.TypeRef(id, recvArgs)         =>
         val d = s.symbols(id)
         d.kind match
           case SymKind.TypeParam => Option.when(boundsReach(s, Members.boundsOf(s, id), cap))(s)
@@ -45,9 +52,10 @@ object Satisfaction:
               */
             def element(a: Type) = s.unifier.resolve(a) match
               case Type.TypeVar(_) => true
-              case solved          => holds(s, solved, cap, Nil).isDefined
+              case solved          => holds(s, solved, cap, Nil, assumed).isDefined
             val elements = !onRequest(s, cap) || recvArgs.forall(element)
-            if declared(s, d.name, cap) && elements || (!onRequest(s, cap) && derived(s, id, cap)) then
+            if declared(s, d.name, cap) && elements || (!onRequest(s, cap) && derived(s, id, cap, recvArgs, assumed))
+            then
               withArgs(s, recvArgs, args)
             else None
           case _ => Some(s)
@@ -177,27 +185,36 @@ object Satisfaction:
     }
     val accessor = params.isEmpty && variants.sizeIs == 1 &&
       s.symbols.fieldsOf(variants.head.id).exists(f => f.name == m.name && s1.tryUnify(result, f.info).isDefined)
-    fold || accessor || (s.symbols(m.owner).name != "Folding" && derived(s, data, m.owner))
+
+    /** `!` satisfies every capability: the parameters are assumed to have it, so the question is
+      * whether some instance derives it.
+      */
+    val anyInstance = s.symbols.typeParamsOf(data).map(_ => Type.NeverType)
+    fold || accessor || (s.symbols(m.owner).name != "Folding" && derived(s, data, m.owner, anyInstance, Set.empty))
 
   /** Rule 7.4: `Folding` for any data with variants, `Functor` over the rightmost type parameter
     * (covariant, never contravariant), and `Show` / `Eq` / `Clone` / `Ord` when every field type
     * has it (recursive fields assumed). A capability with `Self.fn` requirements is never derived.
+    *
+    * A field's type is read at the instance's arguments `args`, so `List of T` has `Show` only if
+    * `T` has it.
     */
-  private def derived(s: TyperState, data: SymbolId, cap: SymbolId): Boolean =
+  private def derived(s: TyperState, data: SymbolId, cap: SymbolId, args: List[Type], assumed: Set[SymbolId])
+      : Boolean =
     val capName = s.symbols(cap).name
+    val params = s.symbols.typeParamsOf(data)
     lazy val variants = s.symbols.variantsOf(data).toList
     lazy val fields = variants.flatMap(v => s.symbols.fieldsOf(v.id).map(_.info))
     capName match
       case "Folding" => variants.nonEmpty
       case "Functor" =>
-        s.symbols.typeParamsOf(data).lastOption.exists { p =>
+        params.lastOption.exists { p =>
           fields.exists(occurs(_, p, positive = true)) && !fields.exists(occurs(_, p, positive = false))
         }
       case name if fieldDerived(name) =>
-        fields.forall {
-          case Type.TypeRef(`data`, _)                                                                       => true
-          case Type.TypeRef(id, _) if s.symbols(id).kind == SymKind.TypeParam && s.symbols(id).owner == data => true
-          case f => holds(s, f, cap, Nil).isDefined
+        variants.forall { v =>
+          val (s1, types) = Members.fieldTypes(s, data, args, v.id)
+          types.forall(holds(s1, _, cap, Nil, assumed + data).isDefined)
         }
       case _ => false
 

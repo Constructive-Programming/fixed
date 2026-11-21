@@ -238,6 +238,54 @@ class TyperSuite extends munit.FunSuite:
       "cap Named:\n    fn name -> String\n    fn label -> String = self.show()\n"
     ).foreach(code => assertEquals(codes(typedUnit(code)), List(DiagCode.T022), code))
 
+  test("P6 D10: show, == and < follow the derivation into a container's type arguments; < needs Ord"):
+    val box = "data Box of A:\n    B(a: A)\n"
+    List(
+      "fn f(xs: List of T) -> String = xs.show()\n" -> ("xs.show()", "`T is Show`"),
+      "fn f(xs: List of T, ys: List of T) -> bool = xs == ys\n" -> ("xs == ys", "`T is Eq`"),
+      "fn f(xs: List of T) -> String = ((z) -> z.show())(xs)\n" -> ("z.show()", "`T is Show`"),
+      (box + "fn f(b: Box of T) -> String = b.show()\n") -> ("b.show()", "`T is Show`"),
+      "fn f(p: (T, u64)) -> String = p.show()\n" -> ("p.show()", "`T is Show`"),
+      "fn f(x: T, y: T) -> bool = x < y\n" -> ("x < y", "`T is Ord`"),
+      "fn f(x: T is Eq, y: T) -> bool = x >= y\n" -> ("x >= y", "`T is Eq + Ord`"),
+      "data P of (A, B):\n    P(b: B)\nfn f(p: P of (T, U)) -> String = p.show()\n" -> ("p.show()", "`U is Show`"),
+      "fn f(x: T) -> String = ((z) -> z.show())(List.Cons(x, List.Nil))\n" -> ("z.show()", "`T is Show`")
+    ).foreach { case (code, (at, hint)) =>
+      val ds = typedUnit(code).diags
+      assertEquals(ds.map(_.code), List(DiagCode.T022), code)
+      assertEquals(ds.head.span.start, code.indexOf(at), code)
+      assertEquals(ds.head.suggestion, Some(s"write the bound: $hint"), code)
+    }
+    assertEquals(
+      typedUnit("fn f(xs: List of T) -> String = xs.show()\n").diags.head.message,
+      "`.show` on a value of type List of T needs the bound `Show` on T"
+    )
+
+    /** No bound would help: `T010`, with no hint. */
+    List(
+      "data Fn:\n    F(f: u64 -> u64)\nfn f(x: Fn) -> String = x.show()\n" -> "Fn does not satisfy Show",
+      "fn f(a: bool, b: bool) -> bool = a < b\n" -> "bool does not satisfy Ord",
+      "fn f(g: T -> u64) -> String = g.show()\n" -> "T -> u64 does not satisfy Show",
+      "data G of A:\n    G(f: u64 -> u64, a: A)\nfn f(g: G of T) -> String = g.show()\n" ->
+        "G of T does not satisfy Show"
+    ).foreach { (code, message) =>
+      val ds = typedUnit(code).diags
+      assertEquals(ds.map(d => (d.code, d.message, d.suggestion)), List((DiagCode.T010, message, None)), code)
+    }
+    val mutual = "data A:\n    A1(b: B)\n    A0\ndata B:\n    B1(a: A)\n"
+    assertEquals(typedUnit(mutual + "fn f(x: A, y: A) -> bool = x == y && x < y\n").diags, Nil)
+    List(
+      "fn f(xs: List of (T is Show)) -> String = xs.show()\n",
+      "fn f(xs: List of (T is Eq), ys: List of T) -> bool = xs == ys\n",
+      box + "fn f(b: Box of (T is Show)) -> String = b.show()\n",
+      box + "fn f(b: Box of u64) -> String = b.show()\n",
+      "fn f(p: (T is Show, u64)) -> String = p.show()\n",
+      "fn f(x: T is Ord, y: T) -> bool = x < y\n",
+      "fn f(xs: List of List of u64, ys: List of List of u64) -> bool = xs == ys\n",
+      "fn f(x: u64, c: char, s: String) -> bool = x < 3 && c <= 'a' && c == 'b' && s > \"b\"\n",
+      "fn f(p: (T is Show, u64, u64)) -> String = p.show()\n"
+    ).foreach(code => assertEquals(typedUnit(code).diags, Nil, code))
+
   test("P6 D10: a receiver whose type is solved to a type parameter later is checked when the unit finishes"):
     List(
       "fn f(x: T) -> String = ((z) -> z.show())(x)\n",
