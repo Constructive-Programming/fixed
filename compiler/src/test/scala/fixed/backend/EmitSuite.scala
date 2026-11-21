@@ -618,3 +618,10 @@ class EmitSuite extends munit.FunSuite:
         val ds = lowered(name, src).fold(identity, _ => fail(s"$name lowered"))
         assert(ds.exists(d => d.code == DiagCode.B005 && d.message.contains(s"payload slot $bits")), ds)
     }
+
+  test("a float literal in an integer instance of a generic function is B005 at the literal, not invalid IR"):
+    val src = "fn h(x: N is Numeric) -> N = x + 2.5\nfn main() -> u64 = h(1)\n"
+    modes.foreach { mode =>
+      val ds = lowered("float_instance", src, mode).fold(identity, _ => fail("lowered"))
+      assertEquals(ds.map(d => (d.code, d.span.start)), List((DiagCode.B005, src.indexOf("2.5"))), mode)
+    }

@@ -192,6 +192,15 @@ class TyperSuite extends munit.FunSuite:
   test("spec 4.9: Numeric members on a numeric literal and N.fromI64 on a type parameter"):
     assertEquals(typed("3.add(4).mul(2)")._3, "i64")
     assertEquals(typed("2.5.add(1.0)")._3, "f64")
+    assertEquals(List("3 + 2.5", "3.add(2.5)", "2.5 * 3").map(typed(_)._3), List("f64", "f64", "f64"))
+    val floats = "fn a(x: u64) -> u64 = x + 2.5\nfn b(x: N is Numeric) -> N = x + 2.5\nfn c() -> u8 = 3.add(2.5)\n"
+    val at = List(floats.indexOf("2.5"), floats.indexOf("3.add"))
+    val ds = typedUnit(floats).diags
+    assertEquals(
+      (ds.map(d => (d.code, d.span.start)), ds.head.message),
+      (at.map((DiagCode.T002, _)), "expected u64, got f64")
+    )
+    assertEquals(typedUnit("fn d(x: f32) -> f32 = x + 2.5 + 3\n").diags, Nil)
     val (s, t) = typedBody("fn f(x: N is Numeric) -> N = N.fromI64(300).add(x)\n")
     assertEquals((s.diags, t), (Nil, "N"))
     val code = "fn f() -> u64 = 3.concat(4)\n"

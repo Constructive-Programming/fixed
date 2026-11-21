@@ -209,8 +209,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
           case c => k(Atom.IntC(l.value, c))
       case l: Trees.FloatLit =>
         ctype(typeOf(l, sc), l.span) match
-          case _: CType.Slot => unsupported(l.span, "a float literal of parameter type (no `fromF64`)", k)
-          case c             => k(Atom.FloatC(l.value, c))
+          case c: CType.Float => k(Atom.FloatC(l.value, c))
+          case _ => unsupported(l.span, "a float literal at a type other than `f32` or `f64` (no `fromF64`)", k)
       case Trees.BoolLit(v, _)       => k(Atom.BoolC(v))
       case Trees.CharLit(c, _)       => k(Atom.IntC(BigInt(c.toInt), CType.Int(32, signed = false)))
       case Trees.StringLit(s, _)     => k(Atom.StrC(s))

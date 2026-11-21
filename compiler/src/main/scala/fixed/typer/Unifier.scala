@@ -5,10 +5,13 @@ import scala.collection.immutable.{BitSet, IntMap}
 import fixed.core.{SymbolId, Type}
 
 /** A persistent substitution over [[Type.TypeVar]]s. `bindings` is indexed by variable id (ids are
-  * dense); an unbound variable's slot holds the variable itself. A variable may be required to be `Numeric`;
-  * a literal's variable carries the type it defaults to when nothing else solves it (`i64` /
-  * `f64`); a variable instantiated from a bounded type parameter keeps that bound: members
-  * resolve on it before it is solved, and every type it is solved to must satisfy it (`bind`). `tuple` is the `Tuple` data type, which a 2-tuple equals.
+  * dense); an unbound variable's slot holds the variable itself. A variable may be required to be
+  * `Numeric`; a literal's variable carries the type it defaults to when nothing else solves it
+  * (`i64` / `f64`). A float literal's variable may be solved to no primitive type except `f32` or
+  * `f64`; an integer literal that meets it takes the float literal's default: `3 + 2.5` is `f64`,
+  * and `x + 2.5` with `x: u64` is a mismatch. A variable instantiated from a bounded type
+  * parameter keeps that bound: members resolve on it before it is solved, and every type it is
+  * solved to must satisfy it (`bind`). `tuple` is the `Tuple` data type, which a 2-tuple equals.
   *
   * `numeric` is supplied by the typer: it decides whether a solved type satisfies `Numeric`.
   */
@@ -54,11 +57,14 @@ final case class Unifier(
   /** `t` with every bound variable replaced, recursively. */
   def zonk(t: Type): Type = resolve(t).mapChildren(zonk)
 
-  /** Solve every still-unbound literal variable to its default. */
+  /** Solve every still-unbound literal variable to the default of the variable it resolves to:
+    * `bind` moves a float literal's default there, so `3 + 2.5` defaults to `f64` whichever literal
+    * comes first. `d` is used only if that variable has no default, which `bind` never leaves.
+    */
   def applyDefaults: Unifier =
     defaults.foldLeft(this) { case (u, (id, d)) =>
       u.resolve(Type.TypeVar(id)) match
-        case Type.TypeVar(free) => u.copy(bindings = u.bindings.updated(free, d))
+        case Type.TypeVar(free) => u.copy(bindings = u.bindings.updated(free, defaults.getOrElse(free, d)))
         case _                  => u
     }
 
@@ -195,11 +201,15 @@ final case class Unifier(
               numericVars = if numericVars.contains(id) then numericVars.incl(other) else numericVars,
               varBounds =
                 if boundsOf(id).isEmpty then varBounds else varBounds.updated(other, boundsOf(other) ++ boundsOf(id)),
-              defaults =
-                defaults.get(id).filterNot(_ => defaults.contains(other)).fold(defaults)(defaults.updated(other, _))
+              /** A float literal's default wins over an integer literal's. */
+              defaults = defaults.get(id).filter(d => !defaults.contains(other) || Unifier.isFloat(d))
+                .fold(defaults)(defaults.updated(other, _))
             )
           )
         case _ if numericVars.contains(id) && !numeric(t) => Left(())
+
+        /** A float literal's variable at a primitive type other than `f32` or `f64` is a mismatch. */
+        case p: Type.PrimType if defaults.get(id).exists(Unifier.isFloat) && !Unifier.isFloat(p) => Left(())
 
         /** An instantiated bounded type parameter (named, anonymous or an `of` parameter) meets a
           * value: the value must satisfy the bounds, and a capability both name has its arguments
@@ -232,6 +242,11 @@ private object Capabilities:
 type Solved = Either[Unit, Unifier]
 
 object Unifier:
+  /** A primitive type a float literal may take: `Numeric` has no `fromF64` yet (`spec/stdlib.md`
+    * §4.9). At a type parameter it is accepted, and the backend refuses an integer instance.
+    */
+  def isFloat(t: Type): Boolean = t == Type.PrimType("f32") || t == Type.PrimType("f64")
+
   /** A type constructor (a variable's solution) applied to `args`: `M := Maybe` makes `M of A` `Maybe of A`. */
   def applyHead(head: Type, args: List[Type]): Type =
     head match

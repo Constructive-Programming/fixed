@@ -198,9 +198,10 @@ object Typer:
     * `a` (is Show)", or "the `is Show` in the type of `a`" when it is part of that type, with
     * " of `Cap.method`" in a capability member's signature (whose names a satisfies body's bounds
     * carry); where they still print the same, by its position among the signature's anonymous
-    * bounds ("#2").
+    * bounds ("#2"). A literal not solved yet prints as its default: "expected u64, got f64".
     */
-  private def mismatch(s: TyperState, expected: Type, actual: Type): String =
+  private def mismatch(unsolved: TyperState, expected: Type, actual: Type): String =
+    val s = unsolved.copy(unifier = unsolved.unifier.applyDefaults)
     def anonymous(u: Type): List[SymbolId] = u match
       case Type.TypeRef(id, _) if Members.anonymousParam(s, id) => List(id)
       case other                                                => other.children.flatMap(anonymous)
