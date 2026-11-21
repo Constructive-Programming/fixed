@@ -1079,7 +1079,7 @@ Written in Fixed itself. The standard library defines the core capabilities that
 
 ### Notes
 
-- Primitives (`i8`..`i128`, `u8`..`u128`, `f32`, `f64`, `bool`, `char`, `()`) are compiler-provided and satisfy relevant capabilities
+- Primitives (`i8`..`i64`, `u8`..`u64`, `f32`, `f64`, `bool`, `char`, `()`) are compiler-provided and satisfy relevant capabilities
 - The compiler has built-in knowledge of stdlib capabilities for representation selection (e.g., `RandomAccess` implies contiguous storage is preferred)
 - `String` is a capability, not a concrete type — the compiler chooses the backing representation
 

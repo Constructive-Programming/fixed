@@ -194,7 +194,7 @@ pub type Arithmetic = Overflow + DivideByZero
 
 The operations take no argument, so a handler learns which effect occurred, not the operands *(author's choice)*.
 
-**Rule E3.6.b (Which operations perform them).** On a bounded integer type (`i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, and `i128`, `u128` once they exist, `spec/compilation_model.md` OQ-CM7):
+**Rule E3.6.b (Which operations perform them).** On a bounded integer type (`i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`):
 
 | Operation | Performs | When |
 |---|---|---|

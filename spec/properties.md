@@ -234,7 +234,7 @@ Each binder introduces a universally quantified variable.
 
 A `forall` is verifiable iff every binder's type has a **PBT generator** in scope. A type has a generator if at least one of the following holds:
 
-1. It is a primitive type with a built-in generator (`bool`, `i8`..`i128`, `u8`..`u128`, `f32`, `f64`, `String`, `char`).
+1. It is a primitive type with a built-in generator (`bool`, `i8`..`i64`, `u8`..`u64`, `f32`, `f64`, `String`, `char`).
 2. It is a `data` type whose every field type has a generator (recursive — depth-bounded for the recursion case).
 3. It is a tuple of types each with a generator.
 4. It is a capability bound `is C` such that at least one satisfaction of `C` in the test build's link unit is for a type that has a generator.

@@ -314,9 +314,9 @@ Per the v0.4.6 grammar (`UnaryExpr`), prefix `-` is single-arity: `--a` is not a
 
 Numeric-literal polymorphism (`type_system.md` §5.7) goes through `Self.fn fromI64`: an integer literal in a `Numeric`-bounded position is desugared to `Self.fromI64(LITERAL)`. Float literals desugar to a `fromF64` overload (forthcoming; deferred until float-spec lands).
 
-All built-in primitive numeric types — `i8`/`i16`/`i32`/`i64`/`i128`, `u8`/`u16`/`u32`/`u64`/`u128`, `f32`/`f64` — satisfy `Numeric` (compiler-provided).
+All built-in primitive numeric types — `i8`/`i16`/`i32`/`i64`, `u8`/`u16`/`u32`/`u64`, `f32`/`f64` — satisfy `Numeric` (compiler-provided).
 
-**Built today.** The prelude's `Numeric` declares the seven arithmetic members without rows; `+`, `-`, `*` wrap, and none of the members without effects exist (`spec/effects.md` §3.6, "Built today"). `i128` and `u128` do not satisfy `Numeric`: the backend has no 128-bit integers (`spec/compilation_model.md` OQ-CM7).
+**Built today.** The prelude's `Numeric` declares the seven arithmetic members without rows; `+`, `-`, `*` wrap, and none of the members without effects exist (`spec/effects.md` §3.6, "Built today"). The language has no 128-bit integers (owner's decision, fourth round of P6): the widest integer has 64 bits. The names `i128` and `u128` are reserved; a program that uses one, as a type or as a name it declares, gets `error[T032]: i128 is reserved; the widest integer type is i64`. They return when the layout of values wider than one slot is built and measured (`spec/compilation_model.md` OQ-CM7), unless ranges carried by types answer the need first (`spec/type_system.md` OQ-T3).
 
 ### 4.10 `cap Show`
 

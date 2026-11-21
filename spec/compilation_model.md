@@ -125,7 +125,7 @@ The rule, *provisional* (OQ-CM13):
 - A data type instance is an **immediate** iff no field of any variant is a reference, and `tag + max over variants of (sum of field widths) ≤ 8` bytes, where `tag` is 1 byte when the type has more than one variant and 0 otherwise, and the width of a field is the `width` of its type (Rule CM3.6).
 - **Bit layout.** The tag, if any, sits in the low byte. The fields of the variant follow in declaration order, each at its width, from the byte after the tag (from byte 0 when there is no tag), with no padding. Unused high bits are zero.
 - The **width** of an immediate instance is its size, as above, rounded up to 1, 2, 4 or 8 bytes. A type with no field and one variant has size 0 and width 1.
-- A field whose type is always a reference (`String`, a closure, `i128`, a type that is statically a cell) makes the type **statically a cell**. Every recursive type is statically a cell.
+- A field whose type is always a reference (`String`, a closure, a type that is statically a cell) makes the type **statically a cell**. Every recursive type is statically a cell.
 
 ```
 data Order: Less | Equal | Greater              // tag only: size 1, imm1
@@ -684,7 +684,7 @@ A release build strips `inspect` and `trace` unless a flag keeps them; the table
 - ~~**OQ-CM4 — Type variables of `data` fields.**~~ Closed in v0.3 by P6 D3: such a variable, and an anonymous bound in a field, is a choice point with one choice for all values of the type, so no cell stores its witness (Rule CM8.1).
 - ~~**OQ-CM5 — Orphan satisfactions.**~~ Closed in v0.3 by P6 D12: a package may declare a satisfaction for a type and a capability it does not declare, and several satisfactions of one pair are resolved by `using` (Rule CM6.6).
 - **OQ-CM6 — Clones across packages and the budget.** Two importers each charge their own budget for the same clone, and the linker merges the result (Rule CM6.5). Rule CM8.7 counts link-time clones over the link unit; whether clones built by importers at package compile should be deduplicated in the same count is open.
-- **OQ-CM7 — Wider immediates.** Whether a value wider than 64 bits that holds no reference (`u128`, a small tuple, a data type over 8 bytes) should travel in two slots in baseline code instead of behind a pointer.
+- **OQ-CM7 — Wider immediates.** Whether a value wider than 64 bits that holds no reference (a 128-bit integer, a small tuple, a data type over 8 bytes) should travel in two slots in baseline code instead of behind a pointer. `i128` and `u128` are out of the language until this is built and measured (owner's decision, fourth round of P6; `spec/stdlib.md` §4.9).
 - ~~**OQ-CM8 — Borrowing and exclusivity through a table.**~~ Closed in v0.3 by P6 D9: the convention is derived from the requirement's signature, so table calls borrow `read` parameters, and the exclusive pointer covers only `own` parameters of type `Self` (Rule CM4.6).
 - **OQ-CM9 — Evidence across packages.** Rule CM4.3 fixes the order of an evidence vector by the canonical order of the effect row. Row variables, and the library entry points of `spec/effects.md` Rule E5.4, need the same treatment.
 - ~~**OQ-CM10 — The weight is lexical.**~~ Closed in v0.3 by P6 D15: the static weight carries the heat of a function's own call sites along call edges, and measured request counts replace it where they exist (Rule CM5.4).
