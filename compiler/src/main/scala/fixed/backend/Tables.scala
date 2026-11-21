@@ -356,11 +356,12 @@ private[backend] trait Tables extends Satisfied:
         Some(of(List(n), Rhs.Prim(PrimOp.Convert, List(n)), c))
       case ("negate", _) if numeric => Some(of(List(self), Rhs.Prim(PrimOp.Neg, List(self)), c))
       case (op, _) if numeric && Tables.arithmetic.contains(op) => Some(binary(Tables.arithmetic(op), c))
-      case ("eq", CType.Boxed)                                  => Some(runtime("fx_str_eq", List(self, other)))
-      case ("eq", _)                                            => Some(binary(PrimOp.Eq, CType.Bool))
-      case ("lt", _) if numeric || t == "char"                  => Some(binary(PrimOp.Lt, CType.Bool))
-      case ("le", _) if numeric || t == "char"                  => Some(binary(PrimOp.Le, CType.Bool))
-      case ("lt" | "le", _) if t == "String"                    =>
+      case ("eq", CType.Boxed)                                  =>
+        Some(of(List(self, other), Rhs.Call("fx_str_eq", List(self, other), runtime = true), CType.Bool))
+      case ("eq", _)                           => Some(binary(PrimOp.Eq, CType.Bool))
+      case ("lt", _) if numeric || t == "char" => Some(binary(PrimOp.Lt, CType.Bool))
+      case ("le", _) if numeric || t == "char" => Some(binary(PrimOp.Le, CType.Bool))
+      case ("lt" | "le", _) if t == "String"   =>
         val op = if member == "lt" then PrimOp.Lt else PrimOp.Le
         Some((
           List(self, other),

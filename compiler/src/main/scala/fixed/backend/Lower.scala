@@ -571,6 +571,9 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       k: K
   ): Expr =
     lazy val listLike = dataOf(recvType).exists((d, _) => listShaped(d))
+
+    /** Whether the receiver is a scalar, a `String` or a data value, whose `show` and `compare` the backend builds. */
+    lazy val known = Lower.scalar(recvType).isDefined || isStringType(recvType) || dataOf(recvType).isDefined
     resolution match
       case Some(Resolution.Field(variant, index)) =>
         dataOf(recvType) match
@@ -588,11 +591,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
         (symbols.preludeName(cap), m.method, args) match
           case ("Concat", "concat", List(arg)) =>
             expr(m.receiver, sc)(r => expr(arg, sc)(a => runtime("fx_str_concat", List(r, a), m, sc)(k)))
-          case ("Show", "show", Nil)
-              if Lower.scalar(recvType).isDefined || isStringType(recvType) || dataOf(recvType).isDefined =>
-            expr(m.receiver, sc)(r => showValue(recvType, r)(k))
-          case ("Ord", "compare", List(arg))
-              if dataOf(recvType).isDefined || Lower.scalar(recvType).isDefined || isStringType(recvType) =>
+          case ("Show", "show", Nil) if known         => expr(m.receiver, sc)(r => showValue(recvType, r)(k))
+          case ("Ord", "compare", List(arg)) if known =>
             expr(m.receiver, sc)(r => expr(arg, sc)(a => compareValues(recvType, r, a)(k)))
           case ("Eq", "eq", List(arg)) if dataOf(recvType).isDefined || isStringType(recvType) =>
             expr(m.receiver, sc)(r =>

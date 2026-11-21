@@ -188,11 +188,6 @@ class TyperSuite extends munit.FunSuite:
       typedUnit(partial).diags.map(d => (d.code, d.span.start)),
       List((DiagCode.T020, partial.indexOf("match")))
     )
-    val just = "fn g(m: Maybe of u64) -> u64 =\n    match m:\n        Maybe.Just(0) => 0\n        Maybe.Nothing => 1\n"
-    assertEquals(
-      typedUnit(just).diags.map(d => (d.code, d.message)),
-      List((DiagCode.T020, "missing case Maybe.Just (a case with a literal does not cover its variant)"))
-    )
 
   test("spec 4.9: Numeric members on a numeric literal and N.fromI64 on a type parameter"):
     assertEquals(typed("3.add(4).mul(2)")._3, "i64")

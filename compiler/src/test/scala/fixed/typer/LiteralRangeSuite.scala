@@ -3,7 +3,9 @@ package fixed.typer
 import fixed.parsing.Parser
 import fixed.util.{DiagCode, SourceFile}
 
-/** An integer literal outside the range of the type it takes is `T023` at the literal. */
+/** An integer literal outside the range of the type it takes is `T023` at the literal; a literal in a
+  * variant pattern makes the case not cover its variant (`T020`).
+  */
 class LiteralRangeSuite extends munit.FunSuite:
 
   private def diags(code: String) =
@@ -46,3 +48,7 @@ class LiteralRangeSuite extends munit.FunSuite:
   test("a literal that is already a type mismatch is not also out of range"):
     val code = "fn a() -> String = 99999999999999999999\n"
     assertEquals(diags(code), List((DiagCode.T002, code.indexOf("9"))))
+
+  test("a variant pattern holding a literal does not cover its variant: T020 at the match"):
+    val src = "fn g(m: Maybe of u64) -> u64 =\n    match m:\n        Maybe.Just(0) => 0\n        Maybe.Nothing => 1\n"
+    assertEquals(diags(src), List((DiagCode.T020, src.indexOf("match"))))

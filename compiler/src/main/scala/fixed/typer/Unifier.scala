@@ -62,9 +62,9 @@ final case class Unifier(
 
   /** Solve every still-unbound literal variable to the default of the variable it resolves to:
     * `bind` moves a float literal's default there, so `3 + 2.5` defaults to `f64` whichever literal
-    * comes first. `d` is used only if that variable has no default, which `bind` never leaves. Then
-    * every still-unbound `diverging` variable (the type of a `handle` its clauses left
-    * unconstrained) is `!`.
+    * comes first; a literal's own default `d` is used only if that variable has none, which `bind`
+    * never leaves. Then every still-unbound `diverging` variable (the type of a `handle` its
+    * clauses left unconstrained) is `!`.
     */
   def applyDefaults: Unifier = (defaults.toList ++ diverging.toList.map(_ -> Type.NeverType)).foldLeft(this) {
     case (u, (id, d)) =>

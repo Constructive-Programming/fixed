@@ -464,7 +464,7 @@ class EmitSuite extends munit.FunSuite:
     val _ = check("recursive", src, "ab\n7\nfront!\n")
 
   test("a function bounded by Ord runs at String and at i64 through its baseline version"):
-    val _ = check("partial", BaselineSuite.partial, "true\nfalse\n")
+    val _ = check("same_at_two", BaselineSuite.sameAtTwo, "true\nfalse\nfalse\n")
 
   test("a closure in a baseline version captures the witness of a slot it binds"):
     val src = header + "data Pair of (A, B):\n    P(a: A, b: B)\n\n" +

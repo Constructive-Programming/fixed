@@ -113,7 +113,7 @@ class BaselineSuite extends munit.FunSuite:
     )
 
   test("`String` has a full table of `Ord`: calls at `String` and at a number share the baseline"):
-    val (lower, fns) = lowered("partial", BaselineSuite.partial)
+    val (lower, fns) = lowered("same_at_two", BaselineSuite.sameAtTwo)
     assert(lower.baselines("same"), lower.baselines)
     assertEquals(lower.instances.toMap, Map.empty[String, String])
     assertEquals(fns.map(_.name).filter(_.startsWith("same")), List("same"))
@@ -234,8 +234,9 @@ object BaselineSuite:
     "    Console.printLine(p.first.concat(p.second.show()))\n"
 
   /** `same` at `i64` and at `String`, which both have an `Ord` table. */
-  val partial = "use std.io.Console\n\nfn same(a: N is Ord, b: N) -> bool = a == b\n\n" +
+  val sameAtTwo = "use std.io.Console\n\nfn same(a: N is Ord, b: N) -> bool = a == b\n\n" +
     "fn main() -> () with Console =\n    Console.printLine(same(\"x\", \"x\").show())\n" +
+    "    Console.printLine(same(\"x\", \"y\").show())\n" +
     "    Console.printLine(same(3, 4).show())\n"
 
   /** `half`'s baseline attempt calls `ident`, then fails on the float literal: `half` is an instance. */
