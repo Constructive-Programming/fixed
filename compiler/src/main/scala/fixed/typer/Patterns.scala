@@ -98,10 +98,7 @@ object Patterns:
   private def exhaustive(s: TyperState, m: Trees.MatchExpr, scrutinee: Type): TyperState =
     val unguarded = m.cases.filter(_.guard.isEmpty).map(_.pattern)
     val alternatives = unguarded.flatMap(flatten)
-    val catchAll = alternatives.exists {
-      case _: Trees.WildcardPat | _: Trees.BinderPat => true
-      case _                                         => false
-    }
+    val catchAll = alternatives.exists(irrefutable)
     lazy val named = alternatives.collect { case Trees.DataVariantPat(_, v, _, _) => v }.toSet
     s.unifier.resolve(scrutinee) match
       case _ if catchAll                                           => s
@@ -120,6 +117,15 @@ object Patterns:
         else s.error(DiagCode.T020, m.span, "missing case: a bool match needs true and false")
       case _: Type.TypeVar | _: Type.IsBound | _: Type.CapRef | Type.NeverType => s
       case _ => s.error(DiagCode.T020, m.span, "missing case _: this scrutinee type needs a catch-all case")
+
+  /** The part of Rule M4.2 the exhaustiveness check uses: `_`, a binder, and a tuple pattern whose
+    * elements are all irrefutable match every value.
+    */
+  private def irrefutable(p: fixed.ast.Tree): Boolean =
+    p match
+      case _: Trees.WildcardPat | _: Trees.BinderPat => true
+      case Trees.TuplePat(elems, _)                  => elems.forall(irrefutable)
+      case _                                         => false
 
   private def flatten(p: fixed.ast.Tree): List[fixed.ast.Tree] =
     p match

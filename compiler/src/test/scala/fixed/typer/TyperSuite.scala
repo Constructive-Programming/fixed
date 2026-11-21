@@ -179,6 +179,16 @@ class TyperSuite extends munit.FunSuite:
       List(DiagCode.T020)
     )
 
+  test("Rule M4.2: a tuple pattern of irrefutable patterns is a catch-all; one with a literal is not"):
+    val f = "fn f(p: ((u64, bool), u64)) -> u64 =\n    match p:\n"
+    assertEquals(typedUnit(f + "        ((a, _), z) => a + z\n").diags, Nil)
+    assertEquals(typedUnit(f + "        ((0, true), z) => z\n        (q, z) => z\n").diags, Nil)
+    val partial = f + "        ((a, true), z) => a + z\n"
+    assertEquals(
+      typedUnit(partial).diags.map(d => (d.code, d.span.start)),
+      List((DiagCode.T020, partial.indexOf("match")))
+    )
+
   test("M5: handle binds operation parameters; resume takes the operation's result"):
     val eff = "effect Ask:\n    fn ask(prompt: String) -> u64\nfn ignoreLen(s: String) -> u64 = 0\n"
     val ok = typedUnit(

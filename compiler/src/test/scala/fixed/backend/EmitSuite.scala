@@ -587,6 +587,14 @@ class EmitSuite extends munit.FunSuite:
     val ds = lowered("prelude_problem", src).fold(identity, _ => fail("lowered"))
     assert(ds.exists(d => d.message.startsWith("in the prelude: ") && d.span == fixed.util.Span.NoSpan), ds)
 
+  test("a literal inside a tuple pattern is B005 at the literal, not a case that never matches"):
+    List("(u64, u64)", "Tuple of (u64, u64)").foreach { t =>
+      val src = s"fn f(p: $t) -> u64 = match p:\n    (0, b) => b\n    (a, b) => a\n" +
+        "fn main() -> u64 = f((0, 2))\n"
+      val ds = lowered("tuple_literal", src).fold(identity, _ => fail("lowered"))
+      assertEquals(ds.map(d => (d.code, d.span.start)), List((DiagCode.B005, src.indexOf("0, b"))), t)
+    }
+
   test("a reference beyond the reference map is B005, not a leak (4.1.M2)"):
     List(wide(bits + 1) -> "wide_over", captures(bits - Layout.closureCode + 1) -> "captures_over").foreach {
       (src, name) =>

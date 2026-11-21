@@ -284,9 +284,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
             Expr.Let(x, Rhs.Move(c), k(sc.bind(name, x)))
       case Trees.WildcardPat(_)     => k(sc)
       case Trees.TuplePat(elems, _) =>
-        val types = t match
-          case Type.TupleType(ts) => ts
-          case _                  => Nil
+        /** `(A, B)` or `Tuple of (A, B)`; the typer has checked the arity. */
+        val types = dataOf(t).fold(Nil)(_._2)
         fields(a, elems.zip(types), Layout.slots(types.map(ctype(_, pat.span))), sc)(k)
       case other => unsupportedThen(other.span, s"pattern ${other.getClass.getSimpleName}", k(sc))
 
@@ -979,10 +978,13 @@ object Lower:
       case Type.UnitType | Type.NeverType       => Some(CType.Unit)
       case _                                    => None
 
-  /** Whether case pattern `p` covers variant `variant`. */
+  /** Whether case pattern `p` covers variant `variant`. A tuple pattern meets only a tuple (the
+    * typer reports any other scrutinee), so it covers the tuple's one variant. Like a variant
+    * pattern, it may still be refutable: `bindPattern` reports a literal inside it as `B005`.
+    */
   def covers(p: Tree, variant: String): Boolean =
     p match
-      case Trees.DataVariantPat(_, v, _, _)          => v == variant
-      case _: Trees.WildcardPat | _: Trees.BinderPat => true
-      case Trees.OrPat(l, r, _)                      => covers(l, variant) || covers(r, variant)
-      case _                                         => false
+      case Trees.DataVariantPat(_, v, _, _)                              => v == variant
+      case _: Trees.TuplePat | _: Trees.WildcardPat | _: Trees.BinderPat => true
+      case Trees.OrPat(l, r, _)                                          => covers(l, variant) || covers(r, variant)
+      case _                                                             => false
