@@ -65,9 +65,10 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   protected val implicitBounds: mutable.Map[Type, Type] = mutable.HashMap.empty
 
   /** The type parameters, each with its key ([[baselineOf]]), of each baseline version being built:
-    * what a recursive call passes, before the finished version drops its phantom ones.
+    * what a recursive call passes; a finished version drops its phantom ones unless one reached it ([[recursed]]).
     */
   private val building = mutable.Map.empty[String, List[(Type, Type)]]
+  private val recursed = mutable.Set.empty[String]
 
   /** The entries of its tables each type parameter's code calls, directly or by passing the table on. */
   private val calledEntries = mutable.Map.empty[Type, Set[String]].withDefaultValue(Set.empty)
@@ -80,6 +81,9 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
 
   /** The function whose code is being lowered, which owns the requests its call sites make. */
   private val owner = scala.util.DynamicVariable("")
+
+  /** Each type parameter of the clones and instances being lowered, as what it derives from ([[TypeOps.derived]]). */
+  private val frame = scala.util.DynamicVariable(Map.empty[SymbolId, Type])
 
   /** Every function instance built so far, including copies and table entries requested after [[program]]. */
   def functions: List[Fn] = fns.values.toList
@@ -232,7 +236,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   private def application(fn: Tree, args: List[Tree], result: Tree, sc: Scope)(k: K): Expr =
     fn match
       case f @ Trees.Ident(name, span) if !sc.env.contains(name) && isFn(name) =>
-        if decls.contains(name) then call(name, typeOf(f, sc), args, result, sc)(k)
+        if decls.contains(name) then call(name, f, args, result, sc)(k)
         else unsupported(span, s"call of `$name`, which has no body", k)
       case _ => expr(fn, sc)(c => all(args, sc)(as => bind(Rhs.CallClosure(c, as), result, sc)(k)))
 
@@ -314,7 +318,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
                   Expr.Let(v, _, result)
                 )
               case (_, CType.Boxed) => unsupported(b.span, s"`${op.symbol}` on boxed values", k)
-              case _                => bind(Rhs.Prim(Lower.prim(op), List(l, r)), b, sc)(k)
+              case _                => bind(Rhs.Prim(PrimOp.of(op), List(l, r)), b, sc)(k)
           )
         )
 
@@ -364,11 +368,11 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       else bind(Rhs.Prim(op, List(a)), u, sc)(k)
     )
 
-  /** A call of top-level function `name`, instantiated at the concrete type of its reference. */
-  private def call(name: String, fnType: Type, args: List[Tree], t: Tree, sc: Scope)(k: K): Expr =
+  /** A call of function `ref` at its type, or of the baseline under polymorphic recursion ([[TypeOps.derived]]). */
+  private def call(name: String, ref: Tree, args: List[Tree], t: Tree, sc: Scope)(k: K): Expr =
     val id = symbols.scope(name)
     val params = symbols.typeParamsOf(id)
-    val solved = TypeOps.solve(params.toSet, symbols(id).info, fnType, Map.empty, Members.boundsOf(symbols, _))
+    val solved = TypeOps.solve(params.toSet, symbols(id).info, typeOf(ref, sc), Map.empty, Members.boundsOf(symbols, _))
     val sigma = params.map(p => p -> solved.getOrElse(p, Type.UnitType)).toMap
     val (declared, ret) = TypeOps.signature(symbols(id).info)
     val argTypes = args.map(typeOf(_, sc))
@@ -377,6 +381,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case (d, actual) if TypeOps.anonymous(d) && dataOf(actual).isDefined => d -> actual
     }.toMap
     val typeArgs = params.map(sigma) ++ declared.flatMap(bounds.get)
+    if building.contains(name) then recursed += name
     val version = baselineOf(name, params, declared, ret).map(_.flatMap { typeParams =>
       /** A declared type parameter is keyed by itself; an implicit one by the bound it stands for. */
       val actuals = typeParams.map { (key, p) =>
@@ -391,14 +396,18 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
           val pairs = actuals.map((p, as) => p -> as.head)
           checkEntries(pairs).flatMap(_ => hiddenArgs(pairs)).map(ws => (typeParams.map(_._1).zip(pairs.map(_._2)), ws))
     })
+    val (inner, deeper) =
+      TypeOps.derived(params, symbols(id).info, unit.typeOf(ref), frame.value, typeParamsIn(_).nonEmpty)
     version match
       case Some(Left(why)) if typeArgs.exists(typeParamsIn(_).nonEmpty) =>
         unsupported(t.span, s"a call of `$name` at a type parameter, which has no baseline version ($why)", k)
+      case Some(Left(why)) if deeper =>
+        unsupported(t.span, s"polymorphic recursion of `$name`, which has no baseline version ($why)", k)
       case _ =>
         /** The callee, its hidden arguments, and the bounds to build it at if it is an instance. */
         val (callee, ws, at) = version match
           case Some(Right((keyed, ws))) =>
-            specialised(name, keyed.map(_._2)) match
+            (if deeper then None else specialised(name, keyed.map(_._2))) match
               case Some(key) =>
                 /** The clone: this function lowered again at the key's types (Rule CM5.1). */
                 typeClones(s"$name[$key]") = (name, key)
@@ -410,7 +419,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
             val inst = if shown.isEmpty then name else shown.map(symbols.render(_)).mkString(s"$name[", ",", "]")
             other.foreach(_.left.foreach(instances(inst) = _))
             (inst, Nil, Some(bounds))
-        at.foreach(b => instance(callee)(function(decls(name), sigma, b, callee)))
+        at.foreach(b => frame.withValue(inner)(instance(callee)(function(decls(name), sigma, b, callee))))
         all(args, sc)(as => bind(Rhs.Call(callee, ws ++ as, runtime = false), t, sc)(k))
 
   /** That no static table among the hidden arguments `pairs` has a null entry ([[Tables.unbuilt]])
@@ -489,7 +498,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
         val f = fns(name)
         val used = Core.freeVars(f.body) ++ (f.params ++ Core.lets(f.body).map(_._1)).flatMap(Core.witnessOf) ++
           Core.witnessOf(Atom.Var("result", f.ret))
-        val kept = all.filter((_, p) => hiddenOf(p).exists(used))
+        val kept = if recursed(name) then all else all.filter((_, p) => hiddenOf(p).exists(used))
         fns(name) = f.copy(params = kept.flatMap((_, p) => hiddenOf(p)) ++ f.params.drop(hidden.size))
         kept
       }
@@ -981,19 +990,3 @@ object Lower:
       case _: Trees.WildcardPat | _: Trees.BinderPat => true
       case Trees.OrPat(l, r, _)                      => covers(l, variant) || covers(r, variant)
       case _                                         => false
-
-  private def prim(op: Trees.BinOperator): PrimOp =
-    import Trees.BinOperator.*
-    op match
-      case Add      => PrimOp.Add
-      case Sub      => PrimOp.Sub
-      case Mul      => PrimOp.Mul
-      case Div      => PrimOp.Div
-      case Mod      => PrimOp.Rem
-      case Eq       => PrimOp.Eq
-      case Neq      => PrimOp.Ne
-      case Lt       => PrimOp.Lt
-      case Le       => PrimOp.Le
-      case Gt       => PrimOp.Gt
-      case Ge       => PrimOp.Ge
-      case And | Or => PrimOp.Eq

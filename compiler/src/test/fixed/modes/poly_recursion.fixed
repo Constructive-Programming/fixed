@@ -1,0 +1,45 @@
+// Polymorphic recursion: N of A holds an N of List of A. `depth` never uses A, but its recursive
+// call (at List of A) passes a witness for it, so its baseline version keeps A's witness; so does
+// `f`, which `g` calls while `f` is being built. `leaves` uses A (`p`), so it has a clone, which
+// would ask for itself at List of its key without end; it calls the baseline version instead, as
+// does the clone of `sz`, which recurses through a closure inside the generated `fold`.
+use std.io.Console
+
+data N of A:
+    Leaf(a: A)
+    Deep(n: N of List of A)
+
+data T of A:
+    Z(v: A)
+    S(v: A, k: List of T of List of A)
+
+fn depth(n: N of A) -> u64 =
+    match n:
+        N.Leaf(_) => 0
+        N.Deep(m) => 1 + depth(m)
+
+fn leaves(n: N of A) -> u64 =
+    match n:
+        N.Leaf(a) =>
+            let p = (a, a)
+            1
+        N.Deep(m) => 1 + leaves(m)
+
+fn f(n: N of A) -> u64 =
+    match n:
+        N.Leaf(_) => 0
+        N.Deep(m) => 1 + g(m)
+
+fn g(n: N of A) -> u64 =
+    match n:
+        N.Leaf(_) => 10
+        N.Deep(m) => 100 + f(m)
+
+fn sz(n: T of A) -> u64 = n.fold((v) -> 1, (v, k) -> k.fold(1, (a, m) -> a + sz(m)))
+
+fn main() -> () with Console =
+    let n = N.Deep(N.Deep(N.Leaf([[1]])))
+    Console.printLine(depth(n).show())
+    Console.printLine(leaves(n).show())
+    Console.printLine(f(N.Deep(N.Deep(N.Deep(N.Leaf([[[1]]]))))).show())
+    Console.printLine(sz(T.S(1, [T.Z([2]), T.S([3], [T.Z([[4]])])])).show())

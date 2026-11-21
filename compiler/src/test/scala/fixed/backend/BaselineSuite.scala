@@ -172,6 +172,26 @@ class BaselineSuite extends munit.FunSuite:
     assert(lower.baselines("right"), lower.baselines)
     assert(fns.exists(_.name == "List of A satisfies Folding: foldRight[R]"), fns.map(_.name))
 
+  test("polymorphic recursion: a clone calls the baseline version at a deeper key (default mode)"):
+    val fns = specialised("poly", file("compiler/src/test/fixed/modes/poly_recursion"))
+    val leaves = fns.map(_.name).filter(_.startsWith("leaves")).sorted
+    assertEquals(leaves, List("leaves", "leaves[i64]"))
+    assert(Core.callees(named(fns, "leaves[i64]").body)("leaves"), "the clone calls the baseline version")
+
+  test("polymorphic recursion with no baseline version is B005, not an endless instance chain"):
+    val src = "data N of A:\n    Leaf(a: A)\n    Deep(n: N of List of A)\n\n" +
+      "fn half(n: N of A, x: X is Numeric) -> X =\n    match n:\n        N.Leaf(_) => x * 0.5\n" +
+      "        N.Deep(m) => half(m, x)\n\nfn main() -> () =\n    let h = half(N.Leaf(1), 3.0)\n    ()\n"
+    val ds = Lower(unit("half", src)).program.fold(identity, fns => fail(s"lowered: ${fns.map(_.name)}"))
+    assert(ds.exists(_.message.contains("polymorphic recursion of `half`")), ds)
+    val finite = List(
+      src.replace("half(m, x)", "half(N.Leaf([1]), x)"),
+      "fn f(a: A, x: X is Numeric, n: u64) -> X =\n    if n == 0: x * 0.5 else: g(7, x, n - 1)\n\n" +
+        "fn g(b: B, x: X is Numeric, n: u64) -> X =\n    if n == 0: x else: f([b], x, n - 1)\n\n" +
+        "fn main() -> () =\n    let h = f(1, 1.5, 3)\n    ()\n"
+    )
+    finite.foreach(p => assert(Lower(unit("finite", p)).program.isRight, s"a finite chain of instances:\n$p"))
+
   test("05: a phantom type parameter gets no witness; a result built by a constructor requirement is the caller's"):
     val (_, fns) = lowered("05_phantom_types", file("examples/05_phantom_types"))
     List("inspect", "showQuantity").foreach { f =>

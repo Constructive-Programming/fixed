@@ -70,6 +70,25 @@ extension (rhs: Rhs)
 enum PrimOp:
   case Add, Sub, Mul, Div, Rem, Eq, Ne, Lt, Le, Gt, Ge, Neg, Not, Widen, Convert
 
+object PrimOp:
+
+  /** The scalar operation of source operator `op`; `&&` and `||` never reach it, `Lower` makes them branches. */
+  def of(op: fixed.ast.Trees.BinOperator): PrimOp =
+    import fixed.ast.Trees.BinOperator as B
+    op match
+      case B.Add        => Add
+      case B.Sub        => Sub
+      case B.Mul        => Mul
+      case B.Div        => Div
+      case B.Mod        => Rem
+      case B.Eq         => Eq
+      case B.Neq        => Ne
+      case B.Lt         => Lt
+      case B.Le         => Le
+      case B.Gt         => Gt
+      case B.Ge         => Ge
+      case B.And | B.Or => Eq
+
 /** The right-hand side of a `Let`. Calls consume their counted arguments. */
 enum Rhs:
 

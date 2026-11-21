@@ -50,5 +50,25 @@ object TypeOps:
   def replaceAll(t: Type, by: Map[Type, Type]): Type =
     if by.isEmpty then t else by.getOrElse(t, t.mapChildren(replaceAll(_, by)))
 
+  /** Polymorphic recursion, which would lower an endless chain of clones or instances. A call of a function with
+    * type parameters `params` and signature `info` has the type `written` in its caller, and `frame` holds each type
+    * parameter of the enclosing clones and instances as the type it derives from. Returns `frame` with each of
+    * `params` as the type it derives from, or as itself where its argument mentions no type parameter (`generic`),
+    * and whether one of them nests a parameter of `params` (`N of A` calling itself at `List of A`). A chain that
+    * passes known types (`f` calling `g(7)`, `g` calling `f([b])`) ends, and is not taken for one.
+    */
+  def derived(
+      params: List[SymbolId],
+      info: Type,
+      written: Option[Type],
+      frame: Map[SymbolId, Type],
+      generic: Type => Boolean
+  ): (Map[SymbolId, Type], Boolean) =
+    val source = written.fold(Map.empty[SymbolId, Type])(solve(params.toSet, info, _, Map.empty))
+    val own = params.map(Type.TypeRef(_, Nil))
+    val types =
+      params.zip(own).map((p, self) => p -> source.get(p).map(subst(_, frame)).filter(generic).getOrElse(self))
+    (frame ++ types, types.exists((_, t) => own.exists(q => t != q && mentions(t, q))))
+
   /** Whether `t` mentions type `self` anywhere. */
   def mentions(t: Type, self: Type): Boolean = t == self || t.children.exists(mentions(_, self))

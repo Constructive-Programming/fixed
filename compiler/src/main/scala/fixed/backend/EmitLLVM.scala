@@ -267,6 +267,7 @@ final class EmitLLVM:
   private def direct(x: Var, f: String, args: List[Atom]): Unit =
     lazy val n = ids.next()
     val params = signatures.get(f).fold(args.map(_.tpe))(_.params.map(_.ctype))
+    require(params.size == args.size, s"$f takes ${params.size} arguments, called with ${args.size}")
     val argList = args.zip(params).zipWithIndex.map { case ((a, p), i) =>
       if p.slot then slotted(operand(a), a.tpe, s"$n.$i")
       else s"${EmitLLVM.llType(a.tpe)} ${operand(a)}"
