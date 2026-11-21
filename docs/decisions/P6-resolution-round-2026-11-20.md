@@ -234,3 +234,8 @@ Three questions left open by the earlier rounds and by `docs/decisions/P0-spec-r
 - The suspected fault behind the ownership-clone measurement (D15).
 - About 4% on `list_pipeline` and `records` against `main` is unexplained; `fx_drop` still recurses on children other than the last.
 - OQ-CM1 is closed by D13; OQ-CM5 by D12; OQ-CM8 by D9; OQ-CM4 and OQ-T2 by D3.
+
+### Derived `Functor` (fourth round, 2026-11-21)
+
+Owner: "A now, B planned." A derived `map` rebuilds a value only where it can reach every occurrence of the rightmost parameter: the parameter itself, or the last argument of a data type that itself derives `Functor`, and only when the parameter is unbounded (`spec/type_system.md` Rule 7.4.c). Other types derive no `Functor` and the diagnostic names the blocking field. Planned: derivation through a function result (`u64 -> A`) by composition. Not planned: a map over any parameter position.
+

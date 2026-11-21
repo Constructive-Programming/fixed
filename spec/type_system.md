@@ -977,8 +977,10 @@ Built: `unfold` and `map` of linear data, and the generated `length` of list-sha
 **Rule 7.4.c (Functor over the rightmost type parameter).** A *named* `data T of (X1, ..., Xn)` declaration is auto-derived as `Functor of Xn` (the **rightmost type parameter** — right-bias convention) iff:
 
 1. `Xn` is non-phantom and is a type parameter (not a value parameter).
-2. `Xn` appears in **covariant** position in at least one variant field.
-3. `Xn` does **not** appear in contravariant position (e.g., as a function-parameter type) in any variant field.
+2. `Xn` has no bound. `map` may produce any element type, and `Functor`'s signature has no place for a bound on it.
+3. Every occurrence of `Xn` in a variant field is **reachable**: it is `Xn` itself, or it lies inside the last argument of a data type that derives `Functor` by this rule, with no other argument of that type mentioning `Xn`. A recursive occurrence of `T` at its own parameters is reachable.
+
+A type that fails condition 2 or 3 derives no `Functor`, and the diagnostic names the field that blocks the derivation. The types excluded by condition 3 are: `Xn` in an argument that is not the last (`Tuple of (Xn, u64)`), `Xn` as the result of a function (`u64 -> Xn`), `Xn` as a function parameter, and a type that refers to itself at other arguments (`M of (B, A)` inside `M of (A, B)`). The user may write `T satisfies Functor:` by hand for any of them. Deriving through a function result, by composing `f` after the field, is planned (`docs/plans/implementation-plan.md`, Phase 4.2). (Owner's decision, fourth round of P6.)
 
 This rule applies to **named** data types only. Anonymous caps produced by cap-generator calls (e.g., `pairConstraint(0, 100)`) are never auto-derived per Rule 6.3.2 — refinement caps add prop obligations, not method surfaces.
 
