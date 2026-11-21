@@ -129,6 +129,18 @@ pub Order satisfies Ordering:
 
 The prelude's satisfier of `Ordering` (§4.4), so `Ord.compare -> is Ordering` has a representation (P6 D17). It holds no reference and fits in one byte, so it is an immediate: it travels inside the slot, with no cell (`spec/compilation_model.md` Rule CM3.5). A program may `match` on an `Order` value. On an `is Ordering` value it uses `fold` (§4.4). Like `Maybe`, it is the canonical satisfaction of its capability in the sense of §5 only.
 
+
+### 3.7 `String`
+
+**Rule S3.7 (Strings are UTF-8).** A `String` is a sequence of Unicode scalar values, held as valid UTF-8. No `String` holds bytes that are not valid UTF-8: every way to make one either cannot produce such bytes or checks them. (Owner's decision, fourth round of P6.)
+
+- **Order.** `String satisfies Ord` compares by Unicode code point, a shorter string before any string it is a prefix of. For valid UTF-8 this is the order of the bytes compared as unsigned values, which is how it is implemented. It is not alphabetical order in any language: `"Z" < "a"`.
+- **Equality.** `String satisfies Eq` compares code points. No Unicode normalisation is applied: a precomposed character and the same character written with a combining mark are different strings *(author's choice, owner to confirm)*.
+- **Collation and normalisation** are library matters: a named satisfaction (`String satisfies Ord named …`, `spec/type_system.md` Rule 8.4.c) selected by `using`, with the locale as an explicit value.
+- **Where bytes come in.** A string literal is checked by the scanner. Text read from outside the program (`Console.readLine`, and later files and sockets) is checked where it enters; text that is not valid UTF-8 does not become a `String`. What the reading operation then does (an effect, an `Optional` result, or replacement characters) is open (OQ-S5).
+
+Built today: the comparison and the equality. Not built: the check on input; `Console.readLine` passes bytes through unchecked.
+
 ## 4. Capability declarations (normative shape)
 
 ### 4.1 `cap Optional`
@@ -521,4 +533,5 @@ Earlier drafts (`docs/plans/implementation-plan.md` line 352) classified `List`,
 
 - **OQ-S1 — Built-in `Show`.** Should `bool`, `i64`, `f64`, etc. auto-satisfy `Show`? Most programs need `.show()` constantly; refusing the default is friction. Provisional yes, formalize once `cap Show` lands.
 - **OQ-S2 — Map/Set.** `cap Map of (K, V)` and `cap Set of A` are mentioned in examples but not yet specified here. Defer to a Phase-5 stdlib doc.
+- **OQ-S5 — Input that is not valid UTF-8.** Rule S3.7 keeps such bytes out of a `String`. Open: whether a reading operation performs an effect, returns an `Optional`, or substitutes U+FFFD.
 - **OQ-S3 — `String`.** Currently ambiguous: a primitive in the grammar (`PrimitiveType`), but example 11 declares refinements (`type Username = String + minLength(3)`) that expect cap-like composition. Decision: `String` is a primitive *and* satisfies a `cap Stringlike` (or similar) for refinement purposes. Formalize separately.

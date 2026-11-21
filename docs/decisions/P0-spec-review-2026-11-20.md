@@ -202,7 +202,7 @@ Found and not fixed:
 - `bool` does not satisfy `Ord` in the typer, though `Declarations.provided` says every primitive does.
 - A negated literal at a mismatched type gets two `T002`s; lambda-parameter variables print as `?N` in mismatches.
 - Float literal patterns are `B005` (`spec/pattern_matching.md` §3.3 asks for bitwise equality; the backend has no bitcast), and so is a literal in a `let` pattern.
-- `spec/stdlib.md` fixes no order for `String`; the runtime orders bytewise. Open for the owner.
+- Input is not checked to be valid UTF-8, which `spec/stdlib.md` Rule S3.7 requires of every `String`: `Console.readLine` passes bytes through.
 - A program's `satisfies Ord` body on a scalar defines `compare`, but `<` and the table's `lt` and `le` stay built in, so they can disagree. Open, with the other built-in scalar members.
 - The typer accepts a tuple of three or more elements where `Pair of (A, B)` is required, and the program crashes; `Members.candidates` resolves `Tuple`'s two-field members on tuples of any size. A run-time table, or a generated member's baseline, at a tuple of other than two elements is `B005`.
 - Exhaustiveness is more conservative than §6.1 of `spec/pattern_matching.md`: `W(n, true)` / `W(n, false)` is `T020`.
