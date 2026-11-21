@@ -288,9 +288,10 @@ final class EmitLLVM:
     require(runtime || !entries(f), s"$f takes slots and must be called through its closure or table")
     if !runtime then direct(x, f, args)
     else
-      val argList = typed(args)
+      val params = runtimeParams(f)
+      val argList = args.zip(params).map(argument).mkString(", ")
       val ret = if x.ctype == CType.Unit then "void" else EmitLLVM.llType(x.ctype)
-      declared(f) = s"declare $ret @$f(${args.map(a => EmitLLVM.llType(a.tpe)).mkString(", ")})"
+      declared(f) = s"declare $ret @$f(${params.map(EmitLLVM.llType).mkString(", ")})"
       if ret == "void" then
         line(s"  call void @$f($argList)")
         aliases(x.name) = "0"
@@ -306,6 +307,7 @@ final class EmitLLVM:
     require(params.size == args.size, s"$f takes ${params.size} arguments, called with ${args.size}")
     val argList = args.zip(params).zipWithIndex.map { case ((a, p), i) =>
       if p.slot then slotted(operand(a), a.tpe, s"$n.$i")
+      else if a.tpe == CType.Unit then argument(a, p)
       else s"${EmitLLVM.llType(a.tpe)} ${operand(a)}"
     }
     val ret = signatures.get(f).fold(x.ctype)(_.ret)
@@ -357,7 +359,24 @@ final class EmitLLVM:
         case CType.Bool                                => "false"
         case _                                         => v
 
-  private def typed(as: List[Atom]): String = as.map(a => s"${EmitLLVM.llType(a.tpe)} ${operand(a)}").mkString(", ")
+  /** `a` as an argument of type `t`, with its type: a unit where `t` is not one is dead code after
+    * an abort or a call of a `-> !` function, passed as the zero of `t`, as [[zeroIfUnit]] makes it
+    * for a join or a return (whose unit operand is `0`, where an argument's is a variable).
+    */
+  private def argument(a: Atom, t: CType): String =
+    s"${EmitLLVM.llType(t)} ${if a.tpe == CType.Unit then zeroIfUnit("0", t) else operand(a)}"
+
+  /** The parameter types of each runtime function: at each position, the first type that is not a
+    * unit among its calls' arguments there. Read once `program` has filled `signatures`.
+    */
+  private lazy val runtimeParams: Map[String, List[CType]] =
+    (for
+      fn <- signatures.values.toList
+      case (_, Rhs.Call(f, as, true)) <- Core.lets(fn.body)
+    yield f -> as.map(_.tpe)).groupMapReduce(_._1)(_._2) { (a, b) =>
+      require(a.size == b.size, "a runtime function called with different numbers of arguments")
+      a.zip(b).map((x, y) => if x == CType.Unit then y else x)
+    }
 
   private def operand(a: Atom): String =
     a match

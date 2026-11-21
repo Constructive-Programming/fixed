@@ -303,6 +303,17 @@ class EmitSuite extends munit.FunSuite:
       assert(count.contains(".in, %entry ]") && !count.contains("call i8 @\"fx_u_count\""), s"$mode: $count")
     }
 
+  test("the result of a `-> !` call passed on in dead code is the zero of the parameter's type"):
+    val src = java.nio.file.Files.readString(Path.of("compiler", "src", "test", "fixed", "modes", "never_branch.fixed"))
+    modes.foreach { mode =>
+      val out = ir("never_branch", src, mode)
+      assert(out.contains("@\"fx_u_quoted\"(ptr null)"), s"$mode: a user function's argument")
+      assert(
+        out.contains("@fx_print_line(ptr null)") && !out.contains("@fx_print_line(i8"),
+        s"$mode: a runtime argument"
+      )
+    }
+
   /** No version of a loop calls itself: a self call in tail position is a jump back to the `loop`
     * block (`EmitLLVM`). A version may call another version of the same loop once (the first step
     * of an exclusive clone, say), so the calls between versions must not form a cycle: the native

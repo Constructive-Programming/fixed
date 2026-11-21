@@ -622,8 +622,12 @@ object Typer:
 
   /** `handle subject: clauses` (`spec/effects.md` §6). Operation clauses bind the operation's
     * parameters; inside them `resume(v)` takes the operation's result type and yields the
-    * handler's. The handler's type is the `return` clause's (else the subject's). Its row is the
-    * subject's minus the effects the clauses name, plus the clause bodies' rows (Rule E6.6).
+    * handler's. Its type is the subject's when there is no `return` clause and the subject is not
+    * `!`; otherwise it is the expected type, else a fresh variable the clause bodies solve. Where
+    * they leave it unconstrained (no bound, not numeric), it becomes `!` unless a later use
+    * solves it (a clause returned a lambda's parameter), since then every way out diverges
+    * (`Unifier.diverging`). Its row is the subject's minus the effects the clauses name, plus the
+    * clause bodies' rows (Rule E6.6).
     */
   private def typedHandle(s: TyperState, h: Trees.HandleExpr, pt: Proto)(using ctx: Context): (TyperState, Type) =
     val (s1, subject, raw) = Effects.isolated(s)(typedExpr(_, h.subject, Proto.Wildcard))
@@ -631,10 +635,9 @@ object Typer:
     /** ponytail: row variables solved after the subject (by a later callback) bypass this handler. */
     val performed = raw.flatMap((e, span) => Effects.expand(s1, List(e)).map(_ -> span))
     val (s2, result) = (h.returnClause, pt) match
-      case (None, _)                        => (s1, subject)
-      case (Some(_), Proto.ExpectedType(e)) => (s1, e)
-      case (Some(_), Proto.Wildcard)        =>
-        s1.fresh
+      case (None, _) if subject != Type.NeverType => (s1, subject)
+      case (_, Proto.ExpectedType(e))             => (s1, e)
+      case (_, Proto.Wildcard)                    => s1.fresh
     val s3 = h.returnClause.fold(s2) { rc =>
       val (si, ci) = Patterns.bind(s2, rc.param, subject)
       typedExpr(si, rc.body, Proto.ExpectedType(result))(using ci)._1
@@ -642,7 +645,12 @@ object Typer:
     val (s4, handled) = mapAccum(s3, h.operationClauses)(typedClause(_, _, result, performed))
     val names = handled.flatten
     val passed = performed.filterNot((e, _) => names.exists(_._1 == e.sym))
-    (Effects.coverage(s4.copy(row = passed ++ s4.row), names, h.span), result)
+    val fresh = pt == Proto.Wildcard && result != subject
+    val s5 = s4.unifier.resolve(result) match
+      case Type.TypeVar(id) if fresh && s4.unifier.boundsOf(id).isEmpty && !s4.unifier.numericVars(id) =>
+        s4.copy(unifier = s4.unifier.copy(diverging = s4.unifier.diverging.incl(id)))
+      case _ => s4
+    (Effects.coverage(s5.copy(row = passed ++ s5.row), names, h.span), result)
 
   /** An operation clause, its parameters bound to the operation's arguments for each instance of
     * the effect the subject performs; the (effect, operation) it handles.

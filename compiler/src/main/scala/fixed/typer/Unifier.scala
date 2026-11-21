@@ -11,7 +11,9 @@ import fixed.core.{SymbolId, Type}
   * `f64`; an integer literal that meets it takes the float literal's default: `3 + 2.5` is `f64`,
   * and `x + 2.5` with `x: u64` is a mismatch. A variable instantiated from a bounded type
   * parameter keeps that bound: members resolve on it before it is solved, and every type it is
-  * solved to must satisfy it (`bind`). `tuple` is the `Tuple` data type, which a 2-tuple equals.
+  * solved to must satisfy it (`bind`). A `diverging` variable, the type of a `handle` its clauses
+  * left unconstrained, is `!` unless solved. `tuple` is the `Tuple` data type, which a 2-tuple
+  * equals.
   *
   * `numeric` is supplied by the typer: it decides whether a solved type satisfies `Numeric`.
   */
@@ -23,7 +25,8 @@ final case class Unifier(
     tuple: Option[SymbolId],
     next: Int,
     obligations: List[(Type, Type)],
-    paramBounds: SymbolId => List[Type] = _ => Nil
+    paramBounds: SymbolId => List[Type] = _ => Nil,
+    diverging: BitSet = BitSet.empty
 ):
 
   def fresh(numeric: Boolean, default: Option[Type]): (Unifier, Type) =
@@ -59,14 +62,16 @@ final case class Unifier(
 
   /** Solve every still-unbound literal variable to the default of the variable it resolves to:
     * `bind` moves a float literal's default there, so `3 + 2.5` defaults to `f64` whichever literal
-    * comes first. `d` is used only if that variable has no default, which `bind` never leaves.
+    * comes first. `d` is used only if that variable has no default, which `bind` never leaves. Then
+    * every still-unbound `diverging` variable (the type of a `handle` its clauses left
+    * unconstrained) is `!`.
     */
-  def applyDefaults: Unifier =
-    defaults.foldLeft(this) { case (u, (id, d)) =>
+  def applyDefaults: Unifier = (defaults.toList ++ diverging.toList.map(_ -> Type.NeverType)).foldLeft(this) {
+    case (u, (id, d)) =>
       u.resolve(Type.TypeVar(id)) match
         case Type.TypeVar(free) => u.copy(bindings = u.bindings.updated(free, defaults.getOrElse(free, d)))
         case _                  => u
-    }
+  }
 
   /** Require `t` to be `Numeric`. */
   def requireNumeric(t: Type, numeric: Type => Boolean): Solved =
