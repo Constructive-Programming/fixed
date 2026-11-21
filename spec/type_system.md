@@ -1,8 +1,10 @@
 # Fixed Type System
 
-**Status:** Draft v0.5.7
+**Status:** Draft v0.5.8
 **Specifies:** typing of Fixed source as defined by `spec/syntax_grammar.ebnf` v0.4.15.
 **Last revised:** 2026-11-21
+
+**Changes from v0.5.7.** Text the compiler or later rules have overtaken. Rule 7.4.b.3 lists `para`, says how it runs for linear data, and says that the loop form of `fold` is built; Rule 7.4.b.1 no longer says that function recursion is not available (Rule 7.4.h). §4.3 no longer names the pair form `using T satisfies C`, withdrawn by Rule 8.4.d. Rule 5.10 cites `spec/stdlib.md` §4.14 for `Sequencing`. The example of §8.5.1 notes that its refinement on `u64` is `E107` as written (`spec/effects.md` Rule E3.6.e). The `fibIter` signature of §5.1 and the examples of Rules 7.4.h and 7.4.j whose arithmetic is not proved in range declare `Overflow` (`spec/effects.md` §3.6, specified and not built).
 
 **Changes from v0.5.6.** Applies two owner's decisions of 2026-11-21, fourth round (P6, "Recursion inside a capability" and "Data that holds a function of itself"). New Rule 7.4.j: a default body of a capability that reaches itself through members of its capability on `self` is `T028`, which neither a structural argument nor `Diverge` admits. Rule 7.4.h's closing paragraph no longer leaves that case open, and records the non-termination through a data type that holds a function of itself as accepted for now (new OQ-T5).
 
@@ -202,7 +204,7 @@ Consequences:
 
 - **List literals.** A package's own sequence type, named `List` or otherwise, takes list literals only by satisfying `std.prelude.Sequencing`: it is then a candidate at a literal's choice point (Rule 5.10, case 3) and an expected type a literal can have (case 1). Declaring `List` does not make literals the package's lists.
 - **Ascription.** The type in `e is T` is resolved by Rule 4.3 like any name: `[1, 2] is List of u8` in a package that declares `List` names the package's `List`, and is valid only if that type satisfies `std.prelude.Sequencing` (otherwise `T010`, Rule 5.10, case 1). `[1, 2] is PreludeList of u8` names the prelude's.
-- **Satisfactions and `using`.** The capability of a `satisfies` declaration, of a `use … satisfies` tail and of `using T satisfies C` is resolved by Rule 4.3, so it is the package's capability where the package hides the prelude's. The prelude's satisfactions stay always in scope (Rule 8.4) whether or not their names are hidden: hiding changes what a name means, not which satisfactions exist. `Maybe satisfies Optional` keeps serving `std.prelude.Optional`, and never a package's own `cap Optional`.
+- **Satisfactions and `using`.** The capability of a `satisfies` declaration and of a `use … satisfies` tail is resolved by Rule 4.3, so it is the package's capability where the package hides the prelude's. The prelude's satisfactions stay always in scope (Rule 8.4) whether or not their names are hidden: hiding changes what a name means, not which satisfactions exist. `Maybe satisfies Optional` keeps serving `std.prelude.Optional`, and never a package's own `cap Optional`.
 - **Visibility.** A declaration hides a prelude name in its own package whether it is `pub` or private (§8.6); `pub` decides only who else may name it.
 - **Exports.** A package that exports `pub data List` hides nothing in its importers. An importer means the prelude's `List` by `List` until it writes `use geometry.List`, which hides the prelude's there with `W060` (Rule 4.3.b), or `use geometry.List as Polyline`, which hides nothing. A signature of `geometry` that mentions its `List` means `geometry.List` in the importer whatever the importer's scope, and the importer's diagnostics print `geometry.List` where `List` means another entity (Rule 4.3.f).
 
@@ -227,7 +229,7 @@ Two forms:
 
 ```
 fn count(c: is Folding) -> u64                          // anonymous: any Folding
-fn fibIter(n: N is Numeric) -> N                       // named: input and output share type
+fn fibIter(n: N is Numeric) -> N with Overflow + Diverge  // named: input and output share type
 fn evenDoubled(numbers: C is Filtering of (N is Numeric) + Functor of N) -> C
 //              ^reused C    ^reused N as element type
 ```
@@ -477,7 +479,7 @@ cap Sized of (Part, Size is Numeric):           // both Part and Size are non-ph
 
 ### 5.10 List literals (Rule 5.10)
 
-**Rule 5.10.** A list literal `[e1, …, en]` builds a sequence of its elements, in order, through the constructor requirements `cons` and `empty` of the prelude capability `Sequencing`. It means `S.cons(e1, S.cons(e2, … S.cons(en, S.empty)))`, where `S` is its type, and every inner call is at `S` too, although the prelude types the tail of `cons` as `is Sequencing of Part` (`compiler/src/main/resources/stdlib/prelude.fixed`; `spec/stdlib.md` does not list `Sequencing` yet). It is an abstract constructor call (§8.5), and its type is decided as for one:
+**Rule 5.10.** A list literal `[e1, …, en]` builds a sequence of its elements, in order, through the constructor requirements `cons` and `empty` of the prelude capability `Sequencing`. It means `S.cons(e1, S.cons(e2, … S.cons(en, S.empty)))`, where `S` is its type, and every inner call is at `S` too, although the prelude types the tail of `cons` as `is Sequencing of Part` (`spec/stdlib.md` §4.14). It is an abstract constructor call (§8.5), and its type is decided as for one:
 
 1. **A concrete expected type** `T`: a parameter, field or result typed `List of u8`, or an ascription (Rule 5.11). The literal has type `T` and is built through the satisfaction of (`T`, `Sequencing`) that Rule 8.4 resolves (§8.5, case 1). A `T` with no such satisfaction is a type error (`T010`).
 2. **A type parameter `R` of the enclosing function.** The literal stays abstract and is built through the capability table in `R`'s witness (§8.5, case 2). The bounds of `R` must include `Sequencing` (`T010` otherwise).
@@ -1041,7 +1043,7 @@ fn unfold<S>(seed: S, step: S -> Self) -> Self
 
 The compiler iterates `step` until no recursive seeds remain. The combination of `fold` (Rule 7.4.a) and `unfold` enables hylomorphism (`unfold` then `fold`).
 
-**Rule 7.4.b.1 (Guaranteed fusion).** Function recursion is not available (functions are total), so every loop in a Fixed program is a `fold`, and a counted loop is an `unfold` followed by a `fold`. The compiler therefore **must** remove the intermediate structure, with no allocation for it, when all of these hold:
+**Rule 7.4.b.1 (Guaranteed fusion).** Recursion between functions is admitted only when structural or under `Diverge` (Rule 7.4.h), so a loop in a Fixed program is usually a `fold`, and a counted loop is an `unfold` followed by a `fold`. The compiler therefore **must** remove the intermediate structure, with no allocation for it, when all of these hold:
 
 1. The result of an `unfold` (or of a conversion the compiler derives from one, such as `toNat`) is consumed by exactly one `fold`.
 2. That result is used once (quantity 1, `spec/quantities.md` §5): nothing else observes it. Exclusive ownership is not required, because the structure is never built.
@@ -1053,11 +1055,11 @@ Outside this class the compiler is permitted, but not required, to fuse.
 
 These two guarantees are **mandatory specialisations** (`spec/compilation_model.md` Rule CM5.5). They are part of code generation, not of profile-guided optimisation: they are not charged to the clone budget and hold in every build mode, including `--no-specialise`. In a baseline version whose data type is a type parameter, the data type is not statically known and neither guarantee applies; in a clone of it for a known type both apply again.
 
-**Rule 7.4.b.3 (Native stack of derived members).** The derived `fold` (Rule 7.4.a), `unfold` (Rule 7.4.b) and `map` (Rule 7.4.c) of **linear data** run in bounded native stack, whatever the length of the value. Data is linear when it has a variant without fields and a variant with a field of type `Self`, each variant's field of type `Self` is its last field, and no other field mentions the data type: `List` and `Nat` are linear. The result is the one the recursive definition gives; the method is the implementation's. `unfold` and `map` build the cells in order in a loop. `fold` combines from the last cell (Rule 7.4.a); the form adopted reverses the spine and then folds from the end in a loop. The reversal is in place only where the spine is exclusively owned; a shared spine is reversed into a copy, which is not `fip` (Rule MM18.1), since `fold` only borrows `self` (`spec/compilation_model.md` Rule CM4.6).
+**Rule 7.4.b.3 (Native stack of derived members).** The derived `fold` (Rule 7.4.a), `para` (Rule 7.4.g), `unfold` (Rule 7.4.b) and `map` (Rule 7.4.c) of **linear data** run in bounded native stack, whatever the length of the value. Data is linear when it has a variant without fields and a variant with a field of type `Self`, each variant's field of type `Self` is its last field, and no other field mentions the data type: `List` and `Nat` are linear. The result is the one the recursive definition gives; the method is the implementation's. `unfold` and `map` build the cells in order in a loop. `fold` combines from the last cell (Rule 7.4.a); the form adopted reverses the spine and then folds from the end in a loop. The reversal is in place only where the spine is exclusively owned; a shared spine is reversed into a copy, which is not `fip` (Rule MM18.1), since `fold` only borrows `self` (`spec/compilation_model.md` Rule CM4.6). `para` also runs in a loop, and keeps every original sub-value alive for its callbacks on a stack of frames: one allocation per cell, and no reuse in place.
 
 The derived members of other recursive data (trees, rose trees, snoc lists; a mutually recursive group derives none, Rule 7.5.a) take one native frame per level of the value. Bounded native stack for them is not specified yet (`spec/memory_management.md` OQ-PR5).
 
-Built: `unfold` and `map` of linear data, and the generated `length` of list-shaped data. Not built: the loop form of `fold`, adopted by the owner (P6, fourth round, decision 3; `docs/plans/implementation-plan.md`, Phase 4.2, item 20); it measured +8.1% instructions and −23% best cycles on `nat_loop` (`docs/decisions/P0-spec-review-2026-11-20.md` §4).
+Built: `fold`, `para`, `unfold` and `map` of linear data, and the generated `length` of list-shaped data (`docs/plans/implementation-plan.md`, Phase 4.2, items 16, 20 and 25). The loop form of `fold`, adopted by the owner (P6, fourth round, decision 3), measured +8.1% instructions and −23% best cycles on `nat_loop` (`docs/decisions/P0-spec-review-2026-11-20.md` §4).
 
 **Rule 7.4.c (Functor over the rightmost type parameter).** A *named* `data T of (X1, ..., Xn)` declaration is auto-derived as `Functor of Xn` (the **rightmost type parameter** — right-bias convention) iff:
 
@@ -1151,7 +1153,7 @@ Self-recursion (a single data type referencing itself) is the trivial 1-element 
 
 1. **Structural recursion.** Every recursive call of the function to itself passes, in one fixed parameter position, a **strict sub-value** of that parameter: a variable bound by a pattern of a `match` (or of the parameter's own pattern) on the parameter, or on a strict sub-value of it. Such a function is total, and its row is unchanged. This is how a user writes a fold that the derivation does not provide: a traversal of a type that refers to itself at other arguments (`M of (B, A)` inside `M of (A, B)`), or through a position that the derived `fold` passes unfolded (Rule 7.4.a.1). The recursive call may be at other type arguments than the caller's.
 
-2. **`Diverge`.** A function whose row has the effect `Diverge` may recurse without restriction: `fn spin(n: u64) -> ! with Diverge = spin(n + 1)`. `Diverge` says that the function may not return. It has no operations and no handler removes it; it propagates to every caller, `main` included. A function with `Diverge` in its row is not total: its props are not proved by enumeration over it, it is never a fork site, and a cost bound on it is a bound per step, not on the call.
+2. **`Diverge`.** A function whose row has the effect `Diverge` may recurse without restriction: `fn spin(n: u64) -> ! with Diverge + Overflow = spin(n + 1)`. `Diverge` says that the function may not return. It has no operations and no handler removes it; it propagates to every caller, `main` included. A function with `Diverge` in its row is not total: its props are not proved by enumeration over it, it is never a fork site, and a cost bound on it is a bound per step, not on the call.
 
 A recursive function that is neither is `error[T027]: <f> calls itself` (or `<f> and <g> call each other`, naming the cycle). The diagnostic must show the ways out, the one that fits the shape of the recursion first:
 
@@ -1162,14 +1164,14 @@ A recursive function that is neither is `error[T027]: <f> calls itself` (or `<f>
 - `with Diverge`, when the recursion is not on a sub-value at all.
 
 ```
-fn total(xs: L) -> u64 =                    // accepted: structural on xs
+fn total(xs: L) -> u64 with Overflow =      // accepted: structural on xs
     match xs:
         L.C(h, t) => h + total(t)
         L.E => 0
-fn total(xs: L) -> u64 =                    // the same with fold; runs in bounded stack (Rule 7.4.b.3)
+fn total(xs: L) -> u64 with Overflow =      // the same with fold; runs in bounded stack (Rule 7.4.b.3)
     xs.fold((h, rest) -> h + rest, () -> 0)
 
-fn size(m: M of (A, B)) -> u64 =            // accepted: structural, at other type arguments
+fn size(m: M of (A, B)) -> u64 with Overflow = // accepted: structural, at other type arguments
     match m:
         M.Leaf(a, b) => 1
         M.Flip(r) => 1 + size(r)
@@ -1200,7 +1202,7 @@ cap Sz:
     fn sz() -> u64 = self.sz()                        // ERROR T028, also `with Diverge`
 cap Sz:
     fn sz() -> u64                                    // accepted: no default body
-    fn twice() -> u64 = self.sz() + self.sz()         // accepted: `sz` has no default
+    fn twice() -> u64 with Overflow = self.sz() + self.sz()   // accepted: `sz` has no default
 cap Two:
     fn a() -> u64 = self.b()                          // ERROR T028: `Two.a` and `Two.b` call each other
     fn b() -> u64 = self.a()
@@ -1500,9 +1502,11 @@ fn tryMake(i: u64) -> is Optional of u64 + between(1, 99) =
 //           a choice point (§8.5, case 3); say selection picks Maybe,
 //           giving Maybe.Just(i).
 //  Stage C: Maybe.Just(i) is a value of `Maybe of u64`. The `between(1, 99)`
-//           prop becomes an obligation on i (i.e. 1 <= i && i <= 99). The
-//           prop verifier discharges it from the call site's context.
+//           prop becomes an obligation on i (i.e. 1 <= i && i <= 99), here,
+//           where tryMake returns it (spec/effects.md Rule E3.6.e).
 ```
+
+As written the example is `E107`: `between(1, 99)` is a refinement on a bounded integer type, which `spec/effects.md` Rule E3.6.e requires to be established in the facts lane where the value meets the refined type, and nothing in `tryMake` proves `1 <= i && i <= 99`. A test of `i` in an `if`, or `assume`, makes it valid.
 
 This rule extends to nested refinements (e.g. `is Optional of (u64 + between(1, 99))` — the inner refinement `between(1, 99)` is stripped from the *type-arg* before resolving against `is Optional of u64`, then re-applied as an obligation on the contained value at use sites).
 

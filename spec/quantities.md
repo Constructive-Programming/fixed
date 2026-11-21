@@ -1,8 +1,10 @@
 # Fixed Quantities (QTT)
 
-**Status:** Draft v0.6.4
+**Status:** Draft v0.6.5
 **Specifies:** quantity and demand inference for Fixed v0.4.4 source.
 **Last revised:** 2026-11-21
+
+**Changes from v0.6.4.** Examples brought in line with rules decided since. §10.1 showed `fibIter` as a nested function that calls itself, which `spec/type_system.md` Rule 7.4.h now rejects (`T027`); it shows the body of `examples/01_basics.fixed`, an `unfold` followed by a `fold`, with the same quantity walk, and the row that §3.6 of `spec/effects.md` and Rule 7.4.i give it. Examples whose integer arithmetic is not proved in range declare `Overflow` (`spec/effects.md` §3.6, specified and not built).
 
 **Changes from v0.6.3.** Settles minor 7 of the consistency review of 2026-11-20 by an author's ruling: fork site 3 (Rule Q5.13.a) rests on props of a capability only where the satisfaction is known, as `spec/properties.md` Rule P7.8.c requires; OQ-Q6 says the same of props on `Numeric`. Site 3 names `assumed` beside `proved`, as the third round decided.
 
@@ -198,7 +200,7 @@ If `x` is used 0 times: quantity 0, with a "dead binding" warning unless the nam
 A function parameter's quantity is the sum of its usages in the body, taken under the body's quantity context.
 
 ```
-fn double(x: i64) -> i64 = x + x          // x used twice → quantity ω
+fn double(x: i64) -> i64 with Overflow = x + x   // x used twice → quantity ω
 fn identity(x: i64) -> i64 = x            // x used once → quantity 1
 fn constZero(x: i64) -> i64 = 0          // x used zero times → quantity 0 (warning unless _x)
 ```
@@ -261,7 +263,7 @@ For match cases specifically: a binding's quantity within the case body follows 
 For an expression with **mutually exclusive branches** — `if c: A else: B`, or `match e: pat1 => a1 | pat2 => a2 | …`, or handler clauses in a `handle` — a free binding's contribution is the **join** (`⊔`, §3.3) over all branches, *not* the sum.
 
 ```
-fn f(x: i64, c: bool) -> i64 =
+fn f(x: i64, c: bool) -> i64 with Overflow =
     if c:
         x        // x used once in this branch
     else:
@@ -276,7 +278,7 @@ Rationale: at runtime exactly one branch executes, so the worst-case usage acros
 For a block `e1; e2; …; en` (sequenced expressions in a `Block`), each free binding's quantity is the **sum** (`+`) over its usages across the sequence.
 
 ```
-fn g(x: i64) -> i64 =
+fn g(x: i64) -> i64 with Overflow =
     let a = x + 1     // x used once
     let b = x + 2     // x used once
     a + b
@@ -457,7 +459,7 @@ An **exclusive version** is a clone of it, compiled for a caller that exclusivel
 An exclusively owned `Heap` argument goes to the shared version, whose run-time test succeeds on it. The reason is the first measurement, in which the test ran as fast as unconditional reuse. **Open:** the project owner suspects that this measurement hides a compiler fault; until that is ruled out (`spec/memory_management.md` §21), the rule is provisional.
 
 ```
-fn bump(xs: List of u64) -> List of u64 =
+fn bump(xs: List of u64) -> List of u64 with Overflow =
     match xs:
         List.Cons(h, t) => List.Cons(h + 1, t)     // xs: exclusive on the first cell, own on t
         List.Nil => List.Nil
@@ -483,24 +485,32 @@ An argument meets an `exclusive` demand only if no other argument or capture of 
 ### 10.1 `examples/01_basics.fixed` — `fibIter`
 
 ```
-fn fibIter(n: N is Numeric) -> N =
-    fn go(i: N, a: N, b: N) -> N =
-        if i == 0:
-            a                           // a used once
+fn fibIter(n: N is Numeric) -> N with Overflow + Diverge =
+    Nat.unfold(n, (k: N) ->
+        if k == 0:
+            Nat.Zero
         else:
-            go(i - 1, b, a + b)          // i, b, a all used once
-    go(n, 0, 1)
+            Nat.Succ(k - 1)                 // k used in the condition and here
+    ).fold(
+        () -> (0, 1),
+        (acc) ->
+            let (a, b) = acc
+            (b, a + b)                      // a used once, b twice
+    ).first
 ```
 
-Quantity walk for `go`'s parameters under Rule Q5.9 (branching uses join):
+The loop is an `unfold` followed by a `fold` (`spec/type_system.md` Rule 7.4.b.1), not a function that calls itself: the earlier form of this example, a nested `go(i - 1, b, a + b)`, is `T027` under Rule 7.4.h, since `i - 1` is not a sub-value of `i`. The row has `Overflow` because the body does arithmetic at a type parameter (`spec/effects.md` Rule E3.6.c), and `Diverge` because the step does not reach `Nat.Zero` for every `N` (at `f64`, `n = 0.5` never does), so the termination of the `unfold` is not established (`spec/type_system.md` Rule 7.4.i). Neither row is built yet, and `examples/01_basics.fixed` declares none.
 
-- `i` in then-branch: 0; in else-branch: 1 (used in `i - 1`). Join: 1. But `i == 0` also uses `i` — that's outside the if; the `i == 0` is in the condition, so `i` is used once there. Total: `1 + (0 ⊔ 1) = 1 + 1 = ω`.
-- `a` in then-branch: 1; in else-branch: 1 (in `a + b`). Join: 1. Total in body: `0 + (1 ⊔ 1) = 1`.
-- `b` in then-branch: 0; in else-branch: 2 (in `b` and in `a + b`). Join: ω. Total: `0 + (0 ⊔ ω) = ω`.
+Quantity walk for the parameters of the two lambdas under Rule Q5.9 (branching uses join):
 
-So `go`'s parameters have quantities `(i: ω, a: 1, b: ω)`. Under Rule Q9.1 the else-branch's `a + b` counts `a` once even though `go`'s parameter `b` is ω: the sum is computed once.
+- `k` in then-branch: 0; in else-branch: 1 (used in `k - 1`). The condition `k == 0` uses `k` once, outside the branches. Total: `1 + (0 ⊔ 1) = 1 + 1 = ω`.
+- `acc`: used once, by the `let` pattern. Total: 1.
+- `a`: used once (in `a + b`). Total: 1.
+- `b`: used twice (as the first component and in `a + b`). Total: `1 + 1 = ω`.
 
-The parameters are unboxed scalars, so their demands are `read` (`i`, compared and subtracted) and `own` (`a`, `b`, returned or passed on), and the code is the same for every non-zero demand.
+So the step of the `unfold` has `(k: ω)` and the step of the `fold` has `(acc: 1)`, with `a: 1` and `b: ω` inside it. Under Rule Q9.1 the sum `a + b` is computed once, although `b` is also used beside it.
+
+In a clone for a scalar `N` the values are unboxed scalars, so their demands are `read` (`k`, compared and subtracted) and `own` (`a`, `b`, placed in the new pair), and the code is the same for every non-zero demand.
 
 ### 10.2 `examples/05_phantom_types.fixed` — `Door` and `Quantity`
 

@@ -1,8 +1,10 @@
 # Fixed Diagnostics: `inspect`, `trace` and Printing Values
 
-**Status:** Draft v0.1.2
+**Status:** Draft v0.1.3
 **Specifies:** the diagnostic channel, the two prelude declarations that write to it (`inspect`, `trace`), interpolation of values into a diagnostic message, what a printed value looks like, how build modes treat diagnostics, and where the printer gets the names it prints.
 **Last revised:** 2026-11-21
+
+**Changes from v0.1.2.** §1 says what is built: the type error for `show`, `==` and `clone` on an unbounded type parameter (`T022`), and not the sinks. Rule DG3.5 names the command that makes a release build, `fixed release`.
 
 **Changes from v0.1.1.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Shadowing of prelude names"): a program's own `inspect` or `trace` hides the prelude's with `warning[W060]` (`spec/type_system.md` Rule 4.3.a).
 
@@ -27,6 +29,8 @@ It does **not** specify:
 - The device behind the diagnostic channel. It is the standard error stream of a hosted program unless the runtime says otherwise; that is implementation-defined.
 - Logging as program behaviour. A program that must write a log writes it through an effect (`spec/effects.md`), with a value it formats itself through `Show`.
 - The surface grammar. `inspect` and `trace` are applications, and interpolation is a form of string literal; the productions belong in `spec/syntax_grammar.ebnf`.
+
+**Built today.** `show`, `==` and `clone` on a value of an unbounded type parameter are type errors (`T022`, P6 D10). Not built: `inspect`, `trace`, interpolation in a sink, the diagnostic channel, stripping in a release build, and the type table of Rule DG3.6 (`docs/plans/implementation-plan.md`, Phase 4.2, items 5 and 8).
 
 ## 2. Dependencies
 
@@ -105,7 +109,7 @@ Names are the declared names, qualified only where two printed types share a nam
 
 ### 3.5 Build modes (Rule DG3.5)
 
-- A **release build** strips every `inspect` and `trace`: `inspect(e)` becomes `e`, and `trace(…)` becomes `()`. A flag (`--keep-diagnostics`) keeps them.
+- A **release build**, made by `fixed release` (`spec/compilation_model.md` §8), strips every `inspect` and `trace`: `inspect(e)` becomes `e`, and `trace(…)` becomes `()`. A flag (`--keep-diagnostics`) keeps them.
 - A **development build** and a **test build** keep them.
 - The message of `unreachable` and the failure reports of props are kept in every mode; they are printed only when the program is already failing.
 

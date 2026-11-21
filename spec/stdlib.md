@@ -1,8 +1,10 @@
 # Fixed Standard Library — Core Types and Capabilities
 
-**Status:** Draft v0.3.4
+**Status:** Draft v0.3.5
 **Specifies:** the core data types and capabilities Fixed's stdlib provides; the cap-vs-data classification each one takes; the auto-derived satisfactions; the arithmetic effects and their handlers.
 **Last revised:** 2026-11-21
+
+**Changes from v0.3.4.** New §4.14: `cap Sequencing`, as the prelude declares it, since `spec/type_system.md` Rule 5.10 builds list literals through it. §4.9 says that `i128` and `u128` do not satisfy `Numeric` in the compiler yet. §5: the prelude gives `List satisfies Sequencing` its bodies already; `inspect` and `trace` are not built.
 
 **Changes from v0.3.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Shadowing of prelude names"). §1: the prelude is the package `std.prelude`; a program may hide a prelude name, and reaches the prelude's entity with `use std.prelude.<Name> as …` (`spec/type_system.md` §4.3). §3.5 and §5 say what hiding `Optional`, `inspect` or `trace` does, in those terms.
 
@@ -45,6 +47,7 @@ It does **not** specify:
 | `Ordering`    | cap  | Abstract `<`/`==`/`>` outcome; `Order` is the prelude's satisfier      |
 | `Boolean`     | cap  | Abstract two-state with `fold`; backed by primitive `bool`             |
 | `Empty`       | cap  | Abstract "has no inhabitants"                                          |
+| `Sequencing`  | cap  | Abstract ordered sequence built by `cons` and `empty`; what a list literal is built through (§4.14) |
 | `Eq`          | cap  | `==`/`!=` operator support (§4.7)                                       |
 | `Ord`         | cap  | `<`/`<=`/`>`/`>=` operator support, extends `Eq` (§4.8)                 |
 | `Numeric`     | cap  | `+`/`-`/`*`/`/`/`%` operator support, extends `Eq + Ord` (§4.9)         |
@@ -286,7 +289,7 @@ Numeric-literal polymorphism (`type_system.md` §5.7) goes through `Self.fn from
 
 All built-in primitive numeric types — `i8`/`i16`/`i32`/`i64`/`i128`, `u8`/`u16`/`u32`/`u64`/`u128`, `f32`/`f64` — satisfy `Numeric` (compiler-provided).
 
-**Built today.** The prelude's `Numeric` declares the seven arithmetic members without rows; `+`, `-`, `*` wrap, and none of the members without effects exist (`spec/effects.md` §3.6, "Built today").
+**Built today.** The prelude's `Numeric` declares the seven arithmetic members without rows; `+`, `-`, `*` wrap, and none of the members without effects exist (`spec/effects.md` §3.6, "Built today"). `i128` and `u128` do not satisfy `Numeric`: the backend has no 128-bit integers (`spec/compilation_model.md` OQ-CM7).
 
 ### 4.10 `cap Show`
 
@@ -389,6 +392,19 @@ pub fn widen(body: () -> A with E) -> A with Overflow + E = ...   // typed and c
 
 Not built: the prelude declares none of these (`docs/plans/implementation-plan.md`, Phase 4.2, item 22).
 
+### 4.14 `cap Sequencing`
+
+```
+pub cap Sequencing:
+    fn length -> u64
+    fn head -> is Optional of Part
+    fn tail -> Self
+    Self.fn cons(h: Part, t: is Sequencing of Part) -> Self
+    Self.fn empty -> Self
+```
+
+An ordered sequence of `Part`s. `cons` and `empty` are its constructor requirements, so `Sequencing` is the least prelude capability that can build a sequence: a list literal `[e1, …, en]` is `S.cons(e1, … S.cons(en, S.empty))` through it (`spec/type_system.md` Rule 5.10), and its choice point is bounded by `Sequencing of E` at least. `head` of an empty sequence is `Optional.none`, and `tail` of an empty sequence is the empty sequence, as the prelude's `List` satisfaction gives them (§5). `Empty` (§4.6) declares only `empty`. The shape is the one in `compiler/src/main/resources/stdlib/prelude.fixed`; cost contracts for it are not stated yet (§4.12). The requirements declare no row, so under `spec/effects.md` §3.6 a body may not perform `Overflow`; the prelude's `length` body (`n + 1` on `u64` in a `fold`) would, which Rule E3.6.g makes `E080` once §3.6 is built. Whether `length` declares `Overflow` or the body counts without it is open for the owner.
+
 ## 5. Prelude satisfactions
 
 The prelude declares these satisfactions, all `pub`. A satisfaction must define every member of its capability that has no default body, by a mapping, a method, auto-derivation (`spec/type_system.md` §7.4) or a built-in. The typer rejects one that leaves a member out (`spec/type_system.md` Rule 6.1.1, P6 D17). The comments say where each member comes from.
@@ -397,9 +413,9 @@ The prelude declares these satisfactions, all `pub`. A satisfaction must define 
 pub List satisfies Sequencing:
     Cons as cons
     Nil as empty
-    fn length -> u64 = ...                  // members of `cap Sequencing` without a default;
-    fn head -> is Optional of Part = ...    // bodies arrive with the Phase 5 library
-    fn tail -> Self = ...
+    fn length -> u64 = ...                  // members of `cap Sequencing` (§4.14) without a
+    fn head -> is Optional of Part = ...    // default; the prelude gives them bodies (by `fold`
+    fn tail -> Self = ...                   // and by `match`)
 pub List satisfies Folding              // auto-derived from variants (Rule 7.4.a)
 pub List satisfies Functor              // auto-derived per Rule 7.4.c; the active type
                                         // parameter is `A` (List has only one)
@@ -459,6 +475,8 @@ pub fn trace(message: String) -> () = ... // body supplied by the compiler
 ```
 
 Being a sink is a property of these two declarations (`spec/diagnostics.md` Rules DG3.1, DG3.2): `inspect` takes a value of any type with no bound, and the argument of `trace` must be a string literal, whose names in braces are interpolated. A program that declares its own `inspect` or `trace` hides the prelude's (`warning[W060]`, `spec/type_system.md` Rule 4.3.a) and gets an ordinary function.
+
+Not built: the prelude does not declare `inspect` and `trace` yet (`docs/plans/implementation-plan.md`, Phase 4.2, item 5).
 
 ## 6. Migration from earlier drafts
 

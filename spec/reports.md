@@ -1,8 +1,10 @@
 # Fixed Reports: Coverage, Cardinality and the Tool Interface
 
-**Status:** Draft v0.2.7
+**Status:** Draft v0.2.8
 **Specifies:** two analyses the compiler runs and reports — coverage of code by verification, and cardinality of types — the report of what the link step chose, the files a build reads besides its sources, the interface external tools use, and the exit codes of every command.
 **Last revised:** 2026-11-21
+
+**Changes from v0.2.7.** Rule RP4.1: the count of a function type is exact only for a function without `Diverge` (`spec/type_system.md` Rule 7.4.h); how to count one with it is left to the owner.
 
 **Changes from v0.2.6.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Recursion inside a capability"): Rule RP5.5 gives class `6` to `T028` (a default body of a capability that reaches itself through `self`, `spec/type_system.md` Rule 7.4.j).
 
@@ -98,7 +100,7 @@ The **cardinality** of a type is the number of values it has.
 
 - A sum adds: a `data` type's cardinality is the sum over its variants.
 - A product multiplies: a variant's cardinality is the product over its fields.
-- A function type exponentiates: `|A -> B| = |B|^|A|`. This is exact in Fixed, because functions are total and pure: there is no non-termination and no exception to add.
+- A function type exponentiates: `|A -> B| = |B|^|A|`. This is exact in Fixed for a function without `Diverge` in its row, because such a function is total and pure: there is no non-termination and no exception to add (apart from the known gap of `spec/type_system.md` OQ-T5, data that holds a function of itself, and an `unfold` until Rule 7.4.i is built). A function whose row has `Diverge` (`spec/type_system.md` Rule 7.4.h) may not return, and the count does not say yet how that adds to its result (open for the owner).
 - An effect adds to the result: `A -> B with Fail of E` counts as `A -> (B + E)`. A function whose row contains an effect with a resuming operation counts as `ω`, because its meaning depends on the handler.
 - A recursive type, and `String`, count as `ω` (countably infinite).
 - A refinement capability (`spec/type_system.md` §6.4) lowers the count when the prover can count its inhabitants: `u8 + between(0, 150)` is 151. Otherwise the count of the base type stands as an upper bound.

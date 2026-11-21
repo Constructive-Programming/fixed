@@ -1,8 +1,10 @@
 # Fixed Memory Management
 
-**Status:** Draft v0.5.5
+**Status:** Draft v0.5.6
 **Specifies:** how the compiler places, frees and reference-counts runtime values for Fixed v0.4.4 source: lifetime classes, immediates, data-stack regions, counted regions, the Perceus heap, destinations, value witnesses, reuse (FBIP), borrowing, effect-handler memory, structured parallelism, the `fip` contract and the memory report.
 **Last revised:** 2026-11-21
+
+**Changes from v0.5.5.** The examples of §22 whose integer arithmetic is not proved in range declare `Overflow` (`spec/effects.md` §3.6, specified and not built).
 
 **Changes from v0.5.4.** Settles minor 8 of the consistency review of 2026-11-20 by an author's ruling: Rule MM5.2(b) no longer decides placement in a baseline version from a cost contract, which `spec/cost.md` Rule CT6.5 forbids; a carried value of parameter type is long-lived there unless the requirement that rebuilds it is `fip`, and a clone for a known type repeats the check.
 
@@ -881,7 +883,7 @@ Every performance statement in this document is a hypothesis until measured; the
 ### 22.1 Simple let-binding (quantity ω, `Frame`)
 
 ```
-fn countPairs(x: i64, y: i64) -> i64 =
+fn countPairs(x: i64, y: i64) -> i64 with Overflow =
     let pair = makePair(x, y)        // built in this function's Frame region (Dest at makePair)
     pair.first + pair.second           // two borrowed reads
 ```
@@ -904,7 +906,7 @@ Fixed functions cannot call themselves. The code above is what the auto-derived 
 ### 22.3 Fold with per-step temporaries
 
 ```
-fn totalLen(words: List of String) -> u64 =
+fn totalLen(words: List of String) -> u64 with Overflow =
     words.fold(0, (acc, w) -> acc + w.trim().length())
 ```
 

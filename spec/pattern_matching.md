@@ -1,8 +1,10 @@
 # Fixed Pattern Matching
 
-**Status:** Draft v0.3.1
+**Status:** Draft v0.3.2
 **Specifies:** pattern syntax, type rules, exhaustiveness/redundancy checking, and match-expression semantics for Fixed v0.4.3 source.
-**Last revised:** 2026-11-20
+**Last revised:** 2026-11-21
+
+**Changes from v0.3.1.** §8.1 no longer says that a function cannot call itself: structural recursion is admitted (`spec/type_system.md` Rule 7.4.h). Its example declares `Overflow` (`spec/effects.md` §3.6, specified and not built). §3.3 says what is built.
 
 **Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): in generic code a `match` reads the variant through the accessor `T.variant` (§8.4); examples destructure the data type `Tuple`, not the capability `Pair`.
 
@@ -74,6 +76,8 @@ A binder shadows enclosing-scope names of the same identifier inside the case bo
 | `UNIT_LITERAL` | `()` — matches the unique unit value. |
 
 **Rule M3.3 (Literal type):** the literal's type must match the scrutinee's type. Numeric-literal polymorphism (per type_system.md §5.7) resolves the literal's type from the scrutinee.
+
+**Built today.** Integer, `bool`, `char` and `String` literal patterns, also nested in tuple and variant patterns (`backend/Cases.scala`). Not built: a float literal pattern, whose bitwise equality the backend cannot yet express, and a literal in a `let` pattern; both are `B005` (`docs/decisions/P0-spec-review-2026-11-20.md` §4).
 
 ### 3.4 Data-variant patterns
 
@@ -323,10 +327,10 @@ Both `match` and the auto-derived `fold` of type_system.md §7.4.a destructure a
 
 ### 8.1 Match semantics
 
-A match case receives the **raw fields** of the matched variant. For recursive types, recursive subtrees are *not* pre-folded: the case receives them as values of the data type. A function cannot call itself, so a case that needs a result for a subtree folds it:
+A match case receives the **raw fields** of the matched variant. For recursive types, recursive subtrees are *not* pre-folded: the case receives them as values of the data type. A case that needs a result for a subtree folds it, as below, or calls the function on it, which is structural recursion (`spec/type_system.md` Rule 7.4.h):
 
 ```
-fn count(t: Tree of A) -> u64 =
+fn count(t: Tree of A) -> u64 with Overflow =
     match t:
         Tree.Empty => 0
         Tree.Leaf(_) => 1
@@ -340,7 +344,7 @@ fn count(t: Tree of A) -> u64 =
 A fold callback for a recursive variant receives **pre-folded** results for `Self`-typed fields and raw values for non-`Self` fields. The fold is the structural catamorphism:
 
 ```
-fn count(t: Tree of A) -> u64 =
+fn count(t: Tree of A) -> u64 with Overflow =
     t.fold(
         () -> 0,                                              // Empty
         (_) -> 1,                                             // Leaf

@@ -1,8 +1,10 @@
 # Fixed Compilation Model
 
-**Status:** Draft v0.3.4
+**Status:** Draft v0.3.5
 **Specifies:** how Fixed v0.4.4 source becomes code: the baseline version of every function, the travel form and the rest form of a value, immediates, accessors, witnesses, specialisation (clones, budget, score, mandatory cases), build modes, packages and the package ABI, visibility, satisfactions in a link unit, the interface and body tiers, and the application link (choice points, summaries, selection, the lock file, the profile file, clones at link, the type table).
 **Last revised:** 2026-11-21
+
+**Changes from v0.3.4.** §6 no longer says that a library's deferred satisfaction sites stay unbound until an application links it: there are none (P6, fourth round, "No deferred sites").
 
 **Changes from v0.3.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"). Rule CM6.6: every satisfaction site is resolved at package compile, and an ambiguous one is `E061` there (`spec/type_system.md` Rule 8.4.b); the deferred sites are withdrawn, and with them the resolution level `using` in the application root. The interface tier (Rule CM7.1), the application link (§8) and the lock file (Rule CM8.5) no longer record or resolve them; Rule CM6.7 no longer speaks of a link error for one. Rule CM8.4: a data type whose pair the site that created a choice point does not decide does not enter the pool, so selection resolves no satisfaction and its only error stays zero viable candidates. §8: a test build's application root is no longer a resolution level.
 
@@ -418,7 +420,7 @@ Copying the demanded part of a shared value remains only inside the shared entry
 
 ### 6.1 Package and link unit (Rule CM6.1)
 
-A **package** is the unit of separate compilation and of ABI: a set of source files compiled together, whose compiled form other packages link against without recompiling it. A **link unit** is the set of packages linked into one executable. Linking it is the **application link** (§8). A library is one or more packages and is not a link unit: its choice points that escape (Rule CM8.1) and its deferred satisfaction sites (Rule CM6.6) stay unbound until an application links it.
+A **package** is the unit of separate compilation and of ABI: a set of source files compiled together, whose compiled form other packages link against without recompiling it. A **link unit** is the set of packages linked into one executable. Linking it is the **application link** (§8). A library is one or more packages and is not a link unit: its choice points that escape (Rule CM8.1) stay unbound until an application links it. It has no unresolved satisfaction site: every one is resolved when its package is compiled (Rule CM6.6).
 
 Inside a package the compiler sees every body, so every call site can request clones (§5.4). Between packages a caller sees only the interface tier (§7.1), unless the callee's package ships the body (§7.3).
 
