@@ -109,7 +109,16 @@ Found and not fixed:
 - Derived `unfold` through a functor field (a rose tree with `List of Rose`) crashes, and derived `map` does not map through such a field, in both build modes.
 - The typer and the backend disagree on a derived `fold` through a type argument that is not the last (`Pair of (Self, u64)`), and on `Functor` for non-regular data.
 - A polymorphically recursive type such as `N of List of A` makes the compiler overflow its own stack in the default mode; a type that refers to itself at other arguments gets only baseline versions of its generated members.
-- Satisfactions are looked up by the name of the type, not by its symbol: a program that declares its own `data Order` picks up the prelude's `Order satisfies Ordering` and crashes the backend.
+- Satisfactions were looked up by the name of the type, not by its symbol: a program that declared its own `data Order` picked up the prelude's `Order satisfies Ordering` and crashed the backend.
+  - **Fixed** (`Symbols.satisfactionsOf`, `Namer`, `Tables.table`): satisfactions and constructor mappings are keyed by the satisfying type's symbol, with no fall-back to the name. A shadowed prelude data type is named `prelude.<name>`, so its generated members do not collide with the program's type.
+- The backend did not lower the bodies of `satisfies` blocks; they were type-checked only.
+  - **Fixed** (`backend/Satisfied.scala`): the bodies are lowered and serve direct calls, table entries and `==`, in both build modes. A program's body takes precedence over a generated member; the prelude's bodies fill the members for which nothing is generated. `==` on a boxed value other than `String` called the runtime's string comparison; it now calls the `Eq` body or is `B005`. A closure that captured a value of a type parameter could copy it before loading its witness, which was invalid IR.
+- A prelude name is still resolved through the program's scope in many places: the types `Tuple`, `Maybe`, `Result`, `List` and `String`, capabilities matched by name in the backend and in the derivation rules, and functions found by name. A program that declares `data Tuple`, `List`, `String` or `Nat`, or `cap Show`, breaks typing or changes behaviour. Prelude function bodies are typed in the program's scope, and their diagnostics, which carry prelude spans, crash the compiler.
+- A `satisfies` body on a primitive type is not lowered. A member with several type parameters of its own is `B005`. `Ord` through a table does not build `lt` and `le` from a user's `compare`. A program that declares any name the prelude declares loses the prelude's `satisfies` bodies.
+- The backend builds no derived `Show` or `Eq` for a data type (`Json`'s, for one): `B005`.
+- Constructor resolution with no fitting candidate leaves the call abstract; a concrete expected type then receives a value of another type.
+- The stand-in representation rule cannot see what a function returns: `fn l() -> is Show = [1, 2]` miscompiles.
+- `Maybe` has no `Folding.fold` body and no generated member for it.
 - A named bound `T is C` is not checked where the function is called.
   - **Fixed** (`Members.go`, `Unifier.bind`, `Members.freshArgs`, `TyperState.tryUnify`): every variable instantiated from a bounded type parameter, named or anonymous, raises an obligation when it is solved. A bounded `of` parameter of a data type, effect or capability does too, and a trial unification fails if it breaks a bound. Examples 02 and 11 passed a `List` where `ArrayLike` / `Sized + Sorted` was required and were corrected.
 - `show` and `==` on `List of T` with an unbounded `T`, and `<` on an unbounded `T`, were accepted.
@@ -126,7 +135,7 @@ Found and not fixed:
 - `N.fromI64(...)` on a type parameter is accepted by the typer and refused by the backend.
 - `i128` and `u128` do not satisfy `Numeric`, though `spec/stdlib.md` §4.9 says they do.
 - A user `cap Numeric` with `i64 satisfies Numeric` crashes the diagnostic formatter (a prelude span formatted against the user's file).
-- `Json` has no `Show` or `Eq` in the prelude, so `==` and `show` on it are rejected; `spec/stdlib.md` §3.2 gives its fields `+ Show + Eq`.
+- `Json` had no `Show` or `Eq` in the prelude. **Fixed**: its fields carry `Show + Eq` as `spec/stdlib.md` §3.2 says, and `Json` satisfies both again in the typer; the backend part is the missing derived `Show` and `Eq` above.
 - Rule 5.1.3 of `spec/type_system.md` does not mention `<` and `Ord`; `spec/stdlib.md` does not list `char satisfies Eq` and `char satisfies Ord`.
 - The backend does not lower the bodies of `satisfies` blocks; they are type-checked only.
 
