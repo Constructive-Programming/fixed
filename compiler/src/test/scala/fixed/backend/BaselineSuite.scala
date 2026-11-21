@@ -112,12 +112,11 @@ class BaselineSuite extends munit.FunSuite:
       List("fibIter", "fibIter[u64]")
     )
 
-  test("a call at a type without a full table of the bound calls an instance; another call shares the baseline"):
+  test("`String` has a full table of `Ord`: calls at `String` and at a number share the baseline"):
     val (lower, fns) = lowered("partial", BaselineSuite.partial)
     assert(lower.baselines("same"), lower.baselines)
-    assertEquals(lower.instances.keySet.toSet, Set("same[String]"))
-    assert(lower.instances("same[String]").contains("`String` does not define `Ord.lt`"), lower.instances)
-    assertEquals(fns.map(_.name).filter(_.startsWith("same")).sorted, List("same", "same[String]"))
+    assertEquals(lower.instances.toMap, Map.empty[String, String])
+    assertEquals(fns.map(_.name).filter(_.startsWith("same")), List("same"))
 
   test("a failed baseline attempt keeps none of what it built: the function is an instance, its callee a baseline"):
     val (lower, fns) = lowered("failed_attempt", BaselineSuite.failedAttempt)
@@ -158,13 +157,13 @@ class BaselineSuite extends munit.FunSuite:
       List(CType.Witness, CType.Table, CType.Witness, CType.Table)
     )
 
-  test("a table entry the backend does not build is never called: the call is an instance, here B005"):
+  test("`compare` on `String` has a table entry: a call through `Ord` at `String` is the baseline's"):
     val src = "fn less(a: T is Ord, b: T) -> bool = a.compare(b).fold(() -> true, () -> false, () -> false)\n\n" +
       "fn main() -> () =\n    let _n = less(\"a\".concat(\"b\"), \"c\")\n    ()\n"
     val lower = Lower(unit("less", src))
-    val ds = lower.program.fold(identity, fns => fail(s"lowered: ${fns.map(_.name)}"))
-    assert(ds.exists(_.message.contains("compare")), ds)
-    assertEquals(lower.instances.get("less[String]"), Some("`String` does not define `Ord.lt`"))
+    val fns = lower.program.fold(ds => fail(s"$ds"), identity)
+    assert(lower.baselines("less") && lower.instances.isEmpty, lower.instances)
+    assert(fns.exists(_.name == "String.compare"), fns.map(_.name))
 
   test("a table entry with no generated member runs the prelude's satisfies body: List's foldRight"):
     val src = "fn right(xs: is Folding of u8) -> u64 = xs.foldRight(0, (x, n) -> n + 1)\n\n" +
@@ -234,7 +233,7 @@ object BaselineSuite:
     "    let p = swap((byte(-7), \"x\".concat(\"y\")))\n" +
     "    Console.printLine(p.first.concat(p.second.show()))\n"
 
-  /** `same` at `i64`, which has an `Ord` table, and at `String`, which has none (no `lt`). */
+  /** `same` at `i64` and at `String`, which both have an `Ord` table. */
   val partial = "use std.io.Console\n\nfn same(a: N is Ord, b: N) -> bool = a == b\n\n" +
     "fn main() -> () with Console =\n    Console.printLine(same(\"x\", \"x\").show())\n" +
     "    Console.printLine(same(3, 4).show())\n"

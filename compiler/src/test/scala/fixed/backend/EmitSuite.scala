@@ -463,7 +463,7 @@ class EmitSuite extends munit.FunSuite:
       "    Console.printLine(spin(Door.new(\"front\".concat(\"!\")), 2).name)\n"
     val _ = check("recursive", src, "ab\n7\nfront!\n")
 
-  test("a function bounded by Ord runs at String through an instance and at i64 through its baseline version"):
+  test("a function bounded by Ord runs at String and at i64 through its baseline version"):
     val _ = check("partial", BaselineSuite.partial, "true\nfalse\n")
 
   test("a closure in a baseline version captures the witness of a slot it binds"):

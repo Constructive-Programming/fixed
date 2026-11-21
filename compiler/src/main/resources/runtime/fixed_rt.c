@@ -302,6 +302,17 @@ bool fx_str_eq(fx_string *a, fx_string *b) {
     return eq;
 }
 
+/* The order of two strings: negative, zero or positive as `a` is before, equal to or after `b`,
+ * comparing bytes as unsigned values and a prefix before the longer string. */
+int32_t fx_str_cmp(fx_string *a, fx_string *b) {
+    int64_t n = a->len < b->len ? a->len : b->len;
+    int c = n > 0 ? memcmp(a->bytes, b->bytes, (size_t)n) : 0;
+    int32_t order = c != 0 ? (c < 0 ? -1 : 1) : (a->len < b->len ? -1 : a->len > b->len ? 1 : 0);
+    fx_drop(&a->h);
+    fx_drop(&b->h);
+    return order;
+}
+
 /* ---- console (Rule E5.4 runtime effects) ---- */
 
 void fx_print_line(fx_string *s) {

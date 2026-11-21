@@ -23,7 +23,8 @@ import fixed.util.Span
   * A member of the language the backend does not build yet ([[Tables.unbuilt]]) gets a null entry;
   * no lowering asks for one. Any other member a type does not define makes the table an error. The
   * hidden entries `lt` and `le` stand in for `compare` (plan §2); a data type builds them from the
-  * `compare`, the program's or the derived one ([[Satisfied.compareOf]]).
+  * `compare`, the program's or the derived one ([[Satisfied.compareOf]]), `String` from the
+  * runtime's order of strings ([[Satisfied.stringOrder]]), a scalar from a comparison.
   */
 private[backend] trait Tables extends Satisfied:
   this: Lower =>
@@ -167,7 +168,7 @@ private[backend] trait Tables extends Satisfied:
       case (Some((data, args)), _)   => dataEntry(t, data, args, cap, member, name)
       case (_, Some((ctor, fields))) => productEntry(ctor, fields, member, name)
       case _ if preludeMember        =>
-        primitive(symbols.render(t), c, member).orElse(bodyEntry(t, Nil, Nil, cap, member, name, fromPrelude = false))
+        bodyEntry(t, Nil, Nil, cap, member, name, fromPrelude = false).orElse(primitive(symbols.render(t), c, member))
       case _ => bodyEntry(t, Nil, Nil, cap, member, name, fromPrelude = false)
     built.orElse(Option.when(preludeMember && Tables.unbuilt(member))(""))
 
@@ -309,10 +310,12 @@ private[backend] trait Tables extends Satisfied:
 
   /** Whether the compiler provides member `member` of a prelude capability on scalar type `t`: a
     * program's `satisfies` body for it is not used, so that `==`, `show` and the table entry agree.
+    * `compare` is not: a program's `satisfies Ord` body on a scalar defines it, as before the
+    * compiler provided one (whether a program may do so is open).
     */
   protected def builtIn(t: Type, member: SymbolId): Boolean =
     Lower.scalar(t).exists(c =>
-      symbols.preludeName(symbols(member).owner).nonEmpty &&
+      symbols.preludeName(symbols(member).owner).nonEmpty && symbols(member).name != "compare" &&
         primitiveBody(symbols.render(t), c, symbols(member).name).isDefined
     )
 
@@ -339,9 +342,19 @@ private[backend] trait Tables extends Satisfied:
       case ("eq", _)                                            => Some(binary(PrimOp.Eq, CType.Bool))
       case ("lt", _) if numeric || t == "char"                  => Some(binary(PrimOp.Lt, CType.Bool))
       case ("le", _) if numeric || t == "char"                  => Some(binary(PrimOp.Le, CType.Bool))
-      case ("concat", CType.Boxed)                              => Some(runtime("fx_str_concat", List(self, other)))
-      case ("show", CType.Boxed)                                => Some((List(self), c, Expr.Ret(self)))
-      case ("show", _)                                          =>
+      case ("lt" | "le", _) if t == "String"                    =>
+        val op = if member == "lt" then PrimOp.Lt else PrimOp.Le
+        Some((
+          List(self, other),
+          CType.Bool,
+          stringOrder(self, other)(c => of(Nil, Rhs.Prim(op, List(c, zeroOrder)), CType.Bool)._3)
+        ))
+      case ("compare", _) if numeric || t == "char" || t == "String" =>
+        val at = if t == "String" then Type.TypeRef(symbols.prelude("String"), Nil) else Type.PrimType(t)
+        Some((List(self, other), CType.Boxed, compareValues(at, self, other)(Expr.Ret(_))))
+      case ("concat", CType.Boxed) => Some(runtime("fx_str_concat", List(self, other)))
+      case ("show", CType.Boxed)   => Some((List(self), c, Expr.Ret(self)))
+      case ("show", _)             =>
         Lower.formatter(c, t == "char").map { (f, to) =>
           if to == c then runtime(f, List(self))
           else
@@ -364,10 +377,9 @@ object Tables:
   private val maxCaptures = 64
 
   /** Members of the language the backend builds no entry for yet where no `satisfies` body defines
-    * them and nothing derives them: `compare` on a scalar or `String` (a data type derives it, its
-    * result the prelude's `Order`, P6 D17), and the others (`find` only for list-shaped data).
+    * them and nothing derives them (`find` only for list-shaped data).
     */
-  private val unbuilt = Set("compare", "foldRight", "head", "tail", "find")
+  private val unbuilt = Set("foldRight", "head", "tail", "find")
 
   /** The hidden entries every table of a capability that extends `Ord` ends with (plan §2): the
     * comparison operators. They mean what `compare` means through `Order`: `lt(a, b)` is

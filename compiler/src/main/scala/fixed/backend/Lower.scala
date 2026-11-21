@@ -324,6 +324,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
                 equality(t, l, r).fold(unsupported(b.span, s"`${op.symbol}` on ${symbols.render(t)}", k))(
                   Expr.Let(v, _, result)
                 )
+              case (Lt | Le | Gt | Ge, CType.Boxed) if isStringType(typeOf(b.lhs, sc)) =>
+                stringOrder(l, r)(c => bind(Rhs.Prim(PrimOp.of(op), List(c, zeroOrder)), b, sc)(k))
               case (Lt | Le | Gt | Ge, CType.Boxed) =>
                 ordered(typeOf(b.lhs, sc), op, l, r)
                   .fold(unsupported(b.span, s"`${op.symbol}` on boxed values", k))(bind(_, b, sc)(k))
@@ -479,7 +481,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     * its bound set, the implicit ones after the declared ones ([[Tables.hiddenOf]], Rule CM4.3),
     * except for a phantom type parameter, whose witness and tables the code never uses; a
     * recursive call, made while the version is being built, passes them all ([[building]]). A call
-    * whose type arguments have no table of a bound (`String` has no `Ord.lt`) calls an instance.
+    * whose type arguments have no full table of a bound (an entry the backend does not build) calls
+    * an instance.
     */
   private def baselineOf(
       name: String,
@@ -588,7 +591,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
           case ("Show", "show", Nil)
               if Lower.scalar(recvType).isDefined || isStringType(recvType) || dataOf(recvType).isDefined =>
             expr(m.receiver, sc)(r => showValue(recvType, r)(k))
-          case ("Ord", "compare", List(arg)) if dataOf(recvType).isDefined || Lower.scalar(recvType).isDefined =>
+          case ("Ord", "compare", List(arg))
+              if dataOf(recvType).isDefined || Lower.scalar(recvType).isDefined || isStringType(recvType) =>
             expr(m.receiver, sc)(r => expr(arg, sc)(a => compareValues(recvType, r, a)(k)))
           case ("Eq", "eq", List(arg)) if dataOf(recvType).isDefined || isStringType(recvType) =>
             expr(m.receiver, sc)(r =>

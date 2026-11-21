@@ -232,11 +232,11 @@ private[backend] trait Satisfied extends Generated:
       } -> ws
     }
 
-  /** `k` given the `Order` that compares `a` with `b`, values of type `t`: units are equal, scalars
+  /** `k` given the `Order` that compares `a` with `b`, values of type `t`: units are equal; scalars
     * are compared (`Less` iff ordered-less, `Equal` iff ordered-equal, else `Greater`, so a NaN is
-    * `Greater`, as `Tables.ordEntries` says), a type parameter's values the same way through its
-    * table's `lt` and `le` (its `compare` entry is null on a scalar), a data type's by its `compare`;
-    * any other type is a problem (`B005`).
+    * `Greater`, as `Tables.ordEntries` says), strings the same way by [[stringOrder]], and a type
+    * parameter's values through its table's `lt` and `le`; a data type's by its `compare`; any
+    * other type is a problem (`B005`).
     */
   protected def compareValues(t: Type, a: Atom, b: Atom)(k: K): Expr =
     def returned(v: String): Expr = order(v)(Expr.Ret(_))
@@ -247,6 +247,8 @@ private[backend] trait Satisfied extends Generated:
       choose(lt, returned("Less"), choose(le, returned("Equal"), returned("Greater"))(Expr.Ret(_)))(k)
     if a.tpe == CType.Unit then order("Equal")(k)
     else if !a.tpe.counted then byTests(Rhs.Prim(PrimOp.Lt, List(a, b)), Rhs.Prim(PrimOp.Le, List(a, b)))
+    else if isStringType(t) then
+      stringOrder(a, b)(c => byTests(Rhs.Prim(PrimOp.Lt, List(c, zeroOrder)), Rhs.Prim(PrimOp.Le, List(c, zeroOrder))))
     else
       (boundTable(t, "Ord", "lt"), boundTable(t, "Ord", "le")) match
         case (Some((tb, lt)), Some((_, le))) =>
@@ -259,6 +261,16 @@ private[backend] trait Satisfied extends Generated:
             case None =>
               report(s"`compare` on ${symbols.render(t)}")
               order("Equal")(k)
+
+  /** `k` given the order of strings `a` and `b` (`fx_str_cmp`, which consumes both): negative, zero
+    * or positive as `a` is before, equal to or after `b`, bytewise, a prefix before the longer string.
+    */
+  protected def stringOrder(a: Atom, b: Atom)(k: Atom.Var => Expr): Expr =
+    val c = fresh("cmp", zeroOrder.tpe)
+    Expr.Let(c, Rhs.Call("fx_str_cmp", List(a, b), runtime = true), k(c))
+
+  /** Zero as the type of [[stringOrder]]'s result. */
+  protected val zeroOrder: Atom = Atom.IntC(0, CType.Int(32, signed = true))
 
   /** The function of the `satisfies` body that defines capability member `member` for satisfying
     * type `head` (a data type at no arguments, or a scalar type), built at the data type's
