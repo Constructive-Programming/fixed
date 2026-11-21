@@ -298,4 +298,4 @@ Built: the prelude's own scope, syntax and derivation naming the prelude, no der
 - Hiding of prelude names: "Keep Shadowing warning (unless a named using is present of course)", clarified as "I just meant using of named satisfaction": `W060` is always given for a hidden name; selecting a named satisfaction with `using` gives no warning.
 - A satisfaction where one already exists: "A, with file-scope and package-scope using allowed". A package's satisfaction of a pair that has a built-in or prelude satisfaction must be `named`; it is selected by `using` at any scope; where selected, operators and tables follow it (`spec/type_system.md` Rule 8.4.c, `E066`).
 - Totality: "A. Enforce spec, and suggest in the error how to rephrase using para". Recursion between named functions is an error whose diagnostic shows the rewrite with `fold`, `para` or `unfold` (`spec/type_system.md` Rule 7.4.h, `T027`). The totality of a derived `unfold` is open (OQ-T4).
-
+- Exit codes: the owner confirmed the class list with one change, "not supported yet = 99". Number `13` is free.

@@ -175,7 +175,7 @@ The report is the place to see why a representation was chosen; it is not needed
 
 ### 5.5 Exit codes (Rule RP5.5)
 
-**Status: proposed by the author, owner to confirm the class list** (`docs/decisions/P6-resolution-round-2026-11-20.md`, fourth round, decision 1). Not built: the compiler today exits `1` on any compile error, `2` on a usage error and `3` when `clang` fails.
+**Status: class list confirmed by the owner (2026-11-21), with `not supported yet` moved to `99`; number `13` is free** (`docs/decisions/P6-resolution-round-2026-11-20.md`, fourth round, decision 1). Not built: the compiler today exits `1` on any compile error, `2` on a usage error and `3` when `clang` fails.
 
 The exit code is the first thing a tool reads from a run, so it is specified here, with the other things tools read. No spec specifies the command line as a whole (`spec/properties.md` Rule P7.6 gives the verification flags); `docs/plans/implementation-plan.md` lists the commands and flags.
 
@@ -196,7 +196,6 @@ Every command uses this one table: the checker `fixed <file>...`, `fixed compile
 | `10` | malformed prop | package compile: typer and static prover | `E100`, `E104`, `E105` |
 | `11` | prop failed | package compile: static prover; test build | `E102`; `E107` (an integer refinement not proved where it is established); under `--strict-pbt`, a budget overrun (`W103`) |
 | `12` | quantity error | package compile: quantity inference | `E070`, `E072`, `E083` |
-| `13` | not supported yet | package compile: a limit of the compiler, found by the namer, the typer or lowering | `T005` where the namer reports it as an error; `T026`; `B001`, `B002`, `B003`, `B005` |
 | `14` | `fip` contract or confinement violated | package compile and the clones of a release link: demand and memory inference | `E071`, `E110`, `E085` |
 | `15` | cost bound not met | package compile: cost checker | `E120` |
 | `16` | no viable representation | selection, at package compile or application link | `E060` |
@@ -204,6 +203,7 @@ Every command uses this one table: the checker `fixed <file>...`, `fixed compile
 | `18` | toolchain failure | `ship`, `link`: the native toolchain | `B004` (`clang` missing or failed); an output file that cannot be written |
 | `19` | no generator | test build | `E101`, `E101a` |
 | `20` | prop not proved | after the verifiers, under `--require-proved` | `E106` |
+| `99` | not supported yet | package compile: a limit of the compiler, found by the namer, the typer or lowering | `T005` where the namer reports it as an error; `T026`; `B001`, `B002`, `B003`, `B005` |
 
 **Several classes in one run.** The exit code is the smallest class number among the errors the run reported. The rule is deterministic and does not depend on the order in which diagnostics are printed. A phase that fails stops the phases after it, so the errors of one run come from the first phase that failed, or from the front end (scanner, parser, typer), which keeps going on partial input; the classes of errors in the program that the front end finds (`3` to `10`) come first and in front-end order, so the code names the first phase that failed. A limit of the compiler that the namer finds (`T005`, class `13`) ranks below them: an error in the program is fixed first. The application link and the test build run only after a package compile that succeeded, and among their own classes the number decides. An internal compiler error outranks everything the run reported; a usage error stops the run before any phase.
 
