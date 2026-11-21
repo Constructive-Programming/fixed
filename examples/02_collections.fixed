@@ -257,8 +257,10 @@ fn main() -> () with Console =
     Console.printLine("Sum:     ".concat(total.show()))
     Console.printLine("Reverse: ".concat(rev.show()))
 
-    // Uses ArrayLike (type alias) — forces contiguous representation
-    let sorted = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
+    // Uses ArrayLike (type alias) — forces contiguous representation.
+    // A list literal is a List, which is neither RandomAccess nor Sized, so
+    // the collection comes from `range`, whose representation the caller picks.
+    let sorted = range(0, 20)
     let searchMsg = binarySearch(sorted, 7).fold(
         "7 not found",
         (_, idx) -> "Found 7 at index ".concat(idx.show()),

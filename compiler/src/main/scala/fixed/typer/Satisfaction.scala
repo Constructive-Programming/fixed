@@ -39,8 +39,14 @@ object Satisfaction:
         d.kind match
           case SymKind.TypeParam => Option.when(boundsReach(s, Members.boundsOf(s, id), cap))(s)
           case SymKind.Data      =>
-            /** A requested `Clone` holds at an instance whose arguments are `Clone` too. */
-            val elements = !onRequest(s, cap) || recvArgs.forall(a => holds(s, a, cap, Nil).isDefined)
+            /** A requested `Clone` holds at an instance whose arguments are `Clone` too. An argument
+              * not solved yet is not refused for the bound it was instantiated with, which lists
+              * what it must satisfy, not all it may satisfy.
+              */
+            def element(a: Type) = s.unifier.resolve(a) match
+              case Type.TypeVar(_) => true
+              case solved          => holds(s, solved, cap, Nil).isDefined
+            val elements = !onRequest(s, cap) || recvArgs.forall(element)
             if declared(s, d.name, cap) && elements || (!onRequest(s, cap) && derived(s, id, cap)) then
               withArgs(s, recvArgs, args)
             else None
@@ -62,16 +68,26 @@ object Satisfaction:
     * are prop obligations for M9. Failures are `T010`.
     */
   def discharge(s: TyperState, value: Type, bound: Type, span: Span): TyperState =
-    val entries = bound match
-      case Type.IsBound(bs) => Members.expandAliases(s.symbols, bs)
-      case other            => List(other)
-    entries.foldLeft(s) { (si, entry) =>
+    entries(s, bound).foldLeft(s) { (si, entry) =>
       entry match
         case Type.CapRef(c, args)   => holds(si, value, c, args).getOrElse(fail(si, value, entry, span))
         case _: Type.RefinementType => si
         case named                  =>
           si.tryUnify(named, value).getOrElse(fail(si, value, entry, span))
     }
+
+  /** [[discharge]] as a test, which reports nothing and keeps no binding. */
+  def satisfies(s: TyperState, value: Type, bound: Type): Boolean =
+    entries(s, bound).forall {
+      case Type.CapRef(c, args)   => holds(s, value, c, args).isDefined
+      case _: Type.RefinementType => true
+      case named                  => s.tryUnify(named, value).isDefined
+    }
+
+  private def entries(s: TyperState, bound: Type): List[Type] =
+    bound match
+      case Type.IsBound(bs) => Members.expandAliases(s.symbols, bs)
+      case other            => List(other)
 
   private def fail(s: TyperState, value: Type, entry: Type, span: Span): TyperState =
     val r = s.symbols.render

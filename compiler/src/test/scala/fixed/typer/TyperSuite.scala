@@ -321,6 +321,51 @@ class TyperSuite extends munit.FunSuite:
     assertEquals(typedUnit(alias + "fn g() -> String = r(1, \"x\")\n").diags, Nil)
     assertEquals(codes(typedUnit(alias + "fn g(h: H) -> String = r(1, h)\n")), List(DiagCode.T010, DiagCode.T010))
 
+  test("Rule 5.1.1: a named bound or a bounded of parameter is checked where the declaration is used"):
+    val decls = "cap Named:\n    fn name -> String\ndata Box:\n    B(n: u64)\n" +
+      "fn greet(x: T is Named) -> String = x.name\n" +
+      "data Tag of (A is Named):\n    Tag(a: A)\n    None\neffect Log of (A is Named):\n    fn log(a: A) -> ()\n" +
+      "cap Coll of (A is Named):\n    Self.fn mk(a: A) -> Self\n    fn count -> u64\nTag satisfies Coll:\n" +
+      "    Tag as mk\n    fn count = 1\n" +
+      "cap Greeter:\n    fn hello(x: T is Named) -> String\nBox satisfies Greeter:\n    fn hello(x: T is Named) = x.name\n"
+
+    /** Each call passes a `Box` where the bound asks for `Named`: rejected without a satisfaction,
+      * accepted with one. The diagnostic sits at the call (`at`).
+      */
+    val boxCalls = List(
+      "fn g(b: Box) -> String = greet(b)\n" -> "greet(b)",
+      "fn g(b: Box) -> String = b |> greet\n" -> "b |> greet",
+      "fn g(b: Box) -> String = ((y) -> greet(y))(b)\n" -> "((y) -> greet(y))(b)",
+      "fn g(b: Box) -> String = b.hello(b)\n" -> "b.hello(b)",
+      "fn g(b: Box) -> Tag of Box = Tag.Tag(b)\n" -> "Tag.Tag(b)",
+      "fn g(b: Box) -> () with Log of Box = Log.log(b)\n" -> "Log.log(b)",
+      "fn g(b: Box) -> u64 = Coll.mk(b).count\n" -> "Coll.mk(b)",
+      "fn need(x: is Coll of Box) -> u64 = x.count\nfn g() -> u64 = need(Tag.None)\n" -> "need(Tag.None)"
+    )
+
+    /** Rejected whatever `Box` satisfies: a literal defaults to `i64`, an unbounded `T` has no bound. */
+    val otherCalls = List(
+      "fn g() -> String = greet(5)\n" -> "greet(5)",
+      "fn g(x: T) -> String = greet(x)\n" -> "greet(x)"
+    )
+    (boxCalls ++ otherCalls).foreach { (call, at) =>
+      val ds = typedUnit(decls + call).diags
+      assertEquals(ds.map(_.code), List(DiagCode.T010), call)
+      val site = (decls + call).indexOf(at)
+      assert(ds.head.span.start >= site && ds.head.span.end <= site + at.length, s"$call: ${ds.head.span}")
+    }
+    val named = decls + "Box satisfies Named:\n    fn name = \"box\"\n"
+    boxCalls.foreach((call, _) => assertEquals(typedUnit(named + call).diags, Nil, call))
+    assertEquals(typedUnit(decls + "fn g(x: T is Named) -> String = greet(x)\n").diags, Nil)
+
+  test("Rule 5.1.1: a literal meeting a named bound is checked once; a bounded argument not solved yet is Clone"):
+    val nn = "cap Named:\n    fn name -> String\nfn nn(x: T is Numeric + Named) -> T = x\n" +
+      "fn num(x: U is Numeric) -> U = x\nfn g() -> u8 = nn(num(5))\n"
+    assertEquals(codes(typedUnit(nn)), List(DiagCode.T010))
+    val clone = "cap Named:\n    fn name -> String\ndata Mb of (A is Named):\n    Just(value: A)\n    Nothing\n" +
+      "Mb satisfies Clone\nfn need(x: is Clone) -> () = ()\nfn f() -> () = need(Mb.Nothing)\n"
+    assertEquals(typedUnit(clone).diags, Nil)
+
   test("spec 5.1: a named type inside two anonymous bounds is shared"):
     val q = "cap Quantity of U:\n    Self.fn new(value: f64) -> Self\n    fn value -> f64\ncap Meters\ncap Seconds\n" +
       "fn add(a: is Quantity of U, b: is Quantity of U) -> is Quantity of U = Quantity.new(a.value + b.value)\n"

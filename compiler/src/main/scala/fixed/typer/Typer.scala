@@ -65,11 +65,14 @@ final case class TyperState(
   /** `n` fresh unconstrained variables. */
   def freshVars(n: Int): (TyperState, List[Type]) = mapAccum(this, List.fill(n)(()))((si, _) => si.fresh)
 
-  /** Unify `expected` with `actual` without reporting: the extended state, if they unify. */
+  /** Unify `expected` with `actual` without reporting: the extended state, if they unify and every
+    * type the unification gave a bounded variable satisfies its bound.
+    */
   def tryUnify(expected: Type, actual: Type): Option[TyperState] =
-    unifier.unify(expected, actual, Members.isNumeric(this, _)).toOption.map(u =>
-      copy(unifier = u.copy(obligations = Nil))
-    )
+    unifier.unify(expected, actual, Members.isNumeric(this, _)).toOption.flatMap { u =>
+      val solved = copy(unifier = u.copy(obligations = Nil))
+      Option.when(u.obligations.forall((value, bound) => Satisfaction.satisfies(solved, value, bound)))(solved)
+    }
 
   /** The recorded type of `tree`, with every solved variable substituted. */
   def typeOf(tree: Tree): Option[Type] = types.get(tree).map(unifier.zonk)

@@ -7,8 +7,8 @@ import fixed.core.{SymbolId, Type}
 /** A persistent substitution over [[Type.TypeVar]]s. `bindings` is indexed by variable id (ids are
   * dense); an unbound variable's slot holds the variable itself. A variable may be required to be `Numeric`;
   * a literal's variable carries the type it defaults to when nothing else solves it (`i64` /
-  * `f64`); a variable instantiated from a bounded type variable keeps that bound, so members
-  * resolve on it before it is solved. `tuple` is the `Tuple` data type, which a 2-tuple equals.
+  * `f64`); a variable instantiated from a bounded type parameter keeps that bound: members
+  * resolve on it before it is solved, and every type it is solved to must satisfy it (`bind`). `tuple` is the `Tuple` data type, which a 2-tuple equals.
   *
   * `numeric` is supplied by the typer: it decides whether a solved type satisfies `Numeric`.
   */
@@ -20,7 +20,6 @@ final case class Unifier(
     tuple: Option[SymbolId],
     next: Int,
     obligations: List[(Type, Type)],
-    obliged: BitSet = BitSet.empty,
     paramBounds: SymbolId => List[Type] = _ => Nil
 ):
 
@@ -182,14 +181,16 @@ final case class Unifier(
       val bound = copy(bindings = bindings.updated(id, t))
       t match
         case Type.TypeVar(other) =>
-          /** A literal meeting an anonymous bound is checked against it once defaulted. */
-          val literal = (obliged.contains(id) && numericVars.contains(other)) ||
-            (obliged.contains(other) && numericVars.contains(id))
+          /** A literal meeting a bounded variable is checked here against the bounds, so that a
+            * literal solved only by its default is checked too; a later solution of the literal is
+            * not checked again (below).
+            */
+          val literal = (varBounds.contains(id) && defaults.contains(other)) ||
+            (varBounds.contains(other) && defaults.contains(id))
           val checked = if literal then bound.oblige(t, Type.IsBound(boundsOf(id) ++ boundsOf(other))) else bound
           Right(
             checked.copy(
               numericVars = if numericVars.contains(id) then numericVars.incl(other) else numericVars,
-              obliged = if obliged.contains(id) then obliged.incl(other) else obliged,
               varBounds =
                 if boundsOf(id).isEmpty then varBounds else varBounds.updated(other, boundsOf(other) ++ boundsOf(id)),
               defaults =
@@ -198,11 +199,12 @@ final case class Unifier(
           )
         case _ if numericVars.contains(id) && !numeric(t) => Left(())
 
-        /** An instantiated anonymous bound meets a value: the value must satisfy the bounds, and a
-          * capability both name has its arguments unified, as when the bound was a type of its own.
+        /** An instantiated bounded type parameter (named, anonymous or an `of` parameter) meets a
+          * value: the value must satisfy the bounds, and a capability both name has its arguments
+          * unified, as when the bound was a type of its own.
           */
-        case _ if obliged.contains(id) =>
-          val checked = bound.oblige(t, Type.IsBound(boundsOf(id)))
+        case _ if varBounds.contains(id) =>
+          val checked = if defaults.contains(id) then bound else bound.oblige(t, Type.IsBound(boundsOf(id)))
           val written = t match
             case Capabilities(ys)     => ys
             case Type.TypeRef(p, Nil) => paramBounds(p)

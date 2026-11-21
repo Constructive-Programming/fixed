@@ -77,14 +77,12 @@ object Members:
       case Type.TypeRef(id, args)
           if s.symbols(id).kind == SymKind.TypeParam && sub.freshOwners(s.symbols(id).owner) =>
         /** The variable first, so that its bounds, instantiated under the same mapping, may name it. */
-        val anonymous = anonymousParam(s, id)
-        val numeric = isNumeric(s, Type.TypeRef(id, Nil)) && !anonymous
+        val numeric = isNumeric(s, Type.TypeRef(id, Nil)) && !anonymousParam(s, id)
         val (u, v) = s.unifier.fresh(numeric = numeric, default = None)
         val (s1, m1, bounds) = rebuildAll(s.copy(unifier = u), boundsOf(s, id), sub, m.updated(id.toInt, v))
         val withBounds = v match
           case Type.TypeVar(n) if bounds.nonEmpty =>
-            val u1 = s1.unifier.copy(varBounds = s1.unifier.varBounds.updated(n, bounds))
-            s1.copy(unifier = if anonymous then u1.copy(obliged = u1.obliged.incl(n)) else u1)
+            s1.copy(unifier = s1.unifier.copy(varBounds = s1.unifier.varBounds.updated(n, bounds)))
           case _ => s1
         go(withBounds, Type.TypeRef(id, args), sub, m1)
       case Type.TypeRef(id, args)   => rebuild(args)(Type.TypeRef(id, _))
@@ -346,11 +344,13 @@ object Members:
         (s2, Type.ArrowType(l, r, EffectRow(fx.effects :+ EffectBound(effect, args))))
       case other => other
 
-  def freshArgs(s: TyperState, data: SymbolId): (TyperState, List[Type]) =
-    mapAccum(s, typeParamsOf(s, data)) { (si, p) =>
-      val (u, v) = si.unifier.fresh(numeric = isNumeric(si, Type.TypeRef(p, Nil)), default = None)
-      (si.copy(unifier = u), v)
-    }
+  /** Fresh variables for the `of` parameters of `owner` (a data type, an effect or a capability),
+    * each keeping its declared bound, which every type it is later solved to must satisfy.
+    */
+  def freshArgs(s: TyperState, owner: SymbolId): (TyperState, List[Type]) =
+    val (s1, _, args) =
+      rebuildAll(s, typeParamsOf(s, owner).map(Type.TypeRef(_, Nil)), Subst(IntMap.empty, Set(owner)), IntMap.empty)
+    (s1, args)
 
   /** The field types of `variant` at `args`, each declared type first passed through `declared`. */
   def fieldTypes(

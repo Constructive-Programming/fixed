@@ -261,13 +261,18 @@ fn boundedPositive(lo: N is Numeric + Ord, hi: N) -> cap of N =
     prop upper: Self <= hi
     prop pos: Self > 0
 
+// The input of `sort`. A list literal is a List, which is not Sized; the
+// caller of `sample` picks `C`, here one that also satisfies `sort`'s bounds.
+fn sample() -> C is Sequencing + Sized of i64 =
+    C.cons(5, C.cons(2, C.cons(8, C.cons(1, C.cons(9, C.cons(3, C.empty))))))
+
 // =========================================================================
 // Main
 // =========================================================================
 
 fn main() -> () with Console =
     // --- Properties ---
-    let numbers = [5, 2, 8, 1, 9, 3]
+    let numbers = sample()
     let sorted = sort(numbers)
     Console.printLine("Sorted: ".concat(sorted.show()))
 
