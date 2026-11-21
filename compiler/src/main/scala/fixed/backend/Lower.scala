@@ -626,7 +626,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
           case _ if hasBody(recvType, member, fromPrelude = true)       => bodyCall(m, member, recvType, sc)(k)
           case (c, name, _)                                             =>
             unsupported(m.span, s"member $c.$name on ${symbols.render(recvType)} (arrives in 4.0.M4)", k)
-      case None => unsupported(m.span, s"member `${m.method}`", k)
+      case None | Some(_: Resolution.NestedFn) => unsupported(m.span, s"member `${m.method}`", k)
 
   /** `m`, resolved to capability member `member`, on a receiver of type parameter `t`, through the
     * table of its bound set that holds the member: the witness of each of the member's own type
@@ -726,18 +726,17 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case None => unsupported(m.span, s"`${m.method}` on ${symbols.render(recvType)}", k)
 
   /** Data constructors, derived `unfold`, capability constructors resolved by the typer (through the
-    * table of a type parameter when the value is one, Rule CM4.5), and the runtime effects. ponytail: `Console` is matched by name; effect resolution arrives with
-    * handlers in 4.0.M4.
+    * table of a type parameter when the value is one, Rule CM4.5), and `std.io`'s `Console`.
     */
   private def static(s: Trees.StaticCall, sc: Scope)(k: K): Expr =
     val args = s.args.getOrElse(Nil)
     lazy val result = typeOf(s, sc)
     val owner = globals.get(s.qualifier)
     val resolved = unit.typing.flatMap(_.constructors.find(_._1 eq s)).map((_, d, v) => (d, v))
-    (s.qualifier, s.method, args) match
-      case ("Console", "printLine", List(arg)) => expr(arg, sc)(a => runtime("fx_print_line", List(a), s, sc)(k))
-      case ("Console", "readLine", Nil)        => runtime("fx_read_line", Nil, s, sc)(k)
-      case _                                   =>
+    (owner.exists(symbols.stdIo("Console").contains), s.method, args) match
+      case (true, "printLine", List(arg)) => expr(arg, sc)(a => runtime("fx_print_line", List(a), s, sc)(k))
+      case (true, "readLine", Nil)        => runtime("fx_read_line", Nil, s, sc)(k)
+      case _                              =>
         owner.filter(symbols(_).kind == SymKind.Data).map(d => d -> s.method).orElse(resolved) match
           case Some((data, "unfold")) if !hasVariant(data, "unfold") =>
             val seed = args.headOption.fold(Type.UnitType)(typeOf(_, sc))
@@ -852,10 +851,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
 
   /** A nested `fn` is a closure bound to its name. */
   private def nestedFn(f: Trees.FnDecl, sc: Scope)(k: Var => Expr): Expr =
-    symbols.denotations.find(d =>
-      d.kind == SymKind.Fn && d.name == f.name && d.span.start >= f.span.start && d.span.end <= f.span.end &&
-        d.owner != SymbolId.Prelude
-    ) match
+    unit.resolutionOf(f).collect { case Resolution.NestedFn(id) => symbols(id) } match
       case Some(d) =>
         val ps = symbols.membersOf(d.id).filter(_.kind == SymKind.ValueParam).toList
         val ret = d.info match

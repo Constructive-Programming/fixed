@@ -28,7 +28,8 @@ object Namer:
     val program = stdlib.copy(owner = SymbolId.Root, table = stdlib.table.copy(written = Nil))
     val (entered, decls) = mapAccum(program, items)(enterTopLevel)
     val typed = typeAll(entered, decls.flatten)
-    (unshadowed(typed.table, typed.global).copy(scope = typed.global, prelude = stdlib.global), typed.diags.reverse)
+    val table = unshadowed(typed.table, typed.global)
+    (table.copy(scope = typed.global, prelude = stdlib.global, modules = stdlib.modules), typed.diags.reverse)
 
   /** A prelude declaration whose name a top-level declaration of the program takes is renamed
     * `prelude.<name>`: the backend names functions, generated code and tables after it, and the two

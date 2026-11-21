@@ -22,10 +22,6 @@ final case class RowCheck(
   */
 object Effects:
 
-  /** The effects the runtime installs handlers for: those `std.io` declares (Rule E5.4). */
-  private lazy val runtimeNames: Set[String] =
-    Stdlib.modules.values.flatten.collect { case e: fixed.ast.Trees.EffectDecl => e.name }.toSet
-
   /** Calling something of row `fx` at `span` performs it. */
   def perform(s: TyperState, fx: EffectRow, span: Span): TyperState =
     if fx.effects.isEmpty then s else s.copy(row = fx.effects.map(_ -> span) ++ s.row)
@@ -123,9 +119,9 @@ object Effects:
   private def unifyArgs(s: TyperState, d: EffectBound, e: EffectBound): Option[TyperState] =
     s.tryUnify(Type.TupleType(d.args), Type.TupleType(e.args))
 
+  /** The runtime installs handlers for the effects `std.io` declares (Rule E5.4). */
   private def isRuntime(s: TyperState, effect: SymbolId): Boolean =
-    val d = s.symbols(effect)
-    d.owner == SymbolId.Prelude && d.kind == SymKind.Effect && runtimeNames(d.name)
+    s.symbols.stdIo(s.symbols(effect).name).contains(effect)
 
   def show(s: TyperState, e: EffectBound): String = s.symbols.render(s.unifier.zonk(asType(s, e)))
 

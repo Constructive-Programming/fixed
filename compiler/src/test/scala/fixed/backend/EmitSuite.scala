@@ -633,3 +633,21 @@ class EmitSuite extends munit.FunSuite:
       val ds = lowered("float_instance", src, mode).fold(identity, _ => fail("lowered"))
       assertEquals(ds.map(d => (d.code, d.span.start)), List((DiagCode.B005, src.indexOf("2.5"))), mode)
     }
+
+  test("a program's own effect Console is not the runtime's: it lowers to the program's handler"):
+    val own = "effect Console:\n    fn printLine(line: String) -> !\n\n" +
+      "fn greet() -> u64 with Console = Console.printLine(\"hi\")\n\n" +
+      "fn main() -> u64 =\n    handle greet():\n        Console.printLine(_line) => 7\n        return(x) => x\n"
+    val io = "use std.io.Console\n\nfn main() -> () with Console = Console.printLine(\"hi\")\n"
+    modes.foreach { mode =>
+      val code = ir("own_console", own, mode)
+      assert(!code.contains("fx_print_line") && code.contains("call void @fx_abort("), mode)
+      assert(ir("io_console", io, mode).contains("@fx_print_line"), mode)
+    }
+
+  test("nested fns lower as the symbols the typer declared, also where one shadows another (a guard)"):
+    val src = "use std.io.Console\n\nfn outer() -> u64 =\n    fn twice(x: u64) -> u64 =\n" +
+      "        fn twice(y: u64) -> u64 = y * 3\n        twice(x) + 1\n    twice(10)\n\n" +
+      "fn other() -> u64 =\n    fn twice(x: u64) -> u64 = x * 2\n    twice(21)\n\n" +
+      "fn main() -> () with Console = Console.printLine(outer().show().concat(other().show()))\n"
+    val _ = check("nested_fns", src, "3142\n")

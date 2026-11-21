@@ -23,7 +23,7 @@ final class TypeTable private (
 
   def get(tree: Tree): Option[Type] = Option(entries.get(tree))
 
-  /** Record which member a call resolved to (the winner among candidates). */
+  /** Record which member a call resolved to (the winner among candidates), or a nested `fn`'s symbol. */
   def resolved(tree: Tree, r: Resolution): TypeTable =
     val _ = resolutions.put(tree, r)
     this

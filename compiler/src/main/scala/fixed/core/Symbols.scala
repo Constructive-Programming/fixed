@@ -43,7 +43,8 @@ final case class Denotation(
   * `scope` is the program's: its declarations shadow the prelude's names. `prelude` is the
   * prelude's, in which the prelude's own code is resolved and through which the compiler finds
   * the entities literals and built-in operations mean (`List`, `Tuple`, `Eq`), whatever the
-  * program declares.
+  * program declares. `modules` holds each stdlib module's declarations (`std.io`), through which
+  * the compiler finds the runtime's effects.
   */
 final case class SymbolTable(
     entries: Vector[Denotation],
@@ -55,7 +56,8 @@ final case class SymbolTable(
     private[core] val satisfies: Map[Type, List[Type]],
     constructors: Map[(Int, String), List[(SymbolId, String)]],
     defaulted: scala.collection.immutable.BitSet,
-    written: List[(Type, Span)] = Nil
+    written: List[(Type, Span)] = Nil,
+    modules: Map[String, Map[String, SymbolId]] = Map.empty
 ):
 
   def apply(id: SymbolId): Denotation = entries(id.toInt - SymbolTable.firstId)
@@ -136,6 +138,11 @@ final case class SymbolTable(
 
   /** The capabilities `t`'s `satisfies` declarations name, in declaration order. */
   def satisfactionsOf(t: Type): List[Type] = satisfies.getOrElse(SymbolTable.satisfier(t), Nil)
+
+  /** The symbol `std.io` declares as `name`, if any; a program's own declaration of that name is
+    * another symbol.
+    */
+  def stdIo(name: String): Option[SymbolId] = modules.get("std.io").flatMap(_.get(name))
 
   /** Replace a symbol's name. */
   def rename(id: SymbolId, name: String): SymbolTable = update(id, _.copy(name = name))
