@@ -587,6 +587,8 @@ EffectMember
    6. Data declarations
    ============================================================ *)
 
+(* Without a DataBody the type has no variant and no value
+   (spec/type_system.md Rule 7.1.a). *)
 DataDecl
     = "data" UPPER_IDENT DataParams? DataBody?
     ;

@@ -614,7 +614,7 @@ fn validateAge(age: u8 is between(0, 150)) -> u8 = age
 
 Per the grammar (`syntax_grammar.ebnf` §10 — `CapBound = CapRef | RefinementCall | PrimitiveType`), a `RefinementCall` is exactly `LOWER_IDENT "(" ArgList? ")"` — the lowercase generator name applied to value-args. The result is a refinement cap that the typer treats as if it were a Marker-classified cap with the generator's prop body as obligation.
 
-**What may stand before `is`** (owner's decision, fourth round of P6). A refinement applies to any type that is already known, not only to a type parameter: a primitive type (`u8 is between(0, 150)`), a declared type (`Bytes is validUtf8()`), an applied type in parentheses (`(List of u8) is nonEmpty()`); grammar `RefinedType`. Where the name before `is` is a type in scope and every bound of the chain is a refinement call, the form refines that type and binds no name, so Rule 4.3.d (`T004`) does not apply to it. Without parentheses an `is` after `of` belongs to the argument: `List of u8 is positive()` refines the element.
+**What may stand before `is`** (owner's decision, fourth round of P6). A refinement applies to any type that is already known, not only to a type parameter: a primitive type (`u8 is between(0, 150)`), a declared type (`Bytes is validUtf8()`), an applied type in parentheses (`(List of u8) is nonEmpty()`); grammar `RefinedType`. Where the name before `is` is a type in scope and every bound of the chain is a refinement call, the form refines that type and binds no name, so Rule 4.3.d (`T004`) does not apply to it. Without parentheses an `is` after `of` belongs to the argument: `List of u8 is positive()` refines the element. (Both readings confirmed by the owner.)
 
 **Higher-order positions.** A generator's *type* is written `cap of T` (grammar `CapType`): `(N, N) -> cap of N` is the type of a parameter that carries a generator. Such a parameter cannot be applied in a bound yet: its arguments would be values of the run, which Rule 6.3.3 does not admit. (Earlier versions showed `-> N is constraint(lo, hi)` here; the owner chose constants only, fourth round of P6.)
 
@@ -925,6 +925,10 @@ data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
 ```
 
 A variant constructor call passes arguments **positionally**, with trailing arguments using their declared defaults if omitted.
+
+**Rule 7.1.a (A data type with no body is empty).** `data Metres`, with no body, declares a type with no variant and so no value (owner's decision, fourth round of P6). No expression builds one, a `match` on one needs no case, and its count is 0 (`spec/reports.md` Rule RP4.1). Its use is as a type argument that tags another type and is never built: `Length of Metres`, a state marker. A type with one value is written with its variant: `data Unit: Unit`. Like `!` it has no value, but it is an ordinary named type: it is not the result of a function that does not return, and it does not unify with every type. Not built: the parser rejects the declaration with `P013`.
+
+**Rule 7.1.b (One member on the line).** After the `:` of a `data`, `cap`, `effect` or `satisfies` declaration, the body is either exactly one member on the same line (`data One: Only`, `cap Named: fn name -> String`, `effect Abort: fn abort() -> !`, `Box satisfies Show: fn show = "box"`) or an indented block. Several members on one line are not a form: there is no separator for them (owner's decision, fourth round of P6; grammar `DataBodyItemList` and its siblings). Not built: the parser asks for the indented block (`P001`).
 
 ### 7.2 Recursive data
 
