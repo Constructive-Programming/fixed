@@ -105,9 +105,16 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
 
 Found and not fixed:
 
-- The derived `unfold` and `map` are not tail-recursive: one native frame per element, so `upto(2000000)` overflows an 8 MiB stack. Filling a destination needs a cell with an unfilled slot in every backend pass, and a heap work list for trees (`docs/plans/implementation-plan.md`, Phase 4.2).
-- Derived `unfold` through a functor field (a rose tree with `List of Rose`) crashes, and derived `map` does not map through such a field, in both build modes.
-- The typer and the backend disagree on a derived `fold` through a type argument that is not the last (`Pair of (Self, u64)`), and on `Functor` for non-regular data.
+- The derived `unfold` and `map` were not tail-recursive: one native frame per element, so `upto(2000000)` overflowed an 8 MiB stack.
+  - **Fixed in part** (`Generated.loopStep`, `EmitLLVM`, `Aborts`, `Consume`): derived `unfold` and `map` of linear data (a list, `Nat`) run as loops that build in reverse and then reverse in place. `EmitLLVM` emits a self call in tail position as a jump, so the bound does not depend on the optimiser. Trees, rose trees, snoc lists, the derived `fold` and the generated `length` still take one native frame per level. The default build reuses `map`'s cells after an `rc == 1` test: `Demands` treats the tail of `x` as overlapping the cell reused from `x`. Measured against the commit before (instructions; best cycles of nine runs): `nat_loop` +10%, +19%; `list_pipeline` +23%, -8%; `records` +12%, -3%; `fail_chain` -2%, -26%; `bintrees` unchanged. The second pass is what destination passing would remove (`docs/plans/implementation-plan.md`, Phase 4.2).
+- Derived `unfold` through a functor field (a rose tree with `List of Rose`) crashed, and derived `map` did not map through such a field, in both build modes.
+  - **Fixed** (`Generated`): one walk, decided on the declared field types, serves `fold`, `unfold` and `map`.
+- The typer and the backend disagreed on a derived `fold` through a type argument that is not the last (`Pair of (Self, u64)`), and on `Functor` for non-regular data.
+  - **Fixed** (`Members.foldedSelf`, `through`, `functor`, `unmapped`): the typer and the backend share one rule for where a derived member reaches `Self` or the element: the parameter itself, or the last argument of a data type whose rightmost parameter is unbounded and itself rebuildable. `Self` anywhere else (`Pair of (Self, u64)`, `u64 -> Self`) is passed unfolded. `Functor` is derived only under that rule, which is narrower than Rule 7.4.c as written: non-regular `M of (A, B)`, `Tuple of (A, u64)`, `u64 -> A` and a bounded last parameter lose it, and the diagnostic names the field. The spec text of Rules 7.4.c and 7.4.a.1 is open for the owner.
+- A generic function that recurses at a growing data type through a table (`deep(Pair.Pair(p, p), n - 1)` with `T is Show`) overflows the compiler's stack.
+- A field type is not checked against the bounds of the type it names: `W(b: Box of A)` is accepted with `A` unbounded.
+- Tuple-literal patterns `(a, b)` never match.
+- A branch that returns a call to a `-> !` function fails at clang with a phi type error.
 - A polymorphically recursive type such as `N of List of A` made the compiler overflow its own stack in the default mode: a clone asked for itself at an ever larger key without end.
   - **Fixed** (`Lower.call`, `TypeOps.derived`): a call whose type argument nests the callee's own type parameter calls the baseline version, or is `B005` where there is none; finite chains keep their clones. Both modes also miscompiled such a function when it did not use its type parameter: its baseline version dropped a witness that its recursive call still passed. `EmitLLVM.direct` now requires the argument count to equal the parameter count.
 - The default build reused a shared cell when the result of an `if` or `match` was a value that is still live after the join, or held a part of one (`Versions.walk`, the `Ret` case): invariant I1 did not hold there.
@@ -120,7 +127,7 @@ Found and not fixed:
   - **Fixed** (`backend/Satisfied.scala`): the bodies are lowered and serve direct calls, table entries and `==`, in both build modes. A program's body takes precedence over a generated member; the prelude's bodies fill the members for which nothing is generated. `==` on a boxed value other than `String` called the runtime's string comparison; it now calls the `Eq` body or is `B005`. A closure that captured a value of a type parameter could copy it before loading its witness, which was invalid IR.
 - A prelude name is still resolved through the program's scope in many places: the types `Tuple`, `Maybe`, `Result`, `List` and `String`, capabilities matched by name in the backend and in the derivation rules, and functions found by name. A program that declares `data Tuple`, `List`, `String` or `Nat`, or `cap Show`, breaks typing or changes behaviour. Prelude function bodies are typed in the program's scope, and their diagnostics, which carry prelude spans, crash the compiler.
 - A `satisfies` body on a primitive type is not lowered. A member with several type parameters of its own is `B005`. `Ord` through a table does not build `lt` and `le` from a user's `compare`. A program that declares any name the prelude declares loses the prelude's `satisfies` bodies.
-- The backend builds no derived `Show` or `Eq` for a data type (`Json`'s, for one): `B005`.
+- The backend built no derived `Show` or `Eq` for a data type. **Fixed** (`Generated.derivedShow`, `derivedEq`) at known type arguments; a program's `satisfies` body takes precedence. `Json` still cannot use them: its field `is Map of (String, Json)` has no representing data type, so lowering fails with `B005`. Derived `Ord` is not built.
 - Constructor resolution with no fitting candidate leaves the call abstract; a concrete expected type then receives a value of another type.
 - The stand-in representation rule cannot see what a function returns: `fn l() -> is Show = [1, 2]` miscompiles.
 - `Maybe` has no `Folding.fold` body and no generated member for it.
@@ -134,7 +141,7 @@ Found and not fixed:
   - **Fixed** (`Lower.resolved`).
 - The type of a list literal is not specified. The typer gives it `List`; examples 02 and 11 assumed a collection that the compiler picks. Open for the owner.
 - Bounds of `of` parameters are not checked in written types (`Tag of Box`, `with Ping of Box`).
-- A derived `map` through a bounded last parameter does not check the new element type.
+- A derived `map` through a bounded last parameter did not check the new element type. **Fixed**: `Functor` is not derived over a bounded last parameter.
 - Signed `MIN / -1` and `MIN % -1` emit a bare `sdiv`/`srem`, which is undefined behaviour. The spec does not say what integer overflow does (trap, wrap or abort). Open for the owner.
 - A member called on a numeric literal (`3.add(4)`) is not resolved.
 - `N.fromI64(...)` on a type parameter is accepted by the typer and refused by the backend.
