@@ -137,9 +137,24 @@ The prelude's satisfier of `Ordering` (§4.4), so `Ord.compare -> is Ordering` h
 - **Order.** `String satisfies Ord` compares by Unicode code point, a shorter string before any string it is a prefix of. For valid UTF-8 this is the order of the bytes compared as unsigned values, which is how it is implemented. It is not alphabetical order in any language: `"Z" < "a"`.
 - **Equality.** `String satisfies Eq` compares code points. No Unicode normalisation is applied: a precomposed character and the same character written with a combining mark are different strings *(author's choice, owner to confirm)*.
 - **Collation and normalisation** are library matters: a named satisfaction (`String satisfies Ord named …`, `spec/type_system.md` Rule 8.4.c) selected by `using`, with the locale as an explicit value.
-- **Where bytes come in.** A string literal is checked by the scanner. Text read from outside the program (`Console.readLine`, and later files and sockets) is checked where it enters; text that is not valid UTF-8 does not become a `String`. What the reading operation then does (an effect, an `Optional` result, or replacement characters) is open (OQ-S5).
+- **Where bytes come in.** A string literal is checked by the scanner. Text read from outside the program (`Console.readLine`, and later files and sockets) is checked where it enters; text that is not valid UTF-8 does not become a `String`. Such an operation performs the abortive effect `Decode` (Rule S3.7.a).
 
-Built today: the comparison and the equality. Not built: the check on input; `Console.readLine` passes bytes through unchecked.
+**Rule S3.7.a (Decoding).** (Owner's decision, fourth round of P6.)
+
+```
+pub effect Decode:
+    fn invalidUtf8(at: u64) -> !            // byte offset of the first invalid sequence
+
+Console.readLine  -> String with Console + Decode
+Console.readBytes -> Bytes  with Console    // the raw bytes; no check
+String.fromUtf8(bytes: Bytes) -> String with Decode
+```
+
+`Bytes` is a sequence of `u8` with no claim about its content. `readLine` is `readBytes` followed by `String.fromUtf8`. The handlers follow the arithmetic ones (`spec/effects.md` §3.6): one that turns `Decode` into an `Optional`, one that turns it into a `Result`. An unhandled `Decode` at `main` aborts with a message that gives the offset. Nothing substitutes replacement characters silently; a program that wants them calls a library function that says so.
+
+*(Author's choices, owner to confirm.)* The effect is named `Decode` and has the one operation above. `Bytes` is a prelude type that satisfies `Sequencing of u8`, `Eq` and `Ord`; its representation is a choice point like any other.
+
+Built today: the comparison and the equality. Not built: the check on input, the effect `Decode`, `Bytes`, `readBytes` and `fromUtf8`; `Console.readLine` passes bytes through unchecked.
 
 ## 4. Capability declarations (normative shape)
 
@@ -533,5 +548,4 @@ Earlier drafts (`docs/plans/implementation-plan.md` line 352) classified `List`,
 
 - **OQ-S1 — Built-in `Show`.** Should `bool`, `i64`, `f64`, etc. auto-satisfy `Show`? Most programs need `.show()` constantly; refusing the default is friction. Provisional yes, formalize once `cap Show` lands.
 - **OQ-S2 — Map/Set.** `cap Map of (K, V)` and `cap Set of A` are mentioned in examples but not yet specified here. Defer to a Phase-5 stdlib doc.
-- **OQ-S5 — Input that is not valid UTF-8.** Rule S3.7 keeps such bytes out of a `String`. Open: whether a reading operation performs an effect, returns an `Optional`, or substitutes U+FFFD.
 - **OQ-S3 — `String`.** Currently ambiguous: a primitive in the grammar (`PrimitiveType`), but example 11 declares refinements (`type Username = String + minLength(3)`) that expect cap-like composition. Decision: `String` is a primitive *and* satisfies a `cap Stringlike` (or similar) for refinement purposes. Formalize separately.

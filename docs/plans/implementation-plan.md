@@ -994,6 +994,7 @@ Added by the owner's decisions of the fourth round (P6, "Owner's decisions (four
 | 25 | **Done. Derived `para`**, in both build modes; for linear data in bounded native stack, keeping every original sub-value alive (one allocation per cell, no reuse in place) | `spec/type_system.md` Rule 7.4.g | 20 |
 | 26 | **Done. Derived `Show`, `Eq` and `Ord`** in the backend (`Generated.derivedShow`, `derivedEq`, the derived `compare`), at known type arguments, `show` and `eq` also through tables built at run time; a program's `satisfies` body takes precedence. `Json` still cannot use them (`B005`: its field `is Map of (String, Json)` has no representing data type) | `spec/stdlib.md` §3.2, P6 D10 | 17 |
 | 27 | **Done. Literal patterns** in the backend (`backend/Cases.scala`): integers, `bool`, `char` and `String`, also nested in tuple and variant patterns. Float literal patterns and a literal in a `let` pattern are `B005` | `spec/pattern_matching.md` §3.3 | — |
+| 28 | **UTF-8 strings.** Check input where it enters; effect `Decode`, `Bytes`, `Console.readBytes`, `String.fromUtf8` and the handlers to `Optional` and `Result` (`spec/stdlib.md` Rules S3.7, S3.7.a) | Not started: order and equality by code point are built; `readLine` does not check |
 
 Also open from P6 and not listed as work: the suspected compiler fault behind the ownership-clone measurement (OQ-CM16), the unexplained 4% on `list_pipeline` and `records` and `fx_drop`'s recursion on children other than the last (OQ-CM17), and the 8-byte header hypothesis (OQ-CM15).
 
