@@ -239,3 +239,23 @@ Three questions left open by the earlier rounds and by `docs/decisions/P0-spec-r
 
 Owner: "A now, B planned." A derived `map` rebuilds a value only where it can reach every occurrence of the rightmost parameter: the parameter itself, or the last argument of a data type that itself derives `Functor`, and only when the parameter is unbounded (`spec/type_system.md` Rule 7.4.c). Other types derive no `Functor` and the diagnostic names the blocking field. Planned: derivation through a function result (`u64 -> A`) by composition. Not planned: a map over any parameter position.
 
+### Integer overflow and division (fourth round, 2026-11-21)
+
+Owner: "C with prover or refinement removes Effect. Division with Effect. We ship standard effects that turn into maybe, either, raises integer size."
+
+- Arithmetic on a bounded integer type that can leave the type's range performs the effect `Overflow`. Division and remainder perform an effect when the divisor can be zero. `MIN / -1` and `MIN % -1` are overflow.
+- The effect is absent from an operation's type where the prover or a refinement shows the result in range (or the divisor non-zero). This is a facts-lane decision (`spec/properties.md` Rule P7.8.a): only `proved` and `assumed` remove it.
+- The standard library ships handlers that turn the effect into a `Maybe`, into an `Either`, and one that raises the integer size.
+- Nothing wraps silently and nothing is undefined behaviour.
+
+Author's choices, to confirm:
+
+1. Two effects: `Overflow` (`+`, `-`, `*`, negation, `MIN / -1`, `MIN % -1`, narrowing conversions) and `DivideByZero` (`/`, `%`).
+2. Floating-point arithmetic performs neither; it follows IEEE 754.
+3. An operation on literals, or one whose range is proved, has no effect in its type, so `i + 1` inside a `fold` over a bounded range stays pure.
+4. Explicit members with no effect stay available on `Numeric`: `wrappingAdd`, `saturatingAdd` and their kin. A hash function says what it means.
+5. An unhandled `Overflow` or `DivideByZero` at `main` aborts with the position of the operation.
+6. "Raises integer size" cannot be an ordinary handler: it changes the type of the result. It is a form that computes the block at the next wider integer type and narrows at the end, performing `Overflow` once if the final value does not fit. Beyond 64 bits it needs the wider immediates of OQ-CM7.
+
+Not built. Today `+`, `-` and `*` wrap, and `MIN / -1` and division by zero are undefined behaviour in the emitted code.
+
