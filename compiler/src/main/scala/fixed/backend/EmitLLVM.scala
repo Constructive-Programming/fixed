@@ -36,7 +36,7 @@ final class EmitLLVM:
     * its parameters on entry and widens its result. Otherwise a call of `fn` in tail position in
     * its own body is a jump to the `loop` block, whose phis take the new parameters: the native
     * stack stays bounded however often `fn` calls itself so (a derived `unfold` or `map` of linear
-    * data, `Generated.loop`, and a derived `fold` of it, `Generated.foldDown`).
+    * data, `Generated.loop`, and a derived `fold` or `para` of it, `Generated.foldDown`).
     */
   private def function(fn: Fn, slots: Boolean): String =
     out.clear()

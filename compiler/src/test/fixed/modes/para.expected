@@ -1,0 +1,10 @@
+Link(1, Link(2, Link(4, Link(5, Link(1, Link(7, End))))))
+Link(Link(1, Link(2, End)), Link(Link(2, End), Link(End, End)))
+Link(5, Link(1, Link(7, End)))
+Link(1, Link(2, Link(5, Link(1, Link(7, End)))))
+1999999000000 0
+3628800
+2000000
+Node(Node(Leaf, 2, Leaf), 5, Node(Node(Leaf, 7, Leaf), 9, Leaf))
+Node(Node(Leaf, 2, Leaf), 5, Node(Leaf, 9, Leaf))
+1005

@@ -178,9 +178,10 @@ object Members:
           case SymKind.Data =>
             field(s, id, args, name).toList ++
               capMember(s, s.symbols.satisfactionsOf(t), t, name) ++
-              Option.when(name == "fold" && s.symbols.variantsOf(id).nonEmpty)(
-                Candidate(Resolution.DerivedFold(id), () => derivedFold(s, id, args))
-              )
+              Option.when((name == "fold" || name == "para") && s.symbols.variantsOf(id).nonEmpty) {
+                val para = name == "para"
+                Candidate(Resolution.DerivedFold(id, para), () => derivedFold(s, id, args, para))
+              }
           case SymKind.TypeParam => capMember(s, boundsOf(s, id), t, name)
           case _                 => Nil
       case t @ Type.PrimType(_) =>
@@ -280,12 +281,21 @@ object Members:
 
   /** `fold` derived from a data type's variants (a catamorphism): one function per variant, its
     * fields with each recursive occurrence of the type (`Self` as declared) replaced by the result type `R`.
+    * `para` (Rule 7.4.g, a paramorphism) passes twice each field that `fold` would fold: first as it
+    * is, then folded.
     */
-  private def derivedFold(s: TyperState, data: SymbolId, args: List[Type]): (TyperState, Type) =
+  private def derivedFold(s: TyperState, data: SymbolId, args: List[Type], para: Boolean): (TyperState, Type) =
     val (s0, r) = s.fresh
     val (s1, cases) = mapAccum(s0, s.symbols.variantsOf(data).toList) { (si, v) =>
-      val (si1, fields) = fieldTypes(si, data, args, v.id, foldedSelf(s.symbols, data, _, r))
-      (si1, Type.ArrowType(Type.TupleType(fields), r, EffectRow.empty))
+      val declared = s.symbols.fieldsOf(v.id).toList.flatMap { f =>
+        val folded = foldedSelf(s.symbols, data, f.info, r)
+        if para && folded != f.info then List(f.info, folded) else List(folded)
+      }
+      val sub = Subst(Subst.of(typeParamsOf(s, data), args), Set(v.id))
+
+      /** One instantiation, so the original and folded types of a field share their fresh variables. */
+      val (si1, fields) = instantiate(si, Type.TupleType(declared), sub)
+      (si1, Type.ArrowType(fields, r, EffectRow.empty))
     }
     (s1, Type.ArrowType(Type.TupleType(cases), r, EffectRow.empty))
 

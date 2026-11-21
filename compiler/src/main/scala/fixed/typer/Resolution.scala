@@ -8,5 +8,5 @@ import fixed.core.SymbolId
 enum Resolution:
   case Field(variant: SymbolId, index: Int)
   case CapMember(cap: SymbolId, member: SymbolId)
-  case DerivedFold(data: SymbolId)
+  case DerivedFold(data: SymbolId, para: Boolean)
   case NestedFn(fn: SymbolId)

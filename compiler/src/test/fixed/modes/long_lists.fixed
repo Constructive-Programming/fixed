@@ -3,7 +3,8 @@
 // as loops (Generated.loopStep); so do those of N, whose last cell has a field and whose nullary
 // variant is not the first, and of L, with two recursive variants. `length` runs as `lengthLoop`; on
 // a list still used after it, clang does not turn the old recursion into a loop. The derived fold
-// of N and L (`nsum`, `lsum`) runs as foldDown and foldUp.
+// of N and L (`nsum`, `lsum`) runs as foldDown and foldUp, and their derived para as paraDown and
+// paraUp, generic (`gcount`) too.
 use std.io.Console
 
 data N of A:
@@ -24,6 +25,13 @@ fn nsum(n: N of u64) -> u64 = n.fold((a) -> a * 1000, () -> 0, (a, r) -> a + r *
 
 fn lsum(l: L of u64) -> u64 = l.fold(() -> 0, (a, r) -> a + r * 10, (a, b, r) -> a * 3 + b + r * 10)
 
+fn npara(n: N of u64) -> u64 = n.para((a) -> a * 1000, () -> 0, (a, r, acc) -> a + acc * 10 + nsum(r))
+
+fn lpara(l: L of u64) -> u64 =
+    l.para(() -> 0, (a, r, acc) -> a + acc * 10 + lsum(r), (a, b, r, acc) -> a * 3 + b + acc * 10 + lsum(r))
+
+fn gcount(xs: List of A) -> u64 = xs.para((_, _, acc) -> acc + 1, () -> 0)
+
 fn upto(n: u64) -> List of u64 = List.unfold(0, (i) -> if i >= n: List.Nil else: List.Cons(i, i + 1))
 
 fn gmap(xs: List of A, f: A -> B) -> List of B = xs.map(f)
@@ -40,9 +48,11 @@ fn main() -> () with Console =
     Console.printLine(gmap(xs, (x) -> x % 3).fold(0, (a, x) -> a + x).show())
     Console.printLine(xs.fold(0, (a, x) -> a + x).show())
     Console.printLine(gupto("ab", 2000000).fold(0, (a, s) -> a + 1).show())
+    Console.printLine(gcount(gupto("ab", 2000000)).show())
     let n = N.unfold(3, (i) -> if i == 0: N.End(7) else: N.More(i, i - 1))
     Console.printLine(nsum(n).show())
     Console.printLine(nsum(n.map((x) -> x + 1)).show())
     let l = L.unfold(4, (i) -> if i == 0: L.Nil else: if i % 2 == 0: L.Two(i, 1, i - 1) else: L.One(i, i - 1))
     Console.printLine(lsum(l).show())
     Console.printLine(lsum(l.map((x) -> x * 2)).show())
+    Console.printLine(npara(n).show().concat(" ").concat(lpara(l).show()))

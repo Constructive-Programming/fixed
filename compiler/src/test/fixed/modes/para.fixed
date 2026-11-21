@@ -1,0 +1,75 @@
+// The derived `para` (Rule 7.4.g): each callback receives a recursive field both as it is and
+// folded. Every `para` result but `depth` would differ, or not type-check, if the callback received
+// the folded rest in place of the original. Linear data runs in two loops (the generated `paraDown` and `paraUp`) in a
+// bounded native stack (2,000,000 elements); the original is never written, so a list still used
+// afterwards, short or long, is right.
+use std.io.Console
+
+data Chain of A:
+    End
+    Link(v: A, rest: Chain of A)
+
+data Tree:
+    Leaf
+    Node(left: Tree, value: u64, right: Tree)
+
+data Rose:
+    Rose(label: u64, kids: List of Rose)
+
+fn upto(n: u64) -> Chain of u64 = Chain.unfold(0, (i) -> if i >= n: Chain.End else: Chain.Link(i, i + 1))
+
+fn from(xs: List of u64) -> Chain of u64 =
+    xs.fold((h, rest) -> Chain.Link(h, rest), () -> Chain.End)
+
+fn insert(x: u64, xs: Chain of u64) -> Chain of u64 =
+    xs.para(() -> Chain.Link(x, Chain.End), (h, t, rest) -> if x <= h: Chain.Link(x, Chain.Link(h, t)) else: Chain.Link(h, rest))
+
+fn tails(xs: Chain of u64) -> Chain of (Chain of u64) =
+    xs.para(() -> Chain.Link(Chain.End, Chain.End), (h, t, rest) -> Chain.Link(Chain.Link(h, t), rest))
+
+fn dropSmall(xs: Chain of u64) -> Chain of u64 =
+    xs.para(() -> Chain.End, (h, t, rest) -> if h < 3: rest else: Chain.Link(h, t))
+
+fn first(xs: Chain of u64) -> u64 =
+    match xs:
+        Chain.Link(h, _) => h
+        Chain.End => 0
+
+fn nextSum(xs: Chain of u64) -> u64 = xs.para(() -> 0, (_, t, acc) -> acc + first(t))
+
+fn count(n: Nat) -> u64 = n.fold(() -> 0, (m) -> m + 1)
+
+fn nat(n: u64) -> Nat = Nat.unfold(n, (k) -> if k == 0: Nat.Zero else: Nat.Succ(k - 1))
+
+fn factorial(n: Nat) -> u64 = n.para(() -> 1, (p, acc) -> (count(p) + 1) * acc)
+
+fn depth(n: Nat) -> u64 = n.para(() -> 0, (_, acc) -> acc + 1)
+
+fn place(x: u64, t: Tree) -> Tree =
+    t.para(
+        () -> Tree.Node(Tree.Leaf, x, Tree.Leaf),
+        (l, lr, v, r, rr) -> if x < v: Tree.Node(lr, v, r) else: Tree.Node(l, v, rr)
+    )
+
+fn label(r: Rose) -> u64 =
+    match r:
+        Rose.Rose(l, _) => l
+
+fn kidsAndNodes(r: Rose) -> u64 =
+    r.para((_, kids, sums) -> kids.fold(0, (a, k) -> a + label(k)) * 100 + sums.fold(1, (a, b) -> a + b))
+
+fn main() -> () with Console =
+    let xs = from([1, 2, 5, 1, 7])
+    Console.printLine(insert(4, xs).show())
+    Console.printLine(tails(from([1, 2])).show())
+    Console.printLine(dropSmall(xs).show())
+    Console.printLine(xs.show())
+    let big = upto(2000000)
+    Console.printLine(nextSum(big).show().concat(" ").concat(first(big).show()))
+    Console.printLine(factorial(nat(10)).show())
+    Console.printLine(depth(nat(2000000)).show())
+    let t = place(2, place(9, place(5, Tree.Leaf)))
+    Console.printLine(place(7, t).show())
+    Console.printLine(t.show())
+    let leaf = (n: u64) -> Rose.Rose(n, [])
+    Console.printLine(kidsAndNodes(Rose.Rose(0, [leaf(1), Rose.Rose(2, [leaf(3), leaf(4)])])).show())

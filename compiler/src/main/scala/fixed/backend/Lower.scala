@@ -587,8 +587,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
             val slot = Layout.slots(fieldTypes(data, dargs, variant).map(ctype(_, m.span)))(index)
             expr(m.receiver, sc)(r => bind(Rhs.Field(r, slot), m, sc)(k))
           case None => unsupported(m.span, s"field `${m.method}` of ${symbols.render(recvType)}", k)
-      case Some(Resolution.DerivedFold(_)) =>
-        generatedCall(recvType, m, sc, Some(typeOf(m, sc)))(derivedFold(_, _, _, m.span))(k)
+      case Some(Resolution.DerivedFold(_, para)) =>
+        generatedCall(recvType, m, sc, Some(typeOf(m, sc)))(derivedFold(_, _, _, m.span, para))(k)
       case Some(Resolution.CapMember(_, member)) if isTypeParam(recvType) =>
         tableMethod(m, member, recvType, args, sc)(k)
       case Some(Resolution.CapMember(_, member)) if hasBody(recvType, member, fromPrelude = false) =>
