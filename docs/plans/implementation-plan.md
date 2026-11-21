@@ -502,6 +502,7 @@ Everything starts from the CLI. The compiler works in two stages with a separate
 | `fixed <file>...` | Checks each file and prints its diagnostics | built |
 | `fixed compile` | Package compile to LLVM IR: typer, static prover, quantity inference, polymorphic Core, demand and memory inference, cost checker, baseline code and clones, interface tier, body tier, usage summaries | built for one package, without the static prover, the cost checker, the tiers and the summaries |
 | `fixed link` | Application link: resolves deferred satisfaction sites, selects the remaining choice points from the summaries, writes the **lock file**, binds the choice points' symbols, generates accessors and the type table; a release build also builds clones for the chosen types | planned (Phase 4.2) |
+| `fixed release` | Builds the release executable: application link with link-time clones, `inspect` and `trace` stripped unless `--keep-diagnostics` (`spec/compilation_model.md` §8). `fixed ship` builds the development executable | planned |
 | `fixed ship` | Builds a native executable (compile, link, `clang`) | built; there is no link step yet, the IR goes straight to `clang` |
 | `fixed verify` | Builds and runs the test build: property-based testing of the props the static prover left open, and measurement into the **profile file** (`spec/properties.md` Rules P7.6, P7.9) | planned |
 | `fixed verify + ship` | Verify props, then build the executable | planned |
@@ -520,8 +521,7 @@ Flags named in the specs:
 | `--explain-selection` | `link`, and `compile` / `ship` of an application | Per choice point: candidates, scores, the disambiguation rule that decided, measured or static (`spec/reports.md` Rule RP5.4) | planned |
 | `--explain-cardinality` | `compile` | State and implementation spaces (`spec/reports.md` §4) | planned |
 | `--coverage` | `verify` | Coverage report (`spec/reports.md`) | planned |
-| `--release` | `fixed link`, `fixed ship` | Makes a release build: link-time clones, `inspect` and `trace` stripped (`spec/compilation_model.md` §8). Without it the build is a development build | planned |
-| `--keep-diagnostics` | a release build | Keeps `inspect` and `trace` (`spec/diagnostics.md` Rule DG3.5) | planned |
+| `--keep-diagnostics` | `fixed release` | Keeps `inspect` and `trace` (`spec/diagnostics.md` Rule DG3.5) | planned |
 | `--no-measure` | `verify` | Runs the props without recording measurements (`spec/properties.md` Rule P7.9) | planned |
 | `--no-pbt`, `--strict-pbt`, `--require-proved`, `--prop-…` | `verify` (and `--require-proved` on `compile`, `ship`) | `spec/properties.md` Rule P7.6 | planned |
 
