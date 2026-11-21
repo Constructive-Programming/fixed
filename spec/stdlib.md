@@ -423,7 +423,7 @@ Not built: the prelude declares none of these (`docs/plans/implementation-plan.m
 
 ```
 pub cap Sequencing:
-    fn length -> u64
+    fn length -> u64 with Overflow      // counting adds 1 per element (owner's decision, P6 fourth round)
     fn head -> is Optional of Part
     fn tail -> Self
     Self.fn cons(h: Part, t: is Sequencing of Part) -> Self
