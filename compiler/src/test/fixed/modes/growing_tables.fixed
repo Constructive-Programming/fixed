@@ -4,6 +4,8 @@
 // and `copies` find the same table at every level; `wrap` builds 100 distinct tables. `twice`
 // reaches the growth from a generic caller, whose clone must not enumerate the types it reaches.
 // `k` shows a `Box` at a parameter with another bound set than the one `deep` built it at.
+// The recursive functions count down a `u64`, which is not structural recursion: they have
+// `Diverge` (Rule 7.4.h), and so do their callers.
 use std.io.Console
 
 data Pair of (A, B):
@@ -42,35 +44,35 @@ Box satisfies Named:
 Box satisfies Clone:
     fn clone() = self
 
-fn deep(p: T is Show, n: u64) -> String =
+fn deep(p: T is Show, n: u64) -> String with Diverge =
     if n == 0: p.show()
     else: deep(Pair.Pair(p, Box.Box(p)), n - 1)
 
-fn twice(p: T is Show) -> String = deep(Pair.Pair(p, 1), 1)
+fn twice(p: T is Show) -> String with Diverge = deep(Pair.Pair(p, 1), 1)
 
-fn same(p: T is Eq, q: T, n: u64) -> bool =
+fn same(p: T is Eq, q: T, n: u64) -> bool with Diverge =
     if n == 0: p == q
     else: same(Bag.Bag([p, q], n), Bag.Bag([q, p], n), n - 1)
 
-fn wrap(p: T is Eq, n: u64) -> bool =
+fn wrap(p: T is Eq, n: u64) -> bool with Diverge =
     if n == 0: p == p
     else: wrap(Box.Box(p), n - 1)
 
-fn named(p: T is Named, n: u64) -> String =
+fn named(p: T is Named, n: u64) -> String with Diverge =
     if n == 0: p.name()
     else: named(Pair.Pair(p, n), n - 1)
 
-fn copies(p: T is Clone, n: u64) -> u64 =
+fn copies(p: T is Clone, n: u64) -> u64 with Diverge =
     if n == 0: 0
     else: copies(Box.Box(p.clone()), n - 1) + 1
 
-fn sorted(p: T is Show + Sz, n: u64) -> String =
+fn sorted(p: T is Show + Sz, n: u64) -> String with Diverge =
     if n == 0: p.show().concat(" ").concat(p.sz().show())
     else: sorted(Sorted.Sorted(p), n - 1)
 
 fn k(x: Box of (A is Eq + Show)) -> String = x.show()
 
-fn main() -> () with Console =
+fn main() -> () with Console + Diverge =
     Console.printLine(deep(7, 2))
     Console.printLine(deep("s", 1))
     Console.printLine(twice(3))

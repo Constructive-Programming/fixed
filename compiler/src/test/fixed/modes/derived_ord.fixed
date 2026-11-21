@@ -3,6 +3,8 @@
 // holding it must use; `deep` compares growing types through tables built at run time, before
 // and after a direct `<` on the same type. A NaN is `Greater` directly and through a table. `L`
 // compares two lists of a million cells: the derived compare loops on its last field.
+// `build` and `deep` count down a `u64`, which is not structural recursion: they have `Diverge`
+// (Rule 7.4.h), and so does `main`.
 use std.io.Console
 
 data Shape:
@@ -30,17 +32,17 @@ data L:
     C(h: u64, t: L)
     N
 
-fn build(n: u64, acc: L) -> L = if n == 0: acc else: build(n - 1, L.C(n, acc))
+fn build(n: u64, acc: L) -> L with Diverge = if n == 0: acc else: build(n - 1, L.C(n, acc))
 
 fn max(a: T is Ord, b: T) -> T = if a > b: a else: b
 
 fn sign(a: T is Ord, b: T) -> u64 = a.compare(b).fold(() -> 0, () -> 1, () -> 2)
 
-fn deep(p: T is Ord, q: T, n: u64) -> bool =
+fn deep(p: T is Ord, q: T, n: u64) -> bool with Diverge =
     if n == 0: p < q
     else: deep(Box.Box(p, n), Box.Box(q, n), n - 1)
 
-fn main() -> () with Console =
+fn main() -> () with Console + Diverge =
     Console.printLine((Shape.Line(3) < Shape.Rect(1, 1)).show())
     Console.printLine((Shape.Rect(1, 2) <= Shape.Rect(1, 1)).show())
     Console.printLine((Shape.Dot >= Shape.Dot).show())

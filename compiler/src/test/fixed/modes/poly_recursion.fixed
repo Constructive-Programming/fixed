@@ -3,6 +3,8 @@
 // `f`, which `g` calls while `f` is being built. `leaves` uses A (`p`), so it has a clone, which
 // would ask for itself at List of its key without end; it calls the baseline version instead, as
 // does the clone of `sz`, which recurses through a closure inside the generated `fold`.
+// `sz` recurses on an element of a list its fold passes, not a value bound by a pattern: it has
+// `Diverge` (Rule 7.4.h), and so does `main`. The other functions recurse structurally.
 use std.io.Console
 
 data N of A:
@@ -35,9 +37,9 @@ fn g(n: N of A) -> u64 =
         N.Leaf(_) => 10
         N.Deep(m) => 100 + f(m)
 
-fn sz(n: T of A) -> u64 = n.fold((v) -> 1, (v, k) -> k.fold(1, (a, m) -> a + sz(m)))
+fn sz(n: T of A) -> u64 with Diverge = n.fold((v) -> 1, (v, k) -> k.fold(1, (a, m) -> a + sz(m)))
 
-fn main() -> () with Console =
+fn main() -> () with Console + Diverge =
     let n = N.Deep(N.Deep(N.Leaf([[1]])))
     Console.printLine(depth(n).show())
     Console.printLine(leaves(n).show())

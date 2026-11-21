@@ -179,8 +179,8 @@ class BaselineSuite extends munit.FunSuite:
     assert(Core.callees(named(fns, "leaves[i64]").body)("leaves"), "the clone calls the baseline version")
 
   test("a table built at run time for a growing tuple of three elements is B005, not a pair's table"):
-    val src = "fn deepEq(x: T is Eq, y: T, n: u64) -> bool =\n    if n == 0: x == y\n" +
-      "    else: deepEq((x, n, x), (x, n, y), n - 1)\n\nfn main() -> () =\n    let _b = deepEq(1, 2, 2)\n    ()\n"
+    val src = "fn deepEq(x: T is Eq, y: T, n: u64) -> bool with Diverge =\n    if n == 0: x == y\n" +
+      "    else: deepEq((x, n, x), (x, n, y), n - 1)\n\nfn main() -> () with Diverge =\n    let _b = deepEq(1, 2, 2)\n    ()\n"
     val ds = Lower(unit("deep_eq", src)).program.fold(identity, fns => fail(s"lowered: ${fns.map(_.name)}"))
     assert(ds.exists(_.message.contains("a tuple of 3 elements (only pairs have one)")), ds)
 
@@ -191,10 +191,11 @@ class BaselineSuite extends munit.FunSuite:
     val ds = Lower(unit("half", src)).program.fold(identity, fns => fail(s"lowered: ${fns.map(_.name)}"))
     assert(ds.exists(_.message.contains("polymorphic recursion of `half`")), ds)
     val finite = List(
-      src.replace("half(m, x)", "half(N.Leaf([1]), x)"),
-      "fn f(a: A, x: X is Numeric, n: u64) -> X =\n    if n == 0: x * 0.5 else: g(7, x, n - 1)\n\n" +
-        "fn g(b: B, x: X is Numeric, n: u64) -> X =\n    if n == 0: x else: f([b], x, n - 1)\n\n" +
-        "fn main() -> () =\n    let h = f(1, 1.5, 3)\n    ()\n"
+      src.replace("half(m, x)", "half(N.Leaf([1]), x)").replace("-> X =", "-> X with Diverge =")
+        .replace("fn main() -> () =", "fn main() -> () with Diverge ="),
+      "fn f(a: A, x: X is Numeric, n: u64) -> X with Diverge =\n    if n == 0: x * 0.5 else: g(7, x, n - 1)\n\n" +
+        "fn g(b: B, x: X is Numeric, n: u64) -> X with Diverge =\n    if n == 0: x else: f([b], x, n - 1)\n\n" +
+        "fn main() -> () with Diverge =\n    let h = f(1, 1.5, 3)\n    ()\n"
     )
     finite.foreach(p => assert(Lower(unit("finite", p)).program.isRight, s"a finite chain of instances:\n$p"))
 

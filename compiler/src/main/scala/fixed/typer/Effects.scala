@@ -111,7 +111,7 @@ object Effects:
     val warned = unused.foldLeft(checked) { (si, d) =>
       si.warn(DiagCode.T017, c.span, s"${c.owner} declares effect ${show(si, d)} but never performs it")
     }
-    val foreign = if c.runtime then declared.filterNot(d => isRuntime(s, d.sym)) else Nil
+    val foreign = if c.runtime then declared.filterNot(d => mainMayLeave(s, d.sym)) else Nil
     foreign.foldLeft(warned) { (si, d) =>
       si.error(DiagCode.T016, c.span, s"main performs ${show(si, d)}, which the runtime does not handle")
     }
@@ -119,9 +119,11 @@ object Effects:
   private def unifyArgs(s: TyperState, d: EffectBound, e: EffectBound): Option[TyperState] =
     s.tryUnify(Type.TupleType(d.args), Type.TupleType(e.args))
 
-  /** The runtime installs handlers for the effects `std.io` declares (Rule E5.4). */
-  private def isRuntime(s: TyperState, effect: SymbolId): Boolean =
-    s.symbols.stdIo(s.symbols(effect).name).contains(effect)
+  /** The effects `main` may leave unhandled: those `std.io` declares, for which the runtime installs
+    * handlers (Rule E5.4), and the prelude's `Diverge`, which has no operation (Rule 7.4.h).
+    */
+  private def mainMayLeave(s: TyperState, effect: SymbolId): Boolean =
+    s.symbols.stdIo(s.symbols(effect).name).contains(effect) || s.symbols.prelude.get("Diverge").contains(effect)
 
   def show(s: TyperState, e: EffectBound): String = s.symbols.render(s.unifier.zonk(asType(s, e)))
 

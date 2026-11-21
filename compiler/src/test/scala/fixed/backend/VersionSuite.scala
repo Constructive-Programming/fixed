@@ -105,10 +105,10 @@ class VersionSuite extends munit.FunSuite:
     * once `grab` is built its result is a part of the shared `xs`, and no call reaches the clone.
     */
   test("a clone chosen early that no call reaches in the end is dropped and holds no budget"):
-    val code = list + "fn grab(xs: L, n: u64) -> L =\n    if n == 0:\n        match xs:\n" +
-      "            L.C(_, t) => t\n            L.E => L.E\n    else:\n        grab(xs, n - 1)\n\n" +
-      "fn user(n: u64) -> u64 =\n    let xs = L.C(1, L.C(2, L.E))\n    first(bump(grab(xs, n))) + first(xs)\n\n"
-    val a = analyse(code, "user(1)")
+    val code = list + "fn grab(xs: L, n: Nat) -> L =\n    match n:\n        Nat.Zero =>\n            match xs:\n" +
+      "                L.C(_, t) => t\n                L.E => L.E\n        Nat.Succ(k) => grab(xs, k)\n\n" +
+      "fn user(n: Nat) -> u64 =\n    let xs = L.C(1, L.C(2, L.E))\n    first(bump(grab(xs, n))) + first(xs)\n\n"
+    val a = analyse(code, "user(Nat.Succ(Nat.Zero))")
     assertEquals(a.candidates("bump").map(c => c.key -> c.reason), List("0:cell" -> "unused"))
     assert(!a.fns.exists(_.name.startsWith("bump#")), a.fns.map(_.name))
 

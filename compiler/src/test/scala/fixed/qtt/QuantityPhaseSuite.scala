@@ -48,10 +48,11 @@ class QuantityPhaseSuite extends munit.FunSuite:
 
   private def codes(code: String): List[DiagCode] = compile(code).diagnostics.map(_.code)
 
-  test("Rule Q5.2: a parameter's quantity is its use count; §10.1 fibIter's go is (ω, 1, ω)"):
+  /** §10.1's `go` counts down, which Rule 7.4.h admits only `with Diverge`. */
+  test("Rule Q5.2: a parameter's quantity is its use count; §10.1 fibIter's go (with Diverge) is (ω, 1, ω)"):
     assertEquals(params("fn double(x: i64) -> i64 = x + x\n", "double"), List("ω"))
     assertEquals(params("fn identity(x: i64) -> i64 = x\n", "identity"), List("1"))
-    val fib = "fn fibIter(n: N is Numeric) -> N =\n    fn go(i: N, a: N, b: N) -> N =\n" +
+    val fib = "fn fibIter(n: N is Numeric) -> N with Diverge =\n    fn go(i: N, a: N, b: N) -> N with Diverge =\n" +
       "        if i == 0:\n            a\n        else:\n            go(i - 1, b, a + b)\n    go(n, 0, 1)\n"
     assertEquals(params(fib, "go"), List("ω", "1", "ω"))
     assertEquals(params(fib, "fibIter"), List("ω"))

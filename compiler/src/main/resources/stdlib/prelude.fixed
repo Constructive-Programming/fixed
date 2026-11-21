@@ -130,6 +130,10 @@ fn join(parts: is Folding of String, separator: String) -> String =
 effect Fail of E:
     fn fail(error: E) -> !
 
+// Rule 7.4.h: a function whose row has `Diverge` may recurse without restriction (it may not
+// return). It has no operations, and no handler removes it.
+effect Diverge
+
 String satisfies Show
 String satisfies Concat
 String satisfies Eq
