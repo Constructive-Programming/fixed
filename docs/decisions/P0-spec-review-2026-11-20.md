@@ -108,7 +108,12 @@ Found and not fixed:
 - The derived `unfold` and `map` are not tail-recursive: one native frame per element, so `upto(2000000)` overflows an 8 MiB stack. Filling a destination needs a cell with an unfilled slot in every backend pass, and a heap work list for trees (`docs/plans/implementation-plan.md`, Phase 4.2).
 - Derived `unfold` through a functor field (a rose tree with `List of Rose`) crashes, and derived `map` does not map through such a field, in both build modes.
 - The typer and the backend disagree on a derived `fold` through a type argument that is not the last (`Pair of (Self, u64)`), and on `Functor` for non-regular data.
-- A polymorphically recursive type such as `N of List of A` makes the compiler overflow its own stack in the default mode; a type that refers to itself at other arguments gets only baseline versions of its generated members.
+- A polymorphically recursive type such as `N of List of A` made the compiler overflow its own stack in the default mode: a clone asked for itself at an ever larger key without end.
+  - **Fixed** (`Lower.call`, `TypeOps.derived`): a call whose type argument nests the callee's own type parameter calls the baseline version, or is `B005` where there is none; finite chains keep their clones. Both modes also miscompiled such a function when it did not use its type parameter: its baseline version dropped a witness that its recursive call still passed. `EmitLLVM.direct` now requires the argument count to equal the parameter count.
+- The default build reused a shared cell when the result of an `if` or `match` was a value that is still live after the join, or held a part of one (`Versions.walk`, the `Ret` case): invariant I1 did not hold there.
+  - **Fixed**: a branch result runs the same `Demands.exclusive` test as a call argument. Found by adversarial programs in the checked runtime mode (`FX_CHECK_EXCL`), in which every untested reuse first asserts that the cell is exclusively owned; every `EmitSuite` run uses it. Closures, abort payloads, handler results, fields of fields, polymorphic results and `satisfies` bodies held under attack (126 runs over three modes).
+- A type that refers to itself at other arguments gets only baseline versions of its generated members.
+- The result of a closure call is always taken as shared. Measured: 4.0 instructions per tested reuse, at most 0.30% on `records`. Left as it is.
 - Satisfactions were looked up by the name of the type, not by its symbol: a program that declared its own `data Order` picked up the prelude's `Order satisfies Ordering` and crashed the backend.
   - **Fixed** (`Symbols.satisfactionsOf`, `Namer`, `Tables.table`): satisfactions and constructor mappings are keyed by the satisfying type's symbol, with no fall-back to the name. A shadowed prelude data type is named `prelude.<name>`, so its generated members do not collide with the program's type.
 - The backend did not lower the bodies of `satisfies` blocks; they were type-checked only.
@@ -130,7 +135,7 @@ Found and not fixed:
 - The type of a list literal is not specified. The typer gives it `List`; examples 02 and 11 assumed a collection that the compiler picks. Open for the owner.
 - Bounds of `of` parameters are not checked in written types (`Tag of Box`, `with Ping of Box`).
 - A derived `map` through a bounded last parameter does not check the new element type.
-- Signed `MIN / -1` and `MIN % -1` are undefined behaviour in the emitted IR.
+- Signed `MIN / -1` and `MIN % -1` emit a bare `sdiv`/`srem`, which is undefined behaviour. The spec does not say what integer overflow does (trap, wrap or abort). Open for the owner.
 - A member called on a numeric literal (`3.add(4)`) is not resolved.
 - `N.fromI64(...)` on a type parameter is accepted by the typer and refused by the backend.
 - `i128` and `u128` do not satisfy `Numeric`, though `spec/stdlib.md` §4.9 says they do.
