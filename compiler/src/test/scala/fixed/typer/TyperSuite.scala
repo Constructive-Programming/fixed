@@ -506,6 +506,11 @@ class TyperSuite extends munit.FunSuite:
       val ds = typedUnit(code).diags
       assertEquals(ds.map(_.code), List(DiagCode.T002), code)
       assertEquals(ds.head.span.start, code.indexOf(pick) + pick.indexOf("rhs"), code)
+      assertEquals(
+        ds.head.message,
+        "expected the type of `a` of `Picker.pick` (is Show), got the type of `rhs` of `Picker.pick` (is Show)",
+        code
+      )
     }
     programs("a: T is Show, rhs: T").foreach(code => assertEquals(typedUnit(code).diags, Nil, code))
 
@@ -515,6 +520,17 @@ class TyperSuite extends munit.FunSuite:
       s"fn hof(c: bool, a: (is Show) -> u64, rhs: (is Show) -> u64) -> u64 =\n    let x = $pick\n    0\n"
     )
     unchanged.foreach(code => assertEquals(typedUnit(code).diags, Nil, code))
+
+  test("spec 5.1: two anonymous bounds that print the same are named by their parameters in a mismatch"):
+    val messages = List(
+      "fn f(c: bool, a: is Show, b: is Show) -> u64 =\n    let x = if c: a else: b\n    0\n" ->
+        "expected the type of `a` (is Show), got the type of `b` (is Show)",
+      "fn f(c: bool, a: List of is Show, b: List of is Show) -> u64 =\n    let x = if c: a else: b\n    0\n" ->
+        "expected List of the `is Show` in the type of `a`, got List of the `is Show` in the type of `b`",
+      "fn f(c: bool, a: (is Show, is Show)) -> u64 =\n    match a:\n        (p, q) => if c: p else: q\n    0\n" ->
+        "expected the `is Show #1` in the type of `a`, got the `is Show #2` in the type of `a`"
+    )
+    messages.foreach((code, message) => assertEquals(typedUnit(code).diags.map(_.message), List(message), code))
 
   test("spec 5.1: a member's bound that names Self, Part or the capability's parameter is read at the satisfying type"):
     val merge =

@@ -191,7 +191,40 @@ object Typer:
       s,
       span,
       s.unifier.unify(expected, actual, isNumeric(s, _))
-    )(s"expected ${show(s, expected)}, got ${show(s, actual)}")
+    )(mismatch(s, expected, actual))
+
+  /** `expected X, got Y`. Where both print the same (two anonymous bounds `is Show`), each
+    * anonymous bound is named by the value parameter of its signature that has it: "the type of
+    * `a` (is Show)", or "the `is Show` in the type of `a`" when it is part of that type, with
+    * " of `Cap.method`" in a capability member's signature (whose names a satisfies body's bounds
+    * carry); where they still print the same, by its position among the signature's anonymous
+    * bounds ("#2").
+    */
+  private def mismatch(s: TyperState, expected: Type, actual: Type): String =
+    def anonymous(u: Type): List[SymbolId] = u match
+      case Type.TypeRef(id, _) if Members.anonymousParam(s, id) => List(id)
+      case other                                                => other.children.flatMap(anonymous)
+    def named(t: Type, numbered: Boolean): String =
+      val zonked = s.unifier.zonk(t)
+      val table = anonymous(zonked).distinct.foldLeft(s.symbols) { (tb, id) =>
+        val (bound, owner) = (s.symbols(id).name, s.symbols(s.symbols(id).owner))
+        val member = owner.kind == SymKind.Method || owner.kind == SymKind.StaticMethod
+        val where = if member then s" of `${s.symbols(owner.owner).name}.${owner.name}`" else ""
+        val position = s.symbols.typeParamsOf(owner.id).filter(Members.anonymousParam(s, _)).indexOf(id) + 1
+        val nth = if numbered then s" #$position" else ""
+        val params = s.symbols.membersOf(owner.id).filter(_.kind == SymKind.ValueParam).toList
+        val text = params.find(_.info == Type.TypeRef(id, Nil)).map(p => s"the type of `${p.name}`$where ($bound$nth)")
+          .orElse(params.find(p => Members.mentions(p.info, Type.TypeRef(id, Nil))).map(p =>
+            s"the `$bound$nth` in the type of `${p.name}`$where"
+          ))
+        text.fold(tb)(tb.rename(id, _))
+      }
+      table.render(zonked)
+    val (e, a) = (show(s, expected), show(s, actual))
+    lazy val (ne, na) = (named(expected, false), named(actual, false))
+    if e != a then s"expected $e, got $a"
+    else if ne != na then s"expected $ne, got $na"
+    else s"expected ${named(expected, true)}, got ${named(actual, true)}"
 
   /** Adopt the unifier from `result`, moving the obligations it recorded to the state with `span`,
     * or report `T002` with `message`.

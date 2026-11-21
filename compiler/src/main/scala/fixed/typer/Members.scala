@@ -426,7 +426,7 @@ object Members:
   private def boundedLast(symbols: SymbolTable, data: SymbolId): Option[SymbolId] =
     symbols.typeParamsOf(data).lastOption.filter(boundsOf(symbols, _).nonEmpty)
 
-  private def mentions(t: Type, part: Type): Boolean = t == part || t.children.exists(mentions(_, part))
+  def mentions(t: Type, part: Type): Boolean = t == part || t.children.exists(mentions(_, part))
 
   /** The first field of `data` that holds its rightmost type parameter where a derived `map` cannot
     * rebuild it, followed by the field of the nested data type that blocks it, if any. Each
