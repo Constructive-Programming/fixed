@@ -160,11 +160,11 @@ class BaselineSuite extends munit.FunSuite:
 
   test("a table entry the backend does not build is never called: the call is an instance, here B005"):
     val src = "fn less(a: T is Ord, b: T) -> bool = a.compare(b).fold(() -> true, () -> false, () -> false)\n\n" +
-      "fn byte(x: u8) -> u8 = x\n\nfn main() -> () =\n    let _n = less(byte(1), byte(2))\n    ()\n"
+      "fn main() -> () =\n    let _n = less(\"a\".concat(\"b\"), \"c\")\n    ()\n"
     val lower = Lower(unit("less", src))
     val ds = lower.program.fold(identity, fns => fail(s"lowered: ${fns.map(_.name)}"))
     assert(ds.exists(_.message.contains("compare")), ds)
-    assert(lower.instances("less[u8]").contains("no `Ord.compare` the backend builds"), lower.instances)
+    assertEquals(lower.instances.get("less[String]"), Some("`String` does not define `Ord.lt`"))
 
   test("a table entry with no generated member runs the prelude's satisfies body: List's foldRight"):
     val src = "fn right(xs: is Folding of u8) -> u64 = xs.foldRight(0, (x, n) -> n + 1)\n\n" +

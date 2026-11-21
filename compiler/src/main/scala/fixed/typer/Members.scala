@@ -134,11 +134,13 @@ object Members:
   def typeParamsOf(s: TyperState, owner: SymbolId): List[SymbolId] =
     s.symbols.typeParamsOf(owner)
 
-  /** Capabilities every concrete type has: auto-derived per `spec/stdlib.md` §4.7, §4.10, §4.11.
-    * Whether a representation can actually derive them is checked at representation selection
-    * (M11).
+  /** Capabilities whose members are looked up on a concrete type that does not declare them
+    * (`spec/stdlib.md` §4.7, §4.8, §4.10), and `Clone` (§4.11) except on data types and tuples,
+    * which have it only on request. A call of one requires the receiver to have the capability
+    * (`Typer.requireBound`; for `Clone`, `T010` from `notCloned`). On an abstract receiver they are
+    * not found, and [[autoDerivedCap]] names the bound it lacks.
     */
-  private val autoDerived = List("Show", "Eq", "Clone")
+  private val autoDerived = List("Show", "Eq", "Ord", "Clone")
 
   /** A value of type `t` is used through a witness and its bound set only (a type parameter, or an
     * anonymous `is ...` bound), so it has no auto-derived member (P6 D10, Rule CM4.3).

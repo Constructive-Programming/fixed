@@ -1,0 +1,23 @@
+// The members of Ord and Eq called by name: compare and eq on a derived data value, compare on
+// scalars and unit, eq on a String. A written eq is a regression guard.
+use std.io.Console
+
+data P:
+    P(a: u64, b: u8)
+
+data Mod:
+    Mod(n: u64)
+
+Mod satisfies Eq:
+    fn eq(other: Mod) = self.n % 10 == other.n % 10
+
+fn name(o: is Ordering) -> String = o.fold(() -> "lt", () -> "eq", () -> "gt")
+
+fn main() -> () with Console =
+    let x = P.P(1, 7)
+    let y = P.P(2, 7)
+    Console.printLine(name(x.compare(y)).concat(name(y.compare(x))).concat(name(x.compare(x))))
+    Console.printLine(x.eq(y).show().concat(x.eq(P.P(1, 7)).show()))
+    Console.printLine(name(3.compare(4)).concat(name('b'.compare('a'))).concat(name(().compare(()))))
+    Console.printLine(Mod.Mod(3).eq(Mod.Mod(13)).show())
+    Console.printLine("a".eq("b").show().concat("a".eq("a").show()))

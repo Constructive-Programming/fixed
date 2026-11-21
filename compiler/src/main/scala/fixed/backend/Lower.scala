@@ -586,8 +586,18 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
           case ("Show", "show", Nil)
               if Lower.scalar(recvType).isDefined || isStringType(recvType) || dataOf(recvType).isDefined =>
             expr(m.receiver, sc)(r => showValue(recvType, r)(k))
-          case ("Ord", "compare", List(arg)) if dataOf(recvType).isDefined =>
+          case ("Ord", "compare", List(arg)) if dataOf(recvType).isDefined || Lower.scalar(recvType).isDefined =>
             expr(m.receiver, sc)(r => expr(arg, sc)(a => compareValues(recvType, r, a)(k)))
+          case ("Eq", "eq", List(arg)) if dataOf(recvType).isDefined || isStringType(recvType) =>
+            expr(m.receiver, sc)(r =>
+              expr(arg, sc)(a =>
+                equality(
+                  recvType,
+                  r,
+                  a
+                ).fold(unsupported(m.span, s"`eq` on ${symbols.render(recvType)}", k))(bind(_, m, sc)(k))
+              )
+            )
           case ("Numeric", "negate", Nil) if Lower.scalar(recvType).isDefined =>
             expr(m.receiver, sc)(r => bind(Rhs.Prim(PrimOp.Neg, List(r)), m, sc)(k))
           case (c, name, List(arg)) if Lower.scalar(recvType).isDefined && Tables.scalarBinary.contains((c, name)) =>

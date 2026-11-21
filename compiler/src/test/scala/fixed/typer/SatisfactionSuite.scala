@@ -156,3 +156,20 @@ class SatisfactionSuite extends munit.FunSuite:
       bad
     )
     assertEquals(typedUnit(program("u64")).diags, Nil)
+
+  test("Ord's compare is found by name on a data value that derives Ord, and needs Ord there or on a type parameter"):
+    val ok =
+      "data P:\n    P(a: u64)\nfn f(x: P, y: P) -> bool = x.compare(y).fold(() -> true, () -> false, () -> false)\n"
+    assertEquals(typedUnit(ok).diags, Nil)
+    val bad =
+      "data H:\n    H(f: u64 -> u64)\nfn f(x: H) -> bool = x.compare(x).fold(() -> true, () -> false, () -> false)\n" +
+        "fn g(x: T) -> bool = x.compare(x).fold(() -> true, () -> false, () -> false)\n" +
+        "fn h(x: H) -> bool = x.lt(x)\n"
+    assertEquals(
+      typedUnit(bad).diags.map(d => (d.code, d.span.start)),
+      List(
+        (DiagCode.T010, bad.indexOf("x.compare")),
+        (DiagCode.T022, bad.lastIndexOf("x.compare")),
+        (DiagCode.T001, bad.indexOf("x.lt"))
+      )
+    )
