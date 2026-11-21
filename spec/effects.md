@@ -1,8 +1,10 @@
 # Fixed Effects
 
-**Status:** Draft v0.3.2
-**Specifies:** algebraic effect declarations, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.4 source.
-**Last revised:** 2026-11-20
+**Status:** Draft v0.3.3
+**Specifies:** algebraic effect declarations, the arithmetic effects, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.4 source.
+**Last revised:** 2026-11-21
+
+**Changes from v0.3.2.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"), with the author's choices that the owner confirmed. New §3.6: integer overflow and division by zero are the abortive effects `Overflow` and `DivideByZero` (Rules E3.6–E3.6.j): which operations perform them, how a generic `T is Numeric` body gets its row, when the prover or a refinement removes the effect (a facts-lane decision), derived members and prop bodies, the abort at `main`, and the widening form. Rule E5.4: both effects are in the set the runtime handles for `main`. Rule E8.2 no longer says a callback must perform the concrete part of a row: its row is a sub-row of it, as Rule E5.5.a already said. New code `E107` (an integer refinement not proved where it is established). Not built.
 
 **Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule E7.8: a closure carries one bit that is set when it holds captured evidence; a fork site tests it.
 
@@ -23,6 +25,7 @@
 This document specifies Fixed's algebraic effect system end-to-end: declarations, the type-level effect-row machinery, the inference algorithm, the runtime semantics of handlers, and how all of the above is compiled to evidence vectors. It covers:
 
 - How `effect E: fn op(...) -> T` declarations are typed (§3).
+- The arithmetic effects `Overflow` and `DivideByZero` (§3.6).
 - What an **effect row** is and how `+` composes them (§4).
 - The inference algorithm that derives a function's `with` clause from its body (§5).
 - The operational semantics of `handle SUBJECT: clauses` (§6).
@@ -160,6 +163,105 @@ handle (do: ... Lock.release):
 ```
 
 The same capture into a *non-linear* clause body (e.g. `Console.printLine`) is downgraded to `own`: the value is shared from then on (`spec/quantities.md` Rule Q5.7). It is not an error.
+
+### 3.6 Arithmetic effects (Rule E3.6)
+
+Decided by the owner (`docs/decisions/P6-resolution-round-2026-11-20.md`, fourth round, "Integer overflow and division"): integer overflow and division by zero are effects; the prover or a refinement removes the effect; the standard library ships handlers to an optional value, to a result and a form that raises the integer size. Nothing wraps silently and nothing is undefined behaviour. The owner confirmed the author's choices of that record; every other choice below is marked.
+
+**Built today.** Not built. The compiler wraps `+`, `-`, `*` and negation on every integer type. `MIN / -1` and `MIN % -1` are a bare `sdiv` or `srem`, which is undefined behaviour in LLVM and traps on x86. An integer `/` or `%` by zero is checked: the program prints `fixed: panic: integer division by zero` and exits with status `101` (`docs/plans/phase-4.0-backend-slice.md` §7, item 6, and §9, notes of 4.0.M2). Nothing removes a check, because the static prover is not built. Code examples in the specs written before this section omit the arithmetic effects from their rows; where they do integer arithmetic on ranges nothing proves, read them with `with Overflow` (or `with Arithmetic`) added.
+
+**Rule E3.6 (The two effects).** The prelude declares (`spec/stdlib.md` §4.13):
+
+```
+pub effect Overflow:
+    fn overflow -> !
+
+pub effect DivideByZero:
+    fn divideByZero -> !
+
+pub type Arithmetic = Overflow + DivideByZero
+```
+
+`Overflow` means that an integer value does not fit the type it must have. `DivideByZero` means that a divisor is zero. The alias `Arithmetic` names both *(author's choice)*.
+
+**Rule E3.6.a (Abortive).** Both operations are abortive (Rule E3.3): a handler clause for them cannot `resume`. Reasons:
+
+- The handlers of Rule E3.6.h replace the whole computation by a value of another type; none resumes.
+- A resumable `Overflow` would let a handler supply the result of `a + b`. The value of an arithmetic expression would then depend on the handler installed where it runs, and every arithmetic operation would be a point where a continuation may be captured (Rule E7.4). An abortive operation is never resumed (Rule E6.2, step 4), so its continuation is never kept (Rule E7.4): the operation is a check and a branch, and only the failing path reaches the handler.
+- A program that wants a value where a result does not fit says which one, with the explicit members of `Numeric` (`wrappingAdd`, `saturatingAdd`, Rule E3.6.i).
+
+The operations take no argument, so a handler learns which effect occurred, not the operands *(author's choice)*.
+
+**Rule E3.6.b (Which operations perform them).** On a bounded integer type (`i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, and `i128`, `u128` once they exist, `spec/compilation_model.md` OQ-CM7):
+
+| Operation | Performs | When |
+|---|---|---|
+| `a + b`, `a - b`, `a * b` (`add`, `sub`, `mul`) | `Overflow` | the mathematical result is outside the range of the type |
+| `-a` (`negate`) | `Overflow` | `a` is the most negative value of a signed type, or a nonzero value of an unsigned type |
+| `a / b`, `a % b` (`div`, `rem`) | `DivideByZero` | `b` is zero |
+| `a / b`, `a % b` | `Overflow` | `a` is the most negative value of a signed type and `b` is `-1` |
+| a narrowing conversion: `fromI64` at a type other than `i64`, and every conversion from an integer type to one whose range does not contain the source's range | `Overflow` | the value is outside the range of the target type |
+
+`f32` and `f64` perform neither effect: their arithmetic follows IEEE 754, which gives infinities, NaN and signed zeros instead. No other primitive type has arithmetic.
+
+**Rule E3.6.c (Rows through `Numeric`).** The requirements of `Numeric` declare the effects (`spec/stdlib.md` §4.9): `fromI64`, `add`, `sub`, `mul` and `negate` are `with Overflow`, and `div` and `rem` are `with Arithmetic`. A satisfaction's member may perform fewer effects than its requirement declares (Rule E4.4): the built-in satisfactions of `f32` and `f64` perform none, those of the integer types perform what Rule E3.6.b says, and a program's satisfaction performs what its body performs.
+
+1. **Known type.** An operation on a value whose type is known at the site (a primitive type, a data type) has the row of that type's member: `x + y` is pure for `x: f64` and performs `Overflow` for `x: u8`.
+2. **Type parameter or choice point.** An operation on a value of a type parameter or of a choice point (`x: T is Numeric`) has the row of the requirement, whatever type is supplied later. A generic function that adds declares `with Overflow`, even if every caller supplies `f64`. An integer literal there reaches its type through `fromI64` (`spec/type_system.md` §5.7) and performs `Overflow` like it, since a satisfaction other than the primitive types may have a narrow range. A literal that is a value argument of a type (an `of` value parameter or its default, `spec/type_system.md` §7.3: `data Bounded of (N is Numeric + Ord, lo: N = 16, …)`) is not such an operation: it is evaluated where the type is instantiated, where it is `T023` or fits, and performs nothing.
+
+This is the simplest sound rule: the row of a generic body does not depend on its instantiation, so a package compiled once gives each signature one row, and a row is part of the ABI (`spec/compilation_model.md` Rule CM6.7). Its cost: a caller that instantiates a generic numeric function at a float type handles or declares an effect that never happens there, and a callback that carries the effect keeps a fork site sequential (Rule E7.8, lanes). Code that must stay pure over floats is written at `f32` or `f64`, or over a capability whose members declare no effect. The alternative, a row that depends on the type argument ("`Overflow` if `T` is a bounded integer type"), is a form that effect rows do not have (§4).
+
+**Rule E3.6.d (Where the effect is absent).** An operation on a bounded integer type does not perform `Overflow`, or `DivideByZero`, and that effect is absent from its type, in these cases and no other:
+
+1. **Constant operands.** Every operand is a compile-time constant: a literal, a binding that the v0 rule of `spec/type_system.md` Rule 6.3.3 admits as a cap-generator value argument, or such an operation on constants. The v1 relaxation of that rule does not apply here: a call is never a constant operand. The compiler evaluates the operation. A result that does not fit, or a constant division by zero, is `error[T025]: constant arithmetic does not fit <type>` (`division by zero` for the second) at the operation: like `T023`, it is a fact about the source text (`spec/type_system.md` §5.7).
+2. **Proved range.** The static prover (`spec/properties.md` Rule P7.1) proves that the mathematical result lies in the range of the type; for `/` and `%`, that the divisor is not zero (for `DivideByZero`) and that the operands are not the most negative value and `-1` (for `Overflow`). Its premises are the conditions of the enclosing `if` branches and `match` guards, the refinements of the operands' types (item 3), the data invariants (`spec/properties.md` Rule P3.2) of the values the operands were read from, and the props of the operands' bounds, each with its status.
+3. **Refinement.** A refinement capability on an operand's type (`spec/type_system.md` §6.3: `u64 is between(0, 1000000)`, `N is boundedPositive(1, 10)`) is a premise of item 2. A divisor whose type is refined to exclude zero (`u64 is positive()`) does not perform `DivideByZero`.
+
+```
+fn mean(xs: is Folding of u64, n: u64) -> u64 with Arithmetic =
+    xs.fold(0, (acc, x) -> acc + x) / n          // the lambda's Overflow joins the row (Rule E5.5.a)
+
+fn percent(part: u64 is between(0, 1000000), whole: u64 is positive()) -> u64 =
+    part * 100 / whole                            // pure: part * 100 <= 100000000, whole > 0
+```
+
+**Rule E3.6.e (A facts-lane decision).** Removing the effect is wrong if the claim is false, since the operation then runs without a check. It is therefore a facts-lane decision (`spec/properties.md` Rule P7.8.a): it takes only `proved` and `assumed` statuses, and the removal has the weakest status of everything the proof rests on (Rule P7.7).
+
+- **When the prover runs** *(author's choice)*. The static prover runs right after the typer (Rule P7.1), so the arithmetic effects of a body are checked against its declared row (`E080`, `E081`) after the prover has decided the range goals of that body, not during effect inference. A range goal is an obligation of the function body, not of a prop: its premises are those of Rule E3.6.d, item 2, which go beyond what Rule P7.2 gives a prop. The prover's budget for range goals is a deterministic resource limit of the solver, not a time, so a row never depends on the machine; a goal that exceeds it is open and the effect stays.
+- **A `tested` or open premise removes nothing.** The operation keeps the effect in its type, and the function declares or handles it. The compiler adds a note that names the prop whose status was too weak *(author's choice)*; the programmer may prove it, strengthen it, or write `assume prop`.
+- **Rows are fixed at the package compile.** The decision uses the statuses the package compile can see (Rule P7.8.c): `proved` from its own static prover, `assumed` as written in its own source, and the statuses in the interfaces of dependencies. A later `fixed verify` of the package, the verification cache and a profile never change a row of a package already compiled: a row is part of a signature. A status that `fixed verify` records in the package's interface, a proof by enumeration included (Rule P8.5), reaches the package's importers at their next package compile, like any status of a dependency.
+- **Capability props.** In baseline code a premise taken from a capability's prop counts only where the satisfaction is known (Rule P7.8.c).
+- **Where a refinement is established** *(author's choice, owner to confirm)*. Inside a function a refinement on a parameter is a premise, because later code takes a refinement as true of its value (Rule P7.7.c). The refinement is an obligation where a value meets the refined type: an argument passed to a refined parameter, a value returned or stored at a refined type, a constructor's result (`spec/type_system.md` §8.5.1, stage C). A body is compiled once for every caller, and a caller, possibly in another package, cannot see whether the body removed an effect by the refinement. So every refinement on a bounded integer type is established in the facts lane: an obligation that the static prover does not prove, and that no `assume prop` covers, is `error[E107]: refinement <name> on <type> is not proved here`, with a help line that suggests a test of the value (an `if` whose condition the prover uses, item 2 of Rule E3.6.d) or `assume`. The obligation is never left to testing. (The alternative, a run-time check that performs `Overflow` where the refinement is not proved, would put prop bodies into the compiled artifact, against Rule P4.1 of `spec/properties.md`.)
+
+**Rule E3.6.f (Rows in signatures).** The arithmetic effects are ordinary effects, and Rules E5.1–E5.3 apply to them unchanged. Every `fn`, public or private, top-level or nested, declares the effects its body performs, or `E080` is reported (Rule E5.2); only the row of a lambda is inferred (Rule E5.5). The alias writes both effects at once: `with Arithmetic`. A declared arithmetic effect that the prover removed from every operation of the body is `warning[E081]`.
+
+**Rule E3.6.g (Derived members, satisfactions and prop bodies).**
+
+- **Derived and generated members** (`spec/type_system.md` §7.4: `fold`, `unfold`, `map`, `show`, `eq`, `compare`, `length`, `clone`) perform no arithmetic effect of their own. They compute nothing on the program's integers, and the count `length` keeps cannot leave `u64`, because every cell occupies at least 8 bytes of a 64-bit address space *(author's choice)*.
+- **A callback that overflows** (`xs.fold(0, (acc, x) -> acc + x)`) performs the effect with the evidence it captured where it was passed (Rules E5.5.a, E7.8). The effect joins the row of the function that passes it; the derived member stays pure, and the abort passes through it to the handler.
+- **A satisfaction's body** that performs an arithmetic effect its requirement does not declare (a `show` that computes digits with `/`) is `E080`. It handles the effect inside, or uses the members of Rule E3.6.i.
+- **Prop bodies** *(author's choice)*. `spec/properties.md` Rule P4.2 forbids effects in a prop body; the arithmetic effects are its one exception. An integer operation in a prop body is written as anywhere else. The static prover proves the prop only together with the range of every such operation in it. In the test build an `Overflow` or a `DivideByZero` ends the iteration as a counterexample (`E102`), reported with the position of the operation (Rule P8.4): a prop whose evaluation leaves the integer range is false.
+
+**Rule E3.6.h (Handlers and the widening form).** The prelude ships two handlers and one form (`spec/stdlib.md` §4.13):
+
+- `arithmeticOrNone(body)` runs `body` and returns `Optional.none` if it performs either effect, `Optional.some(v)` otherwise.
+- `arithmeticOrError(body)` returns `Result.err(e)` with `e` an `ArithmeticError` (`Overflowed` or `DividedByZero`), `Result.ok(v)` otherwise.
+- `widen(body)` raises the integer size. It is not a handler, because it changes the type of the arithmetic inside `body`; the compiler types and compiles it *(author's choice: a prelude function known to the compiler, like `inspect`, so the grammar does not change)*:
+  1. Inside `body`, an arithmetic operation whose result type is a bounded integer type `A` of at most 32 bits is computed at the next wider type `W` of the same signedness (`i8` to `i16`, `i16` to `i32`, `i32` to `i64`, and likewise from `u8` up to `u64`). Its operands of type `A` are widened, which is exact, and literals take `W`. An intermediate result has type `W` and performs `Overflow` only if it does not fit `W`; one `+`, `-` or `*` of two widened operands always fits.
+  2. The result of `body`, of type `A`, is narrowed from `W` once, at the end, and performs `Overflow` if it does not fit `A`.
+  3. A call inside `body` keeps its callee's signature: an argument computed at `W` and passed where `A` is expected is narrowed there, which may perform `Overflow`.
+  4. The result type of `body` must be a bounded integer type; any other type is a type mismatch (`T002`). For `i64` and `u64` the wider type needs the 128-bit immediates of `spec/compilation_model.md` OQ-CM7; until they exist `widen` at those types is `error[T026]: widen at <type> needs a 128-bit integer type`, a limit of the compiler.
+
+```
+fn scale(a: u32, b: u32, c: u32) -> u32 with Arithmetic =
+    widen(() -> a * b / c)       // a * b at u64 cannot overflow; one narrowing at the end
+```
+
+**Rule E3.6.i (Members without effects).** The explicit members of `Numeric` perform no `Overflow` (`spec/stdlib.md` §4.9): `wrapping…` gives the result modulo 2^n (`MIN / -1` is `MIN`), `saturating…` gives the nearest value of the range, and `checked…` gives `is Optional of Self`. `wrappingDiv`, `wrappingRem` and `saturatingDiv` still perform `DivideByZero`. On `f32` and `f64` the wrapping and saturating members are the IEEE 754 operations. A hash function or a checksum says what it means by calling them.
+
+**Rule E3.6.j (Unhandled at `main`).** `Overflow` and `DivideByZero` belong to the effects the runtime handles for `main` (Rule E5.4). Its handler prints `fixed: panic: arithmetic overflow at <file>:<line>:<column>`, or `fixed: panic: integer division by zero at <file>:<line>:<column>`, to the standard error, and ends the program with exit status `101`, the status of the runtime's panics today *(author's choice: the text and the status)*. The position is that of the operation. It travels as a hidden argument of the operation that a handler clause in the program does not see, so no value of the program depends on a source position, as for the diagnostic sinks (Rule E4.6) *(author's choice)*. This is the exit status of the program that `fixed ship` built, not an exit code of the compiler: a run-time abort has no class in `spec/reports.md` Rule RP5.5, which covers the compiler's commands only.
+
+**Compilation.** An operation that performs an arithmetic effect compiles to the checked machine operation (`llvm.sadd.with.overflow` and its kin, a compare for the divisor) and a branch to the operation's call (Rule E7.2) on the failing path. Where a clone knows the handler (§7.6), the branch goes to the handler's code directly. An operation from which Rule E3.6.d removed the effect compiles to the unchecked machine operation.
 
 ## 4. Effect rows
 
@@ -317,7 +419,7 @@ Multiple clauses for the same effect are permitted (one per operation of that ef
 
 ### 5.4 Top-level handling (Rule E5.4)
 
-`fn main()` may declare any `with` clause. The compiler-installed runtime provides handlers for the **stdlib effect set**: `Console`, `FileSystem`, `Clock`, `Random`, `Async` — exact set defined by stdlib. Effects in `main`'s row that are not in the stdlib set are compile errors.
+`fn main()` may declare any `with` clause. The compiler-installed runtime provides handlers for the **stdlib effect set**: `Console`, `FileSystem`, `Clock`, `Random`, `Async`, and the arithmetic effects `Overflow` and `DivideByZero`, whose handler ends the program with the position of the operation (Rule E3.6.j) — exact set defined by stdlib. Effects in `main`'s row that are not in the stdlib set are compile errors.
 
 Other top-level entry points (test mains, library entry points) may declare different sets, configurable at the runtime.
 
@@ -584,7 +686,7 @@ A function may have a concrete effect row plus a row variable:
 fn mapConsole<E>(list: is List of A, f: A -> B with Console + E) -> is List of B with Console + E
 ```
 
-Calls to this function must supply a callback whose row contains at least `Console`. The row variable `E` captures any additional effects.
+Calls to this function may supply a callback whose row is a sub-row of `Console + E` (Rule E5.5.a); it need not perform `Console`. The row variable `E` captures any additional effects (Rule E8.1.a).
 
 ### 8.3 Higher-order effect composition
 
@@ -640,6 +742,7 @@ Inference walk:
 - `parseU64`'s callback `(e) -> Fail.fail(e)` — the lambda's body calls abortive op `Fail.fail`, so its row is `Fail of String`.
 - `inner`'s body passes these lambdas to `fold`, whose parameters have unannotated function types. By Rule E5.5.a the lambdas' row joins `inner`'s row where they are passed, and by Rule E7.8 each lambda captures `inner`'s evidence for `Fail` there; `fold` itself stays pure. So `inner`'s `R_inferred = Fail of String`. The lambdas do not outlive the call of `fold` (its result type cannot hold them), so Rule E5.5.b holds. Its declared `with Fail of String` matches.
 - `compute`'s body wraps `inner(input)` in a `handle` whose clauses cover `Fail` (abortive — `Result.err(e)`) and `return` (transforms to `Result.ok(v)`). After subtraction, the row outside is empty. `compute` declares no `with` clause, which matches. ✓
+- Under §3.6, `n * 2` performs `Overflow`: `n` is any `u64`, and nothing proves the product in range (Rule E3.6.d). Once §3.6 is built, `inner` declares `with Fail of String + Overflow`, and `compute` handles `Overflow` (with `arithmeticOrError`, or a clause) or declares it. `examples/03_option_result.fixed` keeps the rows shown here until then (`docs/plans/implementation-plan.md`, Phase 4.2, item 22).
 - The `handle` block's result type joins:
   - `return` clause's body: `Result.ok(v): is Result of (String, u64)`.
   - `Fail.fail` clause's body: `Result.err(e): is Result of (String, u64)`.
@@ -670,11 +773,12 @@ fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A) =
 |---|---|
 | `spec/syntax_grammar.ebnf` | All effect-related syntax |
 | `spec/type_system.md` | Effect declarations as type-level constructs (§9 forwards here); `!` typing (§5.6) |
+| `spec/stdlib.md` | §4.9: the rows of `Numeric`'s requirements and the members without effects; §4.13: `Overflow`, `DivideByZero`, `Arithmetic`, the handlers and `widen` (Rule E3.6) |
 | `spec/compilation_model.md` | Evidence as a hidden parameter (Rule CM4.3), including evidence captured by closures (Rule E7.8); a known handler as a clone key component (Rule CM5.1); the convention of Rule E7.7 |
 | `spec/quantities.md` | Rule Q5.11 (`resume` quantity 1); OQ-Q1 ↔ OQ-E1; Rule Q9.2 fixes the order in which argument effects are performed (left to right); fork sites need empty rows (Rule Q5.13.a) |
 | `spec/memory_management.md` | §14: handler kinds, abort resets, fiber stacks for capturing handlers, continuation memory; Rule MM4.1 and §20.1 for the confinement check of Rule E5.5.b |
 | `spec/diagnostics.md` | `inspect` and `trace`, which are not effects (Rule E4.6) |
-| `spec/properties.md` | Effects in `prop` bodies are forbidden. Prop bodies are excluded from the compiled artifact (`spec/quantities.md` Rule Q5.5) and run only in the test build |
+| `spec/properties.md` | Effects in `prop` bodies are forbidden, except the arithmetic effects (Rule E3.6.g); removing an arithmetic effect is a facts-lane decision (Rules E3.6.e, P7.8.a). Prop bodies are excluded from the compiled artifact (`spec/quantities.md` Rule Q5.5) and run only in the test build |
 | `spec/pattern_matching.md` | Handler clauses reuse pattern syntax; coverage is Rule M6.4 |
 | `docs/references/scala3-compiler-reference.md` | Recheck pattern; effect inference is a Recheck pass like quantity inference |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `effects/EffectChecker.scala` (effect inference); Phase 4: `effects/EvidencePasser.scala` (evidence-passing compilation) |

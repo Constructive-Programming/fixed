@@ -1,8 +1,10 @@
 # Fixed Reports: Coverage, Cardinality and the Tool Interface
 
-**Status:** Draft v0.2.3
+**Status:** Draft v0.2.4
 **Specifies:** two analyses the compiler runs and reports — coverage of code by verification, and cardinality of types — the report of what the link step chose, the files a build reads besides its sources, the interface external tools use, and the exit codes of every command.
 **Last revised:** 2026-11-21
+
+**Changes from v0.2.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"). Rule RP5.5 gives classes to `T025` (constant arithmetic that does not fit, class `6`), `E107` (an integer refinement not proved where it is established, class `11`) and `T026` (`widen` at a 64-bit type, class `13`), and says that a program's abort on an unhandled arithmetic effect is the program's exit status, not a class.
 
 **Changes from v0.2.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"), decision 1. New Rule RP5.5: exit code `0` for no failure and one number per error class, for every command; the smallest class number wins when a run has several. The table is proposed by the author; the owner confirms the class list. Decision 2 adds `T024` (an ascription that names a bound, `spec/type_system.md` Rule 5.11) to the type errors.
 
@@ -185,14 +187,14 @@ Every command uses this one table: the checker `fixed <file>...`, `fixed compile
 | `3` | scan error | package compile: scanner | `E001`–`E009` |
 | `4` | parse error | package compile: parser | `P001`–`P099` |
 | `5` | name error | package compile: namer and typer | `T001`, `T003`, `T004`; `E063` |
-| `6` | type error | package compile: typer | `T002`, `T006`, `T007`, `T008`, `T010`, `T013`, `T014`, `T022`, `T023`, `T024`; `E062`, `E065` |
+| `6` | type error | package compile: typer | `T002`, `T006`, `T007`, `T008`, `T010`, `T013`, `T014`, `T022`, `T023`, `T024`, `T025`; `E062`, `E065` |
 | `7` | ambiguous satisfaction | package compile: typer; application link: deferred sites | `E061`; `T011` |
 | `8` | effect error | package compile: typer (effect inference) | `E080`, `E084`, `E093`; `T009`, `T015`, `T016`, `T018`, `T019` |
 | `9` | pattern error | package compile: typer | `E090`, `E091`, `E092`, `E094`, `E095`; `T020` |
 | `10` | malformed prop | package compile: typer and static prover | `E100`, `E104`, `E105` |
-| `11` | prop failed | package compile: static prover; test build | `E102`; under `--strict-pbt`, a budget overrun (`W103`) |
+| `11` | prop failed | package compile: static prover; test build | `E102`; `E107` (an integer refinement not proved where it is established); under `--strict-pbt`, a budget overrun (`W103`) |
 | `12` | quantity error | package compile: quantity inference | `E070`, `E072`, `E083` |
-| `13` | not supported yet | package compile: a limit of the compiler, found by the namer or by lowering | `T005` where the namer reports it as an error; `B001`, `B002`, `B003`, `B005` |
+| `13` | not supported yet | package compile: a limit of the compiler, found by the namer, the typer or lowering | `T005` where the namer reports it as an error; `T026`; `B001`, `B002`, `B003`, `B005` |
 | `14` | `fip` contract or confinement violated | package compile and the clones of a release link: demand and memory inference | `E071`, `E110`, `E085` |
 | `15` | cost bound not met | package compile: cost checker | `E120` |
 | `16` | no viable representation | selection, at package compile or application link | `E060` |
@@ -205,7 +207,7 @@ Every command uses this one table: the checker `fixed <file>...`, `fixed compile
 
 **Composed commands.** `a + b` runs `a`, then `b` only when `a` exited `0`. Its exit code is that of the first stage that did not exit `0`, or `0`. `fixed verify + ship` with a failed prop exits `11` and builds nothing.
 
-**Range.** Classes take the numbers `1` to `64`; `21` to `64` are free for classes added later, and `65` to `125` are not used. The shell reserves `126` and above (`126` cannot execute, `127` not found, `128 + n` killed by signal `n`), so a class never collides with them. A run killed by a signal shows the shell's code, not a class. The exit code of a program that `fixed ship` built is the program's own and is not covered here.
+**Range.** Classes take the numbers `1` to `64`; `21` to `64` are free for classes added later, and `65` to `125` are not used. The shell reserves `126` and above (`126` cannot execute, `127` not found, `128 + n` killed by signal `n`), so a class never collides with them. A run killed by a signal shows the shell's code, not a class. The exit code of a program that `fixed ship` built is the program's own and is not covered here: a run-time abort, such as an unhandled `Overflow` at `main` (status `101`, `spec/effects.md` Rule E3.6.j), is not a class.
 
 **Classes and diagnostic codes.** A class is not computed from a code. Codes are grouped by origin: in the compiler, `E` for the scanner and a few later checks (`E072`, `E110`), `P` for the parser, `T` for the typer and `B` for the backend (`compiler/src/main/scala/fixed/util/Reporter.scala`); in the specs, `E` codes by decade per document (`E06x` satisfactions and selection, `E07x` quantities, `E08x` effects, `E09x` patterns, `E10x` props, `E11x` memory, `E12x` cost). A class gathers codes by what the user must fix, which cuts across both: the `T` family spans five classes, and the `B` family two. Where the compiler and the specs number the same error differently (`T015` and `E080` for an undeclared effect, `T020` and `E091` for a match that is not exhaustive), both are in one class. Every code that is an error belongs to exactly one class, and a new code is given its class in this table when it is introduced.
 

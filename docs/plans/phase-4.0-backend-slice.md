@@ -291,6 +291,8 @@ Calibrated against Phase 3 milestones, which took one to two weeks each.
 6. ~~**Integer overflow and division by zero.**~~ **Decided:** integer division by zero panics.
    Overflow wraps, as proposed. The spec states neither yet; both rules are written into
    `spec/stdlib.md` §4.9 at 4.0.M2, before any golden output depends on them.
+   *Superseded* by the owner's decision of 2026-11-21 (P6, fourth round): overflow and division by
+   zero are the effects `Overflow` and `DivideByZero` (`spec/effects.md` §3.6); not built.
 7. **Derived `show` format.** Stdlib §4.10 gives one sentence. The golden files will fix the exact
    format (separators, nullary variants, strings quoted or not); it should be written into the
    spec at 4.0.M3.
@@ -385,7 +387,8 @@ Not reached from `main`: `Maybe`'s `satisfies` bodies, `unwrap_or`, `map_optiona
   scientific otherwise (`1e+300`), and `inf`, `-inf`, `NaN`. Still to go into `spec/stdlib.md`.
 - **Wrapping and panics** (§7.6): `+`, `-`, `*` wrap; integer `/` and `%` by zero exit with code 101
   and `fixed: panic: integer division by zero`. `ponytail:` signed `MIN / -1` is undefined in LLVM
-  and traps on x86; it needs an explicit check if wrapping is to hold there too.
+  and traps on x86; it needs an explicit check if wrapping is to hold there too. *Superseded*: the spec now makes
+  overflow and `MIN / -1` the effect `Overflow` (`spec/effects.md` §3.6); this describes the slice as built.
 - **Built-ins matched by name** (`concat`, `show`, `Console.*`) until the resolution table of
   4.0.M3; `ponytail:` comments in `Lower` mark both places.
 - **Tests:** `EmitSuite`, five programs, each run with the leak check. CI runs `clang --version`

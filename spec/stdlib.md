@@ -1,8 +1,10 @@
 # Fixed Standard Library — Core Types and Capabilities
 
-**Status:** Draft v0.3.2
-**Specifies:** the core data types and capabilities Fixed's stdlib provides; the cap-vs-data classification each one takes; the auto-derived satisfactions.
-**Last revised:** 2026-11-20
+**Status:** Draft v0.3.3
+**Specifies:** the core data types and capabilities Fixed's stdlib provides; the cap-vs-data classification each one takes; the auto-derived satisfactions; the arithmetic effects and their handlers.
+**Last revised:** 2026-11-21
+
+**Changes from v0.3.2.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"). §4.9: the requirements of `Numeric` declare `Overflow` and `DivideByZero` (`spec/effects.md` Rule E3.6.c), and `Numeric` gains the members without effects (`wrapping…`, `saturating…`, `checked…`). New §4.13: the prelude's effects `Overflow` and `DivideByZero`, the alias `Arithmetic`, the data type `ArithmeticError`, the handlers `arithmeticOrNone` and `arithmeticOrError`, and the widening form `widen`. Not built.
 
 **Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). `Clone` is derived only on request (§4.11). Naming: value-level names are camelCase, type-level names PascalCase (§1); the members of this document are renamed accordingly.
 
@@ -22,7 +24,7 @@ The prelude is a package. Every declaration this document gives is `pub` in it (
 
 It does **not** specify:
 - The full method surface of each cap (see `stdlib/*.fixed` source once implemented in Phase 5).
-- Effect-only stdlib items (`Console`, `FileSystem`, etc.) — see `spec/effects.md` and forthcoming `stdlib/io.fixed`.
+- Effect-only stdlib items outside the prelude (`Console`, `FileSystem`, etc.) — see `spec/effects.md` and forthcoming `stdlib/io.fixed`. The prelude's arithmetic effects are in §4.13.
 
 ## 2. Classification (normative)
 
@@ -34,6 +36,7 @@ It does **not** specify:
 | `Nat`         | data | Closed sum (`Zero` + `Succ`) — recursion-scheme example                |
 | `Maybe`       | data | Closed sum (`Just` + `Nothing`); the prelude's satisfier of `Optional` (§3.5) |
 | `Order`       | data | Closed sum (`Less` + `Equal` + `Greater`); the prelude's satisfier of `Ordering` (§3.6) |
+| `ArithmeticError` | data | Closed sum (`Overflowed` + `DividedByZero`); the error of `arithmeticOrError` (§4.13) |
 | `Optional`    | cap  | Abstract presence-or-absence; representation chosen per use            |
 | `Result`      | cap  | Abstract success-or-failure; representation chosen per use             |
 | `Pair`        | cap  | Abstract two-projection container; `Tuple` is the prelude's satisfier |
@@ -229,14 +232,40 @@ a >= b     ≡   a.compare(b).fold(() -> false, () -> true,  () -> true)
 
 ```
 pub cap Numeric extends Eq + Ord:
-    Self.fn fromI64(n: i64) -> Self
-    fn add(other: Self) -> Self
-    fn sub(other: Self) -> Self
-    fn mul(other: Self) -> Self
-    fn div(other: Self) -> Self      // truncating for integers, IEEE for floats
-    fn rem(other: Self) -> Self      // remainder; pairs with div
-    fn negate -> Self                 // additive inverse — `-x ≡ x.negate`
+    Self.fn fromI64(n: i64) -> Self with Overflow
+    fn add(other: Self) -> Self with Overflow
+    fn sub(other: Self) -> Self with Overflow
+    fn mul(other: Self) -> Self with Overflow
+    fn div(other: Self) -> Self with Arithmetic   // truncating for integers, IEEE for floats
+    fn rem(other: Self) -> Self with Arithmetic   // remainder; pairs with div
+    fn negate -> Self with Overflow                // additive inverse — `-x ≡ x.negate`
+
+    // Members without `Overflow` (spec/effects.md Rule E3.6.i)
+    fn wrappingAdd(other: Self) -> Self
+    fn wrappingSub(other: Self) -> Self
+    fn wrappingMul(other: Self) -> Self
+    fn wrappingNegate -> Self
+    fn wrappingDiv(other: Self) -> Self with DivideByZero
+    fn wrappingRem(other: Self) -> Self with DivideByZero
+    fn saturatingAdd(other: Self) -> Self
+    fn saturatingSub(other: Self) -> Self
+    fn saturatingMul(other: Self) -> Self
+    fn saturatingNegate -> Self
+    fn saturatingDiv(other: Self) -> Self with DivideByZero
+    fn checkedAdd(other: Self) -> is Optional of Self =
+        handle self.add(other):
+            Overflow.overflow() => Optional.none
+            return(v) => Optional.some(v)
+    fn checkedSub(other: Self) -> is Optional of Self = ...
+    fn checkedMul(other: Self) -> is Optional of Self = ...
+    fn checkedNegate -> is Optional of Self = ...
+    fn checkedDiv(other: Self) -> is Optional of Self = ...
+    fn checkedRem(other: Self) -> is Optional of Self = ...
 ```
+
+Each `checked…` member has the default body shown for `checkedAdd`, around its own member; `checkedDiv` and `checkedRem` also map `DivideByZero.divideByZero()` to `Optional.none`. The body constructs the requirement's own anonymous result (`spec/type_system.md` Rule 5.1.2), which is why it does not call `arithmeticOrNone` (§4.13), whose result is another choice point.
+
+**Effects.** The rows are those of `spec/effects.md` Rule E3.6.c. A satisfaction's member may perform less than its requirement declares: the integer types perform `Overflow` and `DivideByZero` exactly where Rule E3.6.b says, `f32` and `f64` perform neither, and an operation whose range is proved performs nothing (Rule E3.6.d). A call on a value of a type parameter has the requirement's row. `wrapping…` computes modulo 2^n, `saturating…` gives the nearest value of the range, and `checked…` gives `Optional.none` where the plain member would perform an effect; on `f32` and `f64` the wrapping and saturating members are the IEEE 754 operations. The `checked…` members have default bodies (below); a program's satisfaction of `Numeric` defines the `wrapping…` and `saturating…` members, which have none, since they depend on the range of the type *(author's choice; the owner's confirmed choice puts them on `Numeric`)*.
 
 Operator desugaring:
 
@@ -254,6 +283,8 @@ Per the v0.4.6 grammar (`UnaryExpr`), prefix `-` is single-arity: `--a` is not a
 Numeric-literal polymorphism (`type_system.md` §5.7) goes through `Self.fn fromI64`: an integer literal in a `Numeric`-bounded position is desugared to `Self.fromI64(LITERAL)`. Float literals desugar to a `fromF64` overload (forthcoming; deferred until float-spec lands).
 
 All built-in primitive numeric types — `i8`/`i16`/`i32`/`i64`/`i128`, `u8`/`u16`/`u32`/`u64`/`u128`, `f32`/`f64` — satisfy `Numeric` (compiler-provided).
+
+**Built today.** The prelude's `Numeric` declares the seven arithmetic members without rows; `+`, `-`, `*` wrap, and none of the members without effects exist (`spec/effects.md` §3.6, "Built today").
 
 ### 4.10 `cap Show`
 
@@ -311,6 +342,50 @@ The core capabilities carry cost props (`spec/cost.md` §4). Every satisfaction 
 | `RandomAccess` | `get` | `O(1)` | at most 1 | — |
 
 Consequences already visible in `spec/type_system.md` §6.6: the built-in linked list does not satisfy `Sized` or `RandomAccess`, because it cannot meet these bounds, and the contiguous array does. `Clone` states the bound of a copying satisfier. A sharing satisfier is within it and says so with `constructs(clone) <= 0` (§4.11). `Map` and `Set` have no contracts yet (OQ-S2); a hash map needs a decision between its expected and its worst case (`spec/cost.md` OQ-CT4).
+
+### 4.13 Arithmetic effects and their handlers
+
+The prelude declares the effects of `spec/effects.md` Rule E3.6, their alias, and the handlers of Rule E3.6.h. The decision is the owner's (P6, fourth round, "Integer overflow and division"); the names `Arithmetic`, `ArithmeticError`, `arithmeticOrNone`, `arithmeticOrError` and `widen` are the author's choice.
+
+```
+pub effect Overflow:
+    fn overflow -> !
+
+pub effect DivideByZero:
+    fn divideByZero -> !
+
+pub type Arithmetic = Overflow + DivideByZero
+
+pub data ArithmeticError:
+    Overflowed
+    DividedByZero
+
+pub ArithmeticError satisfies Eq          // derived
+pub ArithmeticError satisfies Show        // derived
+pub ArithmeticError satisfies Clone
+
+pub fn arithmeticOrNone(body: () -> A with Arithmetic + E) -> is Optional of A with E =
+    handle body():
+        Overflow.overflow() => Optional.none
+        DivideByZero.divideByZero() => Optional.none
+        return(v) => Optional.some(v)
+
+pub fn arithmeticOrError(body: () -> A with Arithmetic + E) -> is Result of (ArithmeticError, A) with E =
+    handle body():
+        Overflow.overflow() => Result.err(ArithmeticError.Overflowed)
+        DivideByZero.divideByZero() => Result.err(ArithmeticError.DividedByZero)
+        return(v) => Result.ok(v)
+
+pub fn widen(body: () -> A with E) -> A with Overflow + E = ...   // typed and compiled by the compiler
+```
+
+- **Rows.** `E` is a row variable (`spec/effects.md` Rule E8.2): the other effects of `body` pass through. A `body` that performs only one of the two arithmetic effects is accepted, since its row is a sub-row of the parameter's (Rule E4.4).
+- **To an optional value.** The result of `arithmeticOrNone` is the function's choice point (`spec/type_system.md` Rule 5.1.2); `Maybe` is the prelude's canonical satisfier of `Optional` (§3.5).
+- **To a result.** The prelude has no data type named `Either`; the result capability it names is `Result` (§4.2). `Result` has no canonical satisfier, so a program that calls `arithmeticOrError` declares a data type with a `pub` satisfaction of `Result`: the result is the choice point of a prelude function, for which a private satisfaction is no candidate (`spec/type_system.md` Rule 8.6.a).
+- **`widen`** is a form, not a handler: it computes the arithmetic of `body` at the next wider integer type and narrows the result once (`spec/effects.md` Rule E3.6.h). Its body is supplied by the compiler, as `inspect`'s is (§5); at `i64` and `u64` it waits for OQ-CM7 (`T026`).
+- **At `main`** both effects are handled by the runtime, which ends the program with the position of the operation (`spec/effects.md` Rule E3.6.j).
+
+Not built: the prelude declares none of these (`docs/plans/implementation-plan.md`, Phase 4.2, item 22).
 
 ## 5. Prelude satisfactions
 

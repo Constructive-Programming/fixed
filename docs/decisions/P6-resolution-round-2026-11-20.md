@@ -248,7 +248,7 @@ Owner: "C with prover or refinement removes Effect. Division with Effect. We shi
 - The standard library ships handlers that turn the effect into a `Maybe`, into an `Either`, and one that raises the integer size.
 - Nothing wraps silently and nothing is undefined behaviour.
 
-Author's choices, to confirm:
+Author's choices, confirmed by the owner on 2026-11-21:
 
 1. Two effects: `Overflow` (`+`, `-`, `*`, negation, `MIN / -1`, `MIN % -1`, narrowing conversions) and `DivideByZero` (`/`, `%`).
 2. Floating-point arithmetic performs neither; it follows IEEE 754.
@@ -257,5 +257,20 @@ Author's choices, to confirm:
 5. An unhandled `Overflow` or `DivideByZero` at `main` aborts with the position of the operation.
 6. "Raises integer size" cannot be an ordinary handler: it changes the type of the result. It is a form that computes the block at the next wider integer type and narrows at the end, performing `Overflow` once if the final value does not fit. Beyond 64 bits it needs the wider immediates of OQ-CM7.
 
-Not built. Today `+`, `-` and `*` wrap, and `MIN / -1` and division by zero are undefined behaviour in the emitted code.
+Not built. Today `+`, `-` and `*` wrap, and `MIN / -1` and `MIN % -1` are undefined behaviour in the emitted code. (This record first said the same of division by zero. That was wrong: the emitted code checks the divisor and exits with status `101` and `fixed: panic: integer division by zero`.)
+
+Written into the specs as `spec/effects.md` §3.6 (Rules E3.6–E3.6.j), `spec/stdlib.md` §4.9 and §4.13, `spec/type_system.md` §5.7 (`T025`), `spec/properties.md` Rules P4.2 and P7.8.a, and `spec/reports.md` Rule RP5.5. The further choices made there, each marked *(author's choice)* in the spec:
+
+- Both operations are abortive: a handler that supplies a value would make `a + b` depend on the handler in force, and would make every operation a possible continuation capture; the handlers asked for do not resume, and the explicit members give a chosen value.
+- An operation on a value of a type parameter has the row of `Numeric`'s requirement, whatever type is supplied: generic numeric code declares `Overflow` even when called at `f64`. A literal at a type parameter performs `Overflow` through `fromI64`.
+- Constant arithmetic is evaluated at compile time; a result that does not fit is `T025`.
+- A `tested` or open premise removes nothing; rows are fixed at the package compile. The arithmetic effects of a body are checked after the static prover has decided its range goals, under a deterministic resource limit, so a row never depends on the machine.
+- Every refinement on a bounded integer type is established only by `proved` or `assumed`, since a caller cannot see whether a body removed an effect by it; otherwise `E107` *(owner to confirm; a run-time check was rejected because it would put prop bodies into the binary)*.
+- Every `fn`, private ones included, declares the effects (Rule E5.2 unchanged); the alias `Arithmetic` names both.
+- Derived members perform no arithmetic effect of their own; a callback's effect joins the row of the function that passes it. In a prop body an arithmetic effect is allowed and is a counterexample when it happens.
+- Handlers `arithmeticOrNone` (to `is Optional`) and `arithmeticOrError` (to `is Result of (ArithmeticError, A)`; the prelude names its result capability `Result`, not `Either`). `widen(body)` is a prelude function the compiler types, so the grammar does not change; at `i64` and `u64` it is `T026` until OQ-CM7.
+- The members without effects are on `Numeric`: `wrapping…`, `saturating…` (no default bodies) and `checked…` (default bodies through `arithmeticOrNone`).
+- At `main` the runtime prints `fixed: panic: arithmetic overflow at <file>:<line>:<column>` and the program exits with status `101`. The position is a hidden argument that program handlers do not see. A run-time abort is not a compiler exit code.
+
+**Open direction, not a decision.** The owner added: "we might need to introduce dependent types as a better solution to 'raise integer size'. It might even start simplifying other parts of our system." Recorded as `spec/type_system.md` OQ-T3, which names where the specs already meet the idea (refinement capabilities with value parameters, `boundedPositive(lo, hi)`, the prover removing `Overflow` by range) and designs nothing.
 

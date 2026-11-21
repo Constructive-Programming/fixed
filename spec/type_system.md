@@ -1,8 +1,10 @@
 # Fixed Type System
 
-**Status:** Draft v0.5.3
+**Status:** Draft v0.5.4
 **Specifies:** typing of Fixed source as defined by `spec/syntax_grammar.ebnf` v0.4.14.
 **Last revised:** 2026-11-21
+
+**Changes from v0.5.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"). §5.7: what arithmetic does when a result leaves its type is `spec/effects.md` §3.6; constant arithmetic that does not fit is `T025` (§5.7, Rule 6.3.3). §8.5.1: a refinement on a bounded integer type is established only by `proved` or `assumed` (`E107`, `spec/effects.md` Rule E3.6.e). New OQ-T3 records the owner's note that dependent types may be a better answer to raising the integer size.
 
 **Changes from v0.5.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"). New Rule 5.10: a list literal is an abstract constructor call through `Sequencing`, and a choice point unless a concrete expected type or an ascription fixes its type; its bound set is `Sequencing of E` and what the context requires. New Rule 5.11: the type ascription `e is T` on any expression fixes its type and is not a conversion (`T024` when `T` is a bound). Rule 5.1.1 and Rule 5.7 refer to both. The example of Rule 7.3.c, which wrote `let x: T = …`, uses an ascription. New Rule 7.4.b.3: derived `fold`, `unfold` and `map` of linear data run in bounded native stack; trees do not yet (decision 3).
 
@@ -326,7 +328,7 @@ If still unresolved, **defaults** apply:
 
 An integer literal that meets a float literal takes the float type: `3 + 2.5` is `f64`. A float literal at an integer type is a type error (`T002`).
 
-An integer literal outside the range of the integer type it resolves to is an error, `error[T023]`, reported at the literal; at a type parameter the range is that of `i64`, because the literal reaches the type through `fromI64` (`spec/stdlib.md` §4.9). A leading `-` belongs to the literal for this check, so the most negative value of a signed type is valid. This is a fact about the source text; what arithmetic does at run time when a result leaves the range is a separate question.
+An integer literal outside the range of the integer type it resolves to is an error, `error[T023]`, reported at the literal; at a type parameter the range is that of `i64`, because the literal reaches the type through `fromI64` (`spec/stdlib.md` §4.9). A leading `-` belongs to the literal for this check, so the most negative value of a signed type is valid. This is a fact about the source text. Arithmetic whose operands are all constants is evaluated at compile time, and a result outside the range of its type, or a constant division by zero, is `error[T025]` at the operation, for the same reason (`spec/effects.md` Rule E3.6.d, item 1). What arithmetic does at run time when a result leaves the range is `spec/effects.md` §3.6: it performs the effect `Overflow`, or `DivideByZero` for a zero divisor.
 
 ### 5.8 Type-alias `of`-distribution (resolves OQ6)
 
@@ -604,7 +606,7 @@ Type-checking a signature that mentions `f(arg1, arg2, ...)` (a cap-generator ca
 
 | Admissible internal node | Example |
 |---|---|
-| Closed-form arithmetic over admissible operands: `+`, `-`, `*`, `/`, `%` (compile-time constant-foldable) | `between(0, 2 * upper)` |
+| Closed-form arithmetic over admissible operands: `+`, `-`, `*`, `/`, `%` (compile-time constant-foldable; a result that does not fit its type, or a division by zero, is `T025`, §5.7) | `between(0, 2 * upper)` |
 
 Not admitted in v0:
 - Function calls (`config.maxAge()`)
@@ -1302,7 +1304,7 @@ When the expected type contains refinement caps (Marker classification, per §6.
 
 **Stage B — Resolve against the residual.** Run §8.5's resolution against `E_base` only. Refinement caps are obligation-only and have no satisfactions to filter against; including them in the expected type of §8.5 leaves no satisfying type.
 
-**Stage C — Re-apply refinements as obligations.** The chosen constructor's result is a value of the satisfying type, which by virtue of having satisfied `E_base` is well-typed. The refinement caps in `E_ref` become **prop obligations** on that result, discharged by the verifier per `spec/properties.md` §7. If `E_base` is empty (the expected type is *only* refinement caps), resolution fails with `error[E065]: refinement caps have no constructors; the expected type must include a base capability with a constructor requirement`.
+**Stage C — Re-apply refinements as obligations.** The chosen constructor's result is a value of the satisfying type, which by virtue of having satisfied `E_base` is well-typed. The refinement caps in `E_ref` become **prop obligations** on that result, discharged by the verifier per `spec/properties.md` §7. For a refinement on a bounded integer type the obligation must be `proved` or `assumed` (`spec/effects.md` Rule E3.6.e, `E107`). If `E_base` is empty (the expected type is *only* refinement caps), resolution fails with `error[E065]: refinement caps have no constructors; the expected type must include a base capability with a constructor requirement`.
 
 ```
 fn tryMake(i: u64) -> is Optional of u64 + between(1, 99) =
@@ -1400,6 +1402,7 @@ Subtyping in Fixed is intentionally narrow:
 
 - **OQ-T1 — Mutual-fold convenience** (deferred). Generated combinators over the members of a mutually recursive SCC (§7.5); a backwards-compatible extension of Rule 7.5.a.
 - ~~**OQ-T2 — Type variables of variant fields.**~~ Closed in v0.5.0 by Rule 4.1.a: such a variable, and an anonymous bound in a field, is a choice point bound once per link unit (P6 D3).
+- **OQ-T3 — Dependent types for integer ranges** (open direction, not a decision). The owner's note on the arithmetic effects (P6, fourth round): "we might need to introduce dependent types as a better solution to 'raise integer size'. It might even start simplifying other parts of our system." The widening form `widen` (`spec/effects.md` Rule E3.6.h) fixes one wider type; a type that carried its range would let the result of `a * b` have the range the operands give it. The specs already show three places where values meet types: refinement capabilities with value parameters (§6.3, `cap Between(min, max)`, `fn between(min, max) -> cap of N`), `boundedPositive(lo, hi)` in `examples/11_properties.fixed`, and the static prover removing `Overflow` from an operation whose result range it proves from those refinements (`spec/effects.md` Rule E3.6.d). Nothing is designed.
 
 **Pre-resolved deferrals (lift into the indicated spec doc when drafted):**
 

@@ -70,7 +70,7 @@ Functions declare what they need. The compiler picks the data structure:
 
 ```
 // Works on ANY collection — linked list, array, tree, anything
-fn sum(numbers: is Folding of (N is Numeric)) -> N {
+fn sum(numbers: is Folding of (N is Numeric)) -> N with Overflow {
     numbers.fold(0, (acc, x) -> acc + x)
 }
 
@@ -95,7 +95,7 @@ main reason Fixed exists:
 
 ```
 // The type of the collection isn't needed here
-fn sum(collection: is Folding of Numeric) -> u64 {
+fn sum(collection: is Folding of Numeric) -> u64 with Overflow {
   collection.fold(0, (acc, n) -> acc + n)
 }
 ```
@@ -128,9 +128,9 @@ effect Fail of E {
     fn fail(error: E) -> !
 }
 
-fn compute(input: String) -> u64 with Fail of (NotANumber | DivisionByZero) { //explictly specifying the Parts of the Fail are not necessary
+fn compute(input: String) -> u64 with Fail of (NotANumber | DivisionByZero) + Overflow { //explictly specifying the Parts of the Fail are not necessary
     let n = parseU64(input) // Fail of NotANumber
-    divide(n * 2, 3) // Fail of DivisionByZero
+    divide(n * 2, 3) // Fail of DivisionByZero; `n * 2` may overflow a u64
 }
 
 // Handle the effect, converting to Result
@@ -141,6 +141,8 @@ handle compute("42") {
 ```
 
 Effects are declared, tracked, and handled — never implicit. Unhandled effects are compile errors.
+
+Integer overflow and division by zero are effects too (`Overflow`, `DivideByZero`): nothing wraps silently. The effect disappears where the prover or a refinement shows the result in range, and the prelude handles it into an optional value, a result, or a computation at a wider integer type (`spec/effects.md` §3.6; not built yet).
 
 ### Properties — lightweight theorem proving
 

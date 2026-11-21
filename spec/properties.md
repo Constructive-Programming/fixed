@@ -1,8 +1,10 @@
 # Fixed Properties
 
-**Status:** Draft v0.3.3
+**Status:** Draft v0.3.4
 **Specifies:** `prop` declarations, `forall` / `implies` / `suchThat` constructs, the three verifiers (static prover, cost checker, property-based testing) and where each runs, verification statuses and the two lanes they feed, measurement during testing, property-based test generation, and how verified properties feed compiler decisions for Fixed v0.4.5 source.
 **Last revised:** 2026-11-21
+
+**Changes from v0.3.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"). Rule P4.2: the arithmetic effects `Overflow` and `DivideByZero` are allowed in a prop body, and performing one is a counterexample (`spec/effects.md` Rule E3.6.g). Rule P7.8.a: removing an arithmetic effect from an operation's type, and establishing a refinement on a bounded integer type (`E107`), are facts-lane decisions (Rule E3.6.e). Rule P7.2: the prover also decides the range goals of function bodies. Rule P7.8.c lists the `assumed` props of the package's own source among what the package compile sees, as the third round decided. §9.1: a range invariant removes `Overflow` instead of eliding "checked overflow".
 
 **Changes from v0.3.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"), decision 1. Rule P7.7.b no longer gives an exit code of its own: the exit code follows the one table of `spec/reports.md` Rule RP5.5.
 
@@ -177,6 +179,8 @@ Property verification, when it requires running the body (step 4 of Rule P7.1), 
 ### 4.2 No effects (Rule P4.2)
 
 A prop body's effect row must be **empty**. Calls to effect operations (`Console.printLine`, `Fail.fail`, etc.) are forbidden inside prop bodies: `error[E100]: effect performed in prop body`.
+
+The arithmetic effects `Overflow` and `DivideByZero` are the one exception *(author's choice)*: integer arithmetic in a prop body is written as anywhere else. The static prover proves the prop only together with the range of each such operation, and in the test build an operation that performs one of them is a counterexample (`E102`) at the operation's position (`spec/effects.md` Rule E3.6.g).
 
 A prop body is a statement about values, and its truth must not depend on a handler: the static prover sees no handler, and the program binary does not contain the body at all (§4.1), so an effect in it would have no meaning in either place. The typer enforces effect-row emptiness as a separate check for clearer error messages.
 
@@ -354,7 +358,7 @@ The static prover sees:
 - Type information for every binding.
 - The props of inherited caps (per `extends`, §10) and of the caps that bound its binders, as **premises**, each with its status.
 
-The prover does **not** see effect operations, runtime values, or the body of fn calls (these are typically opaque to first-order reasoning). A prop body referencing fn calls without static-evaluable outcomes typically stays open, and testing decides it. Because the prover sees no bodies, a `proved` result does not depend on which satisfaction a choice point is bound to at link.
+Besides props, the prover decides the range goals of integer operations in function bodies, with the premises of `spec/effects.md` Rule E3.6.d (branch conditions, guards, refinements, data invariants) and a deterministic resource limit instead of the time budget (Rule E3.6.e). For props, the prover does **not** see effect operations, runtime values, or the body of fn calls (these are typically opaque to first-order reasoning). A prop body referencing fn calls without static-evaluable outcomes typically stays open, and testing decides it. Because the prover sees no bodies, a `proved` result does not depend on which satisfaction a choice point is bound to at link.
 
 ### 7.3 Testing details
 
@@ -443,7 +447,8 @@ A decision the compiler makes from a prop belongs to one of two lanes.
 - reuse or in-place update justified by a prop;
 - discharge of `unreachable` (Rule P9.2) and every other optimisation of §9.1;
 - a parallel fork site that relies on a prop (`spec/quantities.md` Rule Q5.13.a);
-- the viability of a candidate by refinement caps (`spec/type_system.md` §6.5.3).
+- the viability of a candidate by refinement caps (`spec/type_system.md` §6.5.3);
+- the removal of `Overflow` or `DivideByZero` from the type of an integer operation whose range is proved, and the establishment of every refinement on a bounded integer type, which such a removal may rest on (`spec/effects.md` Rules E3.6.d, E3.6.e; `E107` where it is not proved). With a premise that is only `tested` or open, the effect stays in the row.
 
 A `tested` prop is excluded because it looks like evidence while guaranteeing nothing: nobody chose to trust it, and a false one would turn a passing test suite into undefined behaviour without anyone having decided anything. An `assumed` prop is admitted because it is an explicit, visible act of trust: the programmer wrote `assume` in the source (Rule P7.7). It is the only way a property that no prover and no generator can reach (OQ-P4) can drive an optimisation; the verdict line counts it; the link report lists the decisions that rest on it; and `--require-proved` rejects it. No flag and no build mode produces an `assumed` prop, so turning testing off never makes the compiler rely on more.
 
@@ -451,7 +456,7 @@ A `tested` prop is excluded because it looks like evidence while guaranteeing no
 
 **Rule P7.8.c (which statuses a decision can see).** A facts-lane decision uses the statuses known where it is made:
 
-- In the **package compile**: `proved` from this compile's static prover, and the statuses recorded in the interfaces of dependencies. Not statuses from this package's own test build, from the verification cache, or from a profile; the compiled code would otherwise depend on whether `fixed verify` had run.
+- In the **package compile**: `proved` from this compile's static prover, `assumed` for the props its own source writes with `assume`, and the statuses recorded in the interfaces of dependencies. Not statuses from this package's own test build, from the verification cache, or from a profile; the compiled code would otherwise depend on whether `fixed verify` had run.
 - **Premises across a satisfaction.** A prop of a capability holds for a value with the status of the value's satisfaction, which can differ per satisfaction. Where the satisfaction is not known at the decision (a value of a type parameter or of a choice point in baseline code), a facts-lane decision must not rest on that capability's props, because the code must be correct for every satisfaction, including ones added later. It may in a clone for a known type, and in a clone built at link (`spec/compilation_model.md` Rule CM8.7), using the status the chosen satisfaction's package recorded.
 
 ### 7.9 Measurement during testing (Rule P7.9)
@@ -544,7 +549,7 @@ A prop with status `proved` or `assumed` (Rule P7.7) is in the **facts lane** (R
 |---|---|
 | `prop sorted: ...` on a `Sequencing` | `find(x)` lowers to binary search rather than linear scan. |
 | `prop nonEmpty: size > 0` | `head` returns `Part` directly instead of `is Optional of Part`; `fold`'s empty case is unreachable and can be elided. |
-| `prop inRange: lo <= value <= hi` (Bounded) | Bounds checks at use sites are elided; arithmetic that would have required checked overflow uses unchecked. |
+| `prop inRange: lo <= value <= hi` (Bounded) | Bounds checks at use sites are elided; arithmetic whose result the invariant keeps in range does not perform `Overflow` and compiles unchecked (`spec/effects.md` Rule E3.6.d). |
 | `prop positive: Self > 0` | `0 - n` becomes guaranteed-non-negative; `if n > 0` branches compile to unconditional. |
 
 The mechanism: each prop in the facts lane annotates the symbol's denotation (per `docs/references/scala3-compiler-reference.md` §4.4) with a *fact* the optimiser may consult. A missing fact is simply a missed optimisation.
