@@ -7,7 +7,7 @@ import fixed.util.Span
 /** Members the compiler derives or generates as Core functions: Rule 7.4.a `fold` (through functors
   * per Rule 7.4.a.1), Rule 7.4.b `unfold`, Rule 7.4.c `map`, and for list-shaped data
   * `Folding.fold`, `length` and `find`: one baseline version per data type, at its own parameters,
-  * and clones at known arguments ([[member]]). The derived `show` and `eq` are built at known
+  * and clones at known arguments ([[member]]). The derived `show`, `eq` and `compare` are built at known
   * arguments, and at a data type's own parameters for a table built at run time.
   * Arguments that are type parameters make a polymorphic member with hidden witness parameters
   * ([[hidden]]).
@@ -51,6 +51,9 @@ private[backend] trait Generated:
 
   /** Whether `a` and `b`, values of type `t`, are equal: `k` gets the `bool` ([[Satisfied]]). */
   protected def equalValues(t: Type, a: Atom, b: Atom)(k: K): Expr
+
+  /** How `a` compares with `b`, values of type `t`: `k` gets the prelude's `Order` ([[Satisfied]]). */
+  protected def compareValues(t: Type, a: Atom, b: Atom)(k: K): Expr
 
   /** The hidden parameters of type parameter `p`: its witness, then its tables (`Tables.hiddenOf`). */
   protected def hiddenOf(p: Type): List[Var]
@@ -286,28 +289,67 @@ private[backend] trait Generated:
     }
 
   /** Rule 7.4 derived `eq` (`spec/stdlib.md` §4.7, component-wise): the same variant, and each pair
-    * of fields equal by [[equalValues]]; hidden parameters as for [[derivedShow]]. ponytail: the variants are compared
-    * by a switch in a switch, quadratic in their number; compare tags once Core can read one.
+    * of fields equal by [[equalValues]]; hidden parameters as for [[derivedShow]].
     */
   protected def derivedEq(data: SymbolId, args: List[Type]): String =
+    pairwise(data, args, "eq", CType.Bool)(
+      _.foldRight(Expr.Ret(Atom.BoolC(true)): Expr) { case (((ft, x), (_, y)), rest) =>
+        equalValues(ft, x, y)(r => result(Rhs.If(r, rest, Expr.Ret(Atom.BoolC(false))), CType.Bool))
+      },
+      (_, _) => Expr.Ret(Atom.BoolC(false))
+    )
+
+  /** Rule 7.4 derived `compare` (`spec/stdlib.md` §4.8): variants in the order declared, then the
+    * fields of one variant left to right, the first that differs deciding ([[compareValues]]); the
+    * last field's comparison is the result, so a list compares in a loop. The result is the
+    * prelude's `Order`. Hidden parameters as for [[derivedShow]].
+    */
+  protected def derivedCompare(data: SymbolId, args: List[Type]): String =
+    def fields(pairs: List[((Type, Var), (Type, Var))]): Expr =
+      pairs match
+        case Nil                       => order("Equal")(Expr.Ret(_))
+        case List(((ft, x), (_, y)))   => compareValues(ft, x, y)(Expr.Ret(_))
+        case ((ft, x), (_, y)) :: rest =>
+          compareValues(ft, x, y) { c =>
+            val cases = orderVariants.map(v => if v == "Equal" then fields(rest) else Expr.Ret(c)).zipWithIndex
+            result(Rhs.Switch(c, cases.map(_.swap)), CType.Boxed)
+          }
+    pairwise(data, args, "compare", CType.Boxed)(
+      fields,
+      (tag, other) => order(if tag < other then "Less" else "Greater")(Expr.Ret(_))
+    )
+
+  /** A derived member `name` of two values `a` and `b` of `data` at `args`: for the same variant,
+    * `same` of their pairs of fields; for variants `tag` and `other` that differ, `differ`.
+    * ponytail: the variants are compared by a switch in a switch, quadratic in their number;
+    * compare tags once Core can read one.
+    */
+  private def pairwise(data: SymbolId, args: List[Type], name: String, rt: CType)(
+      same: List[((Type, Var), (Type, Var))] => Expr,
+      differ: (Int, Int) => Expr
+  ): String =
     val (t, span) = (Type.TypeRef(data, args), Span.NoSpan)
     val ws = typeParamsIn(t).flatMap(hiddenOf)
-    val name = generatedName(data, args, "eq", ws.map(_.name).mkString(", "))
-    instance(name) {
+    val member = generatedName(data, args, name, ws.map(_.name).mkString(", "))
+    instance(member) {
       val (a, b) = (typed(fresh("a", CType.Boxed), t, span), typed(fresh("b", CType.Boxed), t, span))
-      def all(pairs: List[((Type, Var), (Type, Var))]): Expr =
-        pairs match
-          case Nil                       => Expr.Ret(Atom.BoolC(true))
-          case ((ft, x), (_, y)) :: rest =>
-            equalValues(ft, x, y)(r => result(Rhs.If(r, all(rest), Expr.Ret(Atom.BoolC(false))), CType.Bool))
       val branches = perVariant(data, args, a, span) { (tag, as) =>
         val inner = perVariant(data, args, b, span) { (other, bs) =>
-          if other == tag then all(as.zip(bs)) else Expr.Ret(Atom.BoolC(false))
+          if other == tag then same(as.zip(bs)) else differ(tag, other)
         }
-        switch(b, inner, CType.Bool)
+        switch(b, inner, rt)
       }
-      Fn(name, ws ++ List(a, b), CType.Bool, switch(a, branches, CType.Bool))
+      Fn(member, ws ++ List(a, b), rt, switch(a, branches, rt))
     }
+
+  /** `k` given the prelude's `Order` variant `v`. */
+  protected def order(v: String)(k: K): Expr =
+    val o = fresh("o", CType.Boxed)
+    Expr.Let(o, Rhs.Con(orderVariants.indexOf(v), Nil), k(o))
+
+  /** The names of the prelude's `Order` variants, in tag order. */
+  protected def orderVariants: List[String] =
+    symbols.prelude.get("Order").toList.flatMap(symbols.variantsOf(_).map(_.name))
 
   /** A part of a field that a generated member rebuilds: its type before and after, and how to
     * rebuild a value of it.

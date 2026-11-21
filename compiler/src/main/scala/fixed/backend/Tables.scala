@@ -23,7 +23,7 @@ import fixed.util.Span
   * A member of the language the backend does not build yet ([[Tables.unbuilt]]) gets a null entry;
   * no lowering asks for one. Any other member a type does not define makes the table an error. The
   * hidden entries `lt` and `le` stand in for `compare` (plan §2); a data type builds them from the
-  * program's `compare` ([[Satisfied.comparison]]).
+  * `compare`, the program's or the derived one ([[Satisfied.compareOf]]).
   */
 private[backend] trait Tables extends Satisfied:
   this: Lower =>
@@ -63,12 +63,12 @@ private[backend] trait Tables extends Satisfied:
   private val capturing = scala.util.DynamicVariable((0, List.empty[Atom.Var]))
 
   /** The capability a data type's own parameters have while its run-time table is built: the
-    * derived `show` and `eq` reach a field of a parameter's type through its table of it. */
+    * derived `show`, `eq` and `compare` reach a field of a parameter's type through its table of it. */
   private val assumed = scala.util.DynamicVariable(Map.empty[Type, SymbolId])
 
   /** The table of `cap` at `t`, a data type whose arguments mention type parameters, built at run
     * time from the hidden arguments of its own parameters ([[Atom.DynTable]]): their witnesses and
-    * tables, the table of `cap` itself where it is `Show` or `Eq`, which the derived member needs.
+    * tables, the table of `cap` itself where it is `Show`, `Eq` or `Ord`, which the derived member needs.
     * A type that grows under polymorphic recursion has no static table to enumerate. The entries
     * are built once, at the data type's own parameters; a member they call that needs a hidden
     * parameter the table does not hold makes it an error.
@@ -76,7 +76,7 @@ private[backend] trait Tables extends Satisfied:
   private def dynamicTable(t: Type, cap: SymbolId): Either[String, Atom.DynTable] =
     dataOf(t).toRight(s"no table at `${symbols.render(t)}`, which has type parameters").flatMap { (data, args) =>
       val own = symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil))
-      val derivedCap = Option.when(Set("Show", "Eq")(symbols.preludeName(cap)))(cap)
+      val derivedCap = Option.when(Set("Show", "Eq", "Ord")(symbols.preludeName(cap)))(cap)
       assumed.withValue(derivedCap.fold(Map.empty)(c => own.map(_ -> c).toMap)) {
         val layout = own.flatMap(hiddenOf)
         val tooMany = s"a table at `${symbols.render(t)}` holds more than ${Tables.maxCaptures} witnesses and tables"
@@ -233,10 +233,14 @@ private[backend] trait Tables extends Satisfied:
       case (Some("Sequencing"), "length", _) if list =>
         Some(adapter(name, length(data, own, Type.PrimType("u64"), Span.NoSpan), args, own))
       case (Some("Functor"), "map", Some(b)) => Some(adapter(name, derivedMap(data, own, b, Span.NoSpan), args, own))
-      case (None, "lt" | "le", _) => userCompare(t).map(c => adapter(name, comparison(data, own, c, member), args, own))
-      case (Some("Show"), "show", _) => derived(t, derivedShow).map(_._1).map(adapter(name, _, args, own))
-      case (Some("Eq"), "eq", _)     => derived(t, derivedEq).map(_._1).map(adapter(name, _, args, own))
-      case _                         => body(fromPrelude = true))
+      case (None, "lt" | "le", _)            => comparison(t, member).map((g, _) => adapter(name, g, args, own))
+      case (Some(c), m, _) if derivers.contains((c, m)) =>
+        derived(t, derivers((c, m))).map(_._1).map(adapter(name, _, args, own))
+      case _ => body(fromPrelude = true))
+
+  /** The derived members of Rule 7.4 by prelude capability and member name. */
+  private lazy val derivers: Map[(String, String), (SymbolId, List[Type]) => String] =
+    Map(("Show", "show") -> derivedShow, ("Eq", "eq") -> derivedEq, ("Ord", "compare") -> derivedCompare)
 
   /** An auto-flat-struct's entry `name` (`spec/type_system.md` §6.6): its constructor `ctor` builds
     * the struct from `fields`, and a member named like a field reads it.
@@ -360,8 +364,8 @@ object Tables:
   private val maxCaptures = 64
 
   /** Members of the language the backend builds no entry for yet where no `satisfies` body defines
-    * them: `compare`, whose result is the prelude's `Order` (P6 D17), and the others, which are not
-    * derived (`find` only for list-shaped data).
+    * them and nothing derives them: `compare` on a scalar or `String` (a data type derives it, its
+    * result the prelude's `Order`, P6 D17), and the others (`find` only for list-shaped data).
     */
   private val unbuilt = Set("compare", "foldRight", "head", "tail", "find")
 

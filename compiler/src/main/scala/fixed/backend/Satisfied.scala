@@ -118,7 +118,7 @@ private[backend] trait Satisfied extends Generated:
     * it with: none at known arguments; else those of the type parameters `t` mentions, whose tables
     * reach a field of a parameter's type.
     */
-  protected def derived(t: Type, gen: (SymbolId, List[Type]) => String): Option[(String, List[Atom])] =
+  protected def derived(t: Type, gen: (SymbolId, List[Type]) => String): Option[(String, List[Atom.Var])] =
     dataOf(t).map((data, args) => gen(data, args) -> typeParamsIn(t).flatMap(hiddenOf))
 
   /** `v` of type `t` shown (Rule 7.4, [[derivedShow]]): a scalar by the runtime, `()` as `"()"`, a
@@ -171,24 +171,37 @@ private[backend] trait Satisfied extends Generated:
     * set, or the capability a table built at run time assumes for it, `Tables.assumed`).
     */
   private def throughTable(t: Type, cap: String, member: String, args: List[Atom], rt: CType)(k: K): Option[Expr] =
+    boundTable(t, cap, member).map { (table, i) =>
+      val r = fresh("r", rt)
+      Expr.Let(r, Rhs.CallTable(table, i, args), k(r))
+    }
+
+  /** The table of type parameter `t`'s bound set that holds the prelude capability `cap`'s
+    * `member` (its own, or one whose capability extends `cap`), and the member's index in it.
+    */
+  private def boundTable(t: Type, cap: String, member: String): Option[(Atom, Int)] =
     for
       c <- symbols.prelude.get(cap) if isTypeParam(t)
-      table <- tableAtom(t, c).toOption
-    yield
-      val r = fresh("r", rt)
-      Expr.Let(r, Rhs.CallTable(table, Tables.members(symbols, c).indexOf(member), args), k(r))
+      holder <- boundCaps(t).find(Tables.reached(symbols, _).contains(c))
+    yield (tableOf(t, holder), Tables.members(symbols, holder).indexOf(member))
 
   /** The `satisfies` body of `member` for data type `d` at `args` and own type argument `r` (a generator for `member`). */
   protected def dataBody(member: SymbolId)(d: SymbolId, args: List[Type], r: Type): String =
     satisfactionBody(Type.TypeRef(d, Nil), member, args, List(r)).get
 
-  /** The program's `satisfies Ord` body's `compare` for values of type `t`, if it has one. */
-  protected def userCompare(t: Type): Option[SymbolId] =
-    symbols.prelude.get("Ord").flatMap(symbols.membersOf(_).find(_.name == "compare")).map(_.id)
-      .filter(hasBody(t, _, fromPrelude = false))
+  /** The `compare` of values of data type `t` and its hidden arguments: the program's `satisfies
+    * Ord` body, else the derived one ([[derivedCompare]]). Its result is the prelude's `Order` (P6 D17).
+    */
+  protected def compareOf(t: Type): Option[(String, List[Atom.Var])] =
+    val compare = symbols.prelude.get("Ord").flatMap(symbols.membersOf(_).find(_.name == "compare")).map(_.id)
+    dataOf(t).flatMap((data, args) =>
+      compare.filter(hasBody(t, _, fromPrelude = false)) match
+        case Some(c) => satisfactionBody(Type.TypeRef(data, Nil), c, args, Nil).map(_ -> hidden(args))
+        case None    => derived(t, derivedCompare)
+    )
 
-  /** `l op r` for a comparison operator `op` on values of data type `t` by the program's `compare`
-    * ([[comparison]]), if it has one: `>` and `>=` are `lt` and `le` with the operands swapped.
+  /** `l op r` for a comparison operator `op` on values of data type `t` by its `compare`
+    * ([[comparison]]): `>` and `>=` are `lt` and `le` with the operands swapped.
     */
   protected def ordered(t: Type, op: Trees.BinOperator, l: Atom, r: Atom): Option[Rhs] =
     import Trees.BinOperator.*
@@ -200,37 +213,52 @@ private[backend] trait Satisfied extends Generated:
       case _  => None
     for
       (entry, a, b) <- chosen
-      (data, args) <- dataOf(t)
-      compare <- userCompare(t)
-    yield
-      val (f, ws) = member(data, args, None)((as, _) => comparison(data, as, compare, entry))
-      Rhs.Call(f, ws ++ List(a, b), runtime = false)
+      (f, ws) <- comparison(t, entry)
+    yield Rhs.Call(f, ws ++ List(a, b), runtime = false)
 
-  /** The hidden table entry `lt` or `le` (`op`) of `data` at `args` (`Tables.ordEntries`): the
-    * program's `compare`, whose result is the prelude's `Order` (P6 D17), read as `Less` for `lt`
-    * and as not `Greater` for `le`.
+  /** `lt` or `le` (`op`) on values of data type `t` (the hidden table entries of `Tables.ordEntries`)
+    * by its `compare` ([[compareOf]]), read as `Less` for `lt` and as not `Greater` for `le`; with
+    * the hidden arguments to call it with, which its name lists.
     */
-  protected def comparison(data: SymbolId, args: List[Type], compare: SymbolId, op: String): String =
-    val name = s"${symbols.render(Type.TypeRef(data, args))}.$op[compare]"
-    instance(name) {
-      val body = satisfactionBody(Type.TypeRef(data, Nil), compare, args, Nil).get
-      val ws = hidden(args)
-      val (a, b, order) = (fresh("a", CType.Boxed), fresh("b", CType.Boxed), fresh("order", CType.Boxed))
-      val variants = symbols.prelude.get("Order").toList.flatMap(symbols.variantsOf(_).map(_.name))
-      val holds = (v: String) => v == "Less" || (op == "le" && v == "Equal")
-      val res = fresh("holds", CType.Bool)
-      val cases = variants.zipWithIndex.map((v, tag) => tag -> Expr.Ret(Atom.BoolC(holds(v))))
-      Fn(
-        name,
-        ws ++ List(a, b),
-        CType.Bool,
-        Expr.Let(
-          order,
-          Rhs.Call(body, ws ++ List(a, b), runtime = false),
-          Expr.Let(res, Rhs.Switch(order, cases), Expr.Ret(res))
-        )
-      )
+  protected def comparison(t: Type, op: String): Option[(String, List[Atom.Var])] =
+    compareOf(t).map { (f, ws) =>
+      val name = s"${symbols.render(t)}.$op[compare][${ws.map(_.name).mkString(", ")}]"
+      instance(name) {
+        val (a, b, got) = (fresh("a", CType.Boxed), fresh("b", CType.Boxed), fresh("order", CType.Boxed))
+        val (res, holds) = (fresh("holds", CType.Bool), (v: String) => v == "Less" || (op == "le" && v == "Equal"))
+        val cases = orderVariants.zipWithIndex.map((v, tag) => tag -> Expr.Ret(Atom.BoolC(holds(v))))
+        val body = Expr.Let(res, Rhs.Switch(got, cases), Expr.Ret(res))
+        Fn(name, ws ++ List(a, b), CType.Bool, Expr.Let(got, Rhs.Call(f, ws ++ List(a, b), runtime = false), body))
+      } -> ws
     }
+
+  /** `k` given the `Order` that compares `a` with `b`, values of type `t`: units are equal, scalars
+    * are compared (`Less` iff ordered-less, `Equal` iff ordered-equal, else `Greater`, so a NaN is
+    * `Greater`, as `Tables.ordEntries` says), a type parameter's values the same way through its
+    * table's `lt` and `le` (its `compare` entry is null on a scalar), a data type's by its `compare`;
+    * any other type is a problem (`B005`).
+    */
+  protected def compareValues(t: Type, a: Atom, b: Atom)(k: K): Expr =
+    def returned(v: String): Expr = order(v)(Expr.Ret(_))
+    def choose(test: Rhs, yes: Expr, no: Expr)(k: K): Expr =
+      val (flag, c) = (fresh("cmp", CType.Bool), fresh("order", CType.Boxed))
+      Expr.Let(flag, test, Expr.Let(c, Rhs.If(flag, yes, no), k(c)))
+    def byTests(lt: Rhs, le: Rhs): Expr =
+      choose(lt, returned("Less"), choose(le, returned("Equal"), returned("Greater"))(Expr.Ret(_)))(k)
+    if a.tpe == CType.Unit then order("Equal")(k)
+    else if !a.tpe.counted then byTests(Rhs.Prim(PrimOp.Lt, List(a, b)), Rhs.Prim(PrimOp.Le, List(a, b)))
+    else
+      (boundTable(t, "Ord", "lt"), boundTable(t, "Ord", "le")) match
+        case (Some((tb, lt)), Some((_, le))) =>
+          byTests(Rhs.CallTable(tb, lt, List(a, b)), Rhs.CallTable(tb, le, List(a, b)))
+        case _ =>
+          compareOf(t) match
+            case Some((f, ws)) =>
+              val c = fresh("order", CType.Boxed)
+              Expr.Let(c, Rhs.Call(f, ws ++ List(a, b), runtime = false), k(c))
+            case None =>
+              report(s"`compare` on ${symbols.render(t)}")
+              order("Equal")(k)
 
   /** The function of the `satisfies` body that defines capability member `member` for satisfying
     * type `head` (a data type at no arguments, or a scalar type), built at the data type's

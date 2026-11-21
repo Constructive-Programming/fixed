@@ -1,0 +1,17 @@
+true
+false
+true
+Rect(1, 2)
+Box(Line(0), 1)
+false
+Box(Rev(1), 0)
+true
+false
+true
+0
+2
+1
+false
+false
+false
+true
