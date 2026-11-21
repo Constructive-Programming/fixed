@@ -61,10 +61,10 @@
      §13): `sort(xs) using ByAmount`. After a type reference (`TypeRef`,
      §10): `Set of Money using ByAmount`. It names satisfactions; see
      spec/type_system.md Rule 8.4.
-   - **Named satisfactions**: `Money satisfies Ord named ByAmount:`
-     (`SatisfactionName`, §9). `named` is a provisional contextual word,
-     recognised only after the capability of a `satisfies` declaration
-     or of a `use … satisfies` tail. It is not reserved.
+   - **Named satisfactions**: `Money satisfies Ord as ByAmount:`
+     (`SatisfactionName`, §9). The word is `as`, already reserved for
+     `use … as` (owner's decision, fourth round of P6); `named` of
+     earlier versions is withdrawn and is an ordinary identifier.
    - **Diagnostics need no production.** `inspect` and `trace` are
      ordinary identifiers that the prelude binds and the compiler
      knows; see the note in §13. Interpolation (`"… {x} …"`) is not
@@ -418,8 +418,7 @@ DEDENT          = (* synthetic token: closing of an indented block *) ;
    Rule 8.4). It is a separate token from `use`: the scanner takes the
    longest identifier, so `using` never lexes as `use` followed by `ing`.
    `mod` and `in` are reserved without productions.
-   Contextual words, not reserved: `strict` (inside `fip( … )`), `named`
-   (provisional, after the capability of a `satisfies`). `inspect` and
+   Contextual words, not reserved: `strict` (inside `fip( … )`). `inspect` and
    `trace` are ordinary identifiers. *)
 
 
@@ -476,7 +475,7 @@ UsePath
 
 UseTail
     = "." "{" UseSel ( "," UseSel )* ","? "}"      (* use-group: not a block, brace-grouped *)
-    | "satisfies" CapRef SatisfactionName?          (* use a.b.T satisfies C [named N] *)
+    | "satisfies" CapRef                            (* use a.b.T satisfies C *)
     ;
 
 (* A named satisfaction is imported like a type: `use shop.money.ByAmount`
@@ -496,7 +495,7 @@ UsingDecl
     = "using" SatisfactionRef ( "," SatisfactionRef )*
     ;
 
-(* Always a name: the `named` one, or the automatic name of an unnamed
+(* Always a name: the declared one (`as N`), or the automatic name of an unnamed
    satisfaction, `DefaultMoneyOrd` or `DerivedMoneyOrd` (spec/type_system.md
    Rule 8.4.d). The
    pair form of v0.4.13 is withdrawn. *)
@@ -702,13 +701,12 @@ SatisfiesDecl
     = SatisfiesSubject "satisfies" CapRef SatisfactionName? SatisfiesBody?
     ;
 
-(* v0.4.11. `named` is a provisional contextual word (P6 D12; open as
-   spec/compilation_model.md OQ-CM14). It is recognised only here and in
-   UseTail, right after the CapRef. `CapRef`'s optional `of OfArg` cannot
-   absorb it: an OfArg that is a TypeExpr ends at a LOWER_IDENT that is
-   not followed by `(`. *)
+(* The name of a satisfaction follows `as` (owner's decision, fourth
+   round of P6; it replaces the provisional `named` of v0.4.11). `as` is
+   reserved, so `CapRef`'s optional `of OfArg` cannot absorb it. A `use`
+   takes no such tail: a named satisfaction is imported by its name. *)
 SatisfactionName
-    = "named" UPPER_IDENT
+    = "as" UPPER_IDENT
     ;
 
 SatisfiesSubject

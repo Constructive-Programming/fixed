@@ -1346,17 +1346,17 @@ This is required when the auto-derivation rules (§7.4) cannot uniquely produce 
 A satisfaction may be **named**:
 
 ```
-Money satisfies Ord named ByAmount:
+Money satisfies Ord as ByAmount:
     fn compare(other: Self) -> is Ordering = self.amount.compare(other.amount)
 ```
 
-(`named` is provisional, `spec/syntax_grammar.ebnf` §9.) A satisfaction's name lives with the type names of its package and is imported by `use` like one (`use shop.money.ByAmount`). An unnamed satisfaction has an automatic name (Rule 8.4.d), so every level of the resolution order below can choose it.
+(The word is `as`, the owner's decision of the fourth round of P6; earlier drafts wrote `named`. `spec/syntax_grammar.ebnf` §9.) A satisfaction's name lives with the type names of its package and is imported by `use` like one (`use shop.money.ByAmount`). An unnamed satisfaction has an automatic name (Rule 8.4.d), so every level of the resolution order below can choose it.
 
 A satisfaction is **in scope** at a site where a `use` brings it in, or when it is declared in the site's own package. Derived satisfactions (§7.4), built-in ones (§6.6, and those the compiler provides for primitive types) and the prelude's satisfactions (`spec/stdlib.md` §5) are always in scope. A site **sees** a satisfaction that is in scope there; every other document uses "sees" in this sense. A `use` brings a satisfaction in with a `satisfies` clause:
 
 ```
 use shop.box.Box satisfies Optional           // the type and the satisfaction
-use shop.money.Money satisfies Ord named ByAmount
+use shop.money.ByAmount                       // a named satisfaction, by its name
 ```
 
 Without the `satisfies` clause, a `use` imports only the type, and its satisfactions are not in scope, except those that are always in scope.
@@ -1372,7 +1372,7 @@ Otherwise the site is ambiguous, and that is an error (`E061`) when its package 
 
 **Derived and unnamed satisfactions get no preference.** A derived satisfaction (§7.4, `spec/stdlib.md` §5) counts like a declared one, and an unnamed satisfaction like a named one. A pair that has a derived satisfaction and a named one in scope has two, and a site that no `using` decides is ambiguous. Declaring a named satisfaction for a pair that already has one therefore makes every site that sees both ambiguous until a `using` chooses. A `using` always names a satisfaction by a name.
 
-**Rule 8.4.d (Automatic names).** A satisfaction declared without `named` has an automatic name, and `using` selects it by that name. There are two prefixes, each followed by the name of the type and the name of the capability.
+**Rule 8.4.d (Automatic names).** A satisfaction declared without a name (`as X`) has an automatic name, and `using` selects it by that name. There are two prefixes, each followed by the name of the type and the name of the capability.
 
 - `Default…` names the unnamed satisfaction of the pair: `DefaultMoneyOrd`.
 - `Derived…` names the satisfaction the compiler derives for the pair (§7.4), where it derives one: `DerivedMoneyOrd`.
@@ -1385,7 +1385,7 @@ Three cases follow.
 | only an unnamed satisfaction with a written body (the compiler derives none) | the written one | not declared |
 | both | the written one | the derived one |
 
-In the third case the two are separate satisfactions, and `using DerivedMoneyOrd` selects the derived one. `Default…` shadows `Derived…`: a site that no `using` decides takes the written one, as it does today, where a written body replaces the derivation, and the two are not ambiguous with each other. A program should in general name `Default…`. Against a `named` satisfaction the rule above is unchanged: no preference. (Confirmed by the owner.) (Owner's decisions, fourth round of P6: the automatic name replaces the pair form `using Money satisfies Ord`; the two prefixes and the three cases are the owner's.)
+In the third case the two are separate satisfactions, and `using DerivedMoneyOrd` selects the derived one. `Default…` shadows `Derived…`: a site that no `using` decides takes the written one, as it does today, where a written body replaces the derivation, and the two are not ambiguous with each other. A program should in general name `Default…`. Against a named satisfaction the rule above is unchanged: no preference. (Confirmed by the owner.) (Owner's decisions, fourth round of P6: the automatic name replaces the pair form `using Money satisfies Ord`; the two prefixes and the three cases are the owner's.)
 
 1. The name of a primitive type is capitalised in the automatic name: `i64` gives `I64`. (Confirmed by the owner.)
 2. Where the satisfaction states arguments of the capability, the name expands with `Of` and the arguments: `List satisfies Sequencing of u8` is `DerivedListSequencingOfU8`, beside `DerivedListSequencingOfChar`. A satisfaction that leaves the arguments to its own parameters adds nothing. (Owner's decision.) Several arguments follow in written order with no separator, `Store satisfies Map of (String, u64)` is `DefaultStoreMapOfStringU64`; an argument that is itself an applied type is spelled the same way, `OfListOfU8` (confirmed by the owner).
@@ -1436,9 +1436,9 @@ fn sortAll(xs: List of (T is Ord)) -> List of T = sort(xs)   // accepted
 ```
 data Money(amount: i64, date: Date)
 
-Money satisfies Ord named ByAmount:
+Money satisfies Ord as ByAmount:
     fn compare(other: Self) -> is Ordering = self.amount.compare(other.amount)
-Money satisfies Ord named ByDate:
+Money satisfies Ord as ByDate:
     fn compare(other: Self) -> is Ordering = self.date.compare(other.date)
 
 fn biggest(xs: is Sequencing of Money) -> is Sequencing of Money =
@@ -1467,11 +1467,11 @@ decides the sites of the application package (level 3). It decides no site of a 
 **Rule 8.4.c (A satisfaction where one already exists).** A package's satisfaction of a (type, capability) pair that already has a built-in satisfaction (`i64 satisfies Eq`) or a satisfaction declared by the prelude (`List satisfies Show`) must carry a name:
 
 ```
-i64 satisfies Eq named Loose:
+i64 satisfies Eq as Loose:
     fn eq(other: i64) = self / 10 == other / 10
 ```
 
-An unnamed one is `error[E066]: <type> already satisfies <capability>; add `named X``. The rule covers every type of the prelude, not only the scalar types.
+An unnamed one is `error[E066]: <type> already satisfies <capability>; add `as X``. The rule covers every type of the prelude, not only the scalar types.
 
 1. Where no `using` applies, the built-in or prelude satisfaction is the one in force. It is the default of its pair and is not ambiguous with a named one. (For a package's own types Rule 8.4.a is unchanged: a derived and a named satisfaction of one pair are ambiguous without a `using`.)
 2. The named satisfaction is selected by `using` in every form of Rule 8.4: at a call site, in a type (`Set of i64[Eq = Loose]`), at file scope and at package scope (`package.fixed`, which in the application package is the application root). Scalar types have no narrower rule.
