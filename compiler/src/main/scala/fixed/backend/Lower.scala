@@ -571,8 +571,9 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
         (symbols(cap).name, m.method, args) match
           case ("Concat", "concat", List(arg)) =>
             expr(m.receiver, sc)(r => expr(arg, sc)(a => runtime("fx_str_concat", List(r, a), m, sc)(k)))
-          case ("Show", "show", Nil) if Lower.scalar(recvType).isDefined || isStringType(recvType) =>
-            expr(m.receiver, sc)(r => show(r, recvType, m, sc)(k))
+          case ("Show", "show", Nil)
+              if Lower.scalar(recvType).isDefined || isStringType(recvType) || dataOf(recvType).isDefined =>
+            expr(m.receiver, sc)(r => showValue(recvType, r)(k))
           case ("Numeric", "negate", Nil) if Lower.scalar(recvType).isDefined =>
             expr(m.receiver, sc)(r => bind(Rhs.Prim(PrimOp.Neg, List(r)), m, sc)(k))
           case (c, name, List(arg)) if Lower.scalar(recvType).isDefined && Tables.scalarBinary.contains((c, name)) =>
@@ -701,19 +702,6 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
           )
         )
       case None => unsupported(m.span, s"`${m.method}` on ${symbols.render(recvType)}", k)
-
-  private def show(r: Atom, receiver: Type, m: Tree, sc: Scope)(k: K): Expr =
-    def widened(name: String, to: CType) =
-      if r.tpe == to then runtime(name, List(r), m, sc)(k)
-      else
-        val w = fresh("w", to)
-        Expr.Let(w, Rhs.Prim(PrimOp.Widen, List(r)), runtime(name, List(w), m, sc)(k))
-    (r.tpe, Lower.formatter(r.tpe, receiver == Type.PrimType("char"))) match
-      case (_, Some((f, to))) => widened(f, to)
-      case (CType.Unit, _)    => k(Atom.StrC("()"))
-      case (CType.Boxed, _)   => k(r)
-      case (_: CType.Slot, _) => unsupported(m.span, "`show` on a value of parameter type", k)
-      case _                  => unsupported(m.span, s"`show` on ${symbols.render(receiver)}", k)
 
   /** Data constructors, derived `unfold`, capability constructors resolved by the typer (through the
     * table of a type parameter when the value is one, Rule CM4.5), and the runtime effects. ponytail: `Console` is matched by name; effect resolution arrives with

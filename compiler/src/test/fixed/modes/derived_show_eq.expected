@@ -1,0 +1,11 @@
+Node(Leaf, 3, Node(Leaf, 4, Leaf))
+Node(Leaf, 3, Node(Leaf, 4, Leaf))
+Node(Leaf, st, Leaf)
+Tagged(pt, true, 1.5, z)
+true
+false
+true
+false
+false
+true
+false

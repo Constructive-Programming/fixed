@@ -499,8 +499,8 @@ class WitnessSuite extends munit.FunSuite:
       Left("`bool` does not define `Numeric.fromI64`")
     )
     assertEquals(
-      Lower(unit).table(data("List", prim("u64")), symbols.scope("Eq")),
-      Left("`List of u64` does not define `Eq.eq`")
+      Lower(unit).table(data("List", prim("u64")), symbols.scope("Numeric")),
+      Left("`List of u64` does not define `Numeric.fromI64`")
     )
     val a = fixed.core.Type.TypeRef(symbols.typeParamsOf(symbols.scope("List")).head, Nil)
     assert(Lower(unit).table(data("List", a), symbols.scope("Folding")).left.exists(_.contains("run time")))

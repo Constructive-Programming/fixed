@@ -58,18 +58,68 @@ private[backend] trait Satisfied extends Generated:
       case _                       => false
 
   /** `l == r` on boxed values of type `t`: the runtime's string comparison for `String`, the body of
-    * the program's `t satisfies Eq` for a data type.
+    * the program's `t satisfies Eq` for a data type, else its derived `eq` ([[derivedEq]]).
     */
   protected def equality(t: Type, l: Atom, r: Atom): Option[Rhs] =
     if isStringType(t) then Some(Rhs.Call("fx_str_eq", List(l, r), runtime = true))
     else
-      for
-        (data, args) <- dataOf(t)
-        eq <- symbols.scope.get("Eq").flatMap(symbols.membersOf(_).find(_.name == "eq"))
-        if hasBody(t, eq.id, fromPrelude = false)
-      yield
-        val (f, ws) = member(data, args, None)((a, _) => satisfactionBody(data, eq.id, a, Type.UnitType).get)
-        Rhs.Call(f, ws ++ List(l, r), runtime = false)
+      val body =
+        for
+          (data, args) <- dataOf(t)
+          eq <- symbols.scope.get("Eq").flatMap(symbols.membersOf(_).find(_.name == "eq"))
+          if hasBody(t, eq.id, fromPrelude = false)
+        yield
+          val (f, ws) = member(data, args, None)((a, _) => satisfactionBody(data, eq.id, a, Type.UnitType).get)
+          Rhs.Call(f, ws ++ List(l, r), runtime = false)
+      body.orElse(knownDerived(t, derivedEq).map(Rhs.Call(_, List(l, r), runtime = false)))
+
+  /** The derived member `gen` builds for data type `t` (Rule 7.4), at known arguments only: a field
+    * of a type parameter's type would need that parameter's `Show` or `Eq` table, which these
+    * members do not take.
+    */
+  protected def knownDerived(t: Type, gen: (SymbolId, List[Type]) => String): Option[String] =
+    dataOf(t).filter(_ => typeParamsIn(t).isEmpty).map(gen.tupled)
+
+  /** `v` of type `t` shown (Rule 7.4, [[derivedShow]]): a scalar by the runtime, `()` as `"()"`, a
+    * `String` as it is, a data type by the program's `satisfies Show` body or else its derived
+    * `show`; anything else is a problem (`B005`).
+    */
+  protected def showValue(t: Type, v: Atom)(k: K): Expr =
+    val s = fresh("s", CType.Boxed)
+    def call(f: String, a: Atom) = Expr.Let(s, Rhs.Call(f, List(a), runtime = true), k(s))
+    Lower.formatter(v.tpe, t == Type.PrimType("char")) match
+      case Some((f, to)) if to == v.tpe => call(f, v)
+      case Some((f, to))                =>
+        val w = fresh("w", to)
+        Expr.Let(w, Rhs.Prim(PrimOp.Widen, List(v)), call(f, w))
+      case None if v.tpe == CType.Unit => k(Atom.StrC("()"))
+      case None if isStringType(t)     => k(v)
+      case None                        =>
+        val show = symbols.scope.get("Show").flatMap(symbols.membersOf(_).find(_.name == "show"))
+        val body = show.filter(m => hasBody(t, m.id, fromPrelude = false)).flatMap(m =>
+          dataOf(t).map((data, args) =>
+            member(data, args, None)((a, _) => satisfactionBody(data, m.id, a, Type.UnitType).get)
+          )
+        )
+        body.orElse(knownDerived(t, derivedShow).map(_ -> Nil)) match
+          case Some((f, ws)) => Expr.Let(s, Rhs.Call(f, ws :+ v, runtime = false), k(s))
+          case None          =>
+            report(s"`show` on ${symbols.render(t)}")
+            k(Atom.StrC(""))
+
+  /** Whether `a` and `b` of type `t` are equal: units always, scalars by a comparison, else by
+    * [[equality]]; a type it cannot compare is a problem (`B005`).
+    */
+  protected def equalValues(t: Type, a: Atom, b: Atom)(k: K): Expr =
+    val r = fresh("eq", CType.Bool)
+    if a.tpe == CType.Unit then k(Atom.BoolC(true))
+    else if !a.tpe.counted then Expr.Let(r, Rhs.Prim(PrimOp.Eq, List(a, b)), k(r))
+    else
+      equality(t, a, b) match
+        case Some(rhs) => Expr.Let(r, rhs, k(r))
+        case None      =>
+          report(s"`==` on ${symbols.render(t)}")
+          k(Atom.BoolC(false))
 
   /** The function of the `satisfies` body that defines capability member `member` for `data`,
     * built at `data`'s arguments `args` and, for a member with a type parameter of its own, at `r`

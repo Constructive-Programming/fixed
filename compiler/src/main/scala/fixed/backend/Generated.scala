@@ -7,7 +7,8 @@ import fixed.util.Span
 /** Members the compiler derives or generates as Core functions: Rule 7.4.a `fold` (through functors
   * per Rule 7.4.a.1), Rule 7.4.b `unfold`, Rule 7.4.c `map`, and for list-shaped data
   * `Folding.fold`, `length` and `find`: one baseline version per data type, at its own parameters,
-  * and clones at known arguments ([[member]]).
+  * and clones at known arguments ([[member]]). The derived `show` and `eq` are built at known
+  * arguments only.
   * Arguments that are type parameters make a polymorphic member with hidden witness parameters
   * ([[hidden]]).
   */
@@ -44,6 +45,12 @@ private[backend] trait Generated:
 
   /** The anonymous bound each implicit type parameter of a baseline version stands for (`Lower.baselineOf`). */
   protected def implicitBounds: collection.Map[Type, Type]
+
+  /** `v`, a value of type `t`, shown: `k` gets the `String` ([[Satisfied]]). */
+  protected def showValue(t: Type, v: Atom)(k: K): Expr
+
+  /** Whether `a` and `b`, values of type `t`, are equal: `k` gets the `bool` ([[Satisfied]]). */
+  protected def equalValues(t: Type, a: Atom, b: Atom)(k: K): Expr
 
   /** Record `x`'s typer type for `Demands`; returns `x`. */
   protected def typed(x: Var, t: Type, span: Span): Var
@@ -245,6 +252,53 @@ private[backend] trait Generated:
           )
       }
       Fn(name, ws ++ List(acc, done), CType.Boxed, switch(acc, branches, CType.Boxed))
+    }
+
+  /** Rule 7.4 derived `show` (`spec/stdlib.md` §4.10) at known arguments: a variant without
+    * fields shows its name, another `Name(f1, f2, ...)`, each field shown by [[showValue]].
+    * ponytail: each concatenation copies the string so far, quadratic in the size of the value;
+    * collect the parts and join them once if large values are shown.
+    */
+  protected def derivedShow(data: SymbolId, args: List[Type]): String =
+    val (name, t) = (generatedName(data, args, "show", ""), Type.TypeRef(data, args))
+    instance(name) {
+      val x = typed(fresh("x", CType.Boxed), t, Span.NoSpan)
+      val concat = (a: Atom, b: Atom) => bound(Rhs.Call("fx_str_concat", List(a, b), runtime = true), CType.Boxed)
+      def fields(fs: List[(Type, Var)], acc: Atom, first: Boolean): Expr =
+        fs match
+          case Nil             => concat(acc, Atom.StrC(")"))(Expr.Ret(_))
+          case (ft, v) :: rest =>
+            val sep: K => Expr = if first then _(acc) else concat(acc, Atom.StrC(", "))
+            sep(a => showValue(ft, v)(s => concat(a, s)(fields(rest, _, first = false))))
+      val branches = perVariant(data, args, x, Span.NoSpan) { (tag, loaded) =>
+        val ctor = symbols.variantsOf(data).toList(tag).name
+        if loaded.isEmpty then Expr.Ret(Atom.StrC(ctor)) else fields(loaded, Atom.StrC(s"$ctor("), first = true)
+      }
+      val shown = switch(x, branches, CType.Boxed)
+      Fn(name, List(x), CType.Boxed, shown)
+    }
+
+  /** Rule 7.4 derived `eq` (`spec/stdlib.md` §4.7, component-wise) at known arguments: the same
+    * variant, and each pair of fields equal by [[equalValues]]. ponytail: the variants are compared
+    * by a switch in a switch, quadratic in their number; compare tags once Core can read one.
+    */
+  protected def derivedEq(data: SymbolId, args: List[Type]): String =
+    val (t, span) = (Type.TypeRef(data, args), Span.NoSpan)
+    val name = generatedName(data, args, "eq", "")
+    instance(name) {
+      val (a, b) = (typed(fresh("a", CType.Boxed), t, span), typed(fresh("b", CType.Boxed), t, span))
+      def all(pairs: List[((Type, Var), (Type, Var))]): Expr =
+        pairs match
+          case Nil                       => Expr.Ret(Atom.BoolC(true))
+          case ((ft, x), (_, y)) :: rest =>
+            equalValues(ft, x, y)(r => result(Rhs.If(r, all(rest), Expr.Ret(Atom.BoolC(false))), CType.Bool))
+      val branches = perVariant(data, args, a, span) { (tag, as) =>
+        val inner = perVariant(data, args, b, span) { (other, bs) =>
+          if other == tag then all(as.zip(bs)) else Expr.Ret(Atom.BoolC(false))
+        }
+        switch(b, inner, CType.Bool)
+      }
+      Fn(name, List(a, b), CType.Bool, switch(a, branches, CType.Bool))
     }
 
   /** A part of a field that a generated member rebuilds: its type before and after, and how to

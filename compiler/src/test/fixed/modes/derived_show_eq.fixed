@@ -1,0 +1,37 @@
+// Derived Show and Eq (Rule 7.4): a recursive type, a parameterised one through a polymorphic
+// function (its capability table), and a field whose type has its own `satisfies Show` and `Eq`.
+use std.io.Console
+
+data Tree of A:
+    Leaf
+    Node(left: Tree of A, value: A, right: Tree of A)
+
+data Pt:
+    Pt(x: u64, name: String)
+
+Pt satisfies Show:
+    fn show = "pt"
+
+Pt satisfies Eq:
+    fn eq(other: Pt) = self.x == other.x
+
+data Tagged:
+    Tagged(p: Pt, ok: bool, f: f64, c: char)
+
+fn describe(x: T is Show) -> String = x.show()
+
+fn same(a: T is Eq, b: T) -> bool = a == b
+
+fn main() -> () with Console =
+    let t = Tree.Node(Tree.Leaf, 3, Tree.Node(Tree.Leaf, 4, Tree.Leaf))
+    Console.printLine(t.show())
+    Console.printLine(describe(t))
+    Console.printLine(describe(Tree.Node(Tree.Leaf, "s".concat("t"), Tree.Leaf)))
+    Console.printLine(Tagged.Tagged(Pt.Pt(1, "a"), true, 1.5, 'z').show())
+    Console.printLine((t == t).show())
+    Console.printLine((t == Tree.Node(Tree.Leaf, 3, Tree.Leaf)).show())
+    Console.printLine(same(t, Tree.Node(Tree.Leaf, 3, Tree.Node(Tree.Leaf, 4, Tree.Leaf))).show())
+    Console.printLine((Pt.Pt(1, "a") != Pt.Pt(1, "b")).show())
+    Console.printLine(same(t, Tree.Node(Tree.Leaf, 3, Tree.Leaf)).show())
+    Console.printLine((Tagged.Tagged(Pt.Pt(1, "a"), true, 1.5, 'z') == Tagged.Tagged(Pt.Pt(1, "b"), true, 1.5, 'z')).show())
+    Console.printLine((Tagged.Tagged(Pt.Pt(1, "a"), true, 1.5, 'z') == Tagged.Tagged(Pt.Pt(2, "a"), true, 1.5, 'z')).show())

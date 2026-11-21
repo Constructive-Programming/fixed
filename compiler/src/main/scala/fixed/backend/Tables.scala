@@ -146,6 +146,8 @@ private[backend] trait Tables extends Satisfied:
       case (Some("Sequencing"), "length", _) if list =>
         Some(adapter(name, length(data, own, Type.PrimType("u64"), Span.NoSpan), args, own))
       case (Some("Functor"), "map", Some(b)) => Some(adapter(name, derivedMap(data, own, b, Span.NoSpan), args, own))
+      case (Some("Show"), "show", _)         => knownDerived(t, derivedShow).map(adapter(name, _, args, own))
+      case (Some("Eq"), "eq", _)             => knownDerived(t, derivedEq).map(adapter(name, _, args, own))
       case _                                 => body(fromPrelude = true))
 
   /** An auto-flat-struct's entry `name` (`spec/type_system.md` §6.6): its constructor `ctor` builds
