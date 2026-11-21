@@ -1,0 +1,131 @@
+// Exclusivity across closures, abort payloads and handler results, and fields of fields
+// (adversarial programs for Versions.construct and Demands): each value kept is printed after the
+// call that would overwrite it if it were taken as exclusive.
+use std.io.Console
+
+data L:
+    E
+    C(h: u64, t: L)
+
+data P:
+    P(a: L, b: L)
+
+data Q:
+    Q(p: P, n: u64)
+
+fn total(xs: L) -> u64 =
+    match xs:
+        L.C(h, t) => h + total(t)
+        L.E => 0
+
+fn incl(xs: L) -> L =
+    match xs:
+        L.C(h, t) => L.C(h + 1, incl(t))
+        L.E => L.E
+
+fn build(n: u64) -> L = L.C(n, L.C(n + 1, L.C(n + 2, L.E)))
+
+fn sum(p: P) -> u64 =
+    match p:
+        P.P(a, b) => total(a) * 1000 + total(b)
+
+fn incb(p: P) -> P =
+    match p:
+        P.P(a, b) => P.P(incl(a), incl(b))
+
+fn apply(f: () -> L) -> L = f()
+
+fn applyTo(f: L -> L, x: L) -> L = f(x)
+
+fn ident(x: L) -> L = x
+
+fn thrower(xs: L) -> u64 with Fail of L = Fail.fail(xs)
+
+fn keep(xs: L) -> L with Fail of L = xs
+
+fn viaReturn(xs: L) -> u64 =
+    handle keep(xs):
+        Fail.fail(p) => total(p)
+        return(v) => total(incl(v))
+
+fn viaPayload(xs: L) -> u64 =
+    handle thrower(xs):
+        Fail.fail(p) => total(incl(p))
+        return(v) => v
+
+fn partThrower(p: P) -> u64 with Fail of L =
+    match p:
+        P.P(a, _) => Fail.fail(a)
+
+fn viaPart(p: P) -> u64 =
+    handle partThrower(p):
+        Fail.fail(q) => total(incl(q))
+        return(v) => v
+
+fn inner(q: Q) -> L =
+    match q:
+        Q.Q(p, _) =>
+            match p:
+                P.P(a, _) => a
+
+fn bumpInner(q: Q) -> Q =
+    match q:
+        Q.Q(p, n) => Q.Q(incb(p), n + 1)
+
+fn sumq(q: Q) -> u64 =
+    match q:
+        Q.Q(p, n) => sum(p) + n
+
+fn main() -> () with Console =
+    Console.printLine(total(incl(build(1))).show())
+    let xs = build(1)
+    let f = () -> xs
+    Console.printLine(total(incl(f())).show())
+    Console.printLine(total(xs).show())
+    let ys = build(1)
+    let g = () -> total(ys)
+    Console.printLine(total(incl(ys)).show())
+    Console.printLine(g().show())
+    let zs = build(1)
+    Console.printLine(total(incl(apply(() -> zs))).show())
+    Console.printLine(total(zs).show())
+    let ws = build(1)
+    Console.printLine(total(incl(applyTo((x) -> x, ws))).show())
+    Console.printLine(total(ws).show())
+    let vs = build(1)
+    let h = (x: L) -> incl(x)
+    Console.printLine(total(h(vs)).show())
+    Console.printLine(total(vs).show())
+    let us = build(1)
+    let k = (x: L) -> P.P(x, us)
+    Console.printLine(sum(incb(k(us))).show())
+    Console.printLine(total(us).show())
+    let xs = build(1)
+    Console.printLine(viaReturn(xs).show())
+    Console.printLine(total(xs).show())
+    let ys = build(1)
+    Console.printLine(viaPayload(ys).show())
+    Console.printLine(total(ys).show())
+    let p = P.P(build(1), build(10))
+    Console.printLine(viaPart(p).show())
+    Console.printLine(sum(p).show())
+    Console.printLine(viaReturn(build(1)).show())
+    Console.printLine(viaPayload(build(1)).show())
+    Console.printLine(sumq(bumpInner(Q.Q(P.P(build(1), build(10)), 0))).show())
+    let xs = build(1)
+    let q = Q.Q(P.P(xs, build(10)), 0)
+    Console.printLine(sumq(bumpInner(q)).show())
+    Console.printLine(total(xs).show())
+    let q2 = Q.Q(P.P(build(1), build(10)), 0)
+    let a = inner(q2)
+    Console.printLine(sumq(bumpInner(q2)).show())
+    Console.printLine(total(a).show())
+    let q3 = Q.Q(P.P(build(1), build(10)), 0)
+    match q3:
+        Q.Q(p, _) =>
+            Console.printLine(sumq(bumpInner(q3)).show())
+            Console.printLine(sum(p).show())
+    let ys = build(1)
+    let q4 = Q.Q(P.P(ys, ys), 0)
+    Console.printLine(sumq(bumpInner(q4)).show())
+    Console.printLine(total(ys).show())

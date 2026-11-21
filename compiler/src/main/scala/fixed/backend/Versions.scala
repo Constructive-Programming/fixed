@@ -291,8 +291,8 @@ final class Versions(
   /** A program point: the variables live after it, the path facts and the ownership so far. */
   final private case class At(live: Set[String], ctx: d.Ctx, owns: Map[String, Own]):
     /** Ownership of `a` here: shared if another live value or an earlier keep holds it, directly or
-      * through an ancestor. A live part of `a` does not share `a`'s own cell; a call that would
-      * overwrite that part is caught by the aliasing test ([[Demands.exclusive]]).
+      * through an ancestor. Neither `a`'s own liveness nor a live part of it shares it: a user of the
+      * result must also run the aliasing test ([[Demands.exclusive]]), as a call and a branch do.
       */
     def own(a: Atom): Own =
       a match
@@ -306,7 +306,10 @@ final class Versions(
 
   private def walk(e: Expr, ctx: d.Ctx, owns: Map[String, Own]): (Expr, Own) =
     e match
-      case Ret(a)            => (e, At(ctx.after, ctx, owns).own(a))
+      case Ret(a) =>
+        /** A branch result overlapping a value live after the join (or a keep) is a second reference to it. */
+        val alias = Core.countedVar(a).exists(v => !d.exclusive(v.name, List(v.name), ctx.after, ctx))
+        (e, if alias then Own.shared else At(ctx.after, ctx, owns).own(a))
       case Let(x, rhs, body) =>
         val live = (d.names(body) - x.name) ++ ctx.after
         val (rhs2, ox) = right(x, rhs, At(live, ctx, owns))

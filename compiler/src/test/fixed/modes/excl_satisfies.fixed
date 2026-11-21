@@ -1,0 +1,51 @@
+// Exclusivity through `satisfies` bodies written in source (Versions.walk): a `filter` that rebuilds
+// its receiver, and the prelude's `Maybe.find`, which returns `self` from a branch; each value kept
+// is printed after the call that would overwrite it if it were taken as exclusive.
+use std.io.Console
+
+data Stack of A:
+    Push(top: A, rest: Stack of A)
+    Empty
+
+Stack satisfies Filtering:
+    fn filter(pred: Part -> bool) = match self:
+        Stack.Push(h, t) => if pred(h): Stack.Push(h, t.filter(pred)) else: t.filter(pred)
+        Stack.Empty => Stack.Empty
+
+fn sum(s: Stack of u64) -> u64 =
+    match s:
+        Stack.Push(h, t) => h + sum(t)
+        Stack.Empty => 0
+
+fn build(n: u64) -> Stack of u64 = Stack.Push(n, Stack.Push(n + 1, Stack.Push(n + 2, Stack.Empty)))
+
+fn keepOdd(s: Stack of u64) -> Stack of u64 = s.filter((x) -> x % 2 == 1)
+
+fn incs(s: Stack of u64) -> Stack of u64 =
+    match s:
+        Stack.Push(h, t) => Stack.Push(h + 1, incs(t))
+        Stack.Empty => Stack.Empty
+
+fn inner(m: Maybe of Stack of u64) -> Stack of u64 =
+    match m:
+        Maybe.Just(s) => s
+        Maybe.Nothing => Stack.Empty
+
+fn main() -> () with Console =
+    Console.printLine(sum(keepOdd(build(1))).show())
+    let s = build(1)
+    Console.printLine(sum(keepOdd(s)).show())
+    Console.printLine(sum(s).show())
+    let t = build(1)
+    let f = keepOdd(t)
+    Console.printLine(sum(incs(f)).show())
+    Console.printLine(sum(t).show())
+    let m = Maybe.Just(build(1))
+    let r = m.find((x) -> sum(x) > 0)
+    Console.printLine(sum(incs(inner(r))).show())
+    Console.printLine(sum(inner(m)).show())
+    let u = build(1)
+    let w = Maybe.Just(u).find((x) -> sum(x) > 0)
+    Console.printLine(sum(incs(inner(w))).show())
+    Console.printLine(sum(u).show())
+    Console.printLine(sum(incs(inner(Maybe.Just(build(1)).find((x) -> sum(x) > 0)))).show())
