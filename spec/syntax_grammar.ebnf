@@ -496,10 +496,11 @@ UsingDecl
     = "using" SatisfactionRef ( "," SatisfactionRef )*
     ;
 
-(* A named satisfaction by its name; an unnamed or derived one by its
-   pair (`using Money satisfies Ord`), v0.4.13. *)
+(* Always a name: the `named` one, or the automatic name of an unnamed
+   satisfaction, `DerivedMoneyOrd` (spec/type_system.md Rule 8.4.d). The
+   pair form of v0.4.13 is withdrawn. *)
 SatisfactionRef
-    = UPPER_IDENT ( "satisfies" CapRef )?
+    = UPPER_IDENT
     ;
 
 
