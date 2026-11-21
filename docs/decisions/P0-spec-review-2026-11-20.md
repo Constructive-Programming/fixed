@@ -129,32 +129,40 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
 - `Json` had no `Show` or `Eq` in the prelude. **Fixed**: its fields carry `Show + Eq` as `spec/stdlib.md` §3.2 says, and `Json` satisfies both again in the typer; the backend part is the missing derived `Show` and `Eq` above.
 - A prelude name was resolved through the program's scope: the types `Tuple`, `List`, `String`, `Nat`, `Maybe` and `Result`, capabilities matched by name in the typer, the derivation rules and the backend, prelude functions by name, and prelude bodies typed in the program's scope. A program that declared one of those names broke typing, crashed the diagnostic formatter, silently used its own entity (`cap Show` with `u64 satisfies Show` printed `5`), or lost all the prelude's `satisfies` bodies.
   - **Fixed** (`SymbolTable.prelude`, `TyperPhase.inPrelude`, `Namer.unshadowed`, the `inPrelude`/`globals` scope in `backend/Satisfied.scala`, `QuantityPhase`): the prelude is typed, walked and lowered in its own scope. Literals, tuples, operators, compiler-provided table entries and the derivation rules name the prelude's entities. Every shadowed prelude declaration is renamed `prelude.<name>`. A program's own `cap Show` or `cap Functor` is not derived (example 06 now uses the prelude's `Functor`). In the program, a member of a program capability is preferred over a prelude capability's member of the same name. In the prelude's code only prelude capabilities and data types are candidates (Rule 8.6). A problem in prelude code is labelled "in the prelude:" without a span, and a span past the end of the file is formatted without a position. The spec does not state these readings; they are open for the owner.
+- Bounds of `of` parameters were not checked in written types (`Tag of Box`, `with Ping of Box`, a field `Box of A` with `A` unbounded).
+  - **Fixed**: `Namer` records every applied type it resolves in `SymbolTable.written`; `Satisfaction.checkWritten` reports `T010` at the written type when the unit finishes.
+- Constructor resolution with no fitting candidate left the call abstract, and the unifier accepted an `is C` value wherever a concrete type was expected (`f(Ordering.gt)` with `f` taking a `Color` printed a pointer).
+  - **Fixed** (`Unifier`): the expected type must satisfy `C` (`T010`). `Satisfaction.adopt` lets obligations that hold solve capability arguments before literals default, which also makes `total([1, 2, 3])` with `xs: is Folding of u64` type-check.
+- Tuple patterns in `match` never matched.
+  - **Fixed** (`Lower.covers`, `Lower.bindPattern`, `Patterns.exhaustive`, Rule M4.2).
+- `3.add(4)` was `T005`, and `N.fromI64(...)` on a type parameter was typed `N of ?0` and refused by the backend.
+  - **Fixed** (`Members.candidates`, `Members.static`, `Lower.static`).
+- Two anonymous bounds printed the same in a type mismatch ("expected is Show, got is Show").
+  - **Fixed** (`Typer.mismatch`): each is named by the parameter it comes from.
 
 Found and not fixed:
 
 - A generic function that recurses at a growing data type through a table (`deep(Pair.Pair(p, p), n - 1)` with `T is Show`) overflows the compiler's stack.
-- A field type is not checked against the bounds of the type it names: `W(b: Box of A)` is accepted with `A` unbounded.
-- Tuple-literal patterns `(a, b)` never match.
 - A branch that returns a call to a `-> !` function fails at clang with a phi type error.
 - A type that refers to itself at other arguments gets only baseline versions of its generated members.
 - The result of a closure call is always taken as shared. Measured: 4.0 instructions per tested reuse, at most 0.30% on `records`. Left as it is.
 - A `satisfies` body on a primitive type is not lowered. A member with several type parameters of its own is `B005`. `Ord` through a table does not build `lt` and `le` from a user's `compare`.
-- Constructor resolution with no fitting candidate leaves the call abstract; a concrete expected type then receives a value of another type.
 - The stand-in representation rule cannot see what a function returns: `fn l() -> is Show = [1, 2]` miscompiles.
 - `Maybe` has no `Folding.fold` body and no generated member for it.
 - The type of a list literal is not specified. The typer gives it `List`; examples 02 and 11 assumed a collection that the compiler picks. Open for the owner.
-- Bounds of `of` parameters are not checked in written types (`Tag of Box`, `with Ping of Box`).
 - Signed `MIN / -1` and `MIN % -1` emit a bare `sdiv`/`srem`, which is undefined behaviour. The spec does not say what integer overflow does (trap, wrap or abort). Open for the owner.
-- A member called on a numeric literal (`3.add(4)`) is not resolved.
-- `N.fromI64(...)` on a type parameter is accepted by the typer and refused by the backend.
-- `i128` and `u128` do not satisfy `Numeric`, though `spec/stdlib.md` §4.9 says they do.
 - A prelude offset within the program file's length is shown at a wrong position, because spans carry no file.
 - `Console` and the runtime's effects are recognised by name (`Lower.static`, `Effects.runtimeNames`): a program's own `effect Console` is taken for the runtime's.
 - `Lower.nestedFn` finds a nested function by name and span.
-- A list literal does not take its element type from a bound: `total([1, 2, 3])` with `xs: is Folding of u64` fails with `T010 List of i64 does not satisfy Folding of u64`.
 - Trees, rose trees, snoc lists, the derived `fold` and the generated `length` still take one native frame per level; only derived `unfold` and `map` of linear data run as loops.
 - `Json` cannot use the derived `show` and `==`: its field `is Map of (String, Json)` has no representing data type, so lowering fails with `B005`.
 - A derived `Ord` is not built by the backend.
+- `i128` and `u128` do not satisfy `Numeric`, though `spec/stdlib.md` §4.9 says they do. The backend has no 128-bit integers: `Lower.scalar` stops at 64 bits, the runtime formats only 64-bit integers, and there is no boxed integer. Blocked on OQ-CM7.
+- The backend lowers no literal pattern: `match n: 0 => …` on a `u64` is `B005`, as is a literal inside a tuple or variant pattern.
+- An abstract value of another origin (a `-> is C` result, a field `x: is Show`, a parameter typed with a bare capability `C`) still reaches a concrete type that has `C` and runs with a wrong value: Rule 5.1.2 is not enforced.
+- The arguments of a capability bound are not compared by `Satisfaction.holds` when the satisfying type has none (`B is Sized of (u8, A)` accepts `Sized of (u8, u16)`).
+- Integer literals are not range-checked (`256` as a `u8` is 0).
+- `3.add(2.5)` reaches clang with an invalid constant, as `3 + 2.5` does.
 
 Limits and gaps of the first implementation, against the spec:
 
