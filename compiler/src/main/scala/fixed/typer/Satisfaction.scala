@@ -1,5 +1,7 @@
 package fixed.typer
 
+import scala.collection.immutable.{BitSet, IntMap}
+
 import fixed.core.{SymKind, SymbolId, Type, render}
 import fixed.util.{DiagCode, Span}
 
@@ -8,8 +10,9 @@ import fixed.util.{DiagCode, Span}
   * `holds` answers for one capability reference `C of args`: through an in-scope `satisfies`
   * declaration whose capability's closure contains `C`, through auto-derivation (Rule 7.4), or
   * through a type variable's or anonymous bound's own capabilities. Capability arguments are
-  * unified with what the satisfying type provides (its element arguments, right-aligned); the
-  * returned state carries those bindings.
+  * unified with what the satisfying type provides: the arguments its `satisfies` declaration
+  * writes, or else its element arguments, right-aligned. The returned state carries those
+  * bindings.
   */
 object Satisfaction:
 
@@ -25,7 +28,7 @@ object Satisfaction:
   /** Some capability in `bounds` reaches `cap` through its `extends` closure. */
   def boundsReach(s: TyperState, bounds: List[Type], cap: SymbolId): Boolean =
     Members.expandAliases(s.symbols, bounds).exists {
-      case Type.CapRef(c, _) => s.members.closure(c).contains(cap.toInt)
+      case Type.CapRef(c, _) => reaches(s, c, cap)
       case _                 => false
     }
 
@@ -55,17 +58,17 @@ object Satisfaction:
               case Type.TypeVar(_) => true
               case solved          => holds(s, solved, cap, Nil, assumed).isDefined
             val elements = !onRequest(s, cap) || recvArgs.forall(element)
-            if declared(s, Type.TypeRef(id, Nil), cap) && elements ||
-              (!onRequest(s, cap) && derived(s, id, cap, recvArgs, assumed))
-            then
-              withArgs(s, recvArgs, args)
+            val self = Type.TypeRef(id, Nil)
+            if declared(s, self, cap) && elements then withDeclared(s, self, recvArgs, cap, args)
+            else if !onRequest(s, cap) && derived(s, id, cap, recvArgs, assumed) then withArgs(s, recvArgs, args)
             else None
           case _ => Some(s)
-      case Type.PrimType(n) =>
-        val numeric = Members.isNumeric(s, Type.PrimType(n)) &&
-          s.symbols.prelude.get("Numeric").exists(nu => s.members.closure(nu).contains(cap.toInt))
+      case p @ Type.PrimType(n) =>
+        val numeric = Members.isNumeric(s, p) && s.symbols.prelude.get("Numeric").exists(reaches(s, _, cap))
         val clone = primitives(n) && onRequest(s, cap)
-        Option.when(numeric || clone || declared(s, Type.PrimType(n), cap))(s)
+        if numeric || clone then Some(s)
+        else if declared(s, p, cap) then withDeclared(s, p, Nil, cap, args)
+        else None
       case Type.IsBound(bs)       => Option.when(boundsReach(s, bs, cap))(s)
       case c @ Type.CapRef(_, _)  => Option.when(boundsReach(s, List(c), cap))(s)
       case Type.TypeVar(id)       => unsolved(s, id, cap)
@@ -279,3 +282,64 @@ object Satisfaction:
         provided.zip(capArgs).foldLeft(Option(s)) { case (acc, (p, a)) =>
           acc.flatMap(_.tryUnify(a, p))
         }
+
+  /** [[withArgs]] through the declared satisfactions of `self` that reach `cap`, `recvArgs` being
+    * the receiver's arguments. One that writes `cap`'s arguments, on its `satisfies` clause or on
+    * the `extends` clauses through which it reaches `cap`, provides those: `Bytes satisfies Sized
+    * of (u8, u16)` does not satisfy `Sized of (u8, u64)`. One that writes none provides the
+    * receiver's arguments. The obligation holds if it holds through one of them.
+    */
+  private def withDeclared(s: TyperState, self: Type, recvArgs: List[Type], cap: SymbolId, capArgs: List[Type])
+      : Option[TyperState] =
+    val dataParams = self match
+      case Type.TypeRef(d, _) => s.symbols.typeParamsOf(d).map(s.symbols(_).name).zip(recvArgs).toMap
+      case _                  => Map.empty[String, Type]
+    def introduced(t: Type): List[SymbolId] = t match
+      case Type.TypeRef(id, as) if s.symbols(id).kind == SymKind.TypeParam => id :: as.flatMap(introduced)
+      case other                                                           => other.children.flatMap(introduced)
+
+    /** The Namer owns a `satisfies` clause's type variables at the root (or the prelude): each is
+      * the data type's parameter of the same name, or else fresh.
+      */
+    def provided(clause: Type.CapRef): (TyperState, List[Type]) =
+      val named = introduced(clause).flatMap(p => dataParams.get(s.symbols(p).name).map(p.toInt -> _))
+      val sub = Members.Subst(IntMap.from(named), Set(SymbolId.Root, SymbolId.Prelude), part = recvArgs.lastOption)
+      val (s1, at) = Members.instantiate(s, clause, sub)
+      reaching(s1, clause.sym, at.children, cap, recvArgs, BitSet.empty).getOrElse((s, recvArgs))
+    if capArgs.isEmpty then Some(s)
+    else
+      Members.expandAliases(s.symbols, s.symbols.satisfactionsOf(self)).iterator
+        .collect { case clause @ Type.CapRef(c, _) if reaches(s, c, cap) => provided(clause) }
+        .flatMap((si, args) => withArgs(si, args, capArgs))
+        .nextOption()
+
+  /** The arguments `c of args` gives `cap`, itself or through the `extends` clauses of capabilities
+    * not in `seen`, if they are written. Where `c`'s arguments are not, they are the receiver's
+    * (`recvArgs`, right-aligned), or fresh where it has too few.
+    */
+  private def reaching(
+      s: TyperState,
+      c: SymbolId,
+      args: List[Type],
+      cap: SymbolId,
+      recvArgs: List[Type],
+      seen: BitSet
+  ): Option[(TyperState, List[Type])] =
+    if c == cap then Option.when(args.nonEmpty)((s, args))
+    else
+      val params = s.symbols.typeParamsOf(c)
+      val filled = if args.nonEmpty || recvArgs.size < params.size then args else recvArgs.takeRight(params.size)
+      val sub = Members.Subst(Members.Subst.of(params, filled), Set(c), part = recvArgs.lastOption)
+      val supers = s.symbols(c).info match
+        case Type.IsBound(bs) => Members.expandAliases(s.symbols, bs)
+        case _                => Nil
+      supers.iterator
+        .collect { case sup @ Type.CapRef(id, _) if reaches(s, id, cap) && !seen(id.toInt) => sup }
+        .flatMap { sup =>
+          val (s1, at) = Members.instantiate(s, sup, sub)
+          reaching(s1, sup.sym, at.children, cap, recvArgs, seen + c.toInt)
+        }
+        .nextOption()
+
+  /** `c`'s `extends` closure contains `cap`. */
+  private def reaches(s: TyperState, c: SymbolId, cap: SymbolId): Boolean = s.members.closure(c).contains(cap.toInt)

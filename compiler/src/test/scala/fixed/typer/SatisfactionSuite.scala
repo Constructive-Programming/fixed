@@ -2,7 +2,7 @@ package fixed.typer
 
 import fixed.core.{SymbolId, Type}
 import fixed.parsing.Parser
-import fixed.util.SourceFile
+import fixed.util.{DiagCode, SourceFile}
 
 class SatisfactionSuite extends munit.FunSuite:
 
@@ -79,3 +79,80 @@ class SatisfactionSuite extends munit.FunSuite:
     assert(holds(param("uses", "C"), "Folding"))
     assert(!holds(param("uses", "C"), "Numeric"))
     assert(Members.isNumeric(state, param("uses", "N")))
+
+  /** Index and body-type a whole unit, as `TyperPhase` does. */
+  private def typedUnit(code: String): TyperState =
+    val unit = Parser.parse(SourceFile.fromString("<unit>", code))
+    assert(!unit.hasErrors, unit.diagnostics)
+    val (table, namerDiags) = Namer.index(unit.tree)
+    assertEquals(namerDiags, Nil)
+    TyperPhase.typeBodies(unit.tree, table)
+
+  test("a bound's capability arguments must unify with the ones a declared satisfaction writes"):
+    /** `t` is written in, or reaches, every satisfaction but `C`'s; each call needs `u64` there.
+      * `D` writes no arguments for `Bytes`: its own argument, `t`, is `Bytes`'s.
+      */
+    def program(t: String) =
+      s"""|data B:
+          |    B(n: u64)
+          |B satisfies Sized of (u8, $t):
+          |    fn size = 0
+          |cap Bytes of (T is Numeric) extends Sized of (u8, T):
+          |    fn raw -> u64
+          |u32 satisfies Bytes of $t:
+          |    fn raw = 0
+          |    fn size = 0
+          |data C:
+          |    C(n: u64)
+          |C satisfies Bytes:
+          |    fn raw = 0
+          |    fn size = 0
+          |data D of (T is Numeric):
+          |    D(n: T)
+          |D satisfies Bytes:
+          |    fn raw = 0
+          |    fn size = 0
+          |cap Q extends R + Sized of (u8, $t):
+          |    fn q -> u64
+          |cap R extends Q:
+          |    fn r -> u64
+          |i16 satisfies Q:
+          |    fn q = 0
+          |    fn r = 0
+          |    fn size = 0
+          |data Store of V:
+          |    Store(v: V)
+          |Store satisfies Map of (String, V):
+          |    fn get(key: String) = Optional.some(self.v)
+          |cap Coll extends Sized of (Part, u64):
+          |    fn raw -> u64
+          |data Bag of A:
+          |    Bag(a: A)
+          |Bag satisfies Coll:
+          |    fn raw = 0
+          |    fn size = 0
+          |fn need(_b: is Sized of (u8, u64)) -> u64 = 0
+          |fn look(_m: is Map of (String, u64)) -> u64 = 0
+          |fn whole(_b: is Sized of (u64, u64)) -> u64 = 0
+          |fn sz(b: is Sized of (u8, S is Numeric)) -> S = b.size()
+          |fn f(x: u32, y: $t, z: i16) -> u64 =
+          |    need(B.B(1)) + need(x) + need(z) + look(Store.Store(y)) + whole(Bag.Bag(y)) + need(D.D(y)) +
+          |        need(C.C(1))
+          |fn g() -> u64 = sz(B.B(1))
+          |""".stripMargin
+    val bad = program("u16")
+    val calls = List(
+      "need(B.B(1))",
+      "need(x)",
+      "need(z)",
+      "look(Store.Store(y))",
+      "whole(Bag.Bag(y))",
+      "need(D.D(y))",
+      "sz(B.B(1))"
+    )
+    assertEquals(
+      typedUnit(bad).diags.map(d => (d.code, d.span.start)),
+      calls.map(c => (DiagCode.T010, bad.indexOf(c) + c.indexOf('(') + 1)),
+      bad
+    )
+    assertEquals(typedUnit(program("u64")).diags, Nil)
