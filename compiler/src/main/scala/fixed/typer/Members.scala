@@ -175,9 +175,12 @@ object Members:
       case t @ Type.PrimType(_) =>
         val numeric = if isNumeric(s, t) then s.symbols.prelude.get("Numeric").map(Type.CapRef(_, Nil)).toList else Nil
         capMember(s, s.symbols.satisfactionsOf(t) ++ numeric, t, name)
-      case t @ Type.CapRef(_, _)  => capMember(s, List(t), t, name)
-      case Type.IsBound(bs)       => capMember(s, bs, resolved, name)
-      case Type.TypeVar(id)       => capMember(s, s.unifier.boundsOf(id), resolved, name)
+      case t @ Type.CapRef(_, _) => capMember(s, List(t), t, name)
+      case Type.IsBound(bs)      => capMember(s, bs, resolved, name)
+      case Type.TypeVar(id)      =>
+        /** A numeric literal not solved yet has `Numeric`'s members: `3.add(4)`. */
+        val numeric = s.symbols.prelude.get("Numeric").filter(_ => s.unifier.numericVars(id)).map(Type.CapRef(_, Nil))
+        capMember(s, s.unifier.boundsOf(id) ++ numeric, resolved, name)
       case Type.AppliedVar(id, _) => capMember(s, s.unifier.boundsOf(id), resolved, name)
       case _                      => Nil
     val data = resolved match
@@ -296,12 +299,20 @@ object Members:
               .headOption
               .map(_())
       case SymKind.TypeParam =>
-        /** A type constructor variable: `M.pure(x)` is `M of typeof(x)`, whatever `M`'s bound says. */
+        /** A parameter bounded by a capability with a member that takes or gives a `Part` is a type
+          * constructor: `M.pure(x)` is `M of typeof(x)`, and so is `R.empty`. Otherwise a static
+          * member returns the parameter unapplied: `N.fromI64(300)` is `N`.
+          */
+        val bounds = boundsOf(s, owner)
+        val caps = bounds.collect { case Type.CapRef(c, _) => c }
+        val elementwise = caps.exists(c =>
+          MemberTables.table(s.symbols, c).values.exists(_.values.flatten.exists(e =>
+            mentions(e.member.info, Type.PartType)
+          ))
+        )
         val (s1, part) = s.fresh
-        val self = Type.TypeRef(owner, List(part))
-        capMember(s1, boundsOf(s, owner), self, name, SymKind.StaticMethod, Some(part))
-          .headOption
-          .map(_())
+        val self = Type.TypeRef(owner, if elementwise then List(part) else Nil)
+        capMember(s1, bounds, self, name, SymKind.StaticMethod, Option.when(elementwise)(part)).headOption.map(_())
       case SymKind.Cap =>
         val (s1, args) = freshArgs(s, owner) match
           case (si, Nil) =>

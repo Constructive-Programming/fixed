@@ -740,6 +740,15 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
               case Some(cap) if represent.constructor(cap.id).exists(_.name == s.method) =>
                 construct(0, args, s, sc)(k)
               case Some(effect) if effect.kind == SymKind.Effect => operation(s, effect.id, args, sc)(k)
+
+              /** `N.fromI64(n)`, `N is Numeric`: a new scalar (a `u64` is unsigned), a conversion, or its table. */
+              case None if s.method == "fromI64" && unit.typeOf(s).exists(numericParam) =>
+                expr(args.head, sc)(n =>
+                  ctype(result, s.span) match
+                    case CType.Int(64, _)              => bind(Rhs.Move(n), s, sc)(k)
+                    case _: CType.Int | _: CType.Float => bind(Rhs.Prim(PrimOp.Convert, List(n)), s, sc)(k)
+                    case _ => tableCall(result, symbols.prelude("Numeric"), "fromI64", List(n), s, sc)(k)
+                )
               case _ => unsupported(s.span, s"`${s.qualifier}.${s.method}`", k)
 
   private def construct(tag: Int, args: List[Tree], t: Tree, sc: Scope)(k: K): Expr =

@@ -343,7 +343,7 @@ object Typer:
             Members.candidates(s1, resolved, t.method) match
               case Nil =>
                 resolved match
-                  case Type.TypeVar(id) if s1.unifier.boundsOf(id).isEmpty =>
+                  case Type.TypeVar(id) if s1.unifier.boundsOf(id).isEmpty && !s1.unifier.numericVars(id) =>
                     (s1.unsupported(t.span, s"`.${t.method}` on a receiver of unknown type"), Type.NeverType)
                   case _ =>
                     Members.autoDerivedCap(s1, t.method) match
@@ -356,7 +356,7 @@ object Typer:
                           s1.error(
                             DiagCode.T001,
                             t.span,
-                            s"not found: member ${t.method} of ${show(s1, resolved)}",
+                            s"not found: member ${t.method} of ${shown(s1, resolved)}",
                             s1.symbols.prelude.get("Functor")
                               .filter(s1.symbols.membersOf(_).exists(_.name == t.method))
                               .flatMap(Members.notFunctor(s1.symbols, resolved, _))
@@ -382,6 +382,12 @@ object Typer:
                     requireBound(s2, needs(cap))
                   case _ => s2
                 (s3.copy(types = s3.types.resolved(t, winner.origin)), result)
+
+  /** A receiver's type in a message: a numeric literal not solved yet is not `?3`. */
+  private def shown(s: TyperState, t: Type): String =
+    t match
+      case Type.TypeVar(id) if s.unifier.numericVars(id) => "a numeric literal"
+      case _                                             => show(s, t)
 
   /** `T010`: `clone` on a concrete type that is not `Clone`; a data type has it only on request. */
   private def notCloned(s: TyperState, t: Type, span: Span): TyperState =

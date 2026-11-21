@@ -1,0 +1,27 @@
+// `Numeric` members on a literal receiver, and `N.fromI64` on a type parameter `N is Numeric`
+// (spec/stdlib.md §4.9): through its table, or at the instance's type once a default build
+// specialises it. 300 does not fit a `u8`: it wraps to 44; -1 as a `u64` is its largest value.
+use std.io.Console
+
+fn big(x: N is Numeric + Show) -> N = N.fromI64(300).add(x)
+
+fn conv(x: N is Numeric + Show, n: i64) -> String = N.fromI64(n).show().concat(" ").concat(x.show())
+
+fn main() -> () with Console =
+    Console.printLine(3.add(4).show())
+    Console.printLine(3.add(4).mul(2).negate.show())
+    Console.printLine(2.5.add(1.0).show())
+    Console.printLine(big(1).show())
+    Console.printLine(big(asU64(1)).show())
+    Console.printLine(big(asU8(1)).show())
+    Console.printLine(big(asF64(0.5)).show())
+    Console.printLine(conv(asU16(1), 7))
+    Console.printLine(wide(asU64(1)))
+
+fn wide(x: N is Numeric + Show) -> String =
+    N.fromI64(-1).show().concat(" ").concat(N.fromI64(-1).div(N.fromI64(2)).show()).concat(" ").concat(x.show())
+
+fn asU64(x: u64) -> u64 = x
+fn asU8(x: u8) -> u8 = x
+fn asU16(x: u16) -> u16 = x
+fn asF64(x: f64) -> f64 = x

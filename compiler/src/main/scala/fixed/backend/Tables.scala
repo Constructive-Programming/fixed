@@ -69,6 +69,13 @@ private[backend] trait Tables extends Satisfied:
     val tabled = caps.filter(Tables.members(symbols, _).nonEmpty)
     tabled.filterNot(c => tabled.exists(d => d != c && Tables.reached(symbols, d).contains(c)))
 
+  /** Whether `N.fromI64` on type parameter `p` is `Numeric`'s: `p` is bounded by the prelude's
+    * `Numeric` and by no other capability that declares a `fromI64` of its own.
+    */
+  protected def numericParam(p: Type): Boolean =
+    val (numeric, others) = boundCaps(p).partition(Tables.reached(symbols, _).contains(symbols.prelude("Numeric")))
+    numeric.nonEmpty && !others.exists(Tables.members(symbols, _).contains("fromI64"))
+
   /** The table parameter of type parameter `p` for capability `cap`. */
   protected def tableOf(p: Type, cap: SymbolId): Atom.Var =
     Atom.Var(s"t.${witnessVar(p).name.stripPrefix("w.")}.${symbols(cap).name}", CType.Table)

@@ -189,6 +189,17 @@ class TyperSuite extends munit.FunSuite:
       List((DiagCode.T020, partial.indexOf("match")))
     )
 
+  test("spec 4.9: Numeric members on a numeric literal and N.fromI64 on a type parameter"):
+    assertEquals(typed("3.add(4).mul(2)")._3, "i64")
+    assertEquals(typed("2.5.add(1.0)")._3, "f64")
+    val (s, t) = typedBody("fn f(x: N is Numeric) -> N = N.fromI64(300).add(x)\n")
+    assertEquals((s.diags, t), (Nil, "N"))
+    val code = "fn f() -> u64 = 3.concat(4)\n"
+    assertEquals(
+      typedUnit(code).diags.map(d => (d.code, d.span.start, d.message)),
+      List((DiagCode.T001, code.indexOf("3.concat"), "not found: member concat of a numeric literal"))
+    )
+
   test("M5: handle binds operation parameters; resume takes the operation's result"):
     val eff = "effect Ask:\n    fn ask(prompt: String) -> u64\nfn ignoreLen(s: String) -> u64 = 0\n"
     val ok = typedUnit(
