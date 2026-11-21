@@ -195,7 +195,7 @@ Every command uses this one table: the checker `fixed <file>...`, `fixed compile
 | `3` | scan error | package compile: scanner | `E001`–`E009` |
 | `4` | parse error | package compile: parser | `P001`–`P099` |
 | `5` | name error | package compile: namer and typer | `T001`, `T003`, `T004`; `E063` |
-| `6` | type error | package compile: typer | `T002`, `T006`, `T007`, `T008`, `T010`, `T013`, `T014`, `T022`, `T023`, `T024`, `T025`, `T027`, `T028`, `T029`; `E062`, `E065`, `E066` |
+| `6` | type error | package compile: typer | `T002`, `T006`, `T007`, `T008`, `T010`, `T013`, `T014`, `T022`, `T023`, `T024`, `T025`, `T027`, `T028`, `T029`, `T031`; `E062`, `E065`, `E066` |
 | `7` | ambiguous satisfaction | package compile: typer (`spec/type_system.md` Rule 8.4.b) | `E061`; `T011` |
 | `8` | effect error | package compile: typer (effect inference) | `E080`, `E084`, `E093`; `T009`, `T015`, `T016`, `T018`, `T019` |
 | `9` | pattern error | package compile: typer | `E090`, `E091`, `E092`, `E094`, `E095`; `T020` |
