@@ -127,6 +127,8 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
   - **Fixed** (`Lower.resolved`).
 - A derived `map` through a bounded last parameter did not check the new element type. **Fixed**: `Functor` is not derived over a bounded last parameter.
 - `Json` had no `Show` or `Eq` in the prelude. **Fixed**: its fields carry `Show + Eq` as `spec/stdlib.md` §3.2 says, and `Json` satisfies both again in the typer; the backend part is the missing derived `Show` and `Eq` above.
+- A prelude name was resolved through the program's scope: the types `Tuple`, `List`, `String`, `Nat`, `Maybe` and `Result`, capabilities matched by name in the typer, the derivation rules and the backend, prelude functions by name, and prelude bodies typed in the program's scope. A program that declared one of those names broke typing, crashed the diagnostic formatter, silently used its own entity (`cap Show` with `u64 satisfies Show` printed `5`), or lost all the prelude's `satisfies` bodies.
+  - **Fixed** (`SymbolTable.prelude`, `TyperPhase.inPrelude`, `Namer.unshadowed`, the `inPrelude`/`globals` scope in `backend/Satisfied.scala`, `QuantityPhase`): the prelude is typed, walked and lowered in its own scope. Literals, tuples, operators, compiler-provided table entries and the derivation rules name the prelude's entities. Every shadowed prelude declaration is renamed `prelude.<name>`. A program's own `cap Show` or `cap Functor` is not derived (example 06 now uses the prelude's `Functor`). In the program, a member of a program capability is preferred over a prelude capability's member of the same name. In the prelude's code only prelude capabilities and data types are candidates (Rule 8.6). A problem in prelude code is labelled "in the prelude:" without a span, and a span past the end of the file is formatted without a position. The spec does not state these readings; they are open for the owner.
 
 Found and not fixed:
 
@@ -136,8 +138,7 @@ Found and not fixed:
 - A branch that returns a call to a `-> !` function fails at clang with a phi type error.
 - A type that refers to itself at other arguments gets only baseline versions of its generated members.
 - The result of a closure call is always taken as shared. Measured: 4.0 instructions per tested reuse, at most 0.30% on `records`. Left as it is.
-- A prelude name is still resolved through the program's scope in many places: the types `Tuple`, `Maybe`, `Result`, `List` and `String`, capabilities matched by name in the backend and in the derivation rules, and functions found by name. A program that declares `data Tuple`, `List`, `String` or `Nat`, or `cap Show`, breaks typing or changes behaviour. Prelude function bodies are typed in the program's scope, and their diagnostics, which carry prelude spans, crash the compiler.
-- A `satisfies` body on a primitive type is not lowered. A member with several type parameters of its own is `B005`. `Ord` through a table does not build `lt` and `le` from a user's `compare`. A program that declares any name the prelude declares loses the prelude's `satisfies` bodies.
+- A `satisfies` body on a primitive type is not lowered. A member with several type parameters of its own is `B005`. `Ord` through a table does not build `lt` and `le` from a user's `compare`.
 - Constructor resolution with no fitting candidate leaves the call abstract; a concrete expected type then receives a value of another type.
 - The stand-in representation rule cannot see what a function returns: `fn l() -> is Show = [1, 2]` miscompiles.
 - `Maybe` has no `Folding.fold` body and no generated member for it.
@@ -147,7 +148,10 @@ Found and not fixed:
 - A member called on a numeric literal (`3.add(4)`) is not resolved.
 - `N.fromI64(...)` on a type parameter is accepted by the typer and refused by the backend.
 - `i128` and `u128` do not satisfy `Numeric`, though `spec/stdlib.md` §4.9 says they do.
-- A user `cap Numeric` with `i64 satisfies Numeric` crashes the diagnostic formatter (a prelude span formatted against the user's file).
+- A prelude offset within the program file's length is shown at a wrong position, because spans carry no file.
+- `Console` and the runtime's effects are recognised by name (`Lower.static`, `Effects.runtimeNames`): a program's own `effect Console` is taken for the runtime's.
+- `Lower.nestedFn` finds a nested function by name and span.
+- A list literal does not take its element type from a bound: `total([1, 2, 3])` with `xs: is Folding of u64` fails with `T010 List of i64 does not satisfy Folding of u64`.
 - Trees, rose trees, snoc lists, the derived `fold` and the generated `length` still take one native frame per level; only derived `unfold` and `map` of linear data run as loops.
 - `Json` cannot use the derived `show` and `==`: its field `is Map of (String, Json)` has no representing data type, so lowering fails with `B005`.
 - A derived `Ord` is not built by the backend.
