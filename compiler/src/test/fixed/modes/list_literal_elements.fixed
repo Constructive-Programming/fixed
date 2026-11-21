@@ -1,0 +1,11 @@
+// The integer literals of a list literal passed where `is Folding of u64` is expected are `u64`s,
+// not `i64`s: the largest `u64` shows as itself, not as -1, and 200 + 100 wraps to 44 as a `u8`.
+use std.io.Console
+
+fn last(xs: is Folding of u64) -> String = xs.fold("", (_acc, x) -> x.show())
+
+fn total(xs: is Folding of u8) -> u8 = xs.fold(0, (acc, x) -> acc + x)
+
+fn main() -> () with Console =
+    Console.printLine(last([1, 18446744073709551615]))
+    Console.printLine(total([200, 100]).show())

@@ -939,6 +939,11 @@ class TyperSuite extends munit.FunSuite:
       "fn o(x: is Ordering) -> u64 = 1\nfn g() -> u64 = o(Ordering.eq)\n"
     ).foreach(code => assertEquals(typedUnit(decls + code).diags, Nil, code))
 
+  test("the integer literals of a list literal take the element type a bound asks for"):
+    val code = "fn total(xs: is Folding of u64) -> u64 = xs.fold(0, (acc, x) -> acc + x)\n" +
+      "fn g() -> u64 = total([1, 2, 3])\n"
+    assertEquals(typedUnit(code).diags, Nil)
+
   test("Rule 8.1.a: trailing fields with defaults may be absent from the requirement"):
     val cap = "cap Queue:\n    Self.fn empty -> Self\n    fn size -> u64\n"
     val withDefault =
