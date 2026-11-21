@@ -623,13 +623,15 @@ class EmitSuite extends munit.FunSuite:
     val shown = ds.map(fixed.util.Reporter(SourceFile.fromString("prelude_problem.fixed", src)).format)
     assert(shown.exists(_.startsWith(s"stdlib/prelude.fixed:$line:5: error[B005]: member Folding.fold")), shown)
 
-  test("a literal inside a tuple pattern is B005 at the literal, not a case that never matches"):
-    List("(u64, u64)", "Tuple of (u64, u64)").foreach { t =>
-      val src = s"fn f(p: $t) -> u64 = match p:\n    (0, b) => b\n    (a, b) => a\n" +
-        "fn main() -> u64 = f((0, 2))\n"
-      val ds = lowered("tuple_literal", src).fold(identity, _ => fail("lowered"))
-      assertEquals(ds.map(d => (d.code, d.span.start)), List((DiagCode.B005, src.indexOf("0, b"))), t)
-    }
+  test("a float literal pattern is B005 at the literal: its equality is bitwise, which the backend does not build"):
+    val src = "fn f(x: f64) -> u64 = match x:\n    0.5 => 1\n    _ => 2\nfn main() -> u64 = f(0.5)\n"
+    val ds = lowered("float_literal", src).fold(identity, _ => fail("lowered"))
+    assertEquals(ds.map(d => (d.code, d.span.start)), List((DiagCode.B005, src.indexOf("0.5 =>"))))
+
+  test("a literal in a `let` pattern is B005, not a binding that ignores it"):
+    val src = "fn f(p: (u64, u64)) -> u64 =\n    let (0, b) = p\n    b\nfn main() -> u64 = f((7, 3))\n"
+    val ds = lowered("let_literal", src).fold(identity, _ => fail("lowered"))
+    assertEquals(ds.map(_.code), List(DiagCode.B005))
 
   test("a reference beyond the reference map is B005, not a leak (4.1.M2)"):
     List(wide(bits + 1) -> "wide_over", captures(bits - Layout.closureCode + 1) -> "captures_over").foreach {

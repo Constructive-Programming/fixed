@@ -5,8 +5,9 @@ import fixed.core.{Context, Proto, SymKind, Type}
 import fixed.util.DiagCode
 
 /** Pattern binding and `match` typing (`spec/pattern_matching.md` §3–§6). Exhaustiveness is the v1
-  * top-level check (plan §5.5.1): every variant of a data scrutinee is named by an unguarded case,
-  * `true` and `false` both appear for `bool`, otherwise a catch-all case is required.
+  * top-level check (plan §5.5.1): every variant of a data scrutinee is named by an unguarded case
+  * without a literal (a conservative stand-in for the check of §6: `V(true)` and `V(false)` do not
+  * cover `V`), `true` and `false` both appear for `bool`, otherwise a catch-all case is required.
   */
 object Patterns:
 
@@ -99,17 +100,20 @@ object Patterns:
     val unguarded = m.cases.filter(_.guard.isEmpty).map(_.pattern)
     val alternatives = unguarded.flatMap(flatten)
     val catchAll = alternatives.exists(irrefutable)
-    lazy val named = alternatives.collect { case Trees.DataVariantPat(_, v, _, _) => v }.toSet
+    lazy val named = alternatives.collect { case p @ Trees.DataVariantPat(_, v, _, _) if !hasLiteral(p) => v }.toSet
     s.unifier.resolve(scrutinee) match
       case _ if catchAll                                           => s
       case Type.TypeRef(d, _) if s.symbols(d).kind == SymKind.Data =>
-        val missing = s.symbols.variantsOf(d).filterNot(v => named(v.name))
+        val missing = s.symbols.variantsOf(d).filterNot(v => named(v.name)).toList
         if missing.isEmpty then s
         else
           s.error(
             DiagCode.T020,
             m.span,
-            missing.map(v => s"${s.symbols(d).name}.${v.name}").mkString("missing case ", ", ", "")
+            missing.map(v => s"${s.symbols(d).name}.${v.name}").mkString("missing case ", ", ", "") +
+              (if missing.exists(v => alternatives.exists(names(_, v.name))) then
+                 " (a case with a literal does not cover its variant)"
+               else "")
           )
       case Type.PrimType("bool") =>
         val lits = alternatives.collect { case Trees.LiteralPat(Trees.BoolLit(b, _), _) => b }.toSet
@@ -126,6 +130,20 @@ object Patterns:
       case _: Trees.WildcardPat | _: Trees.BinderPat => true
       case Trees.TuplePat(elems, _)                  => elems.forall(irrefutable)
       case _                                         => false
+
+  /** Whether `p` names variant `v`. */
+  private def names(p: fixed.ast.Tree, v: String): Boolean =
+    p match
+      case Trees.DataVariantPat(_, w, _, _) => w == v
+      case _                                => false
+
+  /** Whether `p` holds a literal: a variant pattern with one does not cover its variant. */
+  def hasLiteral(p: fixed.ast.Tree): Boolean =
+    p match
+      case _: Trees.LiteralPat               => true
+      case Trees.TuplePat(ps, _)             => ps.exists(hasLiteral)
+      case Trees.DataVariantPat(_, _, ps, _) => ps.exists(_.exists(hasLiteral))
+      case _                                 => false
 
   private def flatten(p: fixed.ast.Tree): List[fixed.ast.Tree] =
     p match

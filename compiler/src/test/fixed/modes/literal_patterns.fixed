@@ -1,0 +1,146 @@
+// Literal patterns (`spec/pattern_matching.md` §3.3, §4): the cases are tried in order and a literal
+// matches a value equal to it by the type's equality, at the top of a pattern and inside a tuple or
+// variant pattern (`Cases`). Every arm gives a different result, and every scrutinee meets at least
+// one case that must not match it.
+use std.io.Console
+
+fn small(n: u64) -> String =
+    match n:
+        0 => "zero"
+        1 => "one"
+        18446744073709551615 => "max"
+        m => "other ".concat(m.show())
+
+fn byte(b: u8) -> String =
+    match b:
+        255 => "ff"
+        0 => "00"
+        _ => "byte"
+
+fn signed(n: i64) -> String =
+    match n:
+        7 => "seven"
+        9223372036854775807 => "imax"
+        _ => "signed"
+
+fn narrow(n: i32) -> String =
+    match n:
+        2147483647 => "i32max"
+        3 => "three"
+        _ => "i32"
+
+fn flag(b: bool) -> String =
+    match b:
+        true => "yes"
+        false => "no"
+
+fn letter(c: char) -> String =
+    match c:
+        'a' => "a"
+        'é' => "e-acute"
+        _ => "letter"
+
+fn word(s: String) -> String =
+    match s:
+        "" => "empty"
+        "ab" => "ab"
+        "abc" => "abc"
+        "é" => "e-acute"
+        _ => "word"
+
+fn first(n: u64) -> String =
+    match n:
+        5 => "first five"
+        5 => "second five"
+        _ => "not five"
+
+fn pair(p: (u64, String)) -> String =
+    match p:
+        (0, "x") => "zero x"
+        (0, s) => "zero ".concat(s)
+        (n, "x") => "x ".concat(n.show())
+        (n, s) => s.concat(" ").concat(n.show())
+
+fn just(m: Maybe of u64) -> String =
+    match m:
+        Maybe.Just(0) => "just zero"
+        Maybe.Just(n) => "just ".concat(n.show())
+        Maybe.Nothing => "nothing"
+
+fn nested(m: Maybe of Tuple of (u64, bool)) -> String =
+    match m:
+        Maybe.Just((1, true)) => "one true"
+        Maybe.Just((1, _)) => "one false"
+        Maybe.Just((n, true)) => "true ".concat(n.show())
+        Maybe.Just(_) => "just"
+        Maybe.Nothing => "nothing"
+
+fn isZero(n: N is Numeric + Eq) -> bool =
+    match n:
+        0 => true
+        _ => false
+
+fn bump(m: Maybe of u64) -> Maybe of u64 =
+    match m:
+        Maybe.Just(0) => Maybe.Just(100)
+        Maybe.Just(n) => Maybe.Just(n + 1)
+        _ => Maybe.Nothing
+
+fn tagged(p: (A is Show, String)) -> String =
+    match p:
+        (a, "keep") => "kept ".concat(a.show())
+        (a, s) => s.concat(" ").concat(a.show())
+
+data Shape:
+    Rect(w: u64, h: u64)
+    Dot
+
+fn shape(s: Shape) -> String =
+    match s:
+        Shape.Rect(0, 0) => "point"
+        Shape.Rect(w, 0) => "flat ".concat(w.show())
+        Shape.Rect(_, h) => "tall ".concat(h.show())
+        _ => "dot"
+
+data Box of N:
+    B(a: N, b: N)
+
+fn boxed(b: Box of N is Numeric + Eq + Show) -> String =
+    match b:
+        Box.B(0, 0) => "origin"
+        Box.B(n, 1) => "one ".concat(n.show())
+        Box.B(_, _) => "box"
+
+fn widths(a: i8, b: i16, c: u16, d: u32) -> String =
+    let x = match a:
+        127 => "i8max"
+        _ => "i8"
+    let y = match b:
+        32767 => "i16max"
+        _ => "i16"
+    let z = match c:
+        65535 => "u16max"
+        _ => "u16"
+    let w = match d:
+        4294967295 => "u32max"
+        _ => "u32"
+    x.concat(" ").concat(y).concat(" ").concat(z).concat(" ").concat(w)
+
+fn main() -> () with Console =
+    Console.printLine(small(0).concat(" ").concat(small(1)).concat(" ").concat(small(18446744073709551615)).concat(" ").concat(small(2)))
+    Console.printLine(byte(255).concat(" ").concat(byte(0)).concat(" ").concat(byte(254)))
+    Console.printLine(signed(7).concat(" ").concat(signed(9223372036854775807)).concat(" ").concat(signed(0 - 7)))
+    Console.printLine(narrow(2147483647).concat(" ").concat(narrow(3)).concat(" ").concat(narrow(0 - 3)))
+    Console.printLine(flag(true).concat(" ").concat(flag(false)))
+    Console.printLine(letter('a').concat(" ").concat(letter('é')).concat(" ").concat(letter('b')))
+    Console.printLine(word("").concat(" ").concat(word("ab")).concat(" ").concat(word("abc")).concat(" ").concat(word("a")).concat(" ").concat(word("abcd")).concat(" ").concat(word("é")).concat(" ").concat(word("e")).concat(" ").concat(word("ac")).concat(" ").concat(word("è")))
+    Console.printLine(first(5).concat(" ").concat(first(6)))
+    Console.printLine(pair((0, "x")).concat(", ").concat(pair((0, "y"))).concat(", ").concat(pair((3, "x"))).concat(", ").concat(pair((3, "y"))))
+    Console.printLine(just(Maybe.Just(0)).concat(", ").concat(just(Maybe.Just(4))).concat(", ").concat(just(Maybe.Nothing)))
+    Console.printLine(nested(Maybe.Just((1, true))).concat(", ").concat(nested(Maybe.Just((1, false)))).concat(", ").concat(nested(Maybe.Just((2, true)))).concat(", ").concat(nested(Maybe.Just((2, false)))).concat(", ").concat(nested(Maybe.Nothing)))
+    Console.printLine(isZero(0).show().concat(" ").concat(isZero(3).show()))
+    Console.printLine(just(bump(Maybe.Just(0))).concat(", ").concat(just(bump(Maybe.Just(7)))).concat(", ").concat(just(bump(Maybe.Nothing))))
+    Console.printLine(tagged((1, "keep")).concat(", ").concat(tagged((2, "drop"))))
+    Console.printLine(shape(Shape.Rect(0, 0)).concat(", ").concat(shape(Shape.Rect(3, 0))).concat(", ").concat(shape(Shape.Rect(0, 4))).concat(", ").concat(shape(Shape.Dot)))
+    Console.printLine(boxed(Box.B(0, 0)).concat(", ").concat(boxed(Box.B(5, 1))).concat(", ").concat(boxed(Box.B(0, 2))))
+    Console.printLine(widths(127, 32767, 65535, 4294967295).concat(", ").concat(widths(0 - 1, 0 - 1, 0, 0)))

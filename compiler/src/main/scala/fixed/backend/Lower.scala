@@ -22,12 +22,12 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
   * built is lowered per instance. Constructs beyond the current milestone are `B005`, and so is a
   * cell with a reference beyond its header's reference map (`refMapLimit`).
   */
-final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(String, String)] = Set.empty) extends Tables:
+final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(String, String)] = Set.empty) extends Cases:
   private type Env = Map[String, Var]
   private type Sigma = Map[SymbolId, Type]
 
   /** Lexical bindings and the type substitution of the instance being lowered. */
-  final private case class Scope(env: Env, sigma: Sigma, bounds: Map[Type, Type] = Map.empty):
+  final private[backend] case class Scope(env: Env, sigma: Sigma, bounds: Map[Type, Type] = Map.empty):
     def bind(name: String, v: Var): Scope = copy(env = env.updated(name, v))
 
   private val ids = Iterator.from(1)
@@ -199,7 +199,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     fns(name) = Fn(name, hidden ++ vars, rt, Expr.Ret(Atom.UnitC))
     Fn(name, hidden ++ vars, rt, body.body.fold(Expr.Ret(Atom.UnitC))(tail(_, sc)))
 
-  private def expr(t: Tree, sc: Scope)(k: K): Expr =
+  private[backend] def expr(t: Tree, sc: Scope)(k: K): Expr =
     t match
       case l: Trees.IntLit =>
         val t = typeOf(l, sc)
@@ -237,7 +237,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case h: Trees.HandleExpr                          => handle(h, sc)(k)
       case other                                        => unsupported(other.span, other.getClass.getSimpleName, k)
 
-  private def tail(t: Tree, sc: Scope): Expr = expr(t, sc)(Expr.Ret(_))
+  private[backend] def tail(t: Tree, sc: Scope): Expr = expr(t, sc)(Expr.Ret(_))
 
   /** `fn(args)`, typed as `result`: a top-level function instance, or a closure call. */
   private def application(fn: Tree, args: List[Tree], result: Tree, sc: Scope)(k: K): Expr =
@@ -276,7 +276,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case e :: rest                 => expr(e, sc)(_ => block(rest, sc)(k))
 
   /** Bind `pat` to the value `a` of type `t`: binders, `_` and tuple patterns of those. */
-  private def bindPattern(pat: Tree, a: Atom, t: Type, sc: Scope)(k: Scope => Expr): Expr =
+  private[backend] def bindPattern(pat: Tree, a: Atom, t: Type, sc: Scope)(k: Scope => Expr): Expr =
     pat match
       case Trees.BinderPat(name, _) =>
         a match
@@ -292,19 +292,19 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case other => unsupportedThen(other.span, s"pattern ${other.getClass.getSimpleName}", k(sc))
 
   /** Load the fields `pats` bind from `obj`, at `slots`. */
-  private def fields(obj: Atom, pats: List[(Tree, Type)], slots: List[Int], sc: Scope)(k: Scope => Expr): Expr =
+  private[backend] def fields(
+      obj: Atom,
+      pats: List[(Tree, Type)],
+      slots: List[Int],
+      sc: Scope
+  )(k: Scope => Expr): Expr =
     pats.zip(slots) match
       case Nil                     => k(sc)
       case ((p, ft), slot) :: rest =>
         p match
           case Trees.WildcardPat(_) => fields(obj, rest.map(_._1), rest.map(_._2), sc)(k)
           case _                    =>
-            val x = typed(fresh("f", ctype(ft, p.span)), ft, p.span)
-            Expr.Let(
-              x,
-              Rhs.Field(obj, slot),
-              bindPattern(p, x, ft, sc)(fields(obj, rest.map(_._1), rest.map(_._2), _)(k))
-            )
+            loadField(obj, slot, ft, p)(bindPattern(p, _, ft, sc)(fields(obj, rest.map(_._1), rest.map(_._2), _)(k)))
 
   private def binOp(b: Trees.BinOp, sc: Scope)(k: K): Expr =
     import Trees.BinOperator.*
@@ -864,28 +864,6 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
         closure(params, f.body.fold(Expr.Ret(Atom.UnitC))(tail(_, inner)), ctype(ret, f.span))(k)
       case None => unsupportedThen(f.span, s"nested fn `${f.name}`", k(fresh(f.name, CType.Boxed)))
 
-  /** `match` on a data value: one `Switch` branch per variant, taken from the first case covering it. */
-  private def matchExpr(m: Trees.MatchExpr, sc: Scope)(k: K): Expr =
-    val t = typeOf(m.scrutinee, sc)
-    (dataOf(t), m.cases.exists(_.guard.isDefined)) match
-      case (Some((data, dargs)), false) =>
-        expr(m.scrutinee, sc) { s =>
-          val branches = symbols.variantsOf(data).toList.zipWithIndex.map { (v, tag) =>
-            val branch = m.cases.find(c => Lower.covers(c.pattern, v.name)).fold(Expr.Ret(Atom.UnitC)) { c =>
-              c.pattern match
-                case Trees.DataVariantPat(_, _, pats, _) =>
-                  val types = fieldTypes(data, dargs, v.id)
-                  fields(s, pats.getOrElse(Nil).zip(types), Layout.slots(types.map(ctype(_, c.span))), sc)(
-                    tail(c.body, _)
-                  )
-                case p => bindPattern(p, s, t, sc)(tail(c.body, _))
-            }
-            (tag, branch)
-          }
-          bind(Rhs.Switch(s, branches), m, sc)(k)
-        }
-      case _ => unsupported(m.span, s"`match` on ${symbols.render(t)} or with guards", k)
-
   private def hasVariant(data: SymbolId, name: String): Boolean = symbols.variantsOf(data).exists(_.name == name)
 
   /** The constructor and the fields of the auto-flat-struct `t` represents, if it is one. */
@@ -916,7 +894,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case t :: rest => expr(t, sc)(a => all(rest, sc)(as => k(a :: as)))
 
   /** Bind `rhs` to a fresh variable of `t`'s type and continue with it. */
-  private def bind(rhs: Rhs, t: Tree, sc: Scope)(k: K): Expr =
+  private[backend] def bind(rhs: Rhs, t: Tree, sc: Scope)(k: K): Expr =
     val tt = typeOf(t, sc)
     val x = typed(fresh("t", ctype(tt, t.span)), tt, t.span)
     Expr.Let(x, rhs, k(x))
@@ -946,7 +924,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
 
   protected def fresh(base: String, t: CType): Var = Var(s"$base.${ids.next()}", t)
 
-  private def typeOf(t: Tree, sc: Scope): Type = concrete(unit.typeOf(t).getOrElse(Type.NeverType), sc.sigma, sc.bounds)
+  private[backend] def typeOf(t: Tree, sc: Scope): Type =
+    concrete(unit.typeOf(t).getOrElse(Type.NeverType), sc.sigma, sc.bounds)
 
   /** `t` at the instance's concrete types, with capability bounds replaced by their representation. */
   private def concrete(t: Type, sigma: Sigma, bounds: Map[Type, Type] = Map.empty): Type =
@@ -971,7 +950,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     problems += problem(DiagCode.B005, span, s"$what is not supported by the backend slice yet")
     rest
 
-  private def unsupported(span: Span, what: String, k: K): Expr = unsupportedThen(span, what, k(Atom.UnitC))
+  private[backend] def unsupported(span: Span, what: String, k: K): Expr = unsupportedThen(span, what, k(Atom.UnitC))
 
   /** A problem in the prelude's code is at its span in the prelude's file; one with no span says
     * where it is.
@@ -986,7 +965,7 @@ object Lower:
 
   /** Whether case pattern `p` covers variant `variant`. A tuple pattern meets only a tuple (the
     * typer reports any other scrutinee), so it covers the tuple's one variant. Like a variant
-    * pattern, it may still be refutable: `bindPattern` reports a literal inside it as `B005`.
+    * pattern, it may still be refutable: `Cases` tests the literals inside it.
     */
   def covers(p: Tree, variant: String): Boolean =
     p match
