@@ -36,7 +36,9 @@ final case class Denotation(
 /** Every symbol of a compilation, by id, plus what the Namer learns alongside: each owner's
   * members in entry order, the top-level scope, the prelude's own scope and the `satisfies`
   * declarations by satisfying type (a data type's symbol, not its name, which a program's own
-  * declaration may shadow). Persistent: entering or refining returns a new table.
+  * declaration may shadow), and the applied types the program writes (`written`, newest first),
+  * whose arguments the typer checks against the bounds of the type's parameters. Persistent:
+  * entering or refining returns a new table.
   *
   * `scope` is the program's: its declarations shadow the prelude's names. `prelude` is the
   * prelude's, in which the prelude's own code is resolved and through which the compiler finds
@@ -52,7 +54,8 @@ final case class SymbolTable(
     prelude: Map[String, SymbolId],
     private[core] val satisfies: Map[Type, List[Type]],
     constructors: Map[(Int, String), List[(SymbolId, String)]],
-    defaulted: scala.collection.immutable.BitSet
+    defaulted: scala.collection.immutable.BitSet,
+    written: List[(Type, Span)] = Nil
 ):
 
   def apply(id: SymbolId): Denotation = entries(id.toInt - SymbolTable.firstId)
@@ -92,6 +95,9 @@ final case class SymbolTable(
 
   /** A variant's fields, in declaration order. */
   def fieldsOf(variant: SymbolId): Iterator[Denotation] = membersOf(variant).filter(_.kind == SymKind.Field)
+
+  /** Record applied type `t`, written at `span`. */
+  def recordWritten(t: Type, span: Span): SymbolTable = copy(written = (t, span) :: written)
 
   /** Record that field (or parameter) `id` declares a default value. */
   def markDefaulted(id: SymbolId): SymbolTable = copy(defaulted = defaulted.incl(id.toInt))

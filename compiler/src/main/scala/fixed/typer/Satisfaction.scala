@@ -13,7 +13,8 @@ import fixed.util.{DiagCode, Span}
   */
 object Satisfaction:
 
-  private val primitives = Set("i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "char")
+  private[typer] val primitives =
+    Set("i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "char")
 
   /** Capabilities `Rule 7.4` derives from a data type's fields. */
   private val fieldDerived = Set("Show", "Eq", "Clone", "Ord")
@@ -91,6 +92,37 @@ object Satisfaction:
       case Type.CapRef(c, args)   => holds(s, value, c, args).isDefined
       case _: Type.RefinementType => true
       case named                  => s.tryUnify(named, value).isDefined
+    }
+
+  /** `T010`: type `t`, written at `span` as `D of args` (a data type, effect, capability or alias of
+    * capabilities), has an argument that lacks a bound of `D`'s type parameter at its position,
+    * with the other parameters in the bound replaced by their arguments. A type parameter as an
+    * argument has the bounds it was declared with (`data W of A: W(b: Box of A)` needs
+    * `A is Numeric` when `Box` does). Value arguments, literals or value parameters, are skipped.
+    */
+  def checkWritten(s: TyperState, t: Type, span: Span): TyperState =
+    t match
+      case Type.TypeRef(head, _) if s.symbols(head).kind == SymKind.TypeAlias =>
+        Members.expandAliases(s.symbols, List(t)).foldLeft(s)(checkWritten(_, _, span))
+      case Type.TypeRef(head, args) => arguments(s, t, head, args, span)
+      case Type.CapRef(head, args)  => arguments(s, t, head, args, span)
+      case _                        => s
+
+  private def arguments(s: TyperState, t: Type, head: SymbolId, args: List[Type], span: Span): TyperState =
+    val params = s.symbols.typeParamsOf(head)
+    val types = args.filter {
+      case _: Type.ValueArg => false
+      case _                => true
+    }
+    val sub = Members.Subst(Members.Subst.of(params, types), Set(head))
+    val r = s.symbols.render
+    params.zip(types).foldLeft(s) { case (si, (p, a)) =>
+      Members.boundsOf(si.symbols, p).foldLeft(si) { (sj, declared) =>
+        val (sk, bound) = Members.instantiate(sj, declared, sub)
+        lazy val message = s"${r(t)}: ${r(a)} does not satisfy ${r(bound)}, " +
+          s"the bound of ${s.symbols(head).name}'s parameter ${s.symbols(p).name}"
+        if satisfies(sk, a, bound) then sj else sj.error(DiagCode.T010, span, message)
+      }
     }
 
   private def entries(s: TyperState, bound: Type): List[Type] =

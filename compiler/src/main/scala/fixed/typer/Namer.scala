@@ -23,7 +23,10 @@ object Namer:
     val items = unit match
       case Trees.CompilationUnit(items, _) => items
       case other                           => List(other)
-    val (entered, decls) = mapAccum(stdlib.copy(owner = SymbolId.Root), items)(enterTopLevel)
+
+    /** The prelude's signatures are not checked: their spans are not in the unit's file. */
+    val program = stdlib.copy(owner = SymbolId.Root, table = stdlib.table.copy(written = Nil))
+    val (entered, decls) = mapAccum(program, items)(enterTopLevel)
     val typed = typeAll(entered, decls.flatten)
     (unshadowed(typed.table, typed.global).copy(scope = typed.global, prelude = stdlib.global), typed.diags.reverse)
 
@@ -95,6 +98,9 @@ object Namer:
 
     /** The outermost frame: the top-level scope. */
     def global: Map[String, SymbolId] = frames.last
+
+    /** `t` as written at `span`, recorded for the bound check when it applies a type to arguments. */
+    def wrote(t: Type, span: Span): Ctx = copy(table = table.recordWritten(t, span))
 
     def error(code: DiagCode, span: Span, message: String): Ctx =
       copy(diags = Diagnostic(Severity.Error, code, span, message) :: diags)
@@ -281,16 +287,22 @@ object Namer:
 
   private def typeOf(c: Ctx, tree: Tree): (Ctx, Type) =
     tree match
-      case Trees.PrimitiveType(name, _) => (c, Type.PrimType(name))
-      case Trees.UnitType(_)            => (c, Type.UnitType)
-      case Trees.NeverType(_)           => (c, Type.NeverType)
-      case Trees.SelfType(of, _)        =>
+      /** A lower-case name is a primitive, or a value parameter forwarded as an argument (`Range of (lo, N)`). */
+      case Trees.PrimitiveType(name, _) =>
+        val param =
+          c.lookup(name).filter(id => c.table(id).kind == SymKind.ValueParam && !Satisfaction.primitives(name))
+        (c, param.fold(Type.PrimType(name))(id => Type.ValueArg(SymbolicTerm.BoundVar(id))))
+      case Trees.UnitType(_)     => (c, Type.UnitType)
+      case Trees.NeverType(_)    => (c, Type.NeverType)
+      case Trees.SelfType(of, _) =>
         val (c1, args) = typeArgs(c, of)
         (c1, Type.SelfType(args.headOption))
       case Trees.TypeRef(name, ofArg, span) =>
         val (c1, args) = typeArgs(c, ofArg)
         c1.lookup(name) match
-          case Some(id)               => (c1, reference(c1, id, args))
+          case Some(id) =>
+            val t = reference(c1, id, args)
+            (c1.wrote(t, span), t)
           case None if name == "Part" => (c1, Type.PartType)
           case None                   =>
             val (c2, id) = introduce(c1, name, Nil, span)
@@ -326,8 +338,8 @@ object Namer:
         val (c1, t) = typeOf(c, inner)
         val (c2, args) = typeArgs(c1, Some(ofArg))
         t match
-          case Type.TypeRef(id, Nil) => (c2, Type.TypeRef(id, args))
-          case Type.CapRef(id, Nil)  => (c2, Type.CapRef(id, args))
+          case Type.TypeRef(id, Nil) => (c2.wrote(Type.TypeRef(id, args), span), Type.TypeRef(id, args))
+          case Type.CapRef(id, Nil)  => (c2.wrote(Type.CapRef(id, args), span), Type.CapRef(id, args))
           case _                     => (c2.error(DiagCode.T005, span, "type application to a non-name type"), t)
       case _: Trees.IntLit | _: Trees.FloatLit | _: Trees.StringLit | _: Trees.CharLit | _: Trees.BoolLit =>
         val (c1, term) = symbolicTerm(c, tree)
@@ -358,7 +370,8 @@ object Namer:
     tree match
       case Trees.CapRef(name, ofArg, span) =>
         val (c1, args) = typeArgs(c, ofArg)
-        resolve(c1, name, span, "capability")(reference(c1, _, args))
+        val (c2, cap) = resolve(c1, name, span, "capability")(reference(c1, _, args))
+        (cap.fold(c2)(c2.wrote(_, span)), cap)
       case Trees.RefinementCall(name, args, span) =>
         val (c1, terms) = mapAccum(c, args)(symbolicTerm)
         resolve(c1, name, span, "capability generator")(Type.RefinementType(_, terms.flatten))
@@ -389,7 +402,8 @@ object Namer:
         ci.lookup(name).filter(ci.table(_).kind != SymKind.TypeParam) match
           case Some(_) =>
             val (ci1, args) = typeArgs(ci, ofArg)
-            resolve(ci1, name, span, "effect")(EffectBound(_, args))
+            val (ci2, effect) = resolve(ci1, name, span, "effect")(EffectBound(_, args))
+            (effect.fold(ci2)(e => ci2.wrote(Type.TypeRef(e.sym, args), span)), effect)
           case None =>
             /** A row variable (`spec/effects.md` §8.1), introduced at first use like a type variable. */
             val (ci1, id) = ci.lookup(name).fold(introduce(ci, name, Nil, span))((ci, _))

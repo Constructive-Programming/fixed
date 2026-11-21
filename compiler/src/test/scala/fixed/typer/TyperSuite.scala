@@ -396,15 +396,70 @@ class TyperSuite extends munit.FunSuite:
       "fn g() -> String = greet(5)\n" -> "greet(5)",
       "fn g(x: T) -> String = greet(x)\n" -> "greet(x)"
     )
+
+    /** A program that writes `Tag of Box`, `Log of Box` or `Coll of Box` is also rejected there. */
     (boxCalls ++ otherCalls).foreach { (call, at) =>
       val ds = typedUnit(decls + call).diags
-      assertEquals(ds.map(_.code), List(DiagCode.T010), call)
       val site = (decls + call).indexOf(at)
-      assert(ds.head.span.start >= site && ds.head.span.end <= site + at.length, s"$call: ${ds.head.span}")
+      val (atCall, elsewhere) = ds.partition(d => d.span.start >= site && d.span.end <= site + at.length)
+      assertEquals(atCall.map(_.code), List(DiagCode.T010), call)
+      val written = List("Tag of Box", "Log of Box", "Coll of Box").find(call.contains)
+      assertEquals(
+        elsewhere.map(d => (d.code, d.span.start)),
+        written.map(w => (DiagCode.T010, decls.length + call.indexOf(w))).toList,
+        call
+      )
     }
     val named = decls + "Box satisfies Named:\n    fn name = \"box\"\n"
     boxCalls.foreach((call, _) => assertEquals(typedUnit(named + call).diags, Nil, call))
     assertEquals(typedUnit(decls + "fn g(x: T is Named) -> String = greet(x)\n").diags, Nil)
+
+  test("Rule 5.1.1: the arguments of every written type are checked against the bounds of its parameters"):
+    val decls = "cap Named:\n    fn name -> String\ndata Box:\n    B(n: u64)\n" +
+      "data Tag of (A is Named):\n    Tag(a: A)\neffect Log of (A is Named):\n    fn log(a: A) -> ()\n" +
+      "data Num of (N is Numeric):\n    Num(n: N)\n"
+
+    /** Each program writes one type whose argument lacks the parameter's bound, at `at`. */
+    val written = List(
+      "fn g(t: Tag of Box) -> u64 = 1\n" -> "Tag of Box",
+      "fn g() -> Tag of Box = g()\n" -> "Tag of Box",
+      "fn g() -> u64 with Log of Box = 1\n" -> "Log of Box",
+      "data W of A:\n    W(b: Num of A)\n" -> "Num of A",
+      "fn g(t: T) -> Num of T = g(t)\n" -> "Num of T",
+      "fn g() -> u64 =\n    let f = (t: Tag of Box) -> 1\n    1\n" -> "Tag of Box",
+      "fn g() -> u64 =\n    fn h(t: Tag of Box) -> u64 = 1\n    1\n" -> "Tag of Box",
+      "fn g(x: is Sized of (u8, String)) -> u64 = 1\n" -> "Sized of (u8, String)",
+      "Box satisfies Sized of (u8, String):\n    fn size = 1\n" -> "Sized of (u8, String)",
+      "fn g(t: List of Tag of Box) -> u64 = 1\n" -> "Tag of Box",
+      "type SS = Sized + Show\nfn g(x: is SS of (u8, String)) -> u64 = 1\n" -> "SS of (u8, String)",
+      "data V of (n: u64, A is Named):\n    V(a: A)\nfn g(v: V of (3, Box)) -> u64 = 1\n" -> "V of (3, Box)",
+      "data R of (lo: u64, N is Numeric):\n    R(n: N)\ndata O of (k: u64, M):\n    O(r: R of (k, M))\n" ->
+        "R of (k, M)"
+    )
+    written.foreach { (code, at) =>
+      val ds = typedUnit(decls + code).diags.filter(_.isError)
+      assertEquals(ds.map(d => (d.code, d.span.start)), List((DiagCode.T010, (decls + code).lastIndexOf(at))), code)
+    }
+    assert(typedUnit(decls + written.head._1).diags.exists(
+      _.message == "Tag of Box: Box does not satisfy Named, the bound of Tag's parameter A"
+    ))
+
+    /** The same types, written at arguments that satisfy the bounds. */
+    val named = decls + "Box satisfies Named:\n    fn name = \"box\"\n"
+    List(
+      "fn g(t: Tag of Box) -> Tag of Box = t\n",
+      "fn g(b: Box) -> () with Log of Box = Log.log(b)\n",
+      "data W of (A is Numeric + Show):\n    W(b: Num of A)\n",
+      "fn g(t: T is Numeric) -> Num of T = Num.Num(t)\n",
+      "fn g() -> u64 =\n    let f = (t: Tag of Box) -> 1\n    1\n",
+      "fn g(x: is Sized of (u8, u64)) -> u64 = 1\n",
+      "fn g(t: List of Tag of Box) -> List of Tag of Box = t\n",
+      "type SS = Sized + Show\nfn g(x: is SS of (u8, u64)) -> u64 = 1\n",
+      "data V of (n: u64, A is Named):\n    V(a: A)\nfn g(v: V of (3, Box)) -> u64 = 1\n",
+      "data R of (lo: u64, N is Numeric):\n    R(n: N)\ndata O of (k: u64, M is Numeric):\n    O(r: R of (k, M))\n",
+      "fn f(u8: u64, x: u8) -> u8 = x\nfn g() -> u8 = f(1, 2)\n",
+      "data P of (u8: u64, A):\n    P(a: A, b: u8)\nfn g() -> P of u64 = P.P(1, 2)\n"
+    ).foreach(code => assertEquals(typedUnit(named + code).diags.filter(_.isError), Nil, code))
 
   test("Rule 5.1.1: a literal meeting a named bound is checked once; a bounded argument not solved yet is Clone"):
     val nn = "cap Named:\n    fn name -> String\nfn nn(x: T is Numeric + Named) -> T = x\n" +
@@ -750,7 +805,15 @@ class TyperSuite extends munit.FunSuite:
     assertEquals(one(bounded)._3, Some(boundedWhy))
     val nested =
       "data Box of (A is Numeric):\n    Box(value: A)\ndata W of A:\n    W(b: Box of A)\nW satisfies Functor\n"
-    assertEquals(one(nested)._3, Some("a derived map cannot rebuild field W.b: Box of A"))
+
+    /** `Box of A` is also rejected as written: `W` does not bound `A`. */
+    assertEquals(
+      typedUnit(nested).diags.map(d => (d.code, d.suggestion)),
+      List(
+        (DiagCode.T010, Some("a derived map cannot rebuild field W.b: Box of A")),
+        (DiagCode.T010, None)
+      )
+    )
 
   test("3.1.M3: the stdlib's own satisfies declarations pass the checks"):
     val (table, _) = Namer.index(Parser.parse(SourceFile.fromString("<empty>", "")).tree)

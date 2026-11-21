@@ -103,12 +103,16 @@ final case class TyperState(
   /** Check a body's effect row when the unit finishes. */
   def checkRow(c: RowCheck): TyperState = copy(rowChecks = c :: rowChecks)
 
-  /** Check the effect rows recorded while typing (their arguments may solve literal variables),
-    * default unsolved literal variables, discharge the capability obligations, and order the
-    * diagnostics. Recorded types stay as typed; `typeOf` substitutes on read.
+  /** Check the arguments of every applied type the program writes against the bounds of the
+    * type's parameters, check the effect rows recorded while typing (their arguments may solve
+    * literal variables), default unsolved literal variables, discharge the capability obligations,
+    * and order the diagnostics. Recorded types stay as typed; `typeOf` substitutes on read.
     */
   def finish: TyperState =
-    val rows = rowChecks.reverse.foldLeft(this)(Effects.discharge)
+    val wellFormed = symbols.written.reverse.foldLeft(this) { case (si, (t, span)) =>
+      Satisfaction.checkWritten(si, t, span)
+    }
+    val rows = rowChecks.reverse.foldLeft(wellFormed)(Effects.discharge)
     val defaulted = rows.copy(unifier = rows.unifier.applyDefaults)
     val checked = obligations.reverse.foldLeft(defaulted) { case (si, (value, bound, span)) =>
       Satisfaction.discharge(si, value, bound, span)
