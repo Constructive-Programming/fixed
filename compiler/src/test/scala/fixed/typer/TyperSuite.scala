@@ -744,6 +744,13 @@ class TyperSuite extends munit.FunSuite:
       one(m)._3,
       Some("a derived map cannot rebuild field X.r: M of (B, A)")
     )
+    val bounded = "data Box of (K, A is Numeric):\n    Box(key: K, value: A)\nBox satisfies Functor\n"
+    val boundedWhy = "map is not derived: the last type parameter of Box is bounded (A is Numeric), " +
+      "and map must accept any result type"
+    assertEquals(one(bounded)._3, Some(boundedWhy))
+    val nested =
+      "data Box of (A is Numeric):\n    Box(value: A)\ndata W of A:\n    W(b: Box of A)\nW satisfies Functor\n"
+    assertEquals(one(nested)._3, Some("a derived map cannot rebuild field W.b: Box of A"))
 
   test("3.1.M3: the stdlib's own satisfies declarations pass the checks"):
     val (table, _) = Namer.index(Parser.parse(SourceFile.fromString("<empty>", "")).tree)

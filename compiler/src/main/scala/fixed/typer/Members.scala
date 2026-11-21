@@ -399,20 +399,26 @@ object Members:
       case _                                                                         => None
 
   /** Whether `data` derives `Functor` (Rule 7.4.c, narrowed): its rightmost type parameter occurs
-    * in a field, and a derived `map` can rebuild every occurrence ([[unmapped]]).
+    * in a field, has no bound, and a derived `map` can rebuild every occurrence ([[unmapped]]).
     */
   def functor(symbols: SymbolTable, data: SymbolId): Boolean =
     symbols.typeParamsOf(data).lastOption.exists { p =>
       symbols.variantsOf(data).exists(v => symbols.fieldsOf(v.id).exists(f => mentions(f.info, Type.TypeRef(p, Nil))))
-    } && unmapped(symbols, data).isEmpty
+    } && boundedLast(symbols, data).isEmpty && unmapped(symbols, data).isEmpty
+
+  /** `data`'s rightmost type parameter, if it has a bound. A derived `map` takes any result type
+    * `B`, and would build `data` at a `B` that does not satisfy that bound.
+    */
+  private def boundedLast(symbols: SymbolTable, data: SymbolId): Option[SymbolId] =
+    symbols.typeParamsOf(data).lastOption.filter(boundsOf(symbols, _).nonEmpty)
 
   private def mentions(t: Type, part: Type): Boolean = t == part || t.children.exists(mentions(_, part))
 
   /** The first field of `data` that holds its rightmost type parameter where a derived `map` cannot
     * rebuild it, followed by the field of the nested data type that blocks it, if any. Each
     * occurrence must be the parameter itself, or inside the last argument of a data type (`data`
-    * at any arguments among them) whose rightmost parameter is rebuilt in turn, with no other
-    * argument of that type mentioning it. Each data type is checked once per search: one already
+    * at any arguments among them) whose rightmost parameter is unbounded and rebuilt in turn, with
+    * no other argument of that type mentioning it. Each data type is checked once per search: one already
     * visited, being checked further up or found rebuildable, is taken as rebuildable.
     */
   def unmapped(symbols: SymbolTable, data: SymbolId): List[Denotation] =
@@ -424,7 +430,7 @@ object Members:
           if !mentions(t, param) || t == param then None
           else
             applied(symbols, t) match
-              case Some((f, args)) if !args.init.exists(mentions(_, param)) =>
+              case Some((f, args)) if !args.init.exists(mentions(_, param)) && boundedLast(symbols, f).isEmpty =>
                 blocked(args.last).orElse(Option.when(visited.add(f))(search(f)).filter(_.nonEmpty))
               case _ => Some(Nil)
         symbols.variantsOf(d).iterator.flatMap(v => symbols.fieldsOf(v.id))
@@ -432,15 +438,20 @@ object Members:
       }
     search(data)
 
-  /** When `cap` is `Functor` and `t` a data type that does not derive it, a hint naming the field
-    * a derived `map` cannot rebuild ([[unmapped]]).
+  /** When `cap` is `Functor` and `t` a data type that does not derive it, a hint saying why: its
+    * rightmost type parameter is bounded ([[boundedLast]]), or naming the field a derived `map`
+    * cannot rebuild ([[unmapped]]).
     */
   def notFunctor(symbols: SymbolTable, t: Type, cap: SymbolId): Option[String] =
     t match
       case Type.TypeRef(id, _) if symbols(cap).name == "Functor" && symbols(id).kind == SymKind.Data =>
-        unmapped(symbols, id) match
-          case Nil    => None
-          case fields =>
+        (boundedLast(symbols, id), unmapped(symbols, id)) match
+          case (Some(p), _) =>
+            val bound = boundsOf(symbols, p).map(symbols.render).mkString(" + ")
+            Some(s"map is not derived: the last type parameter of ${symbols(id).name} is bounded " +
+              s"(${symbols(p).name} is $bound), and map must accept any result type")
+          case (None, Nil)    => None
+          case (None, fields) =>
             val shown = fields.map(f => s"${symbols(f.owner).name}.${f.name}: ${symbols.render(f.info)}")
             Some(s"a derived map cannot rebuild field ${shown.mkString(", through ")}")
       case _ => None
