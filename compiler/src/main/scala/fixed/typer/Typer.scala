@@ -30,6 +30,9 @@ final class TypeTable private (
 
   def resolution(tree: Tree): Option[Resolution] = Option(resolutions.get(tree))
 
+  /** Every typed tree, in no particular order. */
+  def trees: List[Tree] = entries.keySet.toArray(Array.empty[Tree]).toList
+
 object TypeTable:
   def empty: TypeTable =
     TypeTable(java.util.IdentityHashMap[Tree, Type](1024), java.util.IdentityHashMap[Tree, Resolution](256))
@@ -106,8 +109,9 @@ final case class TyperState(
   /** Check the arguments of every applied type the program writes against the bounds of the
     * type's parameters, check the effect rows recorded while typing (their arguments may solve
     * literal variables), let the obligations that hold solve the capability arguments they meet,
-    * default unsolved literal variables, discharge the capability obligations, and order the
-    * diagnostics. Recorded types stay as typed; `typeOf` substitutes on read.
+    * default unsolved literal variables, discharge the capability obligations, check integer
+    * literals against the ranges of their types, and order the diagnostics. Recorded types stay as
+    * typed; `typeOf` substitutes on read.
     */
   def finish: TyperState =
     val wellFormed = symbols.written.reverse.foldLeft(this) { case (si, (t, span)) =>
@@ -122,7 +126,8 @@ final case class TyperState(
       Satisfaction.discharge(si, value, bound, span)
     }
     val bounded = boundChecks.reverse.foldLeft(checked.copy(boundChecks = Nil))(Typer.requireBound(_, _, last = true))
-    bounded.copy(diags = bounded.diags.reverse)
+    val ranged = Typer.literalRanges(bounded)
+    ranged.copy(diags = ranged.diags.reverse)
 
 object TyperState:
   def apply(symbols: SymbolTable): TyperState =
@@ -243,6 +248,32 @@ object Typer:
     )
 
   private def show(s: TyperState, t: Type): String = s.symbols.render(s.unifier.zonk(t))
+
+  /** `T023`: an integer literal, with its sign (`-128` is an `i8`), outside the range of the integer
+    * type it took once types are solved; at a type parameter, outside `i64`, which `fromI64` takes
+    * (`spec/stdlib.md` §4.9). A float type takes any integer literal; a literal that already has an
+    * error at its span is not checked again.
+    */
+  def literalRanges(s: TyperState): TyperState =
+    val trees = s.types.trees
+    val negated = trees.collect { case n @ Trees.UnaryOp(Trees.UnaryOperator.Neg, l: Trees.IntLit, _) => (n.span, l) }
+    val operands = negated.map(_._2.span).toSet
+    val plain = trees.collect { case l: Trees.IntLit if !operands(l.span) => (l.span, l) }
+    val literals = negated.map((at, l) => (at, -l.value, l)) ++ plain.map((at, l) => (at, l.value, l))
+    literals.sortBy((at, _, _) => (at.file.fold("")(_.path), at.start)).foldLeft(s) { case (si, (at, value, lit)) =>
+      val integer = si.typeOf(lit).collect {
+        case Type.PrimType(n) if n.matches("[iu](8|16|32|64)")               => (n, n)
+        case Type.TypeRef(id, _) if si.symbols(id).kind == SymKind.TypeParam =>
+          ("i64", s"i64, which `fromI64` takes for ${si.symbols(id).name}")
+      }
+      integer.filterNot(_ => si.diags.exists(_.span == lit.span)).fold(si) { (n, named) =>
+        val bits = n.drop(1).toInt
+        val (lo, hi) = if n.startsWith("i") then (-(BigInt(1) << (bits - 1)), (BigInt(1) << (bits - 1)) - 1)
+        else (BigInt(0), (BigInt(1) << bits) - 1)
+        if value >= lo && value <= hi then si
+        else si.error(DiagCode.T023, at, s"$value is out of the range of $named ($lo to $hi)")
+      }
+    }
 
   /** Numeric literals are polymorphic (`spec/type_system.md`): a fresh `Numeric` variable defaulting to `default`. */
   private def literal(s: TyperState, default: Type): (TyperState, Type) =
