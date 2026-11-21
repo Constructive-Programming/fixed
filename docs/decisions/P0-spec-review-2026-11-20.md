@@ -163,6 +163,22 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
   - **Fixed** (`SymbolTable.modules`, `Resolution.NestedFn`).
 - Integer literals were not range-checked (`256` as a `u8` was 0).
   - **Fixed** (`Typer.literalRanges`, new code `T023`), for every integer type of 8 to 64 bits; the most negative value of a signed type stays valid.
+- With `--no-specialise`, a `satisfies` body that called a generic function at its own data type crashed the compiler.
+  - **Fixed** (`Lower.code`): a function's real signature is recorded before its body is lowered.
+- A `handle` with no `return` clause around a `-> !` subject failed at clang.
+  - **Fixed** (`Typer.typedHandle`, `Unifier.diverging`, `EmitLLVM.argument`): the handle takes the type its clauses give; a never-typed value in dead code is passed as the zero of the parameter's type.
+- The backend lowered no literal pattern.
+  - **Fixed** (`backend/Cases.scala`): integers, `bool`, `char` and `String`, also nested in tuple and variant patterns, tried in order. A variant pattern that holds a literal no longer counts as covering its variant (`T020`); before, such a match compiled and crashed.
+- Strings had no order, and `compare` had no table entry for scalars and `String`.
+  - **Fixed** (`fx_str_cmp` in the runtime, `Tables`): bytewise, unsigned, a prefix first. The `String` `eq` table entry returned `ptr` where the runtime returns `bool`, which read unequal strings as equal with `--no-specialise`; fixed with it.
+- A `satisfies` body of a data type with a bounded parameter did not take the parameter's table (invalid IR in a static table, `B005` through a run-time table).
+  - **Fixed** (`Tables.bodyHidden`).
+- Tuples of three or more elements were lowered as pairs (`(1, 2, 3) == (1, 2, 4)` was true), and `(T, T, T)` gave invalid IR.
+  - **Fixed** (`Lower.fieldTypes`, `typeParamsIn`).
+- With `--no-specialise`, `x + -9223372036854775808` at a float instance applied `fromI64` before negating.
+  - **Fixed**: a minus applied to a nonzero integer literal is lowered as one literal.
+- The derived `fold` of linear data took one native frame per element.
+  - **Fixed** (`Generated.foldDown`, `foldUp`; owner's decision, Rule 7.4.b.3): two loops, reversing in place where the value is exclusively owned. A shared value is copied from its first shared cell on, one allocation per cell, and its stack stays bounded. Measured on `nat_loop`: +8.1% instructions, -22.7% best cycles; the other four benchmarks are unchanged.
 
 Found and not fixed:
 
@@ -173,24 +189,25 @@ Found and not fixed:
 - Signed `MIN / -1` and `MIN % -1` emit a bare `sdiv`/`srem`, which is undefined behaviour. The spec does not say what integer overflow does (trap, wrap or abort). Open for the owner.
 - `Json` cannot use the derived `show` and `==`: its field `is Map of (String, Json)` has no representing data type, so lowering fails with `B005`.
 - `i128` and `u128` do not satisfy `Numeric`, though `spec/stdlib.md` §4.9 says they do. The backend has no 128-bit integers: `Lower.scalar` stops at 64 bits, the runtime formats only 64-bit integers, and there is no boxed integer. Blocked on OQ-CM7.
-- The backend lowers no literal pattern: `match n: 0 => …` on a `u64` is `B005`, as is a literal inside a tuple or variant pattern.
 - An abstract value of another origin (a `-> is C` result, a field `x: is Show`, a parameter typed with a bare capability `C`) still reaches a concrete type that has `C` and runs with a wrong value: Rule 5.1.2 is not enforced.
-- Trees, rose trees, snoc lists and the derived `fold` still take one native frame per level; derived `unfold` and `map` of linear data and the generated `length` run as loops, and a derived `compare` loops on its last field. A loop form of the derived `fold` of linear data (in-place reversal, then a fold from the end) measured on `nat_loop` +8.1% instructions and -23% best cycles. **Decided**: the owner adopted the loop form for linear data (P6, fourth round, decision 3; `spec/type_system.md` Rule 7.4.b.3). Being built (`docs/plans/implementation-plan.md`, Phase 4.2, item 20); trees, rose trees and snoc lists still take one frame per level.
+- Trees, rose trees and snoc lists still take one native frame per level in every derived member.
 - A program's `satisfies` body for a member that the compiler provides on a scalar (`i64 satisfies Eq: fn eq = …`) is ignored, in both modes. Open for the owner.
-- `compare` on a scalar or a `String` has no table entry, and a `String` field makes a derived `compare` `B005`, reported at 1:1.
 - Tables built at run time for growing types are interned and kept until exit, where Rule CM4.2 says a stack record per frame: a closure can capture the table and outlive the frame.
-- `Ord` or `Numeric` tables through a growing type whose data type has a program `satisfies Ord` body are `B005`.
-- A `satisfies` body of a data type with a bounded parameter that uses the parameter's table does not take that table (`B005` through a run-time table; invalid IR in a static table).
-- A `handle` with no `return` clause around a `-> !` subject fails at clang.
-- With `--no-specialise`, a `satisfies` body that calls a generic function at its own data type crashes the compiler ("takes 2 arguments, called with 0").
-- Tuples of three or more elements are lowered as pairs: `(1, 2, 3).show()` prints `Tuple(1, 2)` and `(1, 2, 3) == (1, 2, 4)` is true, in both modes.
-- With `--no-specialise`, `x + -9223372036854775808` at a float instance gives +9.22e18: the backend applies `fromI64` before negating.
 - A hint can name `prelude.X`, which a program cannot write, when the program's own `X` lacks the member, for `==` and `<` with a program `Eq` or `Ord`, and on a concrete receiver over a parameter.
 - The type variables of a `satisfies` clause are fresh parameters, not the data type's; the typer maps them by name when it compares arguments.
 - Escape reasons in `--explain-memory` print raw character offsets.
 - A problem with no span in prelude code prints at the program's 1:1 with the prefix "in the prelude:".
 - `bool` does not satisfy `Ord` in the typer, though `Declarations.provided` says every primitive does.
 - A negated literal at a mismatched type gets two `T002`s; lambda-parameter variables print as `?N` in mismatches.
+- Float literal patterns are `B005` (`spec/pattern_matching.md` §3.3 asks for bitwise equality; the backend has no bitcast), and so is a literal in a `let` pattern.
+- `spec/stdlib.md` fixes no order for `String`; the runtime orders bytewise. Open for the owner.
+- A program's `satisfies Ord` body on a scalar defines `compare`, but `<` and the table's `lt` and `le` stay built in, so they can disagree. Open, with the other built-in scalar members.
+- The typer accepts a tuple of three or more elements where `Pair of (A, B)` is required, and the program crashes; `Members.candidates` resolves `Tuple`'s two-field members on tuples of any size. A run-time table, or a generated member's baseline, at a tuple of other than two elements is `B005`.
+- Exhaustiveness is more conservative than §6.1 of `spec/pattern_matching.md`: `W(n, true)` / `W(n, false)` is `T020`.
+- An out-of-range literal that reaches its type through a type parameter (`order(18446744073709551615, 1)` with `T is Ord`) defaults to `i64` and wraps.
+- `Box of (A is Eq)` reached from `T is Ord` through a growing type is `B005` ("no table of `Eq`").
+- The scanner reads the escape `\0` as a space.
+- The compiler accepts a function that calls itself, which the spec makes a compile error (totality); test programs rely on it. Open for the owner.
 
 Limits and gaps of the first implementation, against the spec:
 
