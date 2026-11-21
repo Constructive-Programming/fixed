@@ -25,7 +25,20 @@ object Namer:
       case other                           => List(other)
     val (entered, decls) = mapAccum(stdlib.copy(owner = SymbolId.Root), items)(enterTopLevel)
     val typed = typeAll(entered, decls.flatten)
-    (typed.table.copy(scope = typed.global), typed.diags.reverse)
+    (unshadowed(typed.table, typed.global).copy(scope = typed.global), typed.diags.reverse)
+
+  /** A stdlib data type whose name a top-level declaration of the program takes is renamed
+    * `prelude.<name>`: the backend names generated code and tables after the type, and the two must
+    * not meet under one name. Diagnostics of the later phases show the qualified name. `String`
+    * keeps its name: the backend recognises the built-in by it.
+    */
+  private def unshadowed(table: SymbolTable, scope: Map[String, SymbolId]): SymbolTable =
+    table.denotations.foldLeft(table) { (t, d) =>
+      val shadowed = scope.get(d.name).exists(_ != d.id) && d.name != "String"
+      if d.owner == SymbolId.Prelude && d.kind == SymKind.Data && shadowed then
+        t.rename(d.id, s"prelude.${d.name}")
+      else t
+    }
 
   /** The stdlib, indexed once: prelude names bound, modules recorded for `use`. Pure, so shared. */
   private lazy val stdlib: Ctx =
@@ -139,13 +152,18 @@ object Namer:
       tree match
         case Trees.SatisfiesDecl(typeName, capRef, mappings, _) =>
           val (ci1, cap) = capBound(ci, capRef)
+
+          /** The satisfying type as this scope resolves it: a program's own `data Order` is not the prelude's. */
+          val data = ci1.lookup(typeName).filter(ci1.table(_).kind == SymKind.Data)
+          val self = data.fold(Type.PrimType(typeName))(Type.TypeRef(_, Nil))
           val withCtors = cap match
             case Some(Type.CapRef(c, _)) =>
-              mappings.foldLeft(ci1.table.satisfy(typeName, cap.get)) {
-                case (t, Trees.ConstructorMapping(variant, ctor, _)) => t.mapConstructor(c, ctor, typeName, variant)
-                case (t, _)                                          => t
+              mappings.foldLeft(ci1.table.satisfy(self, cap.get)) {
+                case (t, Trees.ConstructorMapping(variant, ctor, _)) =>
+                  data.fold(t)(t.mapConstructor(c, ctor, _, variant))
+                case (t, _) => t
               }
-            case Some(other) => ci1.table.satisfy(typeName, other)
+            case Some(other) => ci1.table.satisfy(self, other)
             case None        => ci1.table
           (ci1.copy(table = withCtors), Type.UnitType)
         case t: Trees.FnDecl                         => fnSignature(ci, t, anonymousBounds = true)

@@ -256,7 +256,7 @@ class WitnessSuite extends munit.FunSuite:
     i
 
   private def tableOf(lower: Lower, t: fixed.core.Type, cap: String): StaticTable =
-    lower.table(t, cap).fold(fail(_), identity)
+    lower.table(t, symbols.scope(cap)).fold(fail(_), identity)
 
   /** Closure code `name`: the closure, then `params`; `lets`, then `result`. */
   private def code(name: String, params: List[Var], ret: CType)(lets: (Var, Rhs)*)(result: Atom): Fn =
@@ -494,7 +494,13 @@ class WitnessSuite extends munit.FunSuite:
     assertEquals(order("Optional"), List("some", "none", "fold", "map", "foldRight", "find"))
     assertEquals(order("Folding"), List("fold", "foldRight", "find"))
     assertEquals(order("Show"), List("show"))
-    assertEquals(Lower(unit).table(prim("bool"), "Numeric"), Left("`bool` does not define `Numeric.fromI64`"))
-    assertEquals(Lower(unit).table(data("List", prim("u64")), "Eq"), Left("`List of u64` does not define `Eq.eq`"))
+    assertEquals(
+      Lower(unit).table(prim("bool"), symbols.scope("Numeric")),
+      Left("`bool` does not define `Numeric.fromI64`")
+    )
+    assertEquals(
+      Lower(unit).table(data("List", prim("u64")), symbols.scope("Eq")),
+      Left("`List of u64` does not define `Eq.eq`")
+    )
     val a = fixed.core.Type.TypeRef(symbols.typeParamsOf(symbols.scope("List")).head, Nil)
-    assert(Lower(unit).table(data("List", a), "Folding").left.exists(_.contains("run time")))
+    assert(Lower(unit).table(data("List", a), symbols.scope("Folding")).left.exists(_.contains("run time")))

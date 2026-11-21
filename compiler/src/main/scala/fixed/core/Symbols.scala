@@ -34,7 +34,8 @@ final case class Denotation(
 )
 
 /** Every symbol of a compilation, by id, plus what the Namer learns alongside: each owner's
-  * members in entry order, the top-level scope and the `satisfies` declarations by type name.
+  * members in entry order, the top-level scope and the `satisfies` declarations by satisfying type
+  * (a data type's symbol, not its name, which a program's own declaration may shadow).
   * Persistent: entering or refining returns a new table.
   */
 final case class SymbolTable(
@@ -43,8 +44,8 @@ final case class SymbolTable(
     children: IntMap[Vector[SymbolId]],
     typeParams: IntMap[List[SymbolId]],
     scope: Map[String, SymbolId],
-    satisfies: Map[String, List[Type]],
-    constructors: Map[(Int, String), List[(String, String)]],
+    private[core] val satisfies: Map[Type, List[Type]],
+    constructors: Map[(Int, String), List[(SymbolId, String)]],
     defaulted: scala.collection.immutable.BitSet
 ):
 
@@ -86,7 +87,6 @@ final case class SymbolTable(
   /** A variant's fields, in declaration order. */
   def fieldsOf(variant: SymbolId): Iterator[Denotation] = membersOf(variant).filter(_.kind == SymKind.Field)
 
-  /** Record `typeName satisfies cap`. */
   /** Record that field (or parameter) `id` declares a default value. */
   def markDefaulted(id: SymbolId): SymbolTable = copy(defaulted = defaulted.incl(id.toInt))
 
@@ -95,21 +95,33 @@ final case class SymbolTable(
   /** The top-level data type called `name`, if any. */
   def dataNamed(name: String): Option[SymbolId] = scope.get(name).filter(apply(_).kind == SymKind.Data)
 
-  /** Record `typeName satisfies cap` mapping `variant as ctor` (for constructor resolution). */
-  def mapConstructor(cap: SymbolId, ctor: String, typeName: String, variant: String): SymbolTable =
+  /** Record `data satisfies cap` mapping `variant as ctor` (for constructor resolution). */
+  def mapConstructor(cap: SymbolId, ctor: String, data: SymbolId, variant: String): SymbolTable =
     val key = (cap.toInt, ctor)
-    copy(constructors = constructors.updated(key, constructors.getOrElse(key, Nil) :+ (typeName -> variant)))
+    copy(constructors = constructors.updated(key, constructors.getOrElse(key, Nil) :+ (data -> variant)))
 
   /** The data types (with the variant) that implement `cap`'s constructor requirement `ctor`. */
-  def constructorsOf(cap: SymbolId, ctor: String): List[(String, String)] =
+  def constructorsOf(cap: SymbolId, ctor: String): List[(SymbolId, String)] =
     constructors.getOrElse((cap.toInt, ctor), Nil)
 
-  def satisfy(typeName: String, cap: Type): SymbolTable =
-    copy(satisfies = satisfies.updated(typeName, satisfies.getOrElse(typeName, Nil) :+ cap))
+  /** Record `t satisfies cap`. A data type is keyed by its symbol, its arguments ignored; any other
+    * type (a primitive, or the Namer's `PrimType` for a name that resolves to no data type) by itself.
+    */
+  def satisfy(t: Type, cap: Type): SymbolTable =
+    val key = SymbolTable.satisfier(t)
+    copy(satisfies = satisfies.updated(key, satisfies.getOrElse(key, Nil) :+ cap))
+
+  /** The capabilities `t`'s `satisfies` declarations name, in declaration order. */
+  def satisfactionsOf(t: Type): List[Type] = satisfies.getOrElse(SymbolTable.satisfier(t), Nil)
+
+  /** Replace a symbol's name. */
+  def rename(id: SymbolId, name: String): SymbolTable = update(id, _.copy(name = name))
 
   /** Replace a symbol's signature type. */
-  def refine(id: SymbolId, info: Type): SymbolTable =
-    copy(entries = entries.updated(id.toInt - SymbolTable.firstId, apply(id).copy(info = info)))
+  def refine(id: SymbolId, info: Type): SymbolTable = update(id, _.copy(info = info))
+
+  private def update(id: SymbolId, f: Denotation => Denotation): SymbolTable =
+    copy(entries = entries.updated(id.toInt - SymbolTable.firstId, f(apply(id))))
 
   /** All denotations in entry order. */
   def denotations: List[Denotation] = entries.toList
@@ -119,6 +131,12 @@ object SymbolTable:
     * real symbols are dense from 2, so `entries` is indexed by `id - firstId`.
     */
   val firstId: Int = 2
+
+  /** The key of [[SymbolTable.satisfies]]: a data type without its arguments. */
+  private def satisfier(t: Type): Type =
+    t match
+      case Type.TypeRef(id, _) => Type.TypeRef(id, Nil)
+      case other               => other
 
   val empty: SymbolTable =
     SymbolTable(Vector.empty, firstId, IntMap.empty, IntMap.empty, Map.empty, Map.empty, Map.empty, BitSet.empty)

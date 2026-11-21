@@ -166,15 +166,15 @@ object Members:
         d.kind match
           case SymKind.Data =>
             field(s, id, args, name).toList ++
-              capMember(s, s.symbols.satisfies.getOrElse(d.name, Nil), t, name) ++
+              capMember(s, s.symbols.satisfactionsOf(t), t, name) ++
               Option.when(name == "fold" && s.symbols.variantsOf(id).nonEmpty)(
                 Candidate(Resolution.DerivedFold(id), () => derivedFold(s, id, args))
               )
           case SymKind.TypeParam => capMember(s, boundsOf(s, id), t, name)
           case _                 => Nil
-      case t @ Type.PrimType(n) =>
+      case t @ Type.PrimType(_) =>
         val numeric = if isNumeric(s, t) then s.symbols.scope.get("Numeric").map(Type.CapRef(_, Nil)).toList else Nil
-        capMember(s, s.symbols.satisfies.getOrElse(n, Nil) ++ numeric, t, name)
+        capMember(s, s.symbols.satisfactionsOf(t) ++ numeric, t, name)
       case t @ Type.CapRef(_, _)  => capMember(s, List(t), t, name)
       case Type.IsBound(bs)       => capMember(s, bs, resolved, name)
       case Type.TypeVar(id)       => capMember(s, s.unifier.boundsOf(id), resolved, name)
@@ -289,7 +289,7 @@ object Members:
           case None                     =>
             val (s1, args) = freshArgs(s, owner)
             val self = Type.TypeRef(owner, args)
-            capMember(s1, s1.symbols.satisfies.getOrElse(d.name, Nil), self, name, SymKind.StaticMethod)
+            capMember(s1, s1.symbols.satisfactionsOf(self), self, name, SymKind.StaticMethod)
               .headOption
               .map(_())
       case SymKind.TypeParam =>

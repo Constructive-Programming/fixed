@@ -29,17 +29,18 @@ private[backend] trait Tables extends Generated:
   protected def functionNamed(name: String): Fn
 
   /** The table of capability `cap` at type `t`, or why there is none. */
-  def table(t: Type, cap: String): Either[String, Atom.StaticTable] =
+  def table(t: Type, cap: SymbolId): Either[String, Atom.StaticTable] =
     val known = Lower.scalar(t).isDefined || dataOf(t).isDefined || isStringType(t) || productFields(t).isDefined
-    (Option.when(known)(ctype(t, Span.NoSpan)), symbols.scope.get(cap).filter(symbols(_).kind == SymKind.Cap)) match
+    val name = symbols(cap).name
+    Option.when(known)(ctype(t, Span.NoSpan)) match
       case _ if typeParamsIn(t).nonEmpty =>
         Left(s"a table at `${symbols.render(t)}` needs a witness record built at run time, which is not built yet")
-      case (Some(c), Some(id)) =>
-        val (missing, entries) = Tables.members(symbols, id).partitionMap(m => entry(t, c, id, m).toRight(m))
+      case Some(c) =>
+        val (missing, entries) = Tables.members(symbols, cap).partitionMap(m => entry(t, c, cap, m).toRight(m))
         missing.headOption match
-          case Some(m) => Left(s"`${symbols.render(t)}` does not define `$cap.$m`")
-          case None    => Right(Atom.StaticTable(s"${symbols.render(t)}:$cap", entries.map((_, ""))))
-      case _ => Left(s"no table of `$cap` at `${symbols.render(t)}`")
+          case Some(m) => Left(s"`${symbols.render(t)}` does not define `$name.$m`")
+          case None    => Right(Atom.StaticTable(s"${symbols.render(t)}:$name", entries.map((_, ""))))
+      case None => Left(s"no table of `$name` at `${symbols.render(t)}`")
 
   /** The capabilities of type parameter `p`'s bound set that get a table (Rule CM4.3): aliases
     * expanded, in the order written; a capability without members has none, and neither has one
@@ -84,7 +85,7 @@ private[backend] trait Tables extends Generated:
         tableOf(t, cap),
         s"no table of `${symbols(cap).name}` for `${symbols.render(t)}`, whose bound set has none of its own"
       )
-    else table(t, symbols(cap).name)
+    else table(t, cap)
 
   /** The entry of `member`: its adapter, `""` for a null entry, `None` if `t` does not define it. */
   private def entry(t: Type, c: CType, cap: SymbolId, member: String): Option[String] =

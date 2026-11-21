@@ -54,7 +54,8 @@ object Satisfaction:
               case Type.TypeVar(_) => true
               case solved          => holds(s, solved, cap, Nil, assumed).isDefined
             val elements = !onRequest(s, cap) || recvArgs.forall(element)
-            if declared(s, d.name, cap) && elements || (!onRequest(s, cap) && derived(s, id, cap, recvArgs, assumed))
+            if declared(s, Type.TypeRef(id, Nil), cap) && elements ||
+              (!onRequest(s, cap) && derived(s, id, cap, recvArgs, assumed))
             then
               withArgs(s, recvArgs, args)
             else None
@@ -63,7 +64,7 @@ object Satisfaction:
         val numeric = Members.isNumeric(s, Type.PrimType(n)) &&
           s.symbols.scope.get("Numeric").exists(nu => s.members.closure(nu).contains(cap.toInt))
         val clone = primitives(n) && onRequest(s, cap)
-        Option.when(numeric || clone || declared(s, n, cap))(s)
+        Option.when(numeric || clone || declared(s, Type.PrimType(n), cap))(s)
       case Type.IsBound(bs)       => Option.when(boundsReach(s, bs, cap))(s)
       case c @ Type.CapRef(_, _)  => Option.when(boundsReach(s, List(c), cap))(s)
       case Type.TypeVar(id)       => unsolved(s, id, cap)
@@ -114,9 +115,7 @@ object Satisfaction:
   def constructor(s: TyperState, cap: SymbolId, call: fixed.ast.Trees.StaticCall, pt: fixed.core.Proto)
       : Option[(TyperState, Type)] =
     val expected = pt.expected.map(s.unifier.resolve)
-    val candidates = s.symbols.constructorsOf(cap, call.method).flatMap { (typeName, variant) =>
-      s.symbols.dataNamed(typeName).map(_ -> variant)
-    }
+    val candidates = s.symbols.constructorsOf(cap, call.method)
     def fits(data: SymbolId): Boolean =
       expected match
         case Some(Type.TypeRef(d, _)) if s.symbols(d).kind == SymKind.Data => d == data
@@ -160,9 +159,9 @@ object Satisfaction:
     val bounds = s.unifier.boundsOf(id)
     Option.when(bounds.isEmpty || boundsReach(s, bounds, cap))(s)
 
-  /** An in-scope `name satisfies C'` with `cap` in `closure(C')`. */
-  private def declared(s: TyperState, name: String, cap: SymbolId): Boolean =
-    boundsReach(s, s.symbols.satisfies.getOrElse(name, Nil), cap)
+  /** A `t satisfies C'` with `cap` in `closure(C')`. */
+  private def declared(s: TyperState, t: Type, cap: SymbolId): Boolean =
+    boundsReach(s, s.symbols.satisfactionsOf(t), cap)
 
   /** Data type `data` provides capability member `m` without a body: the derived `fold` (Rule
     * 7.4.a), for a `fold` that takes one function per variant; the accessor of a single-variant

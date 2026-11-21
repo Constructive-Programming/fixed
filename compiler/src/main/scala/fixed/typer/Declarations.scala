@@ -80,7 +80,8 @@ object Declarations:
   private def undefined(s: TyperState, d: Trees.SatisfiesDecl, cap: SymbolId): List[String] =
     val data = s.symbols.dataNamed(d.typeName)
     val bodies = d.mappings.collect { case fn: Trees.FnLike if fn.body.isDefined => fn.name }.toSet
-    val own = s.symbols.satisfies.getOrElse(d.typeName, Nil).collect { case Type.CapRef(c, _) => c }.toSet
+    val self = data.fold(Type.PrimType(d.typeName))(Type.TypeRef(_, Nil))
+    val own = s.symbols.satisfactionsOf(self).collect { case Type.CapRef(c, _) => c }.toSet
     val builtin = data.isEmpty || d.typeName == "String"
     def needed(k: SymbolId) = (k == cap || !own(k)) && !(builtin && provided(d.typeName, s.symbols(k).name))
     def defined(m: Denotation) = bodies(m.name) || s.symbols.hasDefault(m.id) ||

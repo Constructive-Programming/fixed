@@ -404,7 +404,7 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
       for
         (p, t) <- pairs if !isTypeParam(t)
         cap <- boundCaps(p)
-        table <- table(t, symbols(cap).name).toOption.toList
+        table <- table(t, cap).toOption.toList
         (m, e) <- Tables.members(symbols, cap).zip(table.entries) if e._1.isEmpty && calledEntries(p)(m)
       yield s"`${symbols.render(t)}` has no `${symbols(cap).name}.$m` the backend builds"
     missing.headOption.toLeft(())
@@ -606,7 +606,7 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
     dataOf(recvType).flatMap { (data, _) =>
       val ctors = symbols.membersOf(cap).filter(_.kind == SymKind.StaticMethod).map(_.name).toList
       val variants = symbols.variantsOf(data).map(_.name).toList
-      val variantOf = ctors.map(c => symbols.constructorsOf(cap, c).find(_._1 == symbols(data).name).map(_._2))
+      val variantOf = ctors.map(c => symbols.constructorsOf(cap, c).find(_._1 == data).map(_._2))
       Option.when(ctors.size == arity && variantOf.forall(_.isDefined) && variantOf.flatten.toSet == variants.toSet)(
         variants.map(v => variantOf.indexOf(Some(v)))
       )
@@ -637,7 +637,7 @@ final class Lower(unit: CompilationUnit, chosen: Set[(String, String)] = Set.emp
     (m.method, m.args.getOrElse(Nil), dataOf(result), symbols.scope.get("Result")) match
       case ("parseU64", List(arg), Some((data, _)), Some(cap)) =>
         val tagOf = (ctor: String) =>
-          symbols.constructorsOf(cap, ctor).find(_._1 == symbols(data).name)
+          symbols.constructorsOf(cap, ctor).find(_._1 == data)
             .map(c => symbols.variantsOf(data).indexWhere(_.name == c._2)).getOrElse(0)
         expr(arg, sc) { a =>
           val (v, ok) = (fresh("n", CType.Int(64, signed = false)), fresh("ok", CType.Bool))

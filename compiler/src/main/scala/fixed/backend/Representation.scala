@@ -13,8 +13,11 @@ import fixed.typer.Members
 final class Representation(unit: CompilationUnit):
   private val symbols = unit.symbols
 
-  private val dataInScope: List[Denotation] =
-    symbols.scope.values.toList.distinct.map(symbols(_)).filter(_.kind == SymKind.Data).sortBy(_.id.toInt)
+  /** Every data type of the program, the prelude and the stdlib modules, whether in scope or not:
+    * a program's declaration of the same name hides a prelude type's name, not its satisfactions.
+    */
+  private val topLevelData: List[Denotation] =
+    symbols.denotations.filter(d => d.kind == SymKind.Data && (d.owner == SymbolId.Root || d.owner == SymbolId.Prelude))
 
   /** `t` with every capability bound replaced by its representation, where one exists. */
   def apply(t: Type): Type =
@@ -26,7 +29,7 @@ final class Representation(unit: CompilationUnit):
 
   private def caps(bounds: List[Type]): Option[Type] =
     val wanted = Members.expandAliases(symbols, bounds).collect { case Type.CapRef(c, args) => (c, args.map(apply)) }
-    dataInScope.filter(d => wanted.forall((c, _) => satisfies(d, c))) match
+    topLevelData.filter(d => wanted.forall((c, _) => satisfies(d, c))) match
       case List(d) if wanted.nonEmpty =>
         val params = symbols.typeParamsOf(d.id).size
         val args = wanted.map(_._2).find(_.nonEmpty).getOrElse(Nil).takeRight(params)
@@ -39,7 +42,7 @@ final class Representation(unit: CompilationUnit):
 
   private def satisfies(d: Denotation, cap: SymbolId): Boolean =
     val members = unit.typing.map(_.members)
-    symbols.satisfies.getOrElse(d.name, Nil).exists {
+    symbols.satisfactionsOf(Type.TypeRef(d.id, Nil)).exists {
       case Type.CapRef(declared, _) => declared == cap || members.exists(_.closure(declared).contains(cap.toInt))
       case _                        => false
     }
@@ -47,8 +50,8 @@ final class Representation(unit: CompilationUnit):
   /** A product capability's one constructor requirement, when no data type satisfies the capability. */
   def constructor(cap: SymbolId): Option[Denotation] =
     symbols.membersOf(cap).filter(_.kind == SymKind.StaticMethod).toList match
-      case List(ctor) if !dataInScope.exists(satisfies(_, cap)) && symbols(cap).kind == SymKind.Cap => Some(ctor)
-      case _                                                                                        => None
+      case List(ctor) if !topLevelData.exists(satisfies(_, cap)) && symbols(cap).kind == SymKind.Cap => Some(ctor)
+      case _                                                                                         => None
 
   /** The auto-flat-struct fields of product capability `cap` at arguments `args`: names and types. */
   def fields(cap: SymbolId, args: List[Type]): List[(String, Type)] =

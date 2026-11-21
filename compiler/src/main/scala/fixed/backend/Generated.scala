@@ -298,7 +298,7 @@ private[backend] trait Generated:
   /** The variant tag that capability constructor `ctor` maps to on the data type representing `t`. */
   protected def capVariant(cap: SymbolId, ctor: String, t: Type): Option[Int] =
     dataOf(t).flatMap((d, _) =>
-      symbols.constructorsOf(cap, ctor).find(_._1 == symbols(d).name).map(c =>
+      symbols.constructorsOf(cap, ctor).find(_._1 == d).map(c =>
         symbols.variantsOf(d).indexWhere(_.name == c._2)
       )
     )

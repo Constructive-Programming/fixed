@@ -1,6 +1,6 @@
 package fixed.typer
 
-import fixed.core.{SymKind, SymbolId, SymbolTable, render}
+import fixed.core.{SymKind, SymbolId, SymbolTable, Type, render}
 import fixed.parsing.Parser
 import fixed.util.{DiagCode, Diagnostic, SourceFile}
 
@@ -82,9 +82,16 @@ class NamerSuite extends munit.FunSuite:
     assertEquals(table(table.scope("Widget")).kind, SymKind.Import)
     assert(!table.scope.contains("FileSystem"))
 
-  test("satisfies declarations are recorded by type name"):
+  test("satisfies declarations are recorded by the satisfying type's symbol, not its name"):
     val (table, diags) =
-      indexString("data Perhaps of A:\n    Just(value: A)\n    Nothing\nPerhaps satisfies Optional\n")
+      indexString(
+        "data Perhaps of A:\n    Just(value: A)\n    Nothing\nPerhaps satisfies Optional\ndata Order:\n    Open\n"
+      )
     assertEquals(diags, Nil)
-    assertEquals(table.satisfies("Perhaps").map(table.render), List("Optional"))
-    assert(table.satisfies("u64").map(table.render).contains("Show"))
+    assertEquals(table.satisfactionsOf(Type.TypeRef(table.scope("Perhaps"), Nil)).map(table.render), List("Optional"))
+    assert(table.satisfactionsOf(Type.PrimType("u64")).map(table.render).contains("Show"))
+
+    /** The program's `Order` shadows the prelude's name, not its satisfactions; the prelude's is renamed. */
+    assertEquals(table.satisfactionsOf(Type.TypeRef(table.scope("Order"), Nil)), Nil)
+    val prelude = table.denotations.filter(_.name == "prelude.Order").map(d => Type.TypeRef(d.id, Nil))
+    assert(prelude.exists(table.satisfactionsOf(_).map(table.render).contains("Ordering")), prelude)
