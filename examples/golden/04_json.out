@@ -1,0 +1,14 @@
+{
+  "name": "Alice",
+  "age": 30.0,
+  "active": true,
+  "tags": [
+    "admin",
+    "user"
+  ],
+  "address": null
+}
+Tags: [
+  "admin",
+  "user"
+]

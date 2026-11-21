@@ -116,7 +116,7 @@ A linear effect's row entry carries quantity 1 (per `spec/quantities.md` §3 sem
 
 **Rule E3.5.a (Linearity check).** For each linear effect E in a function's inferred row (after handler subtraction per Rule E5.3), the typer verifies:
 
-- Sequential ops on E in the same code path → usage `1 + 1 = ω` → **error[E083]: linear effect used multiple times in <fn>** with location of each call.
+- Sequential ops on E in the same code path → usage `1 + 1 = ω` → **error\[E083\]: linear effect used multiple times in <fn>** with location of each call.
 - Ops on E in mutually exclusive branches → usage `1 ⊔ 1 = 1` → OK.
 - A function call whose body uses E propagates that callee's usage; if the caller is already at usage 1 for E, the call is rejected.
 

@@ -2,6 +2,7 @@
 target/
 *.o
 *.out
+!examples/golden/*.out
 
 # Scala / sbt
 .bloop/

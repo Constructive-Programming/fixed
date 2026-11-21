@@ -2,6 +2,13 @@ ThisBuild / scalaVersion := "3.10.1"
 ThisBuild / organization := "com.fixed"
 ThisBuild / version := "0.1.0-SNAPSHOT"
 
+// sbt-typelevel (pulled in by sbt-typelevel-site, see the `docs` project below) evaluates
+// sbt-git's `git.gitUncommittedChanges` at load, and its bundled JGit cannot handle linked
+// git worktrees ("Bare Repository has neither a working tree, nor an index"). Pin the key so
+// the build loads in worktree checkouts; nothing in this build consumes it (the version is
+// static above), so the pinned value is inert.
+ThisBuild / git.gitUncommittedChanges := false
+
 ThisBuild / scalacOptions ++= Seq(
   "-feature",
   "-deprecation",
@@ -115,6 +122,82 @@ lazy val bench = (project in file("bench"))
     publish / skip := true,
     // JMH state classes need `var` fields and loops; generated code trips -Werror lints.
     scalacOptions --= Seq("-Werror", "-Wunused:all", "-Wvalue-discard")
+  )
+
+// Docs site — Laika + Helium via sbt-typelevel-site, the same mechanism as the
+// sister project eo (eo.constructive.dev). Rooted at `site/` on disk, named `docs`
+// in sbt so `sbt docs/tlSite` / `sbt docs/tlSitePreview` read naturally. Kept out
+// of the root aggregator so plain `sbt check test` stays fast;
+// .github/workflows/deploy-site.yml builds it and deploys to Cloudflare Pages
+// (fixed.constructive.dev).
+lazy val docs = (project in file("site"))
+  .enablePlugins(TypelevelSitePlugin)
+  .settings(
+    name := "fixed-docs",
+    publish / skip := true,
+    // Disable sbt-typelevel-site's default gh-pages publish step: production is
+    // served from Cloudflare Pages via .github/workflows/deploy-site.yml and
+    // GitHub Pages is not used on this repo (same as eo).
+    tlSitePublishBranch := None,
+    tlSitePublishTags := false,
+    // The plugin's mdocIn default is the ROOT `docs/` directory, which holds
+    // internal plans/decisions/baselines the public site should not ingest.
+    // Point it at the site's own docs directory.
+    mdocIn := (ThisBuild / baseDirectory).value / "site" / "docs",
+    // Laika's input tree is mdoc's output by default. Append the language spec
+    // itself so the site serves it straight from `spec/` — one source of truth,
+    // no duplicated spec copies to keep in sync; the .ebnf grammar rides along
+    // as a static file. Internal working notes (`docs/`) stay off the site,
+    // mirroring eo's exclusion of its own internal notes.
+    Laika / sourceDirectories += (ThisBuild / baseDirectory).value / "spec",
+    // Helium theme config — same constructive.dev brand identity as
+    // eo.constructive.dev: indigo accent, OS-driven dark mode, top nav with
+    // the brand favicon and the GitHub source link.
+    tlSiteHelium ~= {
+      import laika.ast.{Image, Path}
+      import laika.helium.config.{HeliumIcon, IconLink, ImageLink, TextLink}
+      import laika.theme.config.Color
+      _.all
+        .themeColors(
+          primary = Color.hex("3b3b8c"),
+          primaryMedium = Color.hex("8585c5"),
+          primaryLight = Color.hex("eaeaf5"),
+          secondary = Color.hex("5e5eb8"),
+          text = Color.hex("23272e"),
+          background = Color.hex("ffffff"),
+          bgGradient = (Color.hex("ffffff"), Color.hex("ffffff"))
+        )
+        .site
+        .darkMode
+        .themeColors(
+          primary = Color.hex("7878d6"),
+          primaryMedium = Color.hex("5e5eb8"),
+          primaryLight = Color.hex("2d333b"),
+          secondary = Color.hex("a3a3e6"),
+          text = Color.hex("e6edf3"),
+          background = Color.hex("1f242b"),
+          bgGradient = (Color.hex("1f242b"), Color.hex("23272e"))
+        )
+        .site
+        .topNavigationBar(
+          // Home link: project name as a text link to the site root.
+          // Helium's default home link (`DynamicHomeLink.default`)
+          // expects a configured landing page; we don't have one.
+          homeLink = TextLink.internal(Path.Root / "index.md", "Fixed"),
+          // Right-side nav: constructive.dev favicon (back to brand
+          // site) first, GitHub source link second.
+          navLinks = Seq(
+            ImageLink.external(
+              "https://www.constructive.dev/",
+              Image.external("https://www.constructive.dev/assets/img/favicon.svg")
+            ),
+            IconLink.external(
+              "https://github.com/Constructive-Programming/fixed",
+              HeliumIcon.github
+            )
+          )
+        )
+    }
   )
 
 lazy val root = (project in file("."))
