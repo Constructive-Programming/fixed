@@ -135,7 +135,7 @@ The prelude's satisfier of `Ordering` (§4.4), so `Ord.compare -> is Ordering` h
 **Rule S3.7 (Strings are UTF-8).** A `String` is a sequence of Unicode scalar values, held as valid UTF-8. No `String` holds bytes that are not valid UTF-8: every way to make one either cannot produce such bytes or checks them. (Owner's decision, fourth round of P6.)
 
 - **Order.** `String satisfies Ord` compares by Unicode code point, a shorter string before any string it is a prefix of. For valid UTF-8 this is the order of the bytes compared as unsigned values, which is how it is implemented. It is not alphabetical order in any language: `"Z" < "a"`.
-- **Equality.** `String satisfies Eq` compares code points. No Unicode normalisation is applied: a precomposed character and the same character written with a combining mark are different strings *(author's choice, owner to confirm)*.
+- **Equality.** `String satisfies Eq` compares code points. No Unicode normalisation is applied: a precomposed character and the same character written with a combining mark are different strings (confirmed by the owner). Canonical equivalence can come later as a library function and a named satisfaction of `Eq` (`spec/type_system.md` Rule 8.4.c).
 - **Collation and normalisation** are library matters: a named satisfaction (`String satisfies Ord named …`, `spec/type_system.md` Rule 8.4.c) selected by `using`, with the locale as an explicit value.
 - **Where bytes come in.** A string literal is checked by the scanner. Text read from outside the program (`Console.readLine`, and later files and sockets) is checked where it enters; text that is not valid UTF-8 does not become a `String`. Such an operation performs the abortive effect `Decode` (Rule S3.7.a).
 
@@ -152,7 +152,7 @@ String.fromUtf8(bytes: Bytes) -> String with Decode
 
 `Bytes` is a sequence of `u8` with no claim about its content. `readLine` is `readBytes` followed by `String.fromUtf8`. The handlers follow the arithmetic ones (`spec/effects.md` §3.6): one that turns `Decode` into an `Optional`, one that turns it into a `Result`. An unhandled `Decode` at `main` aborts with a message that gives the offset. Nothing substitutes replacement characters silently; a program that wants them calls a library function that says so.
 
-*(Author's choices, owner to confirm.)* The effect is named `Decode` and has the one operation above. `Bytes` is a prelude type that satisfies `Sequencing of u8`, `Eq` and `Ord`; its representation is a choice point like any other.
+The effect is named `Decode` and has the one operation above; later decoders add operations to the same effect. `Bytes` is a named prelude type that satisfies `Sequencing of u8`, `Eq` and `Ord` (bytewise); the runtime may back it with a flat buffer, so `readBytes` builds no cell per byte. (Confirmed by the owner, fourth round of P6.)
 
 Built today: the comparison and the equality. Not built: the check on input, the effect `Decode`, `Bytes`, `readBytes` and `fromUtf8`; `Console.readLine` passes bytes through unchecked.
 
