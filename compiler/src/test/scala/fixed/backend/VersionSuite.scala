@@ -113,9 +113,12 @@ class VersionSuite extends munit.FunSuite:
     assert(!a.fns.exists(_.name.startsWith("bump#")), a.fns.map(_.name))
 
   /** Each `Cons(order, tail)` that `unfold` builds keeps its tail part exclusive though `order`, a
-    * closure's result, is shared (`Versions.construct`), so `map`'s clone for it is reached.
+    * closure's result, is shared (`Versions.construct`), so `map`'s clone for it is requested. It
+    * is unused: `map` of a list is a loop (`Generated.loop`) that builds the cell reusing `x` before
+    * the call that takes `x`'s tail, and `Demands` takes that tail as overlapping the reused cell,
+    * so no clone of the loop takes `x` exclusive; each cell is reused after an `rc == 1` test.
     */
-  test("records: the clone of map for an exclusive tail part is chosen and reached"):
+  test("records: the clone of map for an exclusive tail part is requested, and unused by the loop"):
     val src = java.nio.file.Files.readString(java.nio.file.Path.of("bench", "runtime", "records.fixed"))
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString("records.fixed", src)))
     val map = "List of A.map[R]"
@@ -125,7 +128,7 @@ class VersionSuite extends munit.FunSuite:
     val a = Backend.analyse(unit, 2 * size).fold(ds => fail(s"$ds"), identity)
     assertEquals(
       a.candidates(map).map(c => c.key -> c.reason),
-      List("Order,Order" -> "", "Order,Order 0:List of Order#1,cell" -> "")
+      List("Order,Order" -> "", "Order,Order 0:List of Order#1,cell" -> "unused")
     )
     val names = a.fns.map(_.name).toSet
     assert(a.fns.forall(f => Core.callees(f.body).forall(g => names(g) || !g.contains("#"))), names)

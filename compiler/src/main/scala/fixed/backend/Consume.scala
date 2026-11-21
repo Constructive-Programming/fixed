@@ -25,7 +25,7 @@ object Consume:
     val borrowed = a.fns.map { f =>
       val kept = f.params.indices.filterNot(erased(f.name))
       f.name -> kept.zipWithIndex.collect {
-        case (i, j) if needs(f).lift(i).exists(_.root == Demand.Read) && keptAfter((f.name, i)) => j
+        case (i, j) if !loops(f) && needs(f).lift(i).exists(_.root == Demand.Read) && keptAfter((f.name, i)) => j
       }.toSet
     }.toMap
     val drop =
@@ -34,6 +34,20 @@ object Consume:
       f.copy(params = drop(f.name, f.params).collect { case v: Atom.Var => v }, body = calls(f.body, drop))
     )
     (fns, borrowed)
+
+  /** Whether `f` calls itself in tail position, which `EmitLLVM` emits as a jump. Such a function
+    * borrows nothing: an argument it passes on to a borrowed parameter of its own would be
+    * dropped after the call, which would then no longer be in tail position.
+    */
+  private def loops(f: Fn): Boolean =
+    def in(e: Expr): Boolean =
+      e match
+        case Expr.Let(x, Rhs.Call(g, _, false), Expr.Ret(y)) if g == f.name && y == x => true
+        case Expr.Let(x, rhs, body) => (body == Expr.Ret(x) && Core.branches(rhs).exists(in)) || in(body)
+        case Expr.Dup(_, b)         => in(b)
+        case Expr.Drop(_, b)        => in(b)
+        case Expr.Ret(_)            => false
+    in(f.body)
 
   /** A witness parameter is never erased: `Rc` adds `dup` and `drop` calls through it after demand inference. */
   private def witness(f: Fn, i: Int): Boolean = f.params(i).ctype == CType.Witness

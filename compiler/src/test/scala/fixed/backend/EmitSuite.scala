@@ -78,10 +78,10 @@ class EmitSuite extends munit.FunSuite:
     */
   private val reuseSites = Map(
     "bintrees" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 2097150L)),
-    "nat_loop" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 2000600L)),
-    "list_pipeline" -> (List(4000000L, 0L, 0L, 0L), List(0L, 4000000L, 0L, 10000600L)),
-    "records" -> (List(1000000L, 1000000L, 0L, 0L), List(0L, 2000000L, 0L, 4000300L)),
-    "fail_chain" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 9995800L))
+    "nat_loop" -> (List(2000200L, 0L, 0L, 0L), List(0L, 2000200L, 0L, 2000800L)),
+    "list_pipeline" -> (List(6000200L, 4000000L, 0L, 0L), List(0L, 10000200L, 0L, 16000800L)),
+    "records" -> (List(2000100L, 2000000L, 0L, 0L), List(0L, 4000100L, 0L, 6000400L)),
+    "fail_chain" -> (List(2000200L, 0L, 0L, 0L), List(0L, 2000200L, 0L, 7999400L))
   )
 
   programs.foreach { (dir, name) =>
@@ -291,20 +291,42 @@ class EmitSuite extends munit.FunSuite:
       "    Console.printLine(twice(() -> first(bump(a))).show())\n"
     check("closure_twice", src, "4\n")
 
+  /** No version of a loop calls itself: a self call in tail position is a jump back to the `loop`
+    * block (`EmitLLVM`). A version may call another version of the same loop once (the first step
+    * of an exclusive clone, say), so the calls between versions must not form a cycle: the native
+    * stack depth is then bounded by the number of versions, whatever the length of the list.
+    */
+  test("unfold and map of a list run as loops"):
+    val src = java.nio.file.Files.readString(Path.of("compiler", "src", "test", "fixed", "modes", "long_lists.fixed"))
+    (Mode.Default.copy(ownership = false) :: modes).foreach { mode =>
+      val fns = ir("long_lists", src, mode).split("\ndefine ").toList.tail.map(f =>
+        f.dropWhile(_ != '@').takeWhile(_ != '(') -> f
+      )
+      val loops = fns.filter((n, _) => List("unfoldLoop", "mapLoop", "reverseOnto").exists(n.contains)).toMap
+      val calls = loops.map((n, f) => n -> loops.keySet.filter(g => f.contains(s"call ptr $g(")))
+      assert(loops.values.exists(_.contains(".in, %entry ]")), s"$mode: no loop jumps back")
+      loops.keys.foreach(n => assert(!calls(n)(n), s"$mode: $n calls itself"))
+      def acyclic(n: String, path: Set[String]): Boolean = !path(n) && calls(n).forall(acyclic(_, path + n))
+      loops.keys.foreach(n => assert(acyclic(n, Set.empty), s"$mode: a cycle of calls through $n: $calls"))
+    }
+
   test("map over a fresh list reuses its cells; with --no-specialise only after an `rc == 1` test (Rule CM5.7)"):
     val src = header + "fn upto(n: u64) -> List of u64 =\n    List.unfold(0, (i) ->\n        if i >= n:\n" +
       "            List.Nil\n        else:\n            List.Cons(i, i + 1)\n    )\n\n" +
       "fn main() -> () with Console =\n" +
       "    Console.printLine(upto(4).map((x) -> x * 2).fold(0, (a, x) -> a + x).show())\n"
     val (default, plain) = (ir("map_reuse", src, Mode.Default), ir("map_reuse", src, Mode.NoSpecialise))
-    assert(default.contains("@\"fx_u_List of u64.map[u64]#x[") && default.contains("call ptr @fx_reuse_excl("))
+    assert(default.contains("@\"fx_u_List of u64.mapLoop[u64]#x[") && default.contains("call ptr @fx_reuse_excl("))
     assert(!plain.contains("#x[") && !plain.contains("call ptr @fx_reuse_excl("), plain)
     assert(plain.contains("call ptr @fx_reuse("), plain)
 
-    /** The default mode reuses each cell without a test; the baseline after a passing one. */
+    /** Three loops of four cells each: `unfold`, `map` and the reversal of each. The default mode
+      * reuses the cells of both reversals without a test, and those of `map` after a passing one
+      * (see VersionSuite, records); the baseline tests every reuse.
+      */
     val counts = check("map_reuse", src, "12\n")
-    assertEquals(sites(counts(Mode.Default)).init, List(4L, 0L, 0L))
-    assertEquals(sites(counts(Mode.NoSpecialise)).init, List(0L, 4L, 0L))
+    assertEquals(sites(counts(Mode.Default)).init, List(8L, 4L, 0L))
+    assertEquals(sites(counts(Mode.NoSpecialise)).init, List(0L, 12L, 0L))
 
     /** Ownership clones off: the clone of the type axis stays, so no witness call; every reuse tests. */
     val typeOnly = Mode.Default.copy(ownership = false)
@@ -315,7 +337,7 @@ class EmitSuite extends munit.FunSuite:
     )
     val (code, out, err) = run("map_reuse_typeonly", src, "", typeOnly)
     assertEquals((code, out), (0, "12\n"), err)
-    assertEquals(sites(Native.counters(err)), List(0L, 4L, 0L, 0L))
+    assertEquals(sites(Native.counters(err)), List(0L, 12L, 0L, 0L))
 
   test("one baseline version of a generic function runs at String and at i8, freeing every String (Rule CM3.1)"):
     val src = BaselineSuite.generic

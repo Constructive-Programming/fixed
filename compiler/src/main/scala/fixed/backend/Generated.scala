@@ -77,7 +77,8 @@ private[backend] trait Generated:
     */
   protected def derivedUnfold(data: SymbolId, args: List[Type], seed: Type, span: Span): String =
     val seedType = ctype(seed, span)
-    val name = generatedName(data, args, "unfold", if seed == Generated.R then "R" else seedType.toString)
+    val at = if seed == Generated.R then "R" else seedType.toString
+    val name = generatedName(data, args, "unfold", at)
     val ws = hidden(args :+ seed)
     instance(name) {
       val s = fresh("seed", seedType)
@@ -88,15 +89,24 @@ private[backend] trait Generated:
           data,
           t => Part(seed, t, v => bound(Rhs.Call(name, ws ++ List(v, step), runtime = false), CType.Boxed))
         )
-      val branches = perVariant(data, args, layer, span, Some(seedType)) { (tag, loaded) =>
-        construction(tag, loaded, fieldTransform(data, tag, loaded, recurse, span), Type.TypeRef(data, args))
-      }
-      Fn(
-        name,
-        ws ++ List(s, step),
-        CType.Boxed,
-        Expr.Let(layer, Rhs.CallClosure(step, List(s)), switch(layer, branches, CType.Boxed))
-      )
+      if linear(data) then
+        val go = generatedName(data, args, "unfoldLoop", at)
+        instance(go) {
+          val acc = typed(fresh("acc", CType.Boxed), Type.TypeRef(data, args), span)
+          val body = loopBody(data, args, args, layer, Some(seedType), (_, _) => None, acc, go, ws, step, span)
+          Fn(go, ws ++ List(s, step, acc), CType.Boxed, Expr.Let(layer, Rhs.CallClosure(step, List(s)), body))
+        }
+        Fn(name, ws ++ List(s, step), CType.Boxed, enterLoop(data, go, ws ++ List(s, step)))
+      else
+        val branches = perVariant(data, args, layer, span, Some(seedType)) { (tag, loaded) =>
+          construction(tag, loaded, fieldTransform(data, tag, loaded, recurse, span), Type.TypeRef(data, args))
+        }
+        Fn(
+          name,
+          ws ++ List(s, step),
+          CType.Boxed,
+          Expr.Let(layer, Rhs.CallClosure(step, List(s)), switch(layer, branches, CType.Boxed))
+        )
     }
 
   /** Rule 7.4.c: `x.map(f)` over the rightmost type parameter. Elements and recursive fields are
@@ -118,15 +128,123 @@ private[backend] trait Generated:
         if elemParam.contains(d) then
           Some(Part(t, newElem, v => bound(Rhs.CallClosure(f, List(v)), ctype(newElem, span))))
         else recurse(d, t)
-      val branches = perVariant(data, args, x, span) { (tag, loaded) =>
-        construction(
-          tag,
-          loaded,
-          fieldTransform(data, tag, loaded, leaf, span),
-          Type.TypeRef(data, args.dropRight(1) :+ newElem)
-        )
+      val outArgs = args.dropRight(1) :+ newElem
+      val out = Type.TypeRef(data, outArgs)
+      if linear(data) then
+        val go = generatedName(data, args, "mapLoop", shown(newElem))
+        instance(go) {
+          val acc = typed(fresh("acc", CType.Boxed), out, span)
+          Fn(go, ws ++ List(x, f, acc), CType.Boxed, loopBody(data, args, outArgs, x, None, leaf, acc, go, ws, f, span))
+        }
+        Fn(name, ws ++ List(x, f), CType.Boxed, enterLoop(data, go, ws ++ List(x, f)))
+      else
+        val branches = perVariant(data, args, x, span) { (tag, loaded) =>
+          construction(tag, loaded, fieldTransform(data, tag, loaded, leaf, span), out)
+        }
+        Fn(name, ws ++ List(x, f), CType.Boxed, switch(x, branches, CType.Boxed))
+    }
+
+  /** Whether `data`'s `unfold` and `map` run as a loop ([[loopStep]]): it has a variant without
+    * fields and one with a field of type `Self`, each variant's field of type `Self` is its last
+    * field (so the elements before it are produced first, as in the recursive form), and no other
+    * field mentions `data`. A list is linear; a tree, a rose tree and a snoc list are not.
+    */
+  private def linear(data: SymbolId): Boolean =
+    def mentions(t: Type): Boolean =
+      t match
+        case Type.TypeRef(`data`, _) => true
+        case _                       => t.children.exists(mentions)
+    val variants = symbols.variantsOf(data).toList.map(v => symbols.fieldsOf(v.id).map(_.info).toList)
+    variants.exists(_.isEmpty) && variants.exists(_.contains(declaredSelf(data))) &&
+    variants.forall(fs =>
+      fs.dropRight(1).forall(!mentions(_)) && fs.lastOption.forall(f => f == declaredSelf(data) || !mentions(f))
+    )
+
+  /** The body of loop `go` over the variants of `obj` (of `data` at `args`) that builds data at
+    * `outArgs` ([[loopStep]]), calling `go(ws, rest, closure, cell)` after each cell.
+    */
+  private def loopBody(
+      data: SymbolId,
+      args: List[Type],
+      outArgs: List[Type],
+      obj: Var,
+      seed: Option[CType],
+      leaf: Leaf,
+      acc: Var,
+      go: String,
+      ws: List[Var],
+      closure: Var,
+      span: Span
+  ): Expr =
+    val branches = perVariant(data, args, obj, span, seed) { (tag, loaded) =>
+      loopStep(data, outArgs, tag, loaded, leaf, acc, span)((rest, cell) =>
+        result(Rhs.Call(go, ws ++ List(rest, closure, cell), runtime = false), CType.Boxed)
+      )
+    }
+    switch(obj, branches, CType.Boxed)
+
+  /** The entry of a linear member: `go(args, acc)`, the cells built so far starting as the variant
+    * without fields.
+    */
+  private def enterLoop(data: SymbolId, go: String, args: List[Atom]): Expr =
+    val empty = fresh("empty", CType.Boxed)
+    val tag = symbols.variantsOf(data).toList.indexWhere(v => symbols.fieldsOf(v.id).isEmpty)
+    Expr.Let(empty, Rhs.Con(tag, Nil), result(Rhs.Call(go, args :+ empty, runtime = false), CType.Boxed))
+
+  /** One step of a loop that reads its input in order and builds linear data `data` at `args` in
+    * reverse: variant `tag` rebuilt from `loaded` (fields transformed by `leaf`). A variant with a
+    * recursive field becomes a cell that holds `into` in that field, and the loop goes on with
+    * `next(field, cell)`; another is the last cell, and [[reverseOnto]] puts `into`, the cells
+    * built so far, back in order in front of it. Every call is a self call in tail position, which
+    * `EmitLLVM` emits as a jump (EmitSuite checks that the loops of a list have no self call left).
+    */
+  private def loopStep(
+      data: SymbolId,
+      args: List[Type],
+      tag: Int,
+      loaded: List[(Type, Var)],
+      leaf: Leaf,
+      into: Var,
+      span: Span
+  )(next: (Var, Var) => Expr): Expr =
+    val rec = recursiveField(data, tag)
+    val fields = fieldTransform(data, tag, loaded, leaf, span)
+    val transform: Transform = (ft, v) => if rec >= 0 && v == loaded(rec)._2 then Some(_(into)) else fields(ft, v)
+    rebuild(loaded, transform) { as =>
+      val cell = typed(fresh("cell", CType.Boxed), Type.TypeRef(data, args), span)
+      Expr.Let(
+        cell,
+        Rhs.Con(tag, as),
+        if rec >= 0 then next(loaded(rec)._2, cell)
+        else
+          result(
+            Rhs.Call(reverseOnto(data, args, span), hidden(args) ++ List(into, cell), runtime = false),
+            CType.Boxed
+          )
+      )
+    }
+
+  /** The index of variant `tag`'s field of type `Self`, or -1. */
+  private def recursiveField(data: SymbolId, tag: Int): Int =
+    symbols.fieldsOf(symbols.variantsOf(data).toList(tag).id).indexWhere(_.info == declaredSelf(data))
+
+  /** `reverseOnto(acc, done)`: the cells of linear data `acc`, built in reverse by [[loop]], put in
+    * front of `done` in order; a loop too.
+    */
+  private def reverseOnto(data: SymbolId, args: List[Type], span: Span): String =
+    val name = generatedName(data, args, "reverseOnto", "")
+    val ws = hidden(args)
+    instance(name) {
+      val t = Type.TypeRef(data, args)
+      val (acc, done) = (typed(fresh("acc", CType.Boxed), t, span), typed(fresh("done", CType.Boxed), t, span))
+      val branches = perVariant(data, args, acc, span) { (tag, loaded) =>
+        if recursiveField(data, tag) < 0 then Expr.Ret(done)
+        else
+          loopStep(data, args, tag, loaded, (_, _) => None, done, span)((rest, cell) =>
+            result(Rhs.Call(name, ws ++ List(rest, cell), runtime = false), CType.Boxed)
+          )
       }
-      Fn(name, ws ++ List(x, f), CType.Boxed, switch(x, branches, CType.Boxed))
+      Fn(name, ws ++ List(acc, done), CType.Boxed, switch(acc, branches, CType.Boxed))
     }
 
   /** A part of a field that a generated member rebuilds: its type before and after, and how to

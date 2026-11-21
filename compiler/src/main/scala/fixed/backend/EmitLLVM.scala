@@ -18,6 +18,11 @@ final class EmitLLVM:
   private val entries = mutable.Set.empty[String]
   private val signatures = mutable.Map.empty[String, Fn]
 
+  /** The jumps back to the `loop` block of the function being emitted: each jumping block's label
+    * and the arguments it passes to the `loop` block's phis.
+    */
+  private val jumps = mutable.ListBuffer.empty[(String, List[String])]
+
   def program(fns: List[Fn]): String =
     entries ++= Core.indirectEntries(fns)
     signatures ++= fns.map(f => f.name -> f)
@@ -28,29 +33,52 @@ final class EmitLLVM:
 
   /** Emit `fn`. When `slots` is set, `fn` is a closure's code or a table entry: every parameter
     * after the closure or table, and the result, is an `i64` slot (Rule CM3.3(3)), so it narrows
-    * its parameters on entry and widens its result.
+    * its parameters on entry and widens its result. Otherwise a call of `fn` in tail position in
+    * its own body is a jump to the `loop` block, whose phis take the new parameters: the native
+    * stack stays bounded however often `fn` calls itself so (a derived `unfold` or `map` of linear
+    * data, `Generated.loop`).
     */
   private def function(fn: Fn, slots: Boolean): String =
     out.clear()
     aliases.clear()
+    jumps.clear()
     line("entry:")
     val inSlot = fn.params.zipWithIndex.map((p, i) => p -> (slots && i > 0)).toMap
-    val params =
-      fn.params.map(p => if inSlot(p) then s"i64 %${p.name}.s" else s"${EmitLLVM.llType(p.ctype)} %${p.name}")
     fn.params.filter(inSlot).foreach(p => narrow(p, s"%${p.name}.s"))
-    val (result, _) = value(fn.body, "entry")
+    if !slots then line("  br label %loop\nloop:")
+    val loopAt = out.length
+    val (result, end) = value(fn.body, if slots then "entry" else "loop", Option.when(!slots)(fn))
     val ret = zeroIfUnit(result, fn.ret)
     val retType = if slots then "i64" else EmitLLVM.llType(fn.ret)
-    line(s"  ret ${if slots then slotted(ret, fn.ret, "ret") else s"$retType $ret"}")
+    if end.nonEmpty then line(s"  ret ${if slots then slotted(ret, fn.ret, "ret") else s"$retType $ret"}")
+    val renamed = if jumps.isEmpty then "" else ".in"
+    val params = fn.params.map(p =>
+      if inSlot(p) then s"i64 %${p.name}.s" else s"${EmitLLVM.llType(p.ctype)} %${p.name}$renamed"
+    )
+    val phis = fn.params.zipWithIndex.map { (p, i) =>
+      val from = jumps.map((l, as) => s"[ ${as(i)}, %$l ]").mkString(", ")
+      s"  %${p.name} = phi ${EmitLLVM.llType(p.ctype)} [ %${p.name}.in, %entry ], $from\n"
+    }
+    if jumps.nonEmpty then out.insert(loopAt, phis.mkString)
     s"define $retType ${EmitLLVM.user(fn.name)}(${params.mkString(", ")}) {\n$out}\n"
 
-  /** Emit `e`, starting in block `label`; its result operand and the block it ends in. */
-  private def value(e: Expr, label: String): (String, String) =
+  /** Emit `e`, starting in block `label`; its result operand and the block it ends in, or an empty
+    * block where it ends in a jump back to `loop`. `tail`: the function, if `e`'s result is its
+    * result and its self tail calls are jumps.
+    */
+  private def value(e: Expr, label: String, tail: Option[Fn]): (String, String) =
     e match
-      case Expr.Ret(a)          => (operand(a), label)
-      case Expr.Dup(x, body)    => count(x, "dup", EmitLLVM.witnessDup); value(body, label)
-      case Expr.Drop(x, body)   => count(x, "drop", EmitLLVM.witnessDrop); value(body, label)
-      case Expr.Let(x, r, body) => value(body, rhs(x, r, label))
+      case Expr.Ret(a)        => (operand(a), label)
+      case Expr.Dup(x, body)  => count(x, "dup", EmitLLVM.witnessDup); value(body, label, tail)
+      case Expr.Drop(x, body) => count(x, "drop", EmitLLVM.witnessDrop); value(body, label, tail)
+
+      /** A self call whose arguments are not in its parameters' form stays a call. */
+      case Expr.Let(x, Rhs.Call(f, args, false), Expr.Ret(y))
+          if y == x && tail.exists(fn => fn.name == f && fn.params.map(_.ctype) == args.map(_.tpe)) =>
+        jumps += label -> args.map(a => zeroIfUnit(operand(a), a.tpe))
+        line("  br label %loop")
+        ("", "")
+      case Expr.Let(x, r, body) => value(body, rhs(x, r, label, tail.filter(_ => body == Expr.Ret(x))), tail)
 
   /** `dup` or `drop` `x`: a reference directly, a slot through its witness's entry at `offset`
     * (Rule CM4.1), an indirect call.
@@ -64,8 +92,10 @@ final class EmitLLVM:
         line(s"  %wop.$n = load ptr, ptr %wop.$n.p")
         line(s"  call void %wop.$n(i64 ${operand(x)})")
 
-  /** Emit `x = r`; the block emission continues in. */
-  private def rhs(x: Var, r: Rhs, label: String): String =
+  /** Emit `x = r`; the block emission continues in (empty where every branch of `r` jumped back to
+    * `loop`). `tail`: as for [[value]], for the branches of `r`.
+    */
+  private def rhs(x: Var, r: Rhs, label: String, tail: Option[Fn]): String =
     r match
       case Rhs.Move(a)           => move(x, a); label
       case Rhs.Prim(op, args)    => prim(x, op, args, label)
@@ -74,7 +104,7 @@ final class EmitLLVM:
       case Rhs.If(c, t, f)       =>
         val n = ids.next()
         line(s"  br i1 ${operand(c)}, label %then.$n, label %else.$n")
-        join(x, n, List(s"then.$n" -> t, s"else.$n" -> f))
+        join(x, n, List(s"then.$n" -> t, s"else.$n" -> f), tail)
       case Rhs.Switch(v, cases) =>
         val n = ids.next()
         line(s"  %tagp.$n = getelementptr inbounds i8, ptr ${operand(v)}, i64 8")
@@ -82,7 +112,7 @@ final class EmitLLVM:
         val labelled = cases.zipWithIndex.map { case ((tag, c), i) => (tag, s"case.$n.$i", c) }
         val branches = labelled.init.map((tag, l, _) => s"i32 $tag, label %$l").mkString(" ")
         line(s"  switch i32 %tag.$n, label %${labelled.last._2} [ $branches ]")
-        join(x, n, labelled.map((_, l, c) => l -> c))
+        join(x, n, labelled.map((_, l, c) => l -> c), tail)
       case Rhs.Con(tag, Nil) =>
         val name = s"nullary.$tag"
         statics(name) =
@@ -174,17 +204,23 @@ final class EmitLLVM:
   /** A closure's exclusive entry: `code` itself where no exclusive version was built. */
   private def orCode(exclusive: String, code: String): String = if exclusive.isEmpty then code else exclusive
 
-  /** Emit each branch in its own block and join their results with a phi; the join block. */
-  private def join(x: Var, n: Int, branches: List[(String, Expr)]): String =
-    val results = branches.map { (l, e) =>
+  /** Emit each branch in its own block and join their results with a phi; the join block, or an
+    * empty one where every branch jumped back to `loop`.
+    */
+  private def join(x: Var, n: Int, branches: List[(String, Expr)], tail: Option[Fn]): String =
+    val results = branches.flatMap { (l, e) =>
       line(s"$l:")
-      val (v, end) = value(e, l)
-      line(s"  br label %join.$n")
-      s"[ ${zeroIfUnit(v, x.ctype)}, %$end ]"
+      val (v, end) = value(e, l, tail)
+      Option.when(end.nonEmpty) {
+        line(s"  br label %join.$n")
+        s"[ ${zeroIfUnit(v, x.ctype)}, %$end ]"
+      }
     }
-    line(s"join.$n:")
-    line(s"  %${x.name} = phi ${EmitLLVM.llType(x.ctype)} ${results.mkString(", ")}")
-    s"join.$n"
+    if results.isEmpty then ""
+    else
+      line(s"join.$n:")
+      line(s"  %${x.name} = phi ${EmitLLVM.llType(x.ctype)} ${results.mkString(", ")}")
+      s"join.$n"
 
   private def allocate(x: Var, tag: Int, refs: String, slots: Int): Unit =
     line(s"  %${x.name} = call ptr @fx_alloc(i32 $tag, i32 $refs, i64 ${8 * slots})")
