@@ -147,12 +147,13 @@ private[backend] trait Generated:
     (t, v) => part(declared(loaded.indexWhere(_._2 == v)), t, leaf, span).map(_.build(v))
 
   /** What rebuilds a value of declared type `d`, instantiated as `t`: `leaf` where it applies;
-    * else, for `F of (..., X)` with `F` a data type and a part in `X`, `F`'s derived `map` with a
-    * closure that rebuilds each `X` (Rule 7.4.a.1 for `fold`); else nothing, and the value is kept.
+    * else, for `F of (..., X)` that a derived member maps through (`Members.through`, which the
+    * typer's field types follow) and a part in `X`, `F`'s derived `map` with a closure that rebuilds
+    * each `X` (Rule 7.4.a.1 for `fold`); else nothing, and the value is kept, as the typer types it.
     */
   private def part(d: Type, t: Type, leaf: Leaf, span: Span): Option[Part] =
     leaf(d, t).orElse((d, t) match
-      case (Type.TypeRef(_, ds), Type.TypeRef(f, ts)) if ds.nonEmpty && dataOf(t).isDefined =>
+      case (Type.TypeRef(_, ds), Type.TypeRef(f, ts)) if fixed.typer.Members.through(symbols, d).isDefined =>
         part(ds.last, ts.last, leaf, span).map { e =>
           Part(
             Type.TypeRef(f, ts.init :+ e.in),

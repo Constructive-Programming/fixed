@@ -2,7 +2,7 @@ package fixed.typer
 
 import scala.collection.immutable.IntMap
 
-import fixed.core.{EffectBound, EffectRow, SymKind, SymbolId, SymbolTable, Type}
+import fixed.core.{Denotation, EffectBound, EffectRow, SymKind, SymbolId, SymbolTable, Type, render}
 import fixed.util.mapAccum
 
 /** Signature lookup for the typer: instantiation of generic signatures, instance members (data
@@ -267,7 +267,7 @@ object Members:
   private def derivedFold(s: TyperState, data: SymbolId, args: List[Type]): (TyperState, Type) =
     val (s0, r) = s.fresh
     val (s1, cases) = mapAccum(s0, s.symbols.variantsOf(data).toList) { (si, v) =>
-      val (si1, fields) = fieldTypes(si, data, args, v.id, replaceSelf(_, declaredSelf(s.symbols, data), r))
+      val (si1, fields) = fieldTypes(si, data, args, v.id, foldedSelf(s.symbols, data, _, r))
       (si1, Type.ArrowType(Type.TupleType(fields), r, EffectRow.empty))
     }
     (s1, Type.ArrowType(Type.TupleType(cases), r, EffectRow.empty))
@@ -327,7 +327,7 @@ object Members:
     val (s1, args) = freshArgs(s, data)
     val (result, declared) = layer match
       case Some(Type.Layer(`data`, _, seed)) =>
-        (Type.Layer(data, args, seed), replaceSelf(_, declaredSelf(s.symbols, data), seed))
+        (Type.Layer(data, args, seed), foldedSelf(s.symbols, data, _, seed))
       case _ => (Type.TypeRef(data, args), identity[Type])
     val (s2, fields) = fieldTypes(s1, data, args, variant, declared)
     (s2, if fields.isEmpty then result else Type.ArrowType(Type.TupleType(fields), result, EffectRow.empty))
@@ -375,9 +375,75 @@ object Members:
   def declaredSelf(symbols: SymbolTable, data: SymbolId): Type =
     Type.TypeRef(data, symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil)))
 
-  /** `t` with each occurrence of `self` replaced by `by`. */
-  private def replaceSelf(t: Type, self: Type, by: Type): Type =
-    if t == self then by else t.mapChildren(replaceSelf(_, self, by))
+  /** Declared field type `t` of `data` with each recursive position replaced by `by`: `Self`, and
+    * `Self` inside the last argument of a data type a derived member maps through ([[through]]).
+    * Elsewhere `Self` stays (Rule 7.4.a.1: the field is passed unfolded).
+    */
+  def foldedSelf(symbols: SymbolTable, data: SymbolId, t: Type, by: Type): Type =
+    if t == declaredSelf(symbols, data) then by
+    else
+      through(symbols, t) match
+        case Some((f, args)) => Type.TypeRef(f, args.init :+ foldedSelf(symbols, data, args.last, by))
+        case None            => t
+
+  /** `t` as a data type and its arguments when a derived member reaches into its last argument:
+    * the data type is a derived [[functor]].
+    */
+  def through(symbols: SymbolTable, t: Type): Option[(SymbolId, List[Type])] =
+    applied(symbols, t).filter((f, _) => functor(symbols, f))
+
+  /** `t` as a data type applied to arguments, and those arguments. */
+  private def applied(symbols: SymbolTable, t: Type): Option[(SymbolId, List[Type])] =
+    t match
+      case Type.TypeRef(f, args) if args.nonEmpty && symbols(f).kind == SymKind.Data => Some((f, args))
+      case _                                                                         => None
+
+  /** Whether `data` derives `Functor` (Rule 7.4.c, narrowed): its rightmost type parameter occurs
+    * in a field, and a derived `map` can rebuild every occurrence ([[unmapped]]).
+    */
+  def functor(symbols: SymbolTable, data: SymbolId): Boolean =
+    symbols.typeParamsOf(data).lastOption.exists { p =>
+      symbols.variantsOf(data).exists(v => symbols.fieldsOf(v.id).exists(f => mentions(f.info, Type.TypeRef(p, Nil))))
+    } && unmapped(symbols, data).isEmpty
+
+  private def mentions(t: Type, part: Type): Boolean = t == part || t.children.exists(mentions(_, part))
+
+  /** The first field of `data` that holds its rightmost type parameter where a derived `map` cannot
+    * rebuild it, followed by the field of the nested data type that blocks it, if any. Each
+    * occurrence must be the parameter itself, or inside the last argument of a data type (`data`
+    * at any arguments among them) whose rightmost parameter is rebuilt in turn, with no other
+    * argument of that type mentioning it. Each data type is checked once per search: one already
+    * visited, being checked further up or found rebuildable, is taken as rebuildable.
+    */
+  def unmapped(symbols: SymbolTable, data: SymbolId): List[Denotation] =
+    val visited = collection.mutable.Set(data)
+    def search(d: SymbolId): List[Denotation] =
+      symbols.typeParamsOf(d).lastOption.fold(Nil) { p =>
+        val param = Type.TypeRef(p, Nil)
+        def blocked(t: Type): Option[List[Denotation]] =
+          if !mentions(t, param) || t == param then None
+          else
+            applied(symbols, t) match
+              case Some((f, args)) if !args.init.exists(mentions(_, param)) =>
+                blocked(args.last).orElse(Option.when(visited.add(f))(search(f)).filter(_.nonEmpty))
+              case _ => Some(Nil)
+        symbols.variantsOf(d).iterator.flatMap(v => symbols.fieldsOf(v.id))
+          .flatMap(f => blocked(f.info).map(f :: _)).nextOption().getOrElse(Nil)
+      }
+    search(data)
+
+  /** When `cap` is `Functor` and `t` a data type that does not derive it, a hint naming the field
+    * a derived `map` cannot rebuild ([[unmapped]]).
+    */
+  def notFunctor(symbols: SymbolTable, t: Type, cap: SymbolId): Option[String] =
+    t match
+      case Type.TypeRef(id, _) if symbols(cap).name == "Functor" && symbols(id).kind == SymKind.Data =>
+        unmapped(symbols, id) match
+          case Nil    => None
+          case fields =>
+            val shown = fields.map(f => s"${symbols(f.owner).name}.${f.name}: ${symbols.render(f.info)}")
+            Some(s"a derived map cannot rebuild field ${shown.mkString(", through ")}")
+      case _ => None
 
   /** An arrow's left-hand side is always its parameter list, a `TupleType` of any arity, so a
     * single `()` parameter and no parameters stay distinct.

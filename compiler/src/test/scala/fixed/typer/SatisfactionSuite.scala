@@ -14,6 +14,15 @@ class SatisfactionSuite extends munit.FunSuite:
        |    Box(value: A)
        |data Sink of A:
        |    Sink(consume: A -> ())
+       |data Paired of A:
+       |    Paired(p: Tuple of (A, u64))
+       |data Forest of A:
+       |    Forest(value: A, kids: List of Forest of A)
+       |data Ma of A:
+       |    Ma(b: Mb of A)
+       |data Mb of A:
+       |    Nb
+       |    Mb(a: Ma of A, x: A)
        |data Holder:
        |    Holder(f: u64 -> u64)
        |cap Container extends Folding
@@ -59,6 +68,9 @@ class SatisfactionSuite extends munit.FunSuite:
     assert(holds(tref("Shape"), "Show"))
     assert(holds(tref("Box", u64), "Functor"))
     assert(!holds(tref("Sink", u64), "Functor"))
+    assert(!holds(tref("Paired", u64), "Functor"))
+    assert(holds(tref("Forest", u64), "Functor"))
+    assert(holds(tref("Ma", u64), "Functor"))
     assert(!holds(tref("Holder"), "Show"))
     assert(!holds(tref("Shape"), "Optional"))
 

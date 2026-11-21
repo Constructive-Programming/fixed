@@ -100,7 +100,10 @@ object Satisfaction:
 
   private def fail(s: TyperState, value: Type, entry: Type, span: Span): TyperState =
     val r = s.symbols.render
-    s.error(DiagCode.T010, span, s"${r(s.unifier.zonk(value))} does not satisfy ${r(s.unifier.zonk(entry))}")
+    val hint = entry match
+      case Type.CapRef(c, _) => Members.notFunctor(s.symbols, s.unifier.zonk(value), c)
+      case _                 => None
+    s.error(DiagCode.T010, span, s"${r(s.unifier.zonk(value))} does not satisfy ${r(s.unifier.zonk(entry))}", hint)
 
   /** Constructor resolution (spec §8.5, §8.5.1): `Cap.ctor(args)` against the expected type. The
     * candidates are the data types whose `satisfies` maps `ctor`; a candidate fits when it
@@ -192,8 +195,9 @@ object Satisfaction:
     fold || accessor || (s.symbols(m.owner).name != "Folding" && derived(s, data, m.owner, anyInstance, Set.empty))
 
   /** Rule 7.4: `Folding` for any data with variants, `Functor` over the rightmost type parameter
-    * (covariant, never contravariant), and `Show` / `Eq` / `Clone` / `Ord` when every field type
-    * has it (recursive fields assumed). A capability with `Self.fn` requirements is never derived.
+    * when a derived `map` can rebuild it (`Members.functor`), and `Show` / `Eq` / `Clone` / `Ord`
+    * when every field type has it (recursive fields assumed). A capability with `Self.fn`
+    * requirements is never derived.
     *
     * A field's type is read at the instance's arguments `args`, so `List of T` has `Show` only if
     * `T` has it. The shape test alone: it ignores declarations and `Clone`'s request ([[holds]]
@@ -201,29 +205,16 @@ object Satisfaction:
     */
   def derived(s: TyperState, data: SymbolId, cap: SymbolId, args: List[Type], assumed: Set[SymbolId]): Boolean =
     val capName = s.symbols(cap).name
-    val params = s.symbols.typeParamsOf(data)
     lazy val variants = s.symbols.variantsOf(data).toList
-    lazy val fields = variants.flatMap(v => s.symbols.fieldsOf(v.id).map(_.info))
     capName match
-      case "Folding" => variants.nonEmpty
-      case "Functor" =>
-        params.lastOption.exists { p =>
-          fields.exists(occurs(_, p, positive = true)) && !fields.exists(occurs(_, p, positive = false))
-        }
+      case "Folding"                  => variants.nonEmpty
+      case "Functor"                  => Members.functor(s.symbols, data)
       case name if fieldDerived(name) =>
         variants.forall { v =>
           val (s1, types) = Members.fieldTypes(s, data, args, v.id)
           types.forall(holds(s1, _, cap, Nil, assumed + data).isDefined)
         }
       case _ => false
-
-  /** `p` occurs in `t` at the given polarity (function parameters flip it). */
-  private def occurs(t: Type, p: SymbolId, positive: Boolean): Boolean =
-    t match
-      case Type.TypeRef(`p`, _)    => positive
-      case Type.ArrowType(l, r, _) =>
-        occurs(l, p, !positive) || occurs(r, p, positive)
-      case other => other.children.exists(occurs(_, p, positive))
 
   /** Unify the obligation's capability arguments with the satisfying type's element arguments. */
   private def withArgs(s: TyperState, recvArgs: List[Type], capArgs: List[Type]): Option[TyperState] =

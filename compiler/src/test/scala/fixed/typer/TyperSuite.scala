@@ -726,6 +726,25 @@ class TyperSuite extends munit.FunSuite:
     val json = Type.TypeRef(typed.symbols.scope("Json"), Nil)
     assertEquals(typed.symbols.satisfactionsOf(json).map(typed.symbols.render).toSet, Set("Show", "Eq"))
 
+  test("Rule 7.4.c: no derived Functor where map cannot rebuild a field; the diagnostic names the field"):
+    val w = "data W of A:\n    W(p: Tuple of (A, u64))\n"
+    val why = Some("a derived map cannot rebuild field W.p: Tuple of (A, u64)")
+    def one(code: String): (DiagCode, Int, Option[String]) =
+      val d = typedUnit(code).diags
+      assertEquals(d.size, 1, d)
+      (d.head.code, d.head.span.start, d.head.suggestion)
+    val call = w + "fn f(x: W of u64) -> W of u64 = x.map((v) -> v)\n"
+    assertEquals(one(call), (DiagCode.T001, call.indexOf("x.map"), why))
+    val decl = w + "W satisfies Functor\n"
+    assertEquals(one(decl), (DiagCode.T010, decl.indexOf("W satisfies"), why))
+    val pass = w + "fn g(xs: is Functor of u64) -> u64 = 0\nfn h(x: W of u64) -> u64 = g(x)\n"
+    assertEquals(one(pass), (DiagCode.T010, pass.indexOf("g(x)") + 2, why))
+    val m = "data M of (A, B):\n    Nil\n    X(a: A, r: M of (B, A))\nM satisfies Functor\n"
+    assertEquals(
+      one(m)._3,
+      Some("a derived map cannot rebuild field X.r: M of (B, A)")
+    )
+
   test("3.1.M3: the stdlib's own satisfies declarations pass the checks"):
     val (table, _) = Namer.index(Parser.parse(SourceFile.fromString("<empty>", "")).tree)
     assertEquals(Declarations.check(TyperState(table), Stdlib.prelude).finish.diags, Nil)

@@ -343,7 +343,14 @@ object Typer:
                         (notCloned(s1, resolved, t.span), Type.NeverType)
                       case _ =>
                         (
-                          s1.error(DiagCode.T001, t.span, s"not found: member ${t.method} of ${show(s1, resolved)}"),
+                          s1.error(
+                            DiagCode.T001,
+                            t.span,
+                            s"not found: member ${t.method} of ${show(s1, resolved)}",
+                            s1.symbols.scope.get("Functor")
+                              .filter(s1.symbols.membersOf(_).exists(_.name == t.method))
+                              .flatMap(Members.notFunctor(s1.symbols, resolved, _))
+                          ),
                           Type.NeverType
                         )
               case first :: rest =>

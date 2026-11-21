@@ -57,7 +57,8 @@ object Declarations:
       s1.error(
         DiagCode.T010,
         d.span,
-        s"${d.typeName} does not satisfy $capName: missing ${missing.mkString(", ")}"
+        s"${d.typeName} does not satisfy $capName: missing ${missing.mkString(", ")}",
+        s.symbols.dataNamed(d.typeName).flatMap(id => Members.notFunctor(s.symbols, Type.TypeRef(id, Nil), cap))
       )
 
   /** Whether the compiler provides capability `cap` for the primitive type or `String` named `t`
