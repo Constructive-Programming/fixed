@@ -285,6 +285,23 @@ The deferred sites of D12 (an author's choice) are withdrawn, and with them thei
 - The fifth resolution level, `using` in the application root, is removed, as the sixth was (answer L): it decided only sites left open for the link. In the application package the application root is the package scope, level 3. A test build's application root is no longer a resolution level (refines M20).
 - The satisfaction of a data type that enters a choice point's pool is resolved at the site that created the choice point (M4); if the resolution there does not decide between several satisfactions of the pair, that type is not a candidate at the choice point. Selection therefore never meets two satisfactions of one pair, and its only error stays zero viable candidates (D5).
 
+### Recursion inside a capability (fourth round, 2026-11-21)
+
+Owner: "make recursion strictly forbidden inside capability".
+
+A default body of a capability that reaches itself through calls to members of the capability on `self` (or on another value of type `Self`), directly or through other default bodies of the capability or of the capabilities it extends, is an error in every case: neither a structural argument nor `Diverge` admits it. The check of Rule 7.4.h did not see such a cycle, because the call goes through the table: `cap Sz: fn sz() -> u64 = self.sz()` was accepted and loops forever. Written into `spec/type_system.md` Rule 7.4.j and `spec/reports.md` Rule RP5.5, and built in `typer/Totality.scala`. *(Author's choices, owner to confirm:)*
+
+- A new code, `T028`, rather than `T027`: Rule 7.4.h requires `T027` to show `with Diverge` and structural recursion as ways out, and here neither is one. Its ways out are to leave the member without a default body, to write the default with members that do not call back, or to use `fold` or `para` of the data the capability exposes. Class `6`, type error.
+- The bodies of a `satisfies` block stay ordinary functions under Rule 7.4.h: structural recursion on the data is how a user writes a fold. A call of the same member on `self` unchanged in such a body was already `T027`, for data, generic data and scalar types, because the receiver's type is known.
+- The check reads the capability's declarations alone: a cycle among its default bodies is an error even if a satisfaction gives a body that would break it.
+- A call on `Self` in an extended capability reaches the default bodies by which extending capabilities restate the member, and restatements by two capabilities that extend one base are read together. Calls covered: member calls, comparison operators on `Self`, a static member by the capability's own name, and calls from nested functions and lambdas. Not seen: a cycle through a `satisfies` body back into a default body, and one through a function that takes the value at a bound.
+
+No program of the prelude, the examples or the test programs had such a cycle.
+
+### Data that holds a function of itself (fourth round, 2026-11-21)
+
+Owner: "Allow for now. Let's see if this becomes a problem later, not now". A data type that holds a function of itself (`data Rec: R(f: Rec -> u64)`) admits non-termination that no cycle of named functions shows. It is accepted, as a known gap (`spec/type_system.md` Rule 7.4.h, OQ-T5).
+
 
 ### Shadowing of prelude names (fourth round, 2026-11-21)
 

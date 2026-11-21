@@ -1,8 +1,10 @@
 # Fixed Reports: Coverage, Cardinality and the Tool Interface
 
-**Status:** Draft v0.2.6
+**Status:** Draft v0.2.7
 **Specifies:** two analyses the compiler runs and reports — coverage of code by verification, and cardinality of types — the report of what the link step chose, the files a build reads besides its sources, the interface external tools use, and the exit codes of every command.
 **Last revised:** 2026-11-21
+
+**Changes from v0.2.6.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Recursion inside a capability"): Rule RP5.5 gives class `6` to `T028` (a default body of a capability that reaches itself through `self`, `spec/type_system.md` Rule 7.4.j).
 
 **Changes from v0.2.5.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"): the lock file (Rule RP5.3) and the link report (Rule RP5.4) hold no deferred satisfaction site, and class `7` of Rule RP5.5 arises at package compile only.
 
@@ -190,7 +192,7 @@ Every command uses this one table: the checker `fixed <file>...`, `fixed compile
 | `3` | scan error | package compile: scanner | `E001`–`E009` |
 | `4` | parse error | package compile: parser | `P001`–`P099` |
 | `5` | name error | package compile: namer and typer | `T001`, `T003`, `T004`; `E063` |
-| `6` | type error | package compile: typer | `T002`, `T006`, `T007`, `T008`, `T010`, `T013`, `T014`, `T022`, `T023`, `T024`, `T025`, `T027`; `E062`, `E065`, `E066` |
+| `6` | type error | package compile: typer | `T002`, `T006`, `T007`, `T008`, `T010`, `T013`, `T014`, `T022`, `T023`, `T024`, `T025`, `T027`, `T028`; `E062`, `E065`, `E066` |
 | `7` | ambiguous satisfaction | package compile: typer (`spec/type_system.md` Rule 8.4.b) | `E061`; `T011` |
 | `8` | effect error | package compile: typer (effect inference) | `E080`, `E084`, `E093`; `T009`, `T015`, `T016`, `T018`, `T019` |
 | `9` | pattern error | package compile: typer | `E090`, `E091`, `E092`, `E094`, `E095`; `T020` |

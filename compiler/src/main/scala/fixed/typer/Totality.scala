@@ -16,6 +16,11 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
   * table (a receiver of an abstract type) or through a closure value is not an edge. The derived
   * members (`fold`, `para`, `unfold`, `map`, `show`, ...) are not named functions of the program:
   * their recursion is the data's own structure (Rule 7.4).
+  *
+  * Rule 7.4.j: inside a capability's default body (and the nested functions and lambdas in it), a
+  * member call or a comparison on a receiver of the capability's `Self` is an edge to that member's
+  * default body, if it has one: a *table edge*. A cycle with a table edge is `T028` whatever its
+  * arguments or row: neither structural recursion nor `Diverge` admits it.
   */
 object Totality:
 
@@ -27,7 +32,7 @@ object Totality:
   /** A function's code: its node, the name the diagnostic shows, its declaration, and whether it is
     * the prelude's.
     */
-  final private case class Code(node: Node, name: String, fn: Trees.FnLike, prelude: Boolean):
+  final private case class Code(node: Node, name: String, fn: Trees.FnLike, prelude: Boolean, self: Option[SymbolId]):
     /** Its parameters by position: `self` first in the body of an instance member. */
     def params: List[String] =
       fn match
@@ -53,9 +58,17 @@ object Totality:
 
   /** A use of function `to` at `span`; `args` are the trees passed to it (the receiver first), and
     * `descent` maps an argument position to the caller's parameter it is a strict sub-value of.
-    * `call` is false only for the declaration of a nested `fn` by its enclosing function.
+    * `call` is false only for the declaration of a nested `fn` by its enclosing function; `table` is
+    * true for a call through the table of `Self` in a default body (Rule 7.4.j).
     */
-  final private case class Edge(to: Node, span: Span, args: List[Tree], descent: Map[Int, Int], call: Boolean)
+  final private case class Edge(
+      to: Node,
+      span: Span,
+      args: List[Tree],
+      descent: Map[Int, Int],
+      call: Boolean,
+      table: Boolean
+  )
 
   def check(tree: Tree, s: TyperState): List[Diagnostic] =
     val graph = Graph(s)
@@ -86,7 +99,7 @@ object Totality:
       items.foreach {
         case f: Trees.FnDecl if f.body.isDefined =>
           visible.get(f.name).filter(symbols(_).kind == SymKind.Fn).foreach(id =>
-            codes += Code(Node.Fn(id), f.name, f, prelude)
+            codes += Code(Node.Fn(id), f.name, f, prelude, None)
           )
         case Trees.SatisfiesDecl(typeName, Trees.CapRef(capName, _, _), methods, _) =>
           val head = dataType(visible, typeName).getOrElse(Type.PrimType(typeName))
@@ -96,13 +109,13 @@ object Totality:
             entry <-
             (s.members.lookup(cap, SymKind.Method, fn.name) ++
               s.members.lookup(cap, SymKind.StaticMethod, fn.name)).headOption
-          do codes += Code(Node.Body(head, entry.member.id), s"${symbols.render(head)}.${fn.name}", fn, prelude)
+          do codes += Code(Node.Body(head, entry.member.id), s"${symbols.render(head)}.${fn.name}", fn, prelude, None)
         case Trees.CapDecl(name, _, _, _, members, _) =>
           for
             cap <- visible.get(name).filter(symbols(_).kind == SymKind.Cap).toList
             case fn: Trees.FnLike <- members if fn.body.isDefined
             m <- symbols.membersOf(cap).find(m => m.name == fn.name && m.kind != SymKind.Variant)
-          do codes += Code(Node.Default(m.id), s"$name.${fn.name}", fn, prelude)
+          do codes += Code(Node.Default(m.id), s"$name.${fn.name}", fn, prelude, Some(cap))
         case _ => ()
       }
 
@@ -112,12 +125,20 @@ object Totality:
     private def arguments(c: Code): Env =
       c.params.zipWithIndex.map((p, i) => p -> Origin.Arg(i, strict = false)).toMap
 
-    private def edge(from: Code, to: Node, span: Span, args: List[Tree], env: Env, call: Boolean = true): Unit =
+    private def edge(
+        from: Code,
+        to: Node,
+        span: Span,
+        args: List[Tree],
+        env: Env,
+        call: Boolean = true,
+        table: Boolean = false
+    ): Unit =
       val descent = args.zipWithIndex.flatMap {
         case (Trees.Ident(n, _), j) => env.get(n).collect { case Origin.Arg(i, true) => j -> i }
         case _                      => None
       }.toMap
-      edges(from.node) = edges(from.node) :+ Edge(to, span, args, descent, call)
+      edges(from.node) = edges(from.node) :+ Edge(to, span, args, descent, call, table)
 
     /** The names pattern `p` binds when it matches a value of origin `of`: a binder inside a
       * variant, tuple or record pattern holds a strict sub-value of an argument, one at the top
@@ -152,6 +173,35 @@ object Totality:
           symbols.scopeFor(c.prelude).get(name).filter(symbols(_).kind == SymKind.Fn).map(Node.Fn(_))
         )
 
+    /** The edge for a call of capability member `member` on a value of type `t` in `c`: to the body
+      * it runs if `t` is known, or, on the `Self` of the capability whose default body `c` is in, to
+      * the member's default body through the table.
+      */
+    private def member(c: Code, t: Option[Type], member: SymbolId, span: Span, args: List[Tree], env: Env): Unit =
+      if onSelf(c, t) then throughTable(member).foreach(edge(c, _, span, args, env, table = true))
+      else reached(t, member).foreach(edge(c, _, span, args, env))
+
+    /** Whether `t` is the `Self` of the capability whose default body `c` is in. */
+    private def onSelf(c: Code, t: Option[Type]): Boolean =
+      t.exists {
+        case Type.IsBound(bs) => bs.exists { case Type.CapRef(cap, _) => c.self.contains(cap); case _ => false }
+        case _                => false
+      }
+
+    /** The default bodies a call of `member` through the table of `Self` may run: its own, and those
+      * that extending capabilities restate it with.
+      */
+    private def throughTable(member: SymbolId): List[Node] =
+      (Node.Default(member) :: restated.getOrElse(member, Nil)).filter(known)
+
+    /** Each member to the default bodies that capabilities extending its own restate it with: a call
+      * of it on `Self` in the base capability may run them (Rule 7.4.j).
+      */
+    private lazy val restated: Map[SymbolId, List[Node]] =
+      codes.toList.collect { case Code(d @ Node.Default(m), _, _, _, Some(cap)) =>
+        s.members.lookup(cap, symbols(m).kind, symbols(m).name).map(_.member.id).filterNot(_ == m).map(_ -> d)
+      }.flatten.groupMap(_._1)(_._2)
+
     /** The body a call of capability member `member` on a value of type `t` runs, if `t` is known. */
     private def reached(t: Option[Type], member: SymbolId): Option[Node] =
       t.collect {
@@ -178,6 +228,16 @@ object Totality:
         members.flatMap(m => List(Node.Body(h, m), Node.Default(m))).find(known)
       }
 
+    /** In a default body of capability `C`, the default body of the static member `C.method`
+      * (Rule 7.4.j): a call by the capability's own name, which goes through a table of `C`.
+      * ponytail: taken as a call on `Self` whatever its expected type; narrow it to calls the typer
+      * resolves through `Self` if a default body ever needs `C.m` at another type.
+      */
+    private def ownStatic(c: Code, qualifier: String, method: String): List[Node] =
+      c.self.filter(cap => symbols.scopeFor(c.prelude).get(qualifier).contains(cap)).toList.flatMap { cap =>
+        s.members.lookup(cap, SymKind.StaticMethod, method).flatMap(e => throughTable(e.member.id)).distinct
+      }
+
     private def preludeMember(cap: String, member: String): Option[SymbolId] =
       symbols.prelude.get(cap).flatMap(c => s.members.lookup(c, SymKind.Method, member).headOption).map(_.member.id)
 
@@ -190,7 +250,9 @@ object Totality:
           case Trees.Ident(name, span) => named(name, c, env, nested).foreach(edge(c, _, span, args, env))
           case sc: Trees.StaticCall    =>
             val all = args ++ sc.args.getOrElse(Nil)
-            static(c, sc.qualifier, sc.method).foreach(edge(c, _, sc.span, all, env))
+            ownStatic(c, sc.qualifier, sc.method) match
+              case Nil => static(c, sc.qualifier, sc.method).foreach(edge(c, _, sc.span, all, env))
+              case ds  => ds.foreach(edge(c, _, sc.span, all, env, table = true))
             sc.args.toList.flatten.foreach(go)
           case other => go(other)
       t match
@@ -225,23 +287,31 @@ object Totality:
         case Trees.ReturnClause(p, body, _)           => walk(body, c, env ++ locals(p), nested)
         case m: Trees.MethodCall                      =>
           s.types.resolution(m).foreach {
-            case Resolution.CapMember(_, member) =>
-              reached(s.typeOf(m.receiver), member).foreach(
-                edge(c, _, m.span, m.receiver :: m.args.getOrElse(Nil), env)
-              )
+            case Resolution.CapMember(_, m1) =>
+              member(c, s.typeOf(m.receiver), m1, m.span, m.receiver :: m.args.getOrElse(Nil), env)
             case _ => ()
           }
           Trees.children(m).foreach(go)
         case b @ Trees.BinOp(op, lhs, rhs, _) =>
           import Trees.BinOperator.*
-          val member = op match
-            case Eq | Neq          => preludeMember("Eq", "eq")
-            case Lt | Le | Gt | Ge => preludeMember("Ord", "compare")
+          val name = op match
+            case Eq | Neq          => Some("Eq" -> "eq")
+            case Lt | Le | Gt | Ge => Some("Ord" -> "compare")
             case _                 => None
 
+          /** The prelude's member, and in a default body the one its capability restates. */
           /** `l > r` and `l >= r` compare `r` with `l`. */
           val operands = if op == Gt || op == Ge then List(rhs, lhs) else List(lhs, rhs)
-          member.flatMap(reached(s.typeOf(operands.head), _)).foreach(edge(c, _, b.span, operands, env))
+          val receiver = s.typeOf(operands.head)
+
+          /** The prelude's member, and on `Self` in a default body the one its capability restates. */
+          val called = name.toList.flatMap { (cap, m) =>
+            preludeMember(cap, m).toList ++
+              c.self.filter(_ => onSelf(c, receiver)).toList.flatMap(
+                s.members.lookup(_, SymKind.Method, m).map(_.member.id)
+              )
+          }.distinct
+          called.foreach(member(c, receiver, _, b.span, operands, env))
           go(lhs)
           go(rhs)
         case _ => Trees.children(t).foreach(go)
@@ -261,7 +331,7 @@ object Totality:
           case f: Trees.FnDecl =>
             s.types.resolution(f) match
               case Some(Resolution.NestedFn(id)) =>
-                val inner = Code(Node.Fn(id), f.name, f, c.prelude)
+                val inner = Code(Node.Fn(id), f.name, f, c.prelude, c.self)
                 val (e1, n1) = (e - f.name, n + (f.name -> inner.node))
                 codes += inner
                 edge(c, inner.node, f.span, Nil, e, call = false)
@@ -312,17 +382,33 @@ object Totality:
         else
           val cycle = codes.filter(o => reaches(c.node)(o.node) && reaches(o.node)(c.node)).toList
           done ++= cycle.map(_.node)
-          if cycle.forall(diverges) || structural(cycle) then None
+          val inCycle = cycle.map(_.node).toSet
+          val throughSelf = cycle.exists(o => edges(o.node).exists(e => e.table && inCycle(e.to)))
+          if throughSelf then Some(selfCycle(cycle, inCycle))
+          else if cycle.forall(diverges) || structural(cycle) then None
           else
-            val inCycle = cycle.map(_.node).toSet
             val calls = edges(c.node).filter(e => inCycle(e.to))
-            val names = cycle.map(o => s"`${o.name}`")
-            val message =
-              if cycle.sizeIs == 1 then s"${names.head} calls itself"
-              else s"${names.init.mkString(", ")} and ${names.last} call each other"
             val at = calls.find(_.call).getOrElse(calls.head).span
-            Some(Diagnostic(Severity.Error, DiagCode.T027, at, message, Some(Shape(s, c, calls).hint)))
+            Some(Diagnostic(Severity.Error, DiagCode.T027, at, naming(cycle, ""), Some(Shape(s, c, calls).hint)))
       }
+
+    /** "`f` calls itself", or "`f` and `g` call each other", then `how`. */
+    private def naming(cycle: List[Code], how: String): String =
+      val names = cycle.map(o => s"`${o.name}`")
+      if cycle.sizeIs == 1 then s"${names.head} calls itself$how"
+      else s"${names.init.mkString(", ")} and ${names.last} call each other$how"
+
+    /** `T028` (Rule 7.4.j) for a cycle through the table of `Self`, at the first table call on it. */
+    private def selfCycle(cycle: List[Code], inCycle: Set[Node]): Diagnostic =
+      val message = naming(cycle, " through `self`")
+      val at = cycle.view.flatMap(o => edges(o.node).find(e => e.table && inCycle(e.to))).head.span
+      val defaults = cycle.collect { case Code(Node.Default(_), n, _, _, _) => s"`$n`" }.distinct
+      val hint =
+        "a default body may not reach itself through members of its capability, whatever its arguments " +
+          s"or row (`with Diverge` does not admit it): leave ${defaults.mkString(" or ")} without a default " +
+          "body, so that each satisfaction gives one, or write the default with members that do not call " +
+          "back, or with `fold` or `para` of the data the capability exposes"
+      Diagnostic(Severity.Error, DiagCode.T028, at, message, Some(hint))
 
   /** The ways out of `T027` for code `c` (Rule 7.4.h), the one that fits the shape of its recursive
     * `calls` first: `fold` when every call is on a value reached from a parameter through a pattern

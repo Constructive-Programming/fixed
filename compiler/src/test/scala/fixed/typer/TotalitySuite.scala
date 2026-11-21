@@ -179,6 +179,87 @@ class TotalitySuite extends munit.FunSuite:
     val List(d) = rejected(src): @unchecked
     assert(first(d).contains("in other positions"), d)
 
+  /** Rule 7.4.j: the T028 diagnostics of `source`, which has no other error. */
+  private def throughSelf(source: String): List[Diagnostic] =
+    val ds = compile(source).diagnostics.filter(_.isError)
+    assert(ds.nonEmpty && ds.forall(_.code == DiagCode.T028), ds)
+    ds
+
+  private def leaveWithout(d: Diagnostic, member: String): Unit =
+    assert(d.suggestion.exists(h => h.contains(s"leave `$member`") && h.contains("without a default body")), d)
+
+  test("a default body that calls its own member on `self` is T028, with Diverge and without"):
+    val src = "cap Sz:\n    fn sz() -> u64 = self.sz()\n"
+    val List(d) = throughSelf(src): @unchecked
+    assertEquals((d.message, d.span.start), ("`Sz.sz` calls itself through `self`", at(src, "self.sz()")))
+    leaveWithout(d, "Sz.sz")
+    assertEquals(throughSelf(src.replace("-> u64 =", "-> u64 with Diverge =")).map(_.code), List(DiagCode.T028))
+    accepted("cap Sz:\n    fn sz() -> u64\n    fn twice() -> u64 = self.sz() + self.sz()\n")
+
+  test("two default bodies that call each other on `self` or on a value of type `Self` are T028"):
+    val src = "cap Two:\n    fn a() -> u64 = self.b()\n    fn b() -> u64 = self.a()\n"
+    val List(d) = throughSelf(src): @unchecked
+    assertEquals((d.message, d.span.start), ("`Two.a` and `Two.b` call each other through `self`", at(src, "self.b()")))
+    val other = "cap Two:\n    fn a(o: Self) -> u64 = o.b(self)\n    fn b(o: Self) -> u64 = self.a(o)\n"
+    assertEquals(throughSelf(other).map(_.message), List("`Two.a` and `Two.b` call each other through `self`"))
+    accepted("cap Two:\n    fn a() -> u64 = self.b() + self.c()\n    fn b() -> u64 = self.c()\n    fn c() -> u64\n")
+
+  test("a cycle through the default body of an extended capability is T028"):
+    val src = "cap Base:\n    fn a() -> u64\n    fn c() -> u64 = self.a()\n\n" +
+      "cap Sz extends Base:\n    fn a() -> u64 = self.c()\n"
+    val List(d) = throughSelf(src): @unchecked
+    assertEquals((d.message, d.span.start), ("`Base.c` and `Sz.a` call each other through `self`", at(src, "self.a()")))
+    accepted("cap Base:\n    fn a() -> u64\n    fn c() -> u64 = self.a()\n\n" +
+      "cap Sz extends Base:\n    fn a() -> u64 = 1\n    fn s() -> u64 = self.c()\n")
+
+  test("a structurally smaller argument does not admit a cycle through `self`"):
+    val src = "cap Sz:\n    fn sz(n: Nat) -> u64 =\n        match n:\n            Nat.Succ(k) => self.sz(k)\n" +
+      "            Nat.Zero => 0\n"
+    val List(d) = throughSelf(src): @unchecked
+    assertEquals(d.span.start, at(src, "self.sz(k)"))
+    leaveWithout(d, "Sz.sz")
+    accepted(
+      "fn sz(n: Nat) -> u64 =\n    match n:\n        Nat.Succ(k) => sz(k)\n        Nat.Zero => 0\n"
+    )
+
+  test("an operator on `Self` in a default body is a call through the table"):
+    val src = "cap E2 extends Eq:\n    fn eq(o: Self) -> bool = self == o\n"
+    val List(d) = throughSelf(src): @unchecked
+    assertEquals((d.message, d.span.start), ("`E2.eq` calls itself through `self`", at(src, "self == o")))
+    accepted("cap E2 extends Eq:\n    fn same(o: Self) -> bool = self == o\n")
+    accepted("cap E2 extends Eq:\n    fn eq(o: Self) -> bool = self.g(1)\n    fn g(n: u64) -> bool = n == 2\n")
+
+  test("a static member called by the capability's own name is a call through the table"):
+    val src = "cap Mk:\n    Self.fn mk() -> Self = Mk.mk()\n"
+    val List(d) = throughSelf(src): @unchecked
+    assertEquals((d.message, d.span.start), ("`Mk.mk` calls itself through `self`", at(src, "Mk.mk()")))
+    accepted("cap Mk:\n    Self.fn mk() -> Self\n    Self.fn mk2() -> Self = Mk.mk()\n")
+    val restated = "cap Base:\n    Self.fn w() -> Self\n    Self.fn z() -> Self = Base.w()\n\n" +
+      "cap Sz extends Base:\n    Self.fn w() -> Self = Sz.z()\n"
+    assertEquals(throughSelf(restated).map(_.code), List(DiagCode.T028))
+
+  test("a nested fn or lambda in a default body that calls back through `self` is T028"):
+    val nested = "cap Sz:\n    fn sz() -> u64 =\n        fn go() -> u64 = self.sz()\n        go()\n"
+    assertEquals(throughSelf(nested).map(_.code), List(DiagCode.T028))
+    val lambda = "cap Sz:\n    fn sz() -> u64 =\n        let g = (i: u64) -> self.sz() + i\n        g(1)\n"
+    assertEquals(throughSelf(lambda).map(_.code), List(DiagCode.T028))
+
+  test("a satisfaction that overrides the member does not break a cycle of the capability"):
+    val src = "cap Sz:\n    fn sz() -> u64 = self.sz()\n\ndata B:\n    B(v: u64)\n\n" +
+      "B satisfies Sz:\n    fn sz() -> u64 = 0\n"
+    assertEquals(throughSelf(src).map(_.message), List("`Sz.sz` calls itself through `self`"))
+
+  test("a call on another value bounded by the capability is not through `self`"):
+    accepted("cap Sz:\n    fn sz() -> u64\n    fn plus(x: T is Sz) -> u64 = x.sz() + self.sz()\n")
+    accepted("cap Sz:\n    fn sz() -> u64 = 1\n    fn plus(x: is Sz) -> u64 = x.plus(x)\n")
+
+  test("a satisfies body that calls the same member on `self` is T027, for data, generic data and scalars"):
+    val q = "cap Q:\n    fn q(o: Self) -> u64\n\n"
+    val data = q + "data W of A:\n    W(a: A)\n\nW satisfies Q:\n    fn q(o: Self) -> u64 = o.q(self)\n"
+    assertEquals(rejected(data).map(_.message), List("`W.q` calls itself"))
+    val scalar = q + "i64 satisfies Q:\n    fn q(o: Self) -> u64 = self.q(o)\n"
+    assertEquals(rejected(scalar).map(_.message), List("`i64.q` calls itself"))
+
 object TotalitySuite:
 
   def compile(source: String): CompilationUnit =

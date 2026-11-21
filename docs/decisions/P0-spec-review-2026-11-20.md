@@ -209,7 +209,9 @@ Found and not fixed:
 - An out-of-range literal that reaches its type through a type parameter (`order(18446744073709551615, 1)` with `T is Ord`) defaults to `i64` and wraps.
 - `Box of (A is Eq)` reached from `T is Ord` through a growing type is `B005` ("no table of `Eq`").
 - The scanner reads the escape `\0` as a space.
-- Termination is not seen through a capability's default body that calls its own member (`self.sz()` goes through the table) or through a data type that holds a function of itself. Open for the owner.
+- Termination was not seen through a capability's default body that calls its own member (`self.sz()` goes through the table).
+  - **Fixed** (owner's decision, P6 fourth round, "Recursion inside a capability"; Rule 7.4.j): `typer/Totality.scala` adds an edge for a member call or comparison on `Self` inside a default body to the member's default body, and a cycle with such an edge is `T028`, with or without `Diverge`. No program of the prelude, the examples or the test programs had one.
+- Termination is not seen through a data type that holds a function of itself (`data Rec: R(f: Rec -> u64)`). **Accepted** by the owner for now: "Allow for now. Let's see if this becomes a problem later, not now" (P6 fourth round, `spec/type_system.md` OQ-T5).
 - The recursion check rejects three shapes that terminate: a nested `fn` calling its enclosing function on a sub-value, a `match` on a tuple of parameters, and `t > t2` inside `compare`.
 - The derived `show` of a type that holds itself at a growing argument (`Nest of (List of A)`) overflows the compiler's stack.
 - A `fold` whose result type would be `!` leaves the result type unsolved (`B005`).

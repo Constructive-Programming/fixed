@@ -1,8 +1,10 @@
 # Fixed Type System
 
-**Status:** Draft v0.5.6
+**Status:** Draft v0.5.7
 **Specifies:** typing of Fixed source as defined by `spec/syntax_grammar.ebnf` v0.4.15.
 **Last revised:** 2026-11-21
+
+**Changes from v0.5.6.** Applies two owner's decisions of 2026-11-21, fourth round (P6, "Recursion inside a capability" and "Data that holds a function of itself"). New Rule 7.4.j: a default body of a capability that reaches itself through members of its capability on `self` is `T028`, which neither a structural argument nor `Diverge` admits. Rule 7.4.h's closing paragraph no longer leaves that case open, and records the non-termination through a data type that holds a function of itself as accepted for now (new OQ-T5).
 
 **Changes from v0.5.5.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"). Rule 8.4.b is rewritten: a site that the levels of Rule 8.4 do not decide is `E061` when its package is compiled, in a library as in an application, and the diagnostic suggests a `using` or an explicit bound on a type parameter. There are no deferred sites, and the link stage resolves no satisfaction. Rule 8.4 loses its fifth level, `using` in the application root, which now decides nothing; a data type whose pair the site that created a choice point does not decide does not enter that choice point's pool (§6.5.2). Rules 8.4.c and 8.6.a no longer mention the fifth level or deferred sites.
 
@@ -1185,7 +1187,28 @@ fn deep(p: T is Show, n: Nat) -> String =   // accepted: structural on n
 
 **Rule 7.4.i (Termination of `unfold`).** A derived `unfold` produces a finite value only if its step reaches a variant without a seed. An `unfold` whose termination is established has no effect in its row. One whose termination is not established has `Diverge` in its row, like a recursive function under Rule 7.4.h. Termination is established by a prop about the step that is `proved` or `assumed` (a facts-lane decision, `spec/properties.md` Rule P7.8.a); a `tested` prop does not remove the effect. How the user states the decreasing measure, and which steps the static prover recognises without one (a counter compared with a bound and moved toward it by a constant), is open (OQ-T4). Not built: no `unfold` has `Diverge` today.
 
-Built (`typer/Totality.scala`), with three conservative limits that reject functions which do terminate: a nested `fn` that calls its enclosing function on a sub-value, a `match` on a tuple of parameters, and a comparison operator that swaps its operands (`t > t2` inside `compare`). Not seen by the check: a default body of a capability that calls its own member through the table (`cap Sz: fn sz() -> u64 = self.sz()`), and a data type that holds a function of itself (`data Rec: R(f: Rec -> u64)`); both can fail to terminate without `Diverge`. Open for the owner. (Owner's decisions, fourth round of P6: first "enforce", then structural recursion and `Diverge` admitted.)
+Built (`typer/Totality.scala`), with three conservative limits that reject functions which do terminate: a nested `fn` that calls its enclosing function on a sub-value, a `match` on a tuple of parameters, and a comparison operator that swaps its operands (`t > t2` inside `compare`). A default body of a capability that calls its own member through the table (`cap Sz: fn sz() -> u64 = self.sz()`) is Rule 7.4.j. Not seen by the check, and accepted: a data type that holds a function of itself (`data Rec: R(f: Rec -> u64)`) admits non-termination that no cycle of named functions shows, with no `Diverge`. Owner: "Allow for now. Let's see if this becomes a problem later, not now" (OQ-T5). (Owner's decisions, fourth round of P6: first "enforce", then structural recursion and `Diverge` admitted.)
+
+**Rule 7.4.j (No recursion inside a capability).** Within a `cap` declaration, a default body may not reach itself through calls to members of the capability on `self` or on another value of type `Self`: directly, or through other default bodies of the capability or of the capabilities it extends, or through a nested function or a lambda inside them. Such calls are a member call on `self` or on a value of type `Self`; a comparison operator on such a value that calls the capability's own `eq` or `compare`; a static member called by the capability's name (`C.m(…)`, taken as a call on `Self` whatever its expected type); a member inherited through `extends`; and, in a capability that is extended, a call of a member that the extending capability restates with a default body (`cap Base: fn c() = self.a()` with `cap Sz extends Base: fn a() = self.c()`). This is `error[T028]: <C.m> calls itself through `self`` (or `<C.a> and <C.b> call each other through `self``), at the first such call of the cycle, in every case: neither a structural argument (Rule 7.4.h, case 1) nor `Diverge` in the row (case 2) admits it. A default body may still call members of `Self` that have no default body, and members whose default bodies do not lead back. The diagnostic must name the ways out:
+
+- leave the member without a default body, so that each satisfaction gives one;
+- write the default with members that do not call back;
+- write it with `fold` or `para` of the data the capability exposes.
+
+```
+cap Sz:
+    fn sz() -> u64 = self.sz()                        // ERROR T028, also `with Diverge`
+cap Sz:
+    fn sz() -> u64                                    // accepted: no default body
+    fn twice() -> u64 = self.sz() + self.sz()         // accepted: `sz` has no default
+cap Two:
+    fn a() -> u64 = self.b()                          // ERROR T028: `Two.a` and `Two.b` call each other
+    fn b() -> u64 = self.a()
+```
+
+The check reads the capability's declarations alone. A cycle among its default bodies is an error even if a satisfaction gives a body for one of the members on it and so breaks the cycle for that type *(author's choice, owner to confirm)*. A call on `Self` in a capability that others extend reaches every default body by which an extending capability restates the member; restatements by two capabilities that extend one base and not each other are read together, so a cycle that only a type satisfying both would run is an error too *(author's choice, owner to confirm; a check per extends chain would admit it)*. Calls through a value of another type bounded by the capability (`x: T is Sz`, `x: is Sz`) go through another table and are not on the graph (Rule 7.4.h).
+
+The bodies of a `satisfies` block are ordinary functions under Rule 7.4.h *(author's choice, owner to confirm)*: structural recursion on the data is how a user writes a fold for it, and a body whose receiver's type is known is an edge to the body it reaches, so a call of the same member on `self` unchanged is not structural and is `T027`. Not seen: a cycle that passes through a `satisfies` body and back into a default body (a default calls a member that the satisfaction gives a body, and that body calls the default), and a cycle through a function that takes the value at a bound (`fn g(x: T is Sz) = x.sz()`), since such a call goes through a table. Built (`typer/Totality.scala`).
 
 **Rule 7.5.a (Auto-derivation does not apply across non-singleton SCCs) — resolves L7.** Auto-derivations from §7.4 (`fold`/Rule 7.4.a, `unfold`/Rule 7.4.b, `Functor`/Rule 7.4.c, accessors/Rule 7.4.d, `para`/Rule 7.4.g) **are disabled** for `data` declarations whose dependency graph forms an SCC of size ≥ 2. Each member of such an SCC requires explicit `satisfies` declarations for any capabilities it must satisfy.
 
@@ -1556,6 +1579,7 @@ Subtyping in Fixed is intentionally narrow:
 
 - **OQ-T1 — Mutual-fold convenience** (deferred). Generated combinators over the members of a mutually recursive SCC (§7.5); a backwards-compatible extension of Rule 7.5.a.
 - ~~**OQ-T2 — Type variables of variant fields.**~~ Closed in v0.5.0 by Rule 4.1.a: such a variable, and an anonymous bound in a field, is a choice point bound once per link unit (P6 D3).
+- **OQ-T5 — Data that holds a function of itself** (accepted, known gap). A value of `data Rec: R(f: Rec -> u64)` can apply its own field to itself, so a program can fail to terminate with no recursive named function and no `Diverge`. Owner (fourth round of P6): "Allow for now. Let's see if this becomes a problem later, not now."
 - **OQ-T4 — Stating termination of `unfold`.** Rule 7.4.i gives an `unfold` the effect `Diverge` unless its termination is `proved` or `assumed`. Open: how the user states the measure, and which step shapes the static prover accepts without one. Until the prover exists, enforcing the rule would put `Diverge` on every `unfold`.
 - **OQ-T3 — Dependent types for integer ranges** (open direction, not a decision). The owner's note on the arithmetic effects (P6, fourth round): "we might need to introduce dependent types as a better solution to 'raise integer size'. It might even start simplifying other parts of our system." The widening form `widen` (`spec/effects.md` Rule E3.6.h) fixes one wider type; a type that carried its range would let the result of `a * b` have the range the operands give it. The specs already show three places where values meet types: refinement capabilities with value parameters (§6.3, `cap Between(min, max)`, `fn between(min, max) -> cap of N`), `boundedPositive(lo, hi)` in `examples/11_properties.fixed`, and the static prover removing `Overflow` from an operation whose result range it proves from those refinements (`spec/effects.md` Rule E3.6.d). Nothing is designed.
 
