@@ -149,6 +149,20 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
   - **Fixed** (`Generated`): variants in declared order, then fields left to right; the result is the prelude's `Order`; a program's `satisfies Ord` body takes precedence. The comparison of the last field is a tail call, so two long lists compare in a loop.
 - The generated `length` of a list took one native frame per element.
   - **Fixed** (`lengthLoop`).
+- The arguments of a capability bound were not compared when the satisfying type had none (`Bytes satisfies Sized of (u8, u16)` was accepted for `is Sized of (u8, u64)`).
+  - **Fixed** (`Satisfaction.withDeclared`, `reaching`): a declared satisfaction provides the arguments it writes, on its `satisfies` clause or through `extends`; one that writes none provides the receiver's.
+- `3 + 2.5` and `3.add(2.5)` reached clang with an invalid constant.
+  - **Fixed** (`Unifier.bind`, `applyDefaults`): an integer literal that meets a float literal takes its type. A float literal at an integer primitive is `T002`; an integer instance of a generic float literal is `B005`. A mismatch prints an unsolved literal as its default.
+- The typer rejected `x.compare(y)` on a data value (`T001`).
+  - **Fixed** (`Members.autoDerived` gains `Ord`). `eq` by name on a data value or `String`, and `compare` by name on scalars and unit, now lower (`Lower.resolved`). `lt` and `le` are not members of `Ord` and stay `T001`.
+- In a program with its own `cap Show`, `T022` asked for the bound `prelude.Show`, which a program cannot write.
+  - **Fixed** (`Members.lackedBound`).
+- Spans carried no file: a diagnostic in prelude code was shown at a wrong position or crashed the formatter.
+  - **Fixed** (`Span.file`, set for library files): prelude diagnostics and memory-report positions print the prelude's file, line and column.
+- `Console`, the runtime's effects and nested functions were resolved by name; a program's own `effect Console` was lowered to the runtime's.
+  - **Fixed** (`SymbolTable.modules`, `Resolution.NestedFn`).
+- Integer literals were not range-checked (`256` as a `u8` was 0).
+  - **Fixed** (`Typer.literalRanges`, new code `T023`), for every integer type of 8 to 64 bits; the most negative value of a signed type stays valid.
 
 Found and not fixed:
 
@@ -157,26 +171,26 @@ Found and not fixed:
 - The stand-in representation rule cannot see what a function returns: `fn l() -> is Show = [1, 2]` miscompiles.
 - The type of a list literal is not specified. The typer gives it `List`; examples 02 and 11 assumed a collection that the compiler picks. Open for the owner.
 - Signed `MIN / -1` and `MIN % -1` emit a bare `sdiv`/`srem`, which is undefined behaviour. The spec does not say what integer overflow does (trap, wrap or abort). Open for the owner.
-- A prelude offset within the program file's length is shown at a wrong position, because spans carry no file.
-- `Console` and the runtime's effects are recognised by name (`Lower.static`, `Effects.runtimeNames`): a program's own `effect Console` is taken for the runtime's.
-- `Lower.nestedFn` finds a nested function by name and span.
 - `Json` cannot use the derived `show` and `==`: its field `is Map of (String, Json)` has no representing data type, so lowering fails with `B005`.
 - `i128` and `u128` do not satisfy `Numeric`, though `spec/stdlib.md` §4.9 says they do. The backend has no 128-bit integers: `Lower.scalar` stops at 64 bits, the runtime formats only 64-bit integers, and there is no boxed integer. Blocked on OQ-CM7.
 - The backend lowers no literal pattern: `match n: 0 => …` on a `u64` is `B005`, as is a literal inside a tuple or variant pattern.
 - An abstract value of another origin (a `-> is C` result, a field `x: is Show`, a parameter typed with a bare capability `C`) still reaches a concrete type that has `C` and runs with a wrong value: Rule 5.1.2 is not enforced.
-- The arguments of a capability bound are not compared by `Satisfaction.holds` when the satisfying type has none (`B is Sized of (u8, A)` accepts `Sized of (u8, u16)`).
-- Integer literals are not range-checked (`256` as a `u8` is 0).
-- `3.add(2.5)` reaches clang with an invalid constant, as `3 + 2.5` does.
 - Trees, rose trees, snoc lists and the derived `fold` still take one native frame per level; derived `unfold` and `map` of linear data and the generated `length` run as loops, and a derived `compare` loops on its last field. A loop form of the derived `fold` of linear data (in-place reversal, then a fold from the end) measured on `nat_loop` +8.1% instructions and -23% best cycles; it waits for the owner.
 - A program's `satisfies` body for a member that the compiler provides on a scalar (`i64 satisfies Eq: fn eq = …`) is ignored, in both modes. Open for the owner.
 - `compare` on a scalar or a `String` has no table entry, and a `String` field makes a derived `compare` `B005`, reported at 1:1.
-- The typer rejects `x.compare(y)` written directly on a data value (`T001`).
 - Tables built at run time for growing types are interned and kept until exit, where Rule CM4.2 says a stack record per frame: a closure can capture the table and outlive the frame.
 - `Ord` or `Numeric` tables through a growing type whose data type has a program `satisfies Ord` body are `B005`.
 - A `satisfies` body of a data type with a bounded parameter that uses the parameter's table does not take that table (`B005` through a run-time table; invalid IR in a static table).
 - A `handle` with no `return` clause around a `-> !` subject fails at clang.
 - With `--no-specialise`, a `satisfies` body that calls a generic function at its own data type crashes the compiler ("takes 2 arguments, called with 0").
-- In a program that declares its own `cap Show`, `self.a.show()` inside its `satisfies Show` block asks for the prelude's `Show` (`T022`).
+- Tuples of three or more elements are lowered as pairs: `(1, 2, 3).show()` prints `Tuple(1, 2)` and `(1, 2, 3) == (1, 2, 4)` is true, in both modes.
+- With `--no-specialise`, `x + -9223372036854775808` at a float instance gives +9.22e18: the backend applies `fromI64` before negating.
+- A hint can name `prelude.X`, which a program cannot write, when the program's own `X` lacks the member, for `==` and `<` with a program `Eq` or `Ord`, and on a concrete receiver over a parameter.
+- The type variables of a `satisfies` clause are fresh parameters, not the data type's; the typer maps them by name when it compares arguments.
+- Escape reasons in `--explain-memory` print raw character offsets.
+- A problem with no span in prelude code prints at the program's 1:1 with the prefix "in the prelude:".
+- `bool` does not satisfy `Ord` in the typer, though `Declarations.provided` says every primitive does.
+- A negated literal at a mismatched type gets two `T002`s; lambda-parameter variables print as `?N` in mismatches.
 
 Limits and gaps of the first implementation, against the spec:
 

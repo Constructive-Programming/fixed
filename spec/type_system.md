@@ -322,6 +322,10 @@ If still unresolved, **defaults** apply:
 - `INT_LITERAL → i64`
 - `FLOAT_LITERAL → f64`
 
+An integer literal that meets a float literal takes the float type: `3 + 2.5` is `f64`. A float literal at an integer type is a type error (`T002`).
+
+An integer literal outside the range of the integer type it resolves to is an error, `error[T023]`, reported at the literal; at a type parameter the range is that of `i64`, because the literal reaches the type through `fromI64` (`spec/stdlib.md` §4.9). A leading `-` belongs to the literal for this check, so the most negative value of a signed type is valid. This is a fact about the source text; what arithmetic does at run time when a result leaves the range is a separate question.
+
 ### 5.8 Type-alias `of`-distribution (resolves OQ6)
 
 A type alias `type T = C1 + C2 + ... + Cn` is a bag of capabilities. When applied with `of` arguments, the application **distributes** over each constituent.
