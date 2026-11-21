@@ -22,8 +22,8 @@ Capabilities *are* predicate functors over the type universe. Cropping = existen
 ### Keeping performance without explicit data
 
 - **Algebraic effect handlers** — effects are declared, tracked in types, and handled with composable handlers. No monads, no transformers, no colored functions.
-- **QTT** — Quantitative Type Theory tracks how often each binding is used: 0 (erased, type-level only), 1 or ω. Erasure is what makes dependent types sound with reference counting. In-place update (**FBIP, Functional But In-Place**) and the Perceus counts follow a separate inferred fact, ownership: a value owned exclusively is updated in place, a shared one only after a run-time `rc == 1` test. Using a binding once does not make its value exclusively owned.
-- **Evidence passing** — effects compile to efficient evidence-vector lookups, not full delimited continuations.
+- **QTT** — Quantitative Type Theory tracks how often each binding is used: 0 (erased, type-level only), 1 or ω (many). Erasure is what makes dependent types sound with reference counting. In-place update (**FBIP, Functional But In-Place**) and the Perceus counts follow a separate inferred fact, ownership: a value owned exclusively is updated in place, a shared one only after a run-time `rc == 1` test. Using a binding once does not make its value exclusively owned.
+- **Evidence passing** — effects compile to evidence-vector lookups, not full delimited continuations (specified; today only operations that abort are compiled, as direct calls and checked aborts).
 
 You will recognize some of these features from [Koka](https://koka-lang.github.io/koka/doc/index.html). Koka is a research language that got several hard things right and Fixed adopts all of them wholesale. The compilation target is LLVM IR. Memory management is Perceus. Effects are algebraic with evidence passing. FBIP optimizes functional updates.
 
@@ -33,190 +33,204 @@ Where Koka still has `struct`, `enum`, and named data types, Fixed pushes the la
 
 | Koka | Fixed |
 |---|---|
-| `struct Point { x: int; y: int }` | `cap HasX { fn x -> Part }` + `cap HasY { fn y -> Part }` |
-| `type list<a> { Cons(a, list<a>); Nil }` | `cap Sequencing { fn head -> is Optional ... }` |
-| `type either<a,b> { Left(a); Right(b) }` | `cap Result of (E, A) { ... }` |
+| `struct Point { x: int; y: int }` | `cap HasX` with the member `fn x -> f64`, and `cap HasY` with `fn y -> f64`; a function asks for `P is HasX + HasY` |
+| `type list<a> { Cons(a, list<a>); Nil }` | `cap Sequencing`, with `fn head -> is Optional of Part` and `Self.fn cons(h: Part, t: is Sequencing of Part) -> Self` |
+| `type either<a,b> { Left(a); Right(b) }` | `cap Result of (E, A)`, with `Self.fn ok(value: A) -> Self` and `Self.fn err(error: E) -> Self` |
 | Programmer picks the representation | Compiler picks the representation |
 
 The programmer writes **capabilities** — what values can do — and the compiler decides how to lay them out in memory. Request `Sequencing + Folding`? The compiler might choose a linked list. Add `RandomAccess + Sized`? Now it *should* use a contiguous array. The capability set narrows the representation space.
 
-The choice is made late. A package is compiled once, to code that works for every representation; where a representation depends on how the rest of the program uses a type, it is chosen when the application is linked, from usage summaries, and recorded in a lock file. Nothing is recompiled when a choice changes. Declarations are private unless marked `pub`. Several satisfactions of one capability by one type may coexist (`Money satisfies Ord named ByAmount`), and `using` chooses between them (`sort(xs) using ByAmount`); an ambiguity that no `using` settles is an error where it occurs. (Specified; the link step, `pub` and `using` are not built yet.)
+The choice is made late. A package is compiled once, to code that works for every representation; where a representation depends on how the rest of the program uses a type, it is chosen when the application is linked, from usage summaries, and recorded in a lock file. Nothing is recompiled when a choice changes. Declarations are private unless marked `pub`. Several satisfactions of one capability by one type may coexist (`Money satisfies Ord named ByAmount`), and `using` chooses between them (`sort(xs) using ByAmount`); an ambiguity that no `using` settles is an error where it occurs. (Specified in `spec/compilation_model.md` §8 and `spec/type_system.md` Rules 8.4 and 8.6; the link step, `pub`, `named` and `using` are not built yet.)
 
 This is the tagless final encoding applied to an entire language: programs are written against abstract interfaces, and the "interpreter" (the compiler) chooses the concrete semantics.
 
 ## Quick tour
 
-The tour writes bodies with braces and commas for brevity. The grammar has no braced blocks: a body is inline or indented after `=`, `:` or `=>`, and `data` variants are one per line after `:` (`spec/syntax_grammar.ebnf`, and the programs in `examples/`).
+Every sample in this tour is one of two kinds. A sample without a mark was compiled and run with the compiler in this repository, and the output shown is what it printed. A sample marked **Specified, not built** follows the grammar (`spec/syntax_grammar.ebnf`) and the rule it names, and the compiler does not implement that rule yet. Longer working programs are in `examples/`; examples `01`, `03`, `04` and `05` compile and run.
+
+The compiled samples use no integer arithmetic. Under a rule that is specified and not built (`spec/effects.md` §3.6), an integer operation that is not proved to stay in range performs the effect `Overflow`, and a function that does such arithmetic will have to declare it. Arithmetic on `f64` follows IEEE 754 and performs no effect.
 
 ### Hello world
 
 ```
 use std.io.Console
 
-fn greet(name: String) -> () with Console {
+fn greet(name: String) -> () with Console =
     Console.printLine("Hello, ".concat(name).concat("!"))
-}
 
-fn main() -> () with Console {
+fn main() -> () with Console =
     Console.printLine("What is your name?")
     let name = Console.readLine()
     greet(name)
-}
 ```
 
-`with Console` declares the effect. No hidden I/O — it's in the type.
+With `Ada` as input it prints `What is your name?` and `Hello, Ada!`. `with Console` declares the effect: a function that does input or output says so in its type. A body follows `=`, on the same line or indented below it, and the last expression of a block is its value. The specification makes every `String` valid UTF-8 (`spec/stdlib.md` Rule S3.7). Under Rule S3.7.a, which is specified and not built, `Console.readLine` performs the effect `Decode` when its input is not valid UTF-8, and this `main` will then declare `with Console + Decode`. Today `readLine` passes its input through unchecked.
 
 ### Capabilities, not types
 
-Functions declare what they need. The compiler picks the data structure:
+A function states the capabilities it needs from its arguments, not the data structure that holds them:
 
 ```
-// Works on ANY collection — linked list, array, tree, anything
-fn sum(numbers: is Folding of (N is Numeric)) -> N with Overflow {
-    numbers.fold(0, (acc, x) -> acc + x)
-}
+use std.io.Console
 
-// Capability bundles via type aliases
-type ArrayLike = Sequencing + RandomAccess + Sized + Empty
+// A bundle of capabilities, named with a type alias.
+type Label = Show + Ord
 
-// Requires index based access — compiler SHOULD choose a contiguous representation
-fn binarySearch(
-    sorted: C is ArrayLike of (A is Ord),
-    target: A,
-) -> R is Optional of u64 + Empty {
-    ...
-}
+// Works on any collection that can be folded: a list, a tree, an array.
+fn describe(items: is Folding of (T is Label)) -> String =
+    items.fold("", (text, item) -> text.concat(item.show()).concat(" "))
+
+// `T` names one type: the elements and `first` share it.
+fn largest(items: is Folding of (T is Label), first: T) -> T =
+    items.fold(first, (best, item) -> if item > best: item else: best)
+
+// An anonymous result: the signature does not say which type is returned.
+fn ifPositive(n: i64) -> is Optional of i64 =
+    if n > 0: Optional.some(n) else: Optional.none
+
+fn main() -> () with Console =
+    Console.printLine(describe([3, 12, 40]))
+    Console.printLine(largest(["pear", "fig", "plum"], "apple"))
+    Console.printLine(ifPositive(-4).fold((n) -> n.show(), () -> "none"))
 ```
 
-The result here is named (`R is …`), so the caller picks its type. An anonymous result, `-> is Optional of u64`, is left for the compiler to select when the application is linked.
+It prints `3 12 40 `, `plum` and `none`. `T is Label` names the element type, so that `largest` can take a `first` of the same type; a bound without a name (`is Optional of i64`) leaves the type unnamed. The caller picks the type of a named parameter. The type of an anonymous result is chosen for the whole program when the application is linked (`spec/compilation_model.md` §8). That link step is not built: today a stand-in rule gives such a result the one data type in the program that has all the capabilities.
 
 ### The `is` / `of` syntax
 
-Not having to specify the data structure is ergonomic, feels natural and is the
-main reason Fixed exists:
+Not having to name the data structure is the main reason Fixed exists:
 
 ```
-// The type of the collection isn't needed here
-fn sum(collection: is Folding of u64) -> u64 with Overflow {
-  collection.fold(0, (acc, n) -> acc + n)
-}
+use std.io.Console
+
+// The type of the collection is never named.
+fn joined(words: is Folding of String) -> String =
+    words.fold("", (text, word) -> text.concat(word))
+
+fn main() -> () with Console =
+    Console.printLine(joined(["is", " ", "of"]))
 ```
 
-the type of `collection` doesn't even show up in the example. However, we
-still know it contains numbers and can be folded over.
+It prints `is of`. `is` introduces a bound and `of` gives a capability its type arguments. The type of `words` appears nowhere; the function still knows that it holds strings and can be folded.
 
+### Data types: planning structure
 
-### Data types — planning structure
-
-When you need a specific closed set of variants, `data` lets you express the shape:
+When a closed set of variants is needed, `data` declares the shape, one variant per line:
 
 ```
-data Color { Red, Green, Blue, RGB(red: N is Numeric, green: N, blue: N) }
+use std.io.Console
 
-data Expr {
-    Lit(value: V),
-    Add(left: Expr, right: Expr),
-    Mul(left: Expr, right: Expr),
-    Neg(inner: Expr),
-}
+data Color:
+    Red
+    Green
+    Blue
+    Rgb(red: u8, green: u8, blue: u8)
+
+data Expr:
+    Lit(value: f64)
+    Add(left: Expr, right: Expr)
+    Mul(left: Expr, right: Expr)
+    Neg(inner: Expr)
+
+// `fold` is derived from the shape of `Expr`: one function per variant,
+// and each recursive field arrives already evaluated.
+fn eval(e: Expr) -> f64 =
+    e.fold(
+        (v) -> v,
+        (l, r) -> l + r,
+        (l, r) -> l * r,
+        (x) -> -x,
+    )
+
+fn main() -> () with Console =
+    Console.printLine(Color.Rgb(255, 128, 0).show())
+    let e = Expr.Add(Expr.Lit(1.5), Expr.Mul(Expr.Lit(2.0), Expr.Neg(Expr.Lit(3.0))))
+    Console.printLine(eval(e).show())
 ```
 
-`data` is where structure gets planned. The compiler still owns the representation — you declare the shape, not the layout.
+It prints `Rgb(255, 128, 0)` and `-4.5`. Neither type declares `fold` or `show`: the compiler derives `fold`, `unfold`, `para`, `show`, `==` and `compare` from the shape. `data` is where structure gets planned. The compiler still owns the representation: the program declares the shape, not the layout.
 
 ### Algebraic effects
 
 ```
-effect Fail of E {
-    fn fail(error: E) -> !
-}
+use std.io.Console
 
-fn compute(input: String) -> u64 with Fail of (NotANumber | DivisionByZero) + Overflow { //explictly specifying the Parts of the Fail are not necessary
-    let n = parseU64(input) // Fail of NotANumber
-    divide(n * 2, 3) // Fail of DivisionByZero; `n * 2` may overflow a u64
-}
+fn ratio(a: f64, b: f64) -> f64 with Fail of String =
+    if b == 0.0: Fail.fail("division by zero") else: a / b
 
-// Handle the effect, converting to Result
-handle compute("42") {
-    Fail.fail(e) => Result.err(e),
-    return(v) => Result.ok(v),
-}
+// The handler removes `Fail` from the row: `report` performs no effect.
+fn report(a: f64, b: f64) -> String =
+    handle ratio(a, b):
+        Fail.fail(e) => "error: ".concat(e)
+        return(v) => "ratio: ".concat(v.show())
+
+fn main() -> () with Console =
+    Console.printLine(report(3.0, 4.0))
+    Console.printLine(report(1.0, 0.0))
 ```
 
-Effects are declared, tracked, and handled — never implicit. An effect not handled before `main` is a compile error, except those the runtime handles at `main` (an arithmetic effect aborts with status `101`) and `Diverge`, which has no handler.
+It prints `ratio: 0.75` and `error: division by zero`. `Fail` is declared in the prelude, and its operation `fail` returns `!`: it never returns, so the handler clause gives the value of the whole `handle`. An effect that is not handled before `main` is a compile error: a `main` that calls `ratio` without a handler is rejected with `error[T015]: effect Fail of String is not declared by main`. The runtime handles a few effects at `main` itself, such as `Console`. `Diverge`, the effect of a function that may not return, has no handler. Only operations that abort, like `fail`, are built; an operation that returns to its caller through `resume` is specified and not built.
 
-Integer overflow and division by zero are effects too (`Overflow`, `DivideByZero`): nothing wraps silently. The effect disappears where the prover or a refinement shows the result in range, and the prelude handles it into an optional value, a result, or a computation at a wider integer type (`spec/effects.md` §3.6; not built yet).
-
-### Properties — lightweight theorem proving
-
-`prop` declares invariants directly alongside the code they govern. Properties are checked by the static prover where possible, and by property-based testing in a separate test build (`fixed verify`) otherwise; only a proved prop, or one the program states with `assume prop`, steers what the compiler does (not built yet):
+**Integer overflow and division by zero.** **Specified, not built** (`spec/effects.md` §3.6, Rules E3.6.b, E3.6.c and E3.6.h):
 
 ```
-cap Sorted extends Sequencing {
+fn sum(numbers: is Folding of (N is Numeric)) -> N with Overflow =
+    numbers.fold(0, (acc, x) -> acc + x)
+
+fn describeSum(numbers: is Folding of u8) -> String =
+    arithmeticOrNone(() -> sum(numbers)).fold((n) -> n.show(), () -> "does not fit a u8")
+
+fn scale(a: u32, b: u32, c: u32) -> u32 with Arithmetic =
+    widen(() -> a * b / c)
+```
+
+Integer `+`, `-`, `*` and negation perform the effect `Overflow` when the result leaves the range of the type, and so do `MIN / -1`, `MIN % -1` and a conversion to a narrower type. `/` and `%` perform `DivideByZero` when the divisor is zero. `Arithmetic` names both. Nothing wraps silently. The effect is absent from an operation's type where the static prover or a refinement shows the result in range, or where every operand is a constant. Generic code over `N is Numeric` always declares `Overflow`, even when it is called at `f64`. The prelude handles the effect into an optional value (`arithmeticOrNone`) or a result (`arithmeticOrError`), and `widen` computes a block at the next wider integer type and narrows once at the end. Unhandled at `main`, the program stops with the position of the operation and exit status `101`. Today the compiler has none of this: `+`, `-` and `*` wrap (`200 * 7` at `u8` gives `120`), and an integer division by zero stops the program with `fixed: panic: integer division by zero` and status `101`.
+
+### Properties: lightweight theorem proving
+
+`prop` declares an invariant next to the capability or data type it governs. **Specified, not built** (`spec/properties.md` Rules P3.1, P3.2 and P5.4; the second sample is the worked example of §11.1):
+
+```
+cap Sorted of (Part is Ord) extends Sequencing:
     prop sorted: fold(true, (acc, prev, curr) -> acc && prev <= curr)
-}
 
-cap NonEmpty extends Sequencing {
-    prop nonEmpty: size > 0
-}
-
-fn insert(sorted: S is Sorted, value: Part) -> S is Sorted {
-    // compiler verifies the result still satisfies `sorted`
-    ...
-}
+data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
+    Bounded(value: N)
+    prop inRange: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
 ```
 
-Properties live where the capability is defined — not in a separate test file. They serve as machine-checked documentation and as lightweight proofs that the compiler can use to optimize and verify.
-
 ```
-cap Stack extends Sequencing + Sized {
+cap Stack extends Sequencing + Sized:
+    fn push(value: Part) -> Self
+    fn pop -> Self
+
     prop pushIncrements: forall (s: Self, x: Part) ->
         s.push(x).size == s.size + 1
 
-    prop popDecrements: forall (s: Self) ->
-        s.size > 0 implies s.pop().size == s.size - 1
-}
+    prop popDecrements: forall (s: Self) suchThat s.size > 0 ->
+        s.pop().size == s.size - 1
+
+    prop pushPopIdentity: forall (s: Self, x: Part) ->
+        s.push(x).pop == s
 ```
 
-### Dependent types — functions that generate capabilities
+The static prover checks a prop where it can. Property-based testing in a separate test build (`fixed verify`) checks the others. Only a proved prop, or one the program states with `assume prop` (Rule P7.7), steers what the compiler does; a prop that was only tested is evidence, not a fact the compiler relies on. The compiler today parses `prop` and ignores it, and does not parse `assume`.
 
-Functions can return capabilities, making type refinement first-class:
+### Dependent types: functions that generate capabilities
+
+A function can return a capability, which refines a type with a prop. **Specified, not built** (`spec/properties.md` Rule P3.4, `spec/type_system.md` Rule 6.3.0, and `TypeAliasParams` in §7 of the grammar):
 
 ```
-// A function that generates a capability
-fn between(min: N is Ord, max: N) -> cap of N {
+fn between(min: N is Ord, max: N) -> cap of N =
     prop inRange: min <= Self && Self <= max
-}
 
-fn validateAge(age: N is Numeric + between(0, 150)) -> N { age }
+fn validateAge(age: N is Numeric + between(0, 150)) -> N = age
 
 type Port = u16 + between(1, 65535)
-type Username = String + minLength(3) + maxLength(32)
-```
-
-Cap generators are first-class — pass them as arguments, return them from functions, compose them:
-
-```
-fn validateWith(
-    value: N is Numeric,
-    constraint: fn(N, N) -> cap of N,
-    lo: N, hi: N,
-) -> N is constraint(lo, hi) with Fail of String {
-    if value < lo { Fail.fail("too low") }
-    else if value > hi { Fail.fail("too high") }
-    else { value }
-}
-```
-
-Type aliases can take value parameters too, bundling refinements into reusable names:
-
-```
 type PortRange(min: u16, max: u16) = u16 + between(min, max)
-type BoundedString(max: u64) = String + maxLength(max)
-
-fn parsePort(s: String) -> N is PortRange(1024, 49151) with Fail of String { ... }
 ```
 
-Refinement capabilities are zero-cost: compile-time only, no wrapping, the value stays its original type. `cap Name(params)` is sugar for `fn name(params) -> cap`.
+A capability generator is used in a bound by calling it (`between(0, 150)`); as a value, for example a parameter, it has the type `(N, N) -> cap of N`. A type alias can take value parameters. A refinement costs nothing at run time: it is checked at compile time, nothing wraps the value, and the value keeps its type. `cap Between(min: N is Ord, max: N) of N` is sugar for the function `between` (`spec/type_system.md` §6.3). The compiler today accepts these declarations and checks no refinement.
 
 ## Design principles
 
@@ -233,12 +247,12 @@ Refinement capabilities are zero-cost: compile-time only, no wrapping, the value
 
 ## Theoretical foundation
 
-Quine's five predicate functor operations map directly onto Fixed's capability combinators:
+Quine's five predicate functor operations map directly onto Fixed's capability combinators. The last row adds quantities, which are not one of Quine's operations:
 
 | Quine | Logic | Fixed |
 |---|---|---|
 | **Cropping** | Existential quantification (hide a variable) | Existential capabilities — return `is Cap`, hide the concrete type |
-| **Padding** | Add a vacuous variable | Phantom type parameters — `data Tagged of (phantom Tag, Value)` |
+| **Padding** | Add a vacuous variable | Phantom type parameters — `data Tagged of (Tag, Value)` with the one variant `Tagged(value: Value)`: `Tag` appears in no field |
 | **Permutation** | Reorder arguments | Capability bounds are unordered — `A + B` = `B + A` |
 | **Reflection** | Identify two variables | Named aliases — `N is Numeric` constrains multiple params to share a type |
 | **Composition** | Conjoin predicates | Capability composition — `extends`, `+` bounds |
@@ -304,9 +318,9 @@ scanner, parser and end-to-end throughput over `examples/`, with allocation per 
 
 ## Status
 
-Phases 0 (design), 2 and 2.1 (parser), 4.0 (naive backend) and most of 4.1 (polymorphic baseline and specialiser) are done. Phase 1 (specification) exists as drafts under `spec/`. Of the type checker (Phase 3), the base typer, capability closure, effect inference and quantity, demand and lifetime inference are done; property verification and representation selection are not. Examples `01`, `03`, `04` and `05` compile to native code and run, in the default and `--no-specialise` modes, against pinned output (`examples/golden/`); the others are parsed and type-checked by the test suite but not compiled.
+Phases 0 (design), 2 and 2.1 (parser), 4.0 (naive backend) and most of 4.1 (polymorphic baseline and specialiser) are done. Phase 1 (specification) exists as drafts under `spec/`. Of the type checker (Phase 3), the base typer, capability closure, effect inference and quantity, demand and lifetime inference are done; property verification and representation selection are not. Examples `01`, `03`, `04` and `05` compile to native code and run, in the default and `--no-specialise` modes, against pinned output (`examples/golden/`). Examples `02` and `06` type-check with no diagnostics, but the backend does not compile them yet. Examples `07` to `11` still have type errors: `07`, `09` and `11` mostly on names the prelude does not provide yet (`max`, `concat`, `reverse`), `08` and `10` on type mismatches. The test suite runs them through the parser and the type checker.
 
-Phase 4.2, the decisions of `docs/decisions/P6-resolution-round-2026-11-20.md`, is in progress. Built: the totality check (structural recursion and recursion under `Diverge` are accepted, other recursion is `T027`, a cycle among a capability's default bodies is `T028`); derived `para`; `fold`, `para`, `unfold` and `map` of lists and `Nat` in bounded native stack (trees still take one frame per level); derived `Show`, `Eq` and `Ord`; literal patterns; `satisfies` bodies lowered and satisfactions keyed by symbol; `show`, `==` and `clone` on an unbounded type parameter as an error (`T022`); `Clone` on request; camelCase names. Specified and not built: the application link, visibility, `using` and named satisfactions, list literals as choice points, `inspect` and `trace`, and the arithmetic effects `Overflow` and `DivideByZero` (today `+`, `-` and `*` wrap; division by zero aborts with status `101`). Each item's state is in Phase 4.2 of the implementation plan.
+Phase 4.2, the decisions of `docs/decisions/P6-resolution-round-2026-11-20.md`, is in progress. Built: the totality check (structural recursion and recursion under `Diverge` are accepted, other recursion is `T027`, a cycle among a capability's default bodies is `T028`); derived `para`; `fold`, `para`, `unfold` and `map` of lists and `Nat` in bounded native stack (trees still take one frame per level); derived `Show`, `Eq` and `Ord`; a derived `Functor` only where `map` can reach every element, with a diagnostic that names the field that blocks it (a type still needs `T satisfies Functor` to get `map`); literal patterns; `satisfies` bodies lowered and satisfactions keyed by symbol; `show`, `==` and `clone` on an unbounded type parameter as an error (`T022`); `Clone` on request in the type checker (the backend does not compile a `clone` call on a program's own data type yet); camelCase names. Specified and not built: the application link, visibility, `using` and named satisfactions, list literals as choice points and the ascription `e is T`, `inspect` and `trace`, `assume prop`, the warning `W060` and `use … as` for hidden prelude names, the check of input for valid UTF-8 and the effect `Decode`, exit codes by error class, `fixed release`, and the arithmetic effects `Overflow` and `DivideByZero` (today `+`, `-` and `*` wrap; division by zero aborts with status `101`). Each item's state is in Phase 4.2 of the implementation plan.
 
 The language design is explored through 11 example programs covering:
 
