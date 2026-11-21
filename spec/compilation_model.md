@@ -593,7 +593,7 @@ The object code of a package refers to the witness operations, the table entries
 - A choice point selected at package compile (Rule CM8.1, case 3) is bound in the package's own object code.
 - "Late" means the application link. Binding at load time (shared libraries, plug-ins) is out of scope.
 
-A development build only binds symbols. A release build also builds clones (Rule CM8.7).
+A development build only binds symbols. A release build also builds clones (Rule CM8.7). The build kind is a flag of the commands that link: `fixed link --release` and `fixed ship --release` make a release build; without the flag the build is a development build. `--keep-diagnostics` and `--budget <n>` refine a release build. (Owner's decision, fourth round of P6.)
 
 ### 8.3 Usage summaries (Rule CM8.3)
 

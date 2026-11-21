@@ -520,6 +520,7 @@ Flags named in the specs:
 | `--explain-selection` | `link`, and `compile` / `ship` of an application | Per choice point: candidates, scores, the disambiguation rule that decided, measured or static (`spec/reports.md` Rule RP5.4) | planned |
 | `--explain-cardinality` | `compile` | State and implementation spaces (`spec/reports.md` §4) | planned |
 | `--coverage` | `verify` | Coverage report (`spec/reports.md`) | planned |
+| `--release` | `fixed link`, `fixed ship` | Makes a release build: link-time clones, `inspect` and `trace` stripped (`spec/compilation_model.md` §8). Without it the build is a development build | planned |
 | `--keep-diagnostics` | a release build | Keeps `inspect` and `trace` (`spec/diagnostics.md` Rule DG3.5) | planned |
 | `--no-measure` | `verify` | Runs the props without recording measurements (`spec/properties.md` Rule P7.9) | planned |
 | `--no-pbt`, `--strict-pbt`, `--require-proved`, `--prop-…` | `verify` (and `--require-proved` on `compile`, `ship`) | `spec/properties.md` Rule P7.6 | planned |
