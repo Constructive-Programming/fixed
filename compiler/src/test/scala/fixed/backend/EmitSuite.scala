@@ -595,14 +595,22 @@ class EmitSuite extends munit.FunSuite:
         "fn d(x: T is Show) -> String = x.show()\nfn main() -> () with Console = Console.printLine(d(five()))\n"
     ).foreach((name, main) => check(s"own_show_$name", own + main, "mine\n"))
 
-  test("a problem in the prelude's code says so and has no span in the program's file"):
-    /** An `Optional` without a `Folding.fold` body: the prelude's `join` cannot fold it. */
+  test("a problem in the prelude's code is reported at its line in the prelude's file"):
+    /** An `Optional` without a `Folding.fold` body: the prelude's `join` cannot fold it. The comment
+      * makes the program longer than the prelude's offset of that line, where formatting the span
+      * in the program's file would show a wrong position rather than fail.
+      */
     val opt =
       "data Opt of A:\n    Some(v: A)\n    None\nOpt satisfies Optional:\n    Some as some\n    None as none\n" +
         "    fn foldRight(init: R, f: (Part, R) -> R) = init\n    fn find(pred: Part -> bool) = self\n"
-    val src = header + opt + "fn main() -> () with Console = Console.printLine(join(Opt.Some(\"q\"), \"-\"))\n"
+    val src = header + opt + "fn main() -> () with Console = Console.printLine(join(Opt.Some(\"q\"), \"-\"))\n" +
+      "// " + "x" * 20000 + "\n"
     val ds = lowered("prelude_problem", src).fold(identity, _ => fail("lowered"))
-    assert(ds.exists(d => d.message.startsWith("in the prelude: ") && d.span == fixed.util.Span.NoSpan), ds)
+    val prelude = scala.io.Source.fromResource("stdlib/prelude.fixed").getLines().toList
+    val line = prelude.indexWhere(_.startsWith("    parts.fold(")) + 1
+    assert(line > 0, "the prelude's join folds its parts")
+    val shown = ds.map(fixed.util.Reporter(SourceFile.fromString("prelude_problem.fixed", src)).format)
+    assert(shown.exists(_.startsWith(s"stdlib/prelude.fixed:$line:5: error[B005]: member Folding.fold")), shown)
 
   test("a literal inside a tuple pattern is B005 at the literal, not a case that never matches"):
     List("(u64, u64)", "Tuple of (u64, u64)").foreach { t =>

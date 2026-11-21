@@ -205,7 +205,7 @@ object Parser:
     if s.current.kind == kind then consume(s)
     else
       reportExpected(s, DiagCode.P001, s"$what (token $kind)", None)
-      (s, Token.of(kind, Span(s.current.span.start, s.current.span.start)))
+      (s, Token.of(kind, s.current.span.copy(end = s.current.span.start)))
 
   /** Report "expected `what`, got …" at `current`. */
   private[parsing] def reportExpected(
@@ -236,7 +236,7 @@ object Parser:
 
   /** Combine two spans. */
   private[parsing] def span(start: Span, end: Span): Span =
-    Span(start.start, end.end)
+    start.copy(end = end.end)
 
   /** Skip zero or more NEWLINEs at the current position. */
   @tailrec

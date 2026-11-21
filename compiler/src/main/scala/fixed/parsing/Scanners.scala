@@ -600,7 +600,13 @@ final class Scanner(
           Some((tok, next))
       }
       .foreach(buf.addOne)
-    buf.result()
+    val scanned = buf.result()
+
+    /** A library file's tokens carry it in their spans, so its diagnostics are placed in it. */
+    if source.library then
+      val file = Some(source)
+      scanned.mapInPlace(t => Token.of(t.kind, t.span.copy(file = file), t.lexeme))
+    else scanned
 
   /** The single boundary mutation: Scala's `Iterator` owns an internal
     * cursor over `tokens`. Past the materialised end we synthesise
@@ -610,7 +616,7 @@ final class Scanner(
 
   def nextToken(): Token =
     if iter.hasNext then iter.next()
-    else Token.Eof(Span(source.length, source.length))
+    else Token.Eof(Span(source.length, source.length, Option.when(source.library)(source)))
 
   def tokenize(): Seq[Token] = scala.collection.immutable.ArraySeq.unsafeWrapArray(tokens)
 

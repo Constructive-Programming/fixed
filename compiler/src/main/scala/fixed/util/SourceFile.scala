@@ -5,9 +5,9 @@ import scala.collection.Searching
 /** A loaded source file: bytes + path + lazy line-offset table.
   *
   * Spans into a SourceFile are character offsets (0-indexed). Line/column
-  * conversion is on demand; the scanner stays offset-based for speed.
+  * conversion is on demand. A `library` file's spans name it (`Span.file`).
   */
-final class SourceFile(val path: String, val content: String):
+final class SourceFile(val path: String, val content: String, val library: Boolean = false):
 
   /** Offsets of the first character of each line. Line N (1-indexed) starts
     * at offsets(N - 1). offsets(0) == 0. The table includes a synthetic
@@ -51,13 +51,13 @@ object SourceFile:
     val content = scala.io.Source.fromFile(path).mkString
     new SourceFile(path, content)
 
-/** A half-open span [start, end) into a SourceFile's character stream. */
-final case class Span(start: Int, end: Int):
+/** A half-open span [start, end) into `file` (a library file) or else the unit's. */
+final case class Span(start: Int, end: Int, file: Option[SourceFile] = None):
   require(start >= 0 && end >= start, s"invalid span [$start, $end]")
 
   def length: Int = end - start
 
-  def union(other: Span): Span = Span(start min other.start, end max other.end)
+  def union(other: Span): Span = copy(start = start min other.start, end = end max other.end)
 
   def contains(offset: Int): Boolean = offset >= start && offset < end
 

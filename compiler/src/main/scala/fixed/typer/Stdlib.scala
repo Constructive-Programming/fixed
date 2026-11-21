@@ -28,7 +28,7 @@ object Stdlib:
     val path = s"stdlib/$name.fixed"
     val source = Source.fromResource(path)
     val result =
-      try Parser.parse(SourceFile.fromString(path, source.mkString))
+      try Parser.parse(new SourceFile(path, source.mkString, library = true))
       finally source.close()
     require(!result.hasErrors, s"$path does not parse: ${result.diagnostics}")
     result.tree match

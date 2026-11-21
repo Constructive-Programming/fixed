@@ -42,20 +42,22 @@ final class Reporter(val source: SourceFile):
 
   def errorCount: Int = buf.count(_.isError)
 
-  /** Format a diagnostic as a single multi-line block suitable for terminals. A span past the end of
-    * the file is in another file (the prelude's code) and is shown without a position.
+  /** Format a diagnostic as a single multi-line block suitable for terminals, at its span's file
+    * (`Span.file`, a library file) or else this unit's; a span past the end of that file, which
+    * only a fault makes, without a position.
     */
   def format(d: Diagnostic): String =
+    val file = d.span.file.getOrElse(source)
     val at =
-      if d.span.start > source.length then ""
+      if d.span.start > file.length then ""
       else
-        val (line, col) = source.lineColumn(d.span.start)
+        val (line, col) = file.lineColumn(d.span.start)
         s":$line:$col"
     val sevTag = d.severity match
       case Severity.Error   => "error"
       case Severity.Warning => "warning"
       case Severity.Info    => "info"
-    val head = s"${source.path}$at: $sevTag[${d.code}]: ${d.message}"
+    val head = s"${file.path}$at: $sevTag[${d.code}]: ${d.message}"
     d.suggestion match
       case Some(s) => s"$head\n  hint: $s"
       case None    => head

@@ -24,7 +24,7 @@ object Namer:
       case Trees.CompilationUnit(items, _) => items
       case other                           => List(other)
 
-    /** The prelude's signatures are not checked: their spans are not in the unit's file. */
+    /** The prelude's written types are not checked again with each program's. */
     val program = stdlib.copy(owner = SymbolId.Root, table = stdlib.table.copy(written = Nil))
     val (entered, decls) = mapAccum(program, items)(enterTopLevel)
     val typed = typeAll(entered, decls.flatten)

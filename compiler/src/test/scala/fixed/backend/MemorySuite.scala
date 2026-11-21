@@ -99,3 +99,11 @@ class MemorySuite extends munit.FunSuite:
       val a = Backend.analyse(u).fold(ds => fail(s"$f: $ds"), identity)
       assertEquals(a.memory.allocations.keySet, a.fns.map(_.name).toSet, f)
     }
+
+  test("an allocation in the prelude's code is shown at its position in the prelude's file"):
+    val u = unit("use std.io.Console\nfn main() -> () with Console = Console.printLine(repeatStr(\"ab\", 3))\n")
+    val report = MemoryReport.text(u, Backend.analyse(u).fold(ds => fail(s"lowering failed: $ds"), identity))
+    val prelude = scala.io.Source.fromResource("stdlib/prelude.fixed").getLines().toList
+    val body = prelude.indexWhere(_.startsWith("fn repeatStr(")) + 2
+    assert(body > 1, "the prelude has repeatStr")
+    assert(report.contains(s"at: stdlib/prelude.fixed:$body:5"), report)

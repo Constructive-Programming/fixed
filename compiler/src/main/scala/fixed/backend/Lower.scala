@@ -975,10 +975,12 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
 
   private def unsupported(span: Span, what: String, k: K): Expr = unsupportedThen(span, what, k(Atom.UnitC))
 
-  /** A problem in the prelude's code has no span in the program's file, and says where it is. */
+  /** A problem in the prelude's code is at its span in the prelude's file; one with no span says
+    * where it is.
+    */
   private def problem(code: DiagCode, span: Span, message: String): Diagnostic =
-    if inPrelude.value then Diagnostic(Severity.Error, code, Span.NoSpan, s"in the prelude: $message")
-    else Diagnostic(Severity.Error, code, span, message)
+    val where = if inPrelude.value && span == Span.NoSpan then "in the prelude: " else ""
+    Diagnostic(Severity.Error, code, span, where + message)
 
 object Lower:
 

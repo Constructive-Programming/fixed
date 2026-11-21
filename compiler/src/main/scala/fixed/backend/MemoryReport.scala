@@ -6,7 +6,8 @@ import fixed.util.Span
 
 /** `fixed compile --explain-memory [--format json]` (`spec/memory_management.md` §19): per function,
   * its `fip` contract, each parameter's demand and escape, each allocation's class with its escapes
-  * and reasons, fork facts and copy sites; then each `handle`'s kind. Positions are `line:column`.
+  * and reasons, fork facts and copy sites; then each `handle`'s kind. Positions are `line:column`,
+  * after `path:` in a library file (the prelude's code).
   * Every function except a clone and a `fip` shared entry also gives its baseline size and its
   * clone candidates on both axes, built or not (`spec/compilation_model.md` Rule CM5.8).
   */
@@ -30,8 +31,8 @@ object MemoryReport:
     val at = (sp: Span) =>
       if sp == Span.NoSpan then Value.Str("-")
       else
-        val (l, c) = unit.source.lineColumn(sp.start)
-        Value.Str(s"$l:$c")
+        val (l, c) = sp.file.getOrElse(unit.source).lineColumn(sp.start)
+        Value.Str(sp.file.fold("")(_.path + ":") + s"$l:$c")
     val fns = a.fns.map { f =>
       val demands = a.demands.params.getOrElse(f.instance, Nil)
       val escapes = a.memory.escapes.getOrElse(f.name, Nil)
