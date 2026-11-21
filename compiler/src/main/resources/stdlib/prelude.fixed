@@ -154,6 +154,10 @@ List satisfies Filtering:
 Maybe satisfies Optional:
     Just as some
     Nothing as none
+Maybe satisfies Folding:
+    fn fold(init: R, f: (R, Part) -> R) = match self:
+        Maybe.Just(v) => f(init, v)
+        Maybe.Nothing => init
     fn foldRight(init: R, f: (Part, R) -> R) = match self:
         Maybe.Just(v) => f(v, init)
         Maybe.Nothing => init

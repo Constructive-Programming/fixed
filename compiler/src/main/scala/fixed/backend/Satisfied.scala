@@ -5,7 +5,7 @@ import fixed.core.{SymKind, SymbolId, Type, render}
 import fixed.typer.{Members, TyperPhase}
 
 /** The method bodies of `satisfies` declarations (`spec/type_system.md` §8.3), lowered as functions
-  * of their own: a call of the member on a data type that has one, and the member's entry in that
+  * of their own: a call of the member on a data or scalar type that has one, and the member's entry in that
   * type's capability table, run the body. The program's bodies take the place of what the compiler
   * would generate; the prelude's fill only members it generates nothing for, since a generated
   * `fold`, `length` or `find` on a list computes what the prelude's body computes, in a loop.
@@ -45,11 +45,10 @@ private[backend] trait Satisfied extends Generated:
   /** A typed `satisfies` method body, its capability's arguments as declared, and whether it is the prelude's. */
   private case class Body(cap: SymbolId, capArgs: List[Type], fn: Trees.InstanceMethod, prelude: Boolean)
 
-  /** The bodies by satisfying data type and the capability member each defines; a program body
-    * replaces a prelude body for the same pair. Bodies on primitive types are not indexed, and
-    * neither are members with several type parameters of their own: their calls stay `B005`.
+  /** The bodies by satisfying type (a data type at no arguments, or a scalar type) and the
+    * capability member each defines; a program body replaces a prelude body for the same pair.
     */
-  private lazy val satisfactionBodies: Map[(SymbolId, SymbolId), Body] =
+  private lazy val satisfactionBodies: Map[(Type, SymbolId), Body] =
     val own = unit.tree.toList.flatMap { case Trees.CompilationUnit(items, _) => items; case _ => Nil }
     val prelude = TyperPhase.preludeSatisfactions
     (for
@@ -57,17 +56,41 @@ private[backend] trait Satisfied extends Generated:
       case d @ Trees.SatisfiesDecl(typeName, Trees.CapRef(capName, _, _), methods, _) <- prelude ++ own
       fromPrelude = prelude.exists(_ eq d)
       visible = symbols.scopeFor(fromPrelude)
-      data <- visible.get(typeName).filter(symbols(_).kind == SymKind.Data).toList
+      self <- visible.get(typeName).filter(symbols(_).kind == SymKind.Data).map(Type.TypeRef(_, Nil))
+        .orElse(Some(Type.PrimType(typeName)).filter(Lower.scalar(_).isDefined)).toList
       cap <- visible.get(capName).filter(symbols(_).kind == SymKind.Cap).toList
-      capArgs = symbols.satisfactionsOf(Type.TypeRef(data, Nil)).collectFirst { case Type.CapRef(`cap`, as) => as }
+      capArgs = symbols.satisfactionsOf(self).collectFirst { case Type.CapRef(`cap`, as) => as }
       case fn: Trees.InstanceMethod <- methods if fn.body.isDefined
       entry <- typing.members.lookup(cap, SymKind.Method, fn.name).headOption.toList
-      if symbols.typeParamsOf(entry.member.id).sizeIs <= 1
-    yield (data, entry.member.id) -> Body(cap, capArgs.getOrElse(Nil), fn, fromPrelude)).toMap
+    yield (self, entry.member.id) -> Body(cap, capArgs.getOrElse(Nil), fn, fromPrelude)).toMap
 
-  /** Whether `t` has a `satisfies` body for `member` that is the prelude's exactly when `fromPrelude`. */
+  /** The type `satisfies` bodies of a value of type `t` are keyed by: its data type at no arguments, or a scalar type. */
+  protected def satisfier(t: Type): Option[Type] =
+    dataOf(t).map((d, _) => Type.TypeRef(d, Nil)).orElse(Option.when(Lower.scalar(t).isDefined)(t))
+
+  /** Whether `t` has a `satisfies` body for `member` that is the prelude's exactly when `fromPrelude`
+    * and that the compiler does not provide in its place on a scalar (`Tables.builtIn`).
+    */
   protected def hasBody(t: Type, member: SymbolId, fromPrelude: Boolean): Boolean =
-    dataOf(t).exists((d, _) => satisfactionBodies.get((d, member)).exists(_.prelude == fromPrelude))
+    satisfier(t).exists(s => satisfactionBodies.get((s, member)).exists(_.prelude == fromPrelude)) &&
+      !builtIn(t, member)
+
+  /** A call of `member`'s body on a value of type `t` that does not go through a generated member
+    * ([[member]]): on a scalar type, or for a member with several type parameters of its own, which
+    * the call's argument and result types fix. Returns the function and its hidden arguments.
+    */
+  protected def directBody(
+      t: Type,
+      member: SymbolId,
+      argTypes: List[Type],
+      result: Type
+  ): Option[(String, List[Atom])] =
+    val own = symbols.typeParamsOf(member)
+    if dataOf(t).isDefined && own.sizeIs <= 1 then None
+    else
+      val rs = own.map(ownTypeArgs(member, argTypes, result).getOrElse(_, Type.UnitType))
+      val args = dataOf(t).fold(Nil)(_._2)
+      satisfier(t).flatMap(satisfactionBody(_, member, args, rs)).map(_ -> hidden(args ++ rs))
 
   /** Whether `t` is the built-in `String`, which `==` compares in the runtime. */
   protected def isStringType(t: Type): Boolean =
@@ -87,7 +110,7 @@ private[backend] trait Satisfied extends Generated:
           eq <- symbols.prelude.get("Eq").flatMap(symbols.membersOf(_).find(_.name == "eq"))
           if hasBody(t, eq.id, fromPrelude = false)
         yield
-          val (f, ws) = member(data, args, None)((a, _) => satisfactionBody(data, eq.id, a, Type.UnitType).get)
+          val (f, ws) = member(data, args, None)(dataBody(eq.id)(data, _, _))
           Rhs.Call(f, ws ++ List(l, r), runtime = false)
       body.orElse(derived(t, derivedEq).map((f, ws) => Rhs.Call(f, ws ++ List(l, r), runtime = false)))
 
@@ -116,7 +139,7 @@ private[backend] trait Satisfied extends Generated:
         val show = symbols.prelude.get("Show").flatMap(symbols.membersOf(_).find(_.name == "show"))
         val body = show.filter(m => hasBody(t, m.id, fromPrelude = false)).flatMap(m =>
           dataOf(t).map((data, args) =>
-            member(data, args, None)((a, _) => satisfactionBody(data, m.id, a, Type.UnitType).get)
+            member(data, args, None)(dataBody(m.id)(data, _, _))
           )
         )
         body.orElse(derived(t, derivedShow)) match
@@ -155,29 +178,89 @@ private[backend] trait Satisfied extends Generated:
       val r = fresh("r", rt)
       Expr.Let(r, Rhs.CallTable(table, Tables.members(symbols, c).indexOf(member), args), k(r))
 
-  /** The function of the `satisfies` body that defines capability member `member` for `data`,
-    * built at `data`'s arguments `args` and, for a member with a type parameter of its own, at `r`
-    * (else `r` is ignored): it takes the witnesses of the type parameters these mention, `self`, then
-    * the member's parameters. The capability's own parameters are the arguments the declaration
-    * writes, where the member is the capability's own rather than inherited.
+  /** The `satisfies` body of `member` for data type `d` at `args` and own type argument `r` (a generator for `member`). */
+  protected def dataBody(member: SymbolId)(d: SymbolId, args: List[Type], r: Type): String =
+    satisfactionBody(Type.TypeRef(d, Nil), member, args, List(r)).get
+
+  /** The program's `satisfies Ord` body's `compare` for values of type `t`, if it has one. */
+  protected def userCompare(t: Type): Option[SymbolId] =
+    symbols.prelude.get("Ord").flatMap(symbols.membersOf(_).find(_.name == "compare")).map(_.id)
+      .filter(hasBody(t, _, fromPrelude = false))
+
+  /** `l op r` for a comparison operator `op` on values of data type `t` by the program's `compare`
+    * ([[comparison]]), if it has one: `>` and `>=` are `lt` and `le` with the operands swapped.
     */
-  protected def satisfactionBody(data: SymbolId, member: SymbolId, args: List[Type], r: Type): Option[String] =
-    satisfactionBodies.get((data, member)).map { b =>
+  protected def ordered(t: Type, op: Trees.BinOperator, l: Atom, r: Atom): Option[Rhs] =
+    import Trees.BinOperator.*
+    val chosen = op match
+      case Lt => Some(("lt", l, r))
+      case Le => Some(("le", l, r))
+      case Gt => Some(("lt", r, l))
+      case Ge => Some(("le", r, l))
+      case _  => None
+    for
+      (entry, a, b) <- chosen
+      (data, args) <- dataOf(t)
+      compare <- userCompare(t)
+    yield
+      val (f, ws) = member(data, args, None)((as, _) => comparison(data, as, compare, entry))
+      Rhs.Call(f, ws ++ List(a, b), runtime = false)
+
+  /** The hidden table entry `lt` or `le` (`op`) of `data` at `args` (`Tables.ordEntries`): the
+    * program's `compare`, whose result is the prelude's `Order` (P6 D17), read as `Less` for `lt`
+    * and as not `Greater` for `le`.
+    */
+  protected def comparison(data: SymbolId, args: List[Type], compare: SymbolId, op: String): String =
+    val name = s"${symbols.render(Type.TypeRef(data, args))}.$op[compare]"
+    instance(name) {
+      val body = satisfactionBody(Type.TypeRef(data, Nil), compare, args, Nil).get
+      val ws = hidden(args)
+      val (a, b, order) = (fresh("a", CType.Boxed), fresh("b", CType.Boxed), fresh("order", CType.Boxed))
+      val variants = symbols.prelude.get("Order").toList.flatMap(symbols.variantsOf(_).map(_.name))
+      val holds = (v: String) => v == "Less" || (op == "le" && v == "Equal")
+      val res = fresh("holds", CType.Bool)
+      val cases = variants.zipWithIndex.map((v, tag) => tag -> Expr.Ret(Atom.BoolC(holds(v))))
+      Fn(
+        name,
+        ws ++ List(a, b),
+        CType.Bool,
+        Expr.Let(
+          order,
+          Rhs.Call(body, ws ++ List(a, b), runtime = false),
+          Expr.Let(res, Rhs.Switch(order, cases), Expr.Ret(res))
+        )
+      )
+    }
+
+  /** The function of the `satisfies` body that defines capability member `member` for satisfying
+    * type `head` (a data type at no arguments, or a scalar type), built at the data type's
+    * arguments `args` and at `types`, one per type parameter of the member's own: it takes the
+    * witnesses of the type parameters these mention, `self`, then the member's parameters. The
+    * capability's own parameters are the arguments the declaration writes, where the member is the
+    * capability's own rather than inherited.
+    */
+  protected def satisfactionBody(head: Type, member: SymbolId, args: List[Type], types: List[Type]): Option[String] =
+    satisfactionBodies.get((head, member)).map { b =>
       val m = symbols(member)
-      val rs = symbols.typeParamsOf(member).map(_ -> r)
-      val name = s"${symbols.render(Type.TypeRef(data, args))} satisfies ${symbols(b.cap).name}: ${b.fn.name}" +
+      require(types.size >= symbols.typeParamsOf(member).size, s"${m.name} needs a type per own type parameter")
+      val rs = symbols.typeParamsOf(member).zip(types)
+      val (data, ownIds) = head match
+        case Type.TypeRef(d, _) => (Some(d), symbols.typeParamsOf(d))
+        case _                  => (None, Nil)
+      val at = data.fold(head)(Type.TypeRef(_, args))
+      val name = s"${symbols.render(at)} satisfies ${symbols(b.cap).name}: ${b.fn.name}" +
         rs.map((_, t) => s"[${shown(t)}]").mkString
       val fn = b.fn
       instance(name) {
-        val own = symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil))
-        val self = Type.TypeRef(data, own)
+        val own = ownIds.map(Type.TypeRef(_, Nil))
+        val self = data.fold(head)(Type.TypeRef(_, own))
         val capParams = if m.owner == b.cap then symbols.typeParamsOf(b.cap) else Nil
         val mapping = Members.Subst.of(capParams.takeRight(b.capArgs.size), b.capArgs)
         val sub = Members.Subst(mapping, Set(m.owner), Some(self), own.lastOption)
         val (declared, ret) = TypeOps.signature(Members.instantiate(unit.typing.get, m.info, sub)._2)
         val params = (("self", fn.span) -> self) ::
           fn.params.map(p => (p.name, p.span)).zip(declared)
-        val sigma = symbols.typeParamsOf(data).zip(args).toMap ++ rs
+        val sigma = ownIds.zip(args).toMap ++ rs
         inPrelude.withValue(b.prelude)(code(name, params, ret, fn, sigma, Map.empty, hidden(args ++ rs.map(_._2))))
       }
     }

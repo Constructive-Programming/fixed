@@ -12,6 +12,7 @@ import fixed.util.Span
   *
   * Primitive types and `String` have compiler-provided entries. Their members' arguments are scalars
   * or are consumed by the runtime function the entry calls, so no entry has a borrowed value to drop.
+  * A scalar's other members are the program's `satisfies` bodies.
   * A data type's entries call members generated once, polymorphic in its own type parameters, and
   * pass them the static witnesses of the instance's arguments: the adapter is per instance, the
   * member's body is shared. A member a `satisfies` body defines calls that body ([[Satisfied]]):
@@ -21,7 +22,8 @@ import fixed.util.Span
   *
   * A member of the language the backend does not build yet ([[Tables.unbuilt]]) gets a null entry;
   * no lowering asks for one. Any other member a type does not define makes the table an error. The
-  * hidden entries `lt` and `le` stand in for `compare` (plan §2).
+  * hidden entries `lt` and `le` stand in for `compare` (plan §2); a data type builds them from the
+  * program's `compare` ([[Satisfied.comparison]]).
   */
 private[backend] trait Tables extends Satisfied:
   this: Lower =>
@@ -156,6 +158,7 @@ private[backend] trait Tables extends Satisfied:
   /** The entry of `member`: its adapter, `""` for a null entry, `None` if `t` does not define it.
     * Compiler-provided and null entries are for members of the prelude's capabilities (and the
     * hidden `lt` and `le`), not for a program's capability that declares a member of the same name.
+    * A scalar's other entries are the program's `satisfies` bodies ([[builtIn]]).
     */
   private def entry(t: Type, c: CType, cap: SymbolId, member: String): Option[String] =
     val name = s"${symbols.render(t)}:${symbols(cap).name}.$member"
@@ -163,12 +166,36 @@ private[backend] trait Tables extends Satisfied:
     val built = (dataOf(t), productFields(t)) match
       case (Some((data, args)), _)   => dataEntry(t, data, args, cap, member, name)
       case (_, Some((ctor, fields))) => productEntry(ctor, fields, member, name)
-      case _ if preludeMember        => primitive(symbols.render(t), c, member)
-      case _                         => None
+      case _ if preludeMember        =>
+        primitive(symbols.render(t), c, member).orElse(bodyEntry(t, Nil, Nil, cap, member, name, fromPrelude = false))
+      case _ => bodyEntry(t, Nil, Nil, cap, member, name, fromPrelude = false)
     built.orElse(Option.when(preludeMember && Tables.unbuilt(member))(""))
 
+  /** The entry `name` over the `satisfies` body of `member` for `t` (keyed by its [[satisfier]]),
+    * built at the data type's own parameters `own`, the program's or the prelude's as `fromPrelude` says. A
+    * member with one type parameter of its own is built at [[Generated.R]]; one with several is
+    * built at those parameters, and the entry takes a witness for each.
+    */
+  private def bodyEntry(
+      t: Type,
+      own: List[Type],
+      args: List[Type],
+      cap: SymbolId,
+      member: String,
+      name: String,
+      fromPrelude: Boolean
+  ): Option[String] =
+    for
+      d <- declared(cap, member) if hasBody(t, d.id, fromPrelude)
+      head <- satisfier(t)
+      types = symbols.typeParamsOf(d.id) match
+        case List(_) => List(Generated.R)
+        case ps      => ps.map(Type.TypeRef(_, Nil))
+      g <- satisfactionBody(head, d.id, own, types)
+    yield adapter(name, g, args, own)
+
   /** The declaration of `member` in `cap` or the nearest capability its `extends` chain reaches. */
-  private def declared(cap: SymbolId, member: String) =
+  protected def declared(cap: SymbolId, member: String): Option[fixed.core.Denotation] =
     Tables.reached(symbols, cap).flatMap(symbols.membersOf).find(_.name == member)
 
   /** A data type's entry `name`: an adapter over a generated member, or a constructor. */
@@ -189,10 +216,7 @@ private[backend] trait Tables extends Satisfied:
     val arity = decl.map(_.info).collect { case Type.ArrowType(lhs, _, _) => Members.params(lhs).size }.getOrElse(0)
 
     /** The entry over a `satisfies` body: the program's before a generated member, the prelude's after. */
-    def body(fromPrelude: Boolean) =
-      decl.filter(d => hasBody(t, d.id, fromPrelude))
-        .flatMap(d => satisfactionBody(data, d.id, own, r.getOrElse(Type.UnitType)))
-        .map(adapter(name, _, args, own))
+    def body(fromPrelude: Boolean) = bodyEntry(t, own, args, cap, member, name, fromPrelude)
     body(fromPrelude = false).orElse((decl.map(d => symbols.preludeName(d.owner)), member, r) match
       case (_, ctor, _) if decl.exists(_.kind == SymKind.StaticMethod) =>
         capVariant(cap, ctor, t).map(tag =>
@@ -209,9 +233,10 @@ private[backend] trait Tables extends Satisfied:
       case (Some("Sequencing"), "length", _) if list =>
         Some(adapter(name, length(data, own, Type.PrimType("u64"), Span.NoSpan), args, own))
       case (Some("Functor"), "map", Some(b)) => Some(adapter(name, derivedMap(data, own, b, Span.NoSpan), args, own))
-      case (Some("Show"), "show", _)         => derived(t, derivedShow).map(_._1).map(adapter(name, _, args, own))
-      case (Some("Eq"), "eq", _)             => derived(t, derivedEq).map(_._1).map(adapter(name, _, args, own))
-      case _                                 => body(fromPrelude = true))
+      case (None, "lt" | "le", _) => userCompare(t).map(c => adapter(name, comparison(data, own, c, member), args, own))
+      case (Some("Show"), "show", _) => derived(t, derivedShow).map(_._1).map(adapter(name, _, args, own))
+      case (Some("Eq"), "eq", _)     => derived(t, derivedEq).map(_._1).map(adapter(name, _, args, own))
+      case _                         => body(fromPrelude = true))
 
   /** An auto-flat-struct's entry `name` (`spec/type_system.md` §6.6): its constructor `ctor` builds
     * the struct from `fields`, and a member named like a field reads it.
@@ -274,6 +299,21 @@ private[backend] trait Tables extends Satisfied:
 
   /** A compiler-provided entry of the primitive type or `String` named `t`, of Core type `c`. */
   private def primitive(t: String, c: CType, member: String): Option[String] =
+    primitiveBody(t, c, member).map((params, rt, e) =>
+      instance(s"$t.$member")(Fn(s"$t.$member", table :: params, rt, e))
+    )
+
+  /** Whether the compiler provides member `member` of a prelude capability on scalar type `t`: a
+    * program's `satisfies` body for it is not used, so that `==`, `show` and the table entry agree.
+    */
+  protected def builtIn(t: Type, member: SymbolId): Boolean =
+    Lower.scalar(t).exists(c =>
+      symbols.preludeName(symbols(member).owner).nonEmpty &&
+        primitiveBody(symbols.render(t), c, symbols(member).name).isDefined
+    )
+
+  /** The parameters, result type and body of [[primitive]]'s entry, if the compiler provides one. */
+  private def primitiveBody(t: String, c: CType, member: String): Option[(List[Atom.Var], CType, Expr)] =
     val self: Atom.Var = Atom.Var("self", c)
     val other: Atom.Var = Atom.Var("other", c)
     val numeric = t != "char" && (c match { case CType.Int(_, _) | CType.Float(_) => true; case _ => false })
@@ -282,7 +322,7 @@ private[backend] trait Tables extends Satisfied:
       (params, rt, Expr.Let(res, rhs, Expr.Ret(res)))
     val binary = (op: PrimOp, rt: CType) => of(List(self, other), Rhs.Prim(op, List(self, other)), rt)
     val runtime = (f: String, as: List[Atom.Var]) => of(as, Rhs.Call(f, as, runtime = true), CType.Boxed)
-    val body = (member, c) match
+    (member, c) match
       case ("fromI64", CType.Int(64, _)) =>
         val n: Atom.Var = Atom.Var("n", c)
         Some((List(n), c, Expr.Ret(n)))
@@ -306,7 +346,6 @@ private[backend] trait Tables extends Satisfied:
             (List(self), rt, Expr.Let(w, Rhs.Prim(PrimOp.Widen, List(self)), call))
         }
       case _ => None
-    body.map((params, rt, e) => instance(s"$t.$member")(Fn(s"$t.$member", table :: params, rt, e)))
 
 object Tables:
 
@@ -320,9 +359,9 @@ object Tables:
   /** The most witnesses and tables a table built at run time holds (`fx_table` in the runtime). */
   private val maxCaptures = 64
 
-  /** Members of the language the backend builds no entry for yet: `compare`, whose result is the
-    * prelude's `Order` (P6 D17), and the others, which are not derived (`find` only for list-shaped
-    * data).
+  /** Members of the language the backend builds no entry for yet where no `satisfies` body defines
+    * them: `compare`, whose result is the prelude's `Order` (P6 D17), and the others, which are not
+    * derived (`find` only for list-shaped data).
     */
   private val unbuilt = Set("compare", "foldRight", "head", "tail", "find")
 

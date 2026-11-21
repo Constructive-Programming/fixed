@@ -1,0 +1,79 @@
+// satisfies bodies the backend did not lower: on a primitive type, for a member with two type
+// parameters of its own, a program's Ord read by `<` and through a table (it orders in reverse, so
+// `max` returns the smaller value), and the prelude's Folding.fold on Maybe, also through an
+// Optional bound, whose table's `fold` slot is Optional's, so the call goes to an instance; each
+// directly and through a bound. A program's `i64 satisfies Eq` body does not replace the
+// compiler's `eq` on a scalar, in either mode.
+use std.io.Console
+
+cap Named:
+    fn name() -> String
+
+u64 satisfies Named:
+    fn name() = "n-u64"
+
+cap Pairing:
+    fn second(a: A, b: B) -> B
+
+data Cell:
+    Cell(v: u64)
+
+Cell satisfies Pairing:
+    fn second(a: A, b: B) = b
+
+data Rev:
+    Rev(v: u64)
+
+Rev satisfies Ord:
+    fn compare(other: Rev) = match self:
+        Rev.Rev(a) => match other:
+            Rev.Rev(b) => if a < b: Order.Greater else: if a > b: Order.Less else: Order.Equal
+
+Rev satisfies Eq:
+    fn eq(other: Rev) = match self:
+        Rev.Rev(a) => match other:
+            Rev.Rev(b) => a == b
+
+fn named(x: T is Named) -> String = x.name()
+
+fn via(x: T is Pairing) -> String = x.second(5, "t".concat("u"))
+
+fn max(a: T is Ord, b: T) -> T = if a > b: a else: b
+
+fn atMost(a: T is Ord, b: T) -> bool = a <= b
+
+fn val(r: Rev) -> u64 = match r:
+    Rev.Rev(v) => v
+
+fn total(xs: is Folding of u64) -> u64 = xs.fold(10, (acc, x) -> acc + x)
+
+fn optTotal(xs: is Optional of u64) -> u64 = xs.fold(20, (acc, x) -> acc + x)
+
+i64 satisfies Eq:
+    fn eq(other: i64) = true
+
+fn same(a: T is Eq, b: T) -> bool = a == b
+
+fn one() -> i64 = 1
+
+fn two() -> i64 = 2
+
+fn five() -> u64 = 5
+
+fn main() -> () with Console =
+    Console.printLine(five().name())
+    Console.printLine(named(five()))
+    Console.printLine(Cell.Cell(1).second(2, "s".concat("v")))
+    Console.printLine(via(Cell.Cell(1)))
+    Console.printLine((Rev.Rev(1) < Rev.Rev(2)).show())
+    Console.printLine((Rev.Rev(1) >= Rev.Rev(2)).show())
+    Console.printLine((Rev.Rev(1) > Rev.Rev(2)).show())
+    Console.printLine((Rev.Rev(1) <= Rev.Rev(2)).show())
+    Console.printLine(val(max(Rev.Rev(1), Rev.Rev(2))).show())
+    Console.printLine(atMost(Rev.Rev(2), Rev.Rev(1)).show())
+    Console.printLine(atMost(Rev.Rev(2), Rev.Rev(2)).show())
+    Console.printLine(total(Maybe.Just(five())).show())
+    Console.printLine(Maybe.Just(five()).fold(1, (acc, x) -> acc + x).show())
+    Console.printLine(optTotal(Maybe.Just(five())).show())
+    Console.printLine((one() == two()).show())
+    Console.printLine(same(one(), two()).show())

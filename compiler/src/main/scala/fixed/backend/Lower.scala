@@ -322,6 +322,9 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
                 equality(t, l, r).fold(unsupported(b.span, s"`${op.symbol}` on ${symbols.render(t)}", k))(
                   Expr.Let(v, _, result)
                 )
+              case (Lt | Le | Gt | Ge, CType.Boxed) =>
+                ordered(typeOf(b.lhs, sc), op, l, r)
+                  .fold(unsupported(b.span, s"`${op.symbol}` on boxed values", k))(bind(_, b, sc)(k))
               case (_, CType.Boxed) => unsupported(b.span, s"`${op.symbol}` on boxed values", k)
               case _                => bind(Rhs.Prim(PrimOp.of(op), List(l, r)), b, sc)(k)
           )
@@ -350,14 +353,14 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
 
   /** Member `member` of capability `cap`, called with `args` (the receiver first, Rule CM4.6)
     * through the table of type parameter `t`'s bound set that holds `cap`'s members; the result is
-    * bound as the value of `tree`.
+    * bound as the value of `tree`. A table that holds another capability's member under this name
+    * (Optional's `fold` shadows Folding's) does not serve the call.
     */
   private def tableCall(t: Type, cap: SymbolId, member: String, args: List[Atom], tree: Tree, sc: Scope)(k: K): Expr =
     val found =
       if isTypeParam(t) then
-        boundCaps(t).find(Tables.reached(symbols, _).contains(cap)).map(c =>
-          (tableOf(t, c), Tables.members(symbols, c).indexOf(member))
-        )
+        boundCaps(t).find(c => Tables.reached(symbols, c).contains(cap) && declared(c, member).forall(_.owner == cap))
+          .map(c => (tableOf(t, c), Tables.members(symbols, c).indexOf(member)))
       else None
     found match
       case Some((table, i)) if i >= 0 =>
@@ -365,7 +368,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
         bind(Rhs.CallTable(table, i, args), tree, sc)(k)
       case _ =>
         val what = s"`${symbols(cap).name}.$member` on a value of type ${symbols.render(t)}"
-        unsupported(tree.span, s"$what without that bound", k)
+        unsupported(tree.span, s"$what without a bound whose table holds it", k)
 
   private def unaryOp(u: Trees.UnaryOp, sc: Scope)(k: K): Expr =
     val op = u.op match
@@ -632,8 +635,12 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
 
   /** `m`, a call of capability `member` on `recvType`, through its `satisfies` body. */
   private def bodyCall(m: Trees.MethodCall, member: SymbolId, recvType: Type, sc: Scope)(k: K): Expr =
-    val r = ownTypeArg(member, m.args.getOrElse(Nil).map(typeOf(_, sc)), typeOf(m, sc))
-    generatedCall(recvType, m, sc, r)((d, a, r) => satisfactionBody(d, member, a, r).get)(k)
+    val (argTypes, args) = (m.args.getOrElse(Nil).map(typeOf(_, sc)), m.args.getOrElse(Nil))
+    directBody(recvType, member, argTypes, typeOf(m, sc)) match
+      case Some((f, ws)) =>
+        expr(m.receiver, sc)(rv => all(args, sc)(as => bind(Rhs.Call(f, ws ++ (rv :: as), runtime = false), m, sc)(k)))
+      case None =>
+        generatedCall(recvType, m, sc, ownTypeArg(member, argTypes, typeOf(m, sc)))(dataBody(member))(k)
 
   private def fieldRead(recvType: Type, m: Trees.MethodCall, sc: Scope)(k: K): Expr =
     expr(m.receiver, sc)(r => bind(Rhs.Field(r, productField(recvType, m.method).get), m, sc)(k))
