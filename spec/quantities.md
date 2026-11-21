@@ -1,8 +1,10 @@
 # Fixed Quantities (QTT)
 
-**Status:** Draft v0.6.3
+**Status:** Draft v0.6.4
 **Specifies:** quantity and demand inference for Fixed v0.4.4 source.
 **Last revised:** 2026-11-21
+
+**Changes from v0.6.3.** Settles minor 7 of the consistency review of 2026-11-20 by an author's ruling: fork site 3 (Rule Q5.13.a) rests on props of a capability only where the satisfaction is known, as `spec/properties.md` Rule P7.8.c requires; OQ-Q6 says the same of props on `Numeric`. Site 3 names `assumed` beside `proved`, as the third round decided.
 
 **Changes from v0.6.2.** The example of §10.3 that wrote `let x: T = …`, which the grammar does not admit, uses the type ascription of the owner's decisions of 2026-11-21, fourth round (`spec/type_system.md` Rule 5.11).
 
@@ -133,7 +135,7 @@ The rest of this section describes the **quantity** analysis. Quantity inference
 |---|---|
 | Base typer | Typed AST |
 | Capability closure (`spec/type_system.md` §6.2) | Bound sets |
-| Static prover (`spec/properties.md` §7) | `proved` props, available to every later pass (fork site 3, Rule Q5.13.a) |
+| Static prover (`spec/properties.md` §7) | `proved` props, available to every later pass with the `assumed` props the source writes (fork site 3, Rule Q5.13.a) |
 
 | Runs before | Consumes output |
 |---|---|
@@ -313,7 +315,7 @@ Fixed has no surface syntax for parallelism. The compiler may evaluate independe
 
 1. **Tree fold.** An auto-derived `fold` (`spec/type_system.md` Rule 7.4.a) at a variant with two or more recursive fields. The sub-folds of those fields are the lanes. Required: every function argument of the `fold` has an empty effect row (`spec/effects.md` §4.3).
 2. **Tree unfold.** An auto-derived `unfold` (Rule 7.4.b) whose step returns a variant with two or more recursive seeds. The sub-unfolds of those seeds are the lanes. Required: the step has an empty effect row.
-3. **Sequence fold over a proved associative operation.** A `fold(init, step)` over a value with one recursive position, where `step` has the form `(acc, x) -> op(acc, g(x))` with `op: (R, R) -> R`, all effect rows are empty, and props with status `proved` (`spec/properties.md` Rule P7.7) state that `op` is associative and that `init` is its identity. The sequence is split into contiguous runs. Each run is a lane, and the lane results are combined with `op` in sequence order.
+3. **Sequence fold over a proved associative operation.** A `fold(init, step)` over a value with one recursive position, where `step` has the form `(acc, x) -> op(acc, g(x))` with `op: (R, R) -> R`, all effect rows are empty, and props with status `proved` or `assumed` (`spec/properties.md` Rule P7.7) state that `op` is associative and that `init` is its identity. Where `op` is a member of a capability called on a value whose satisfaction is not known at the site (a value of a type parameter or of a choice point, in baseline code), its props do not count (`spec/properties.md` Rule P7.8.c): such a fold forks at site 3 only where the satisfaction is known: in code at a concrete type, in a clone for a known type, or in a clone built at link, with the status that the chosen satisfaction's package recorded. *(Author's ruling, minor 7 of the consistency review.)* The sequence is split into contiguous runs. Each run is a lane, and the lane results are combined with `op` in sequence order.
 
 Sites 1 and 2 need no props. Each lane computes exactly the sub-result that sequential evaluation computes, and the node function combines the sub-results in the same order. Site 3 changes the association order, so its result differs from the sequential one unless `op` is associative. That is why it needs props of the facts lane, `proved` or `assumed`: a `tested` prop does not qualify (Rule P7.7.c). The props come from the static prover, which runs before this pass (§4); a `tested` status, which only the test build can give, could not arrive in time and is excluded from the facts lane in any case (`spec/properties.md` Rule P7.8). Floating-point addition is the standard case that is rejected: it is not associative, so the prop is never `proved`, and the fold stays sequential unless the programmer writes the assumption (`assume prop`, `spec/properties.md` Rule P7.7) and so accepts a result that may differ from the sequential one.
 
@@ -331,7 +333,7 @@ The function arguments of a `fold` are closures that run once per node, so the b
 
 **Rule Q5.13.c (same result).** A forked evaluation must produce the result of sequential evaluation. Empty effect rows and totality make the order of lanes unobservable. If more than one lane panics (`unreachable`, or an `impossible` mapping per `spec/type_system.md` §8.2), the panic reported is that of the first such lane in sequential order.
 
-**Rule Q5.13.d (the fork decision).** Whether an admissible site actually forks is a cost decision of the compiler and runtime (granularity), observable only as timing. It is in the measurement lane (`spec/properties.md` Rules P7.8, P7.9): it may use costs measured in the test build or a profile (`spec/compilation_model.md` Rule CM8.6), because every choice is correct. The memory report (`spec/memory_management.md` §19) states for every `fold` / `unfold` whether it is a fork site and, when it is not, the reason: the effect that makes a row non-empty, or the prop that is not `proved` and its status.
+**Rule Q5.13.d (the fork decision).** Whether an admissible site actually forks is a cost decision of the compiler and runtime (granularity), observable only as timing. It is in the measurement lane (`spec/properties.md` Rules P7.8, P7.9): it may use costs measured in the test build or a profile (`spec/compilation_model.md` Rule CM8.6), because every choice is correct. The memory report (`spec/memory_management.md` §19) states for every `fold` / `unfold` whether it is a fork site and, when it is not, the reason: the effect that makes a row non-empty, or the prop that is neither `proved` nor `assumed` and its status, or that the satisfaction of `op` is not known at the site (Rule Q5.13.a, `spec/properties.md` Rule P7.8.c).
 
 ## 6. Erasure (quantity 0)
 
@@ -544,7 +546,7 @@ let result = x.value + x.lo                     // x.value: runtime read; x.lo: 
 
 - **OQ-Q5 — Effect operations and quantities.** Effect ops (e.g., `Console.printLine`) currently follow Rule Q5.2. Whether *effect rows* themselves participate in quantity (e.g., a "linear effect" that may be performed at most once) is a separate research question, related to OQ-Q1. The proposed semantics live in `spec/effects.md` §3.5 (re-opened OQ-E5 in v0.2.1) and stand non-normative pending closure of this question.
 
-- **OQ-Q6 — Where associativity props live.** Fork site 3 (Rule Q5.13.a) needs `proved` props that an operation is associative and has an identity. `spec/stdlib.md` has no capability carrying such props today: `Numeric` declares none. Until one exists (a monoid-like capability, or props on `Numeric.add` for the integer types), only tree folds and tree unfolds fork. Whether the static prover can discharge associativity for fixed-width integer arithmetic also depends on OQ-P1.
+- **OQ-Q6 — Where associativity props live.** Fork site 3 (Rule Q5.13.a) needs `proved` or `assumed` props that an operation is associative and has an identity. `spec/stdlib.md` has no capability carrying such props today: `Numeric` declares none. Until one exists (a monoid-like capability, or props on `Numeric.add` for the integer types), only tree folds and tree unfolds fork. Even then such props hold per satisfaction, so they serve site 3 only where the satisfaction is known (code at a concrete type, or a clone), not in baseline code over `T is Numeric` (`spec/properties.md` Rule P7.8.c; author's ruling). Whether the static prover can discharge associativity for fixed-width integer arithmetic also depends on OQ-P1.
 
 ## 12. Cross-references
 

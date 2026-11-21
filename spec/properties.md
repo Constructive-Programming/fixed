@@ -1,8 +1,10 @@
 # Fixed Properties
 
-**Status:** Draft v0.3.4
+**Status:** Draft v0.3.5
 **Specifies:** `prop` declarations, `forall` / `implies` / `suchThat` constructs, the three verifiers (static prover, cost checker, property-based testing) and where each runs, verification statuses and the two lanes they feed, measurement during testing, property-based test generation, and how verified properties feed compiler decisions for Fixed v0.4.5 source.
 **Last revised:** 2026-11-21
+
+**Changes from v0.3.4.** Settles minor 7 of the consistency review of 2026-11-20 by an author's ruling: the optimisations of §9.1 rest on props of capabilities, so by Rule P7.8.c they apply only where the satisfaction is known (code at a concrete type, a clone for a known type, or a clone built at link), never in baseline code over a type parameter or a choice point; the `median` example of Rule P9.2 says so, and the exception "unless the prop holds for every satisfaction" is withdrawn.
 
 **Changes from v0.3.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"). Rule P4.2: the arithmetic effects `Overflow` and `DivideByZero` are allowed in a prop body, and performing one is a counterexample (`spec/effects.md` Rule E3.6.g). Rule P7.8.a: removing an arithmetic effect from an operation's type, and establishing a refinement on a bounded integer type (`E107`), are facts-lane decisions (Rule E3.6.e). Rule P7.2: the prover also decides the range goals of function bodies. Rule P7.8.c lists the `assumed` props of the package's own source among what the package compile sees, as the third round decided. §9.1: a range invariant removes `Overflow` instead of eliding "checked overflow".
 
@@ -556,6 +558,8 @@ The mechanism: each prop in the facts lane annotates the symbol's denotation (pe
 
 Every optimisation in the table changes what the program does when the prop is false: binary search over an unsorted sequence returns a wrong answer, and an elided bounds check reads out of range. They are therefore facts-lane decisions, available for `proved` and `assumed` props only. A `tested` prop produces no fact. The compiler may use it only in the measurement lane, for a choice that leaves behaviour unchanged when the prop is false, such as a scoring hint in representation selection.
 
+The props in the table are props of capabilities (`Sequencing`, `NonEmpty`, `Bounded`, a refinement), and their status is per satisfaction (Rule P7.7.a). By Rule P7.8.c the fact they give is used only where the satisfaction of the value is known at the decision: in code at a concrete type, in a clone for a known type, or in a clone built at link with the status that the chosen satisfaction's package recorded. In baseline code over a type parameter or a choice point the optimisation is not made. *(Author's ruling, minor 7 of the consistency review.)*
+
 ### 9.2 `unreachable` discharge (Rule P9.2)
 
 A prop in the facts lane may discharge `unreachable` calls. If the prop excludes the value-domain that would reach `unreachable`, the optimiser can elide the unreachable branch entirely:
@@ -565,13 +569,13 @@ fn median(collection: C is SortedNonEmpty of (N is Numeric)) -> N =
     let mid = collection.size / 2
     collection.get(mid).fold(
         (v) -> v,
-        () -> unreachable,    // statically discharged: NonEmpty proves get(mid) is some
+        () -> unreachable,    // discharged where C is known: NonEmpty proves get(mid) is some
     )
 ```
 
-Per `prop nonEmpty: size > 0` on `NonEmpty`, the typer proves `collection.get(mid)` is `Optional.some(_)` for `mid < size`; the `Optional.none` case is unreachable and the call to `unreachable` is dead code. The compiler emits no runtime check for this case.
+Per `prop nonEmpty: size > 0` on `NonEmpty`, the typer proves `collection.get(mid)` is `Optional.some(_)` for `mid < size`; the `Optional.none` case is unreachable and the call to `unreachable` is dead code. In a clone of `median` for a known `C`, or at a concrete type, the compiler emits no runtime check for this case; in the baseline version, generic over `C`, the branch stays (Rule P7.8.c; author's ruling, minor 7 of the consistency review).
 
-`tested` props do **not** discharge `unreachable` (testing is incomplete; a counterexample at runtime would convert dead-code elision into undefined behavior). `proved` and `assumed` props do, as for every other assumption in this section; an `assumed` prop that is false makes the discharge wrong on the responsibility of the programmer who wrote the assumption (Rule P7.8.a). A `NonEmpty` bound on a type parameter in baseline code does not discharge it unless the prop holds for every satisfaction (Rule P7.8.c); in a clone for a known type it does.
+`tested` props do **not** discharge `unreachable` (testing is incomplete; a counterexample at runtime would convert dead-code elision into undefined behavior). `proved` and `assumed` props do, as for every other assumption in this section; an `assumed` prop that is false makes the discharge wrong on the responsibility of the programmer who wrote the assumption (Rule P7.8.a). A `NonEmpty` bound on a type parameter in baseline code does not discharge it (Rule P7.8.c); in a clone for a known type it does.
 
 ## 10. Inheritance through `extends`
 

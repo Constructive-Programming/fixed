@@ -1,8 +1,10 @@
 # Fixed Memory Management
 
-**Status:** Draft v0.5.4
+**Status:** Draft v0.5.5
 **Specifies:** how the compiler places, frees and reference-counts runtime values for Fixed v0.4.4 source: lifetime classes, immediates, data-stack regions, counted regions, the Perceus heap, destinations, value witnesses, reuse (FBIP), borrowing, effect-handler memory, structured parallelism, the `fip` contract and the memory report.
 **Last revised:** 2026-11-21
+
+**Changes from v0.5.4.** Settles minor 8 of the consistency review of 2026-11-20 by an author's ruling: Rule MM5.2(b) no longer decides placement in a baseline version from a cost contract, which `spec/cost.md` Rule CT6.5 forbids; a carried value of parameter type is long-lived there unless the requirement that rebuilds it is `fip`, and a clone for a known type repeats the check.
 
 **Changes from v0.5.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"): the application link (§20) resolves no satisfaction site (`spec/compilation_model.md` Rule CM6.6).
 
@@ -174,7 +176,7 @@ If the step leaves garbage, putting the carried value on a data stack would keep
 
 The garbage-free check runs at constructor and variant level, the way FP² checks `fip` at source level. It does not need representation sizes; M11 only refines the reuse fingerprints (§11.2).
 
-In a baseline version the check cannot see inside a value of parameter type. A step is garbage-free for a carried value of parameter type only if the capability member that rebuilds it carries an in-place contract (`constructs − releases ≤ 0`, `spec/cost.md` Rule CT3.4); otherwise the carried value is long-lived. A clone for a known type repeats the check on the type.
+In a baseline version the check cannot see inside a value of parameter type, so a carried value of parameter type is long-lived there, unless the requirement that rebuilds it is declared `fip` (`spec/cost.md` Rule CT4.3), which is checked on the code of every satisfaction. A cost prop on it (`constructs − releases ≤ 0`) does not count: what code does is never decided from a cost prop (`spec/cost.md` Rule CT6.5). A clone for a known type repeats the check on the type. *(Author's ruling, minor 8 of the consistency review: the earlier text took an in-place contract as enough.)*
 
 Duration is never a criterion. Totality guarantees termination, not short running time.
 

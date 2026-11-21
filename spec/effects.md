@@ -1,8 +1,10 @@
 # Fixed Effects
 
-**Status:** Draft v0.3.3
+**Status:** Draft v0.3.4
 **Specifies:** algebraic effect declarations, the arithmetic effects, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.4 source.
 **Last revised:** 2026-11-21
+
+**Changes from v0.3.3.** Settles minor 14 of the consistency review of 2026-11-20 by an author's ruling: the wrapper of Rule E7.8, item 1, is an ordinary closure with captures, with the cost and the `fip` status of one.
 
 **Changes from v0.3.2.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"), with the author's choices that the owner confirmed. New §3.6: integer overflow and division by zero are the abortive effects `Overflow` and `DivideByZero` (Rules E3.6–E3.6.j): which operations perform them, how a generic `T is Numeric` body gets its row, when the prover or a refinement removes the effect (a facts-lane decision), derived members and prop bodies, the abort at `main`, and the widening form. Rule E5.4: both effects are in the set the runtime handles for `main`. Rule E8.2 no longer says a callback must perform the concrete part of a row: its row is a sub-row of it, as Rule E5.5.a already said. New code `E107` (an integer refinement not proved where it is established). Not built.
 
@@ -647,7 +649,7 @@ Where a call site knows the handler, the specialiser may build a clone of the ca
 
 A function-typed value receives, at each invocation, the evidence for the row written in the type through which it is invoked (§7.6). The effects of its body that this type does not mention are those that Rule E5.5.a let join the enclosing body's row. For them:
 
-1. **Capture.** The closure captures the evidence of those effects at the point where it is given the type that does not mention them. For a lambda written in place, as an argument or in a field, that point is where it is created. A value that already exists and reaches an unannotated function type later is wrapped there in a new closure that captures the evidence and calls the value with it; the wrapper is created at that point.
+1. **Capture.** The closure captures the evidence of those effects at the point where it is given the type that does not mention them. For a lambda written in place, as an argument or in a field, that point is where it is created. A value that already exists and reaches an unannotated function type later is wrapped there in a new closure that captures the evidence and calls the value with it; the wrapper is created at that point. The wrapper is an ordinary closure with captures and costs what one costs: one construction where it is created (`spec/cost.md` Rule CT3.2) and one more step, a closure call, at each invocation (Rule CT3.1). Its lifetime class and its `fip` status are those of any closure with captures (`spec/memory_management.md` §5, Rule PR5.6, §18): for example, in a `fip fn` a wrapper placed in `Heap` or a `Region` violates Rule MM18.1(1). *(Author's ruling, minor 14 of the consistency review.)*
 2. **Pure higher-order functions take no evidence.** A function whose parameter is `f: A -> B` is compiled as if `f` were pure: it receives no hidden evidence for `f`, and invoking `f` passes none. It cannot intercept an effect its type does not mention, because it has no handle on the evidence `f` carries.
 3. **Markers, not addresses.** Captured evidence names the handler installation by its **marker**, an identity assigned when the `handle` is installed, and not by a stack address. The closure finds the handler frame through the marker when it performs an operation. A continuation captured by an outer handler may be resumed on other fiber stacks (`spec/memory_management.md` §14.3), with the inner handler's frame at a new address; the marker still reaches the right one.
 4. **Confinement.** The handler named by the marker is installed whenever the closure can run, because the closure does not outlive it (Rule E5.5.b).
