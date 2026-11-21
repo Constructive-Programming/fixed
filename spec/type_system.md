@@ -1,8 +1,10 @@
 # Fixed Type System
 
-**Status:** Draft v0.5.4
-**Specifies:** typing of Fixed source as defined by `spec/syntax_grammar.ebnf` v0.4.14.
+**Status:** Draft v0.5.5
+**Specifies:** typing of Fixed source as defined by `spec/syntax_grammar.ebnf` v0.4.15.
 **Last revised:** 2026-11-21
+
+**Changes from v0.5.4.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Shadowing of prelude names"). New §4.3: the scope order (local binders, the package's declarations and `use`s, the prelude); a package may hide a prelude name, with `warning[W060]` (Rule 4.3.a), and so may a `use` (Rule 4.3.b); collisions inside a package are `T003` (Rule 4.3.c); a type-level local binder named like a prelude type is `T004` (Rule 4.3.d); the prelude is the package `std.prelude`, reached with `use std.prelude.List as PreludeList` (Rule 4.3.e, grammar v0.4.15); diagnostics print paths, never internal names (Rule 4.3.f); syntax and derivation always mean the prelude's entities (Rule 4.3.g); interactions with list literals, ascription, satisfactions, visibility and exports (Rule 4.3.h). New Rule 4.1.b states `T004` for every binder position. The example of Rule 8.4 imports a satisfaction from a program package (`shop.box`) instead of `std.maybe.Maybe`: `Maybe` is the prelude's, whose satisfactions are always in scope.
 
 **Changes from v0.5.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"). §5.7: what arithmetic does when a result leaves its type is `spec/effects.md` §3.6; constant arithmetic that does not fit is `T025` (§5.7, Rule 6.3.3). §8.5.1: a refinement on a bounded integer type is established only by `proved` or `assumed` (`E107`, `spec/effects.md` Rule E3.6.e). New OQ-T3 records the owner's note that dependent types may be a better answer to raising the integer size.
 
@@ -73,6 +75,8 @@ A user never names "the type" in the conventional sense. Where the user of a dec
 
 Subsequent occurrences of the same `UPPER_IDENT` within the same signature **refer to the same type variable**. Intra-signature shadowing is a **compile error**.
 
+**Rule 4.1.b (Re-binding).** In the binder positions (`IDENT is Bound`, a bare name in the `of` clause of a `data`, `cap` or `effect` declaration, and a row variable, `spec/effects.md` Rule E8.1), a name that an enclosing signature, the package or the prelude already binds is `error[T004]: <Name> is already bound in an enclosing scope`. A signature that states its own variable again adds bounds to it (`-> N is positive()`). In a position that is not a binder, a bound name is a reference: `x: List of u8` uses `List`. (Stated in v0.5.5 with §4.3; the compiler already reports `T004` for `IDENT is Bound`.)
+
 **Scope.**
 
 - For `fn`: the entire signature (parameters + return type + `with`-clause).
@@ -124,6 +128,81 @@ fn bad(x: N is Numeric) -> N =
 ### 4.2 Term-variable scoping
 
 `let pat = expr` binds the names in `pat` for the rest of its enclosing block. There is no `let-in`; bindings flow through the block sequentially. A function parameter is in scope for the entire function body (and for nested `fn` definitions, since nested functions can capture).
+
+### 4.3 Scopes and the prelude (Rule 4.3)
+
+Decided by the owner (`docs/decisions/P6-resolution-round-2026-11-20.md`, fourth round, "Shadowing of prelude names"): a program may declare a name that the prelude declares and then means its own entity; the prelude's stays reachable by a path; syntax and derivation always mean the prelude's entities; the same holds for a name brought in by `use` (S1); a local type-level binder that would hide a prelude type is an error (S2). Choices the owner did not state are marked.
+
+**Rule 4.3 (Scope order).** A name at a site means the first of these that declares it:
+
+1. a **local binder**: a type variable of the enclosing signature or declaration (Rule 4.1), a row variable (`spec/effects.md` Rule E8.1), a parameter, a `let` or pattern binder, a lambda parameter, a nested `fn` (§4.2);
+2. the **package**: its top-level declarations, in any of its files, and the names that the `use` declarations of the site's file bring in;
+3. the **prelude**, the package `std.prelude` (Rule 4.3.e).
+
+**Rule 4.3.a (Hiding a prelude name).** A package may declare at top level a name that the prelude declares: a data type, a capability, an effect, a type alias or a function. In the package the name then means the package's declaration (level 2). The compiler warns at the declaration *(author's choice, owner to confirm: the option the owner chose included the warning, and the answer did not repeat the word)*:
+
+```
+warning[W060]: `List` hides the prelude's data type `std.prelude.List` in this package
+  --> shapes.fixed:3:6
+   = help: the prelude's stays reachable: `use std.prelude.List as PreludeList`
+```
+
+A warning sets no exit code (`spec/reports.md` Rule RP5.5). The declaration is valid, `pub` or private.
+
+**Rule 4.3.b (A `use` that brings in a prelude name; S1).** A name that a `use` brings into a file for an entity other than the prelude's own, and that the prelude also declares, means the imported entity in that file, with `W060` at the `use`. `use geometry.List as Polyline` brings the entity in under another name and hides nothing.
+
+**Rule 4.3.c (One meaning per name in a package).** The specs said nothing about collisions inside level 2 *(author's choice)*:
+
+- Two top-level declarations of a package with one name are `error[T003]: duplicate definition`, as today.
+- A top-level declaration of the package and a name that a `use` brings into one of its files: `T003` at the `use`, naming both.
+- Two `use` declarations of one file that bring in one name for two different entities: `T003` at the second. Bringing in the same entity twice is allowed.
+
+A `use … as …` resolves each case. A named satisfaction's name is a type-level name of its package (Rule 8.4) and follows these rules.
+
+**Rule 4.3.d (Local binders; S2).** A type-level local binder (a type variable introduced by Rule 4.1, an `of` parameter, a row variable) whose name the prelude declares as a data type, capability, effect or type alias is `error[T004]: <Name> is already bound in an enclosing scope`, by Rule 4.1.b, as re-binding a name of the package or of an enclosing signature is: the prelude is the outermost enclosing scope. So `fn f(x: List is Show)`, `data Box of Maybe` and a row `with Order` are errors; `fn f(x: List of u8)` is a use of `List`, not a binder. Value-level binders are outside this rule *(author's choice)*: a parameter, `let` or pattern binder named like a prelude function hides it in its scope, as it hides a function of the package (§4.2, `spec/pattern_matching.md` §3.2), with no warning.
+
+**Rule 4.3.e (The prelude's path).** The prelude is the package `std.prelude`, beside the standard modules such as `std.io` (`README.md`, `use std.io.Console`), and every prelude declaration has the path `std.prelude.<Name>` *(author's choice of the path)*. A package that hides a prelude name reaches the prelude's entity by importing it under another name (grammar v0.4.15, `UseRename`):
+
+```
+data List of A:                          // warning[W060]: hides std.prelude.List
+    Node(items: is Sequencing of A)
+
+use std.prelude.List as PreludeList
+
+fn toPrelude(xs: List of u8) -> PreludeList of u8 = ...
+```
+
+`use std.prelude.List` without `as` in that package is `T003` (Rule 4.3.c). A `use` of a prelude name that nothing hides is allowed and changes nothing. A type is never written with a path in a signature or an expression: `use … as` is the one way to name a hidden entity *(author's choice: the grammar's type references are single names, and a path in an expression would read as a field access)*.
+
+**Rule 4.3.f (Names in diagnostics).** A diagnostic names an entity by the name that means it at the site. Where that name means another entity there, it prints the entity's path: `std.prelude.List` for the prelude's, `geometry.List` for another package's. It never prints a name of the compiler's own making. Where a fix needs an entity the site cannot name, the help line gives the `use … as …` that makes it nameable:
+
+```
+error[T022]: `show` needs the bound std.prelude.Show on T
+   = help: `use std.prelude.Show as PreludeShow`, then write `T is PreludeShow`
+```
+
+**Rule 4.3.g (Syntax means the prelude).** There is no rebindable syntax. Whatever is in scope:
+
+- a list literal is built through `std.prelude.Sequencing` (Rule 5.10); a string literal is a `String`, a character literal a `char`, `true` and `false` are `bool`, a tuple is the prelude's tuple, `()` is the unit, and an integer or float literal takes a primitive type or goes through `std.prelude.Numeric`'s `fromI64` (Rule 5.7);
+- `==` and `!=` call `std.prelude.Eq`; `<`, `<=`, `>` and `>=` call `std.prelude.Ord` and fold its `std.prelude.Ordering`; `+`, `-`, `*`, `/`, `%` and prefix `-` call `std.prelude.Numeric`; prefix `!` calls `std.prelude.Boolean` (`spec/stdlib.md` §4.5–§4.9); arithmetic performs `std.prelude.Overflow` and `std.prelude.DivideByZero` (`spec/effects.md` Rule E3.6);
+- the built-in `show` of the primitive types is `std.prelude.Show`, and the derivation rules (§7.4; `spec/stdlib.md` §4.7, §4.8, §4.10, §4.11) derive the prelude's capabilities (`Folding`, `Functor`, `Show`, `Eq`, `Ord`, `Clone`) and nothing else;
+- the diagnostic sinks are the prelude's `inspect` and `trace` (`spec/diagnostics.md` Rule DG3.1); a package's own `inspect` is an ordinary function.
+
+Consequences:
+
+- **`==` on a value of a package's type** finds the satisfaction of (`T`, `std.prelude.Eq`): derived for a data type whose fields satisfy it (§7.4), or declared. A package with its own `cap Eq` declares it as `T satisfies PreludeEq` after `use std.prelude.Eq as PreludeEq`. There, `T satisfies Eq` satisfies the package's own `Eq`, which `==` never calls. The same holds for `<` and `Ord`, arithmetic and `Numeric`, `show` and `Show`.
+- **A package's own capability named like a prelude capability is never derived**, and never connects to syntax.
+- **A package's own `effect Overflow`** is not what arithmetic performs, and a clause for it handles no arithmetic.
+
+**Rule 4.3.h (Interactions).**
+
+- **List literals.** A package's own sequence type, named `List` or otherwise, takes list literals only by satisfying `std.prelude.Sequencing`: it is then a candidate at a literal's choice point (Rule 5.10, case 3) and an expected type a literal can have (case 1). Declaring `List` does not make literals the package's lists.
+- **Ascription.** The type in `e is T` is resolved by Rule 4.3 like any name: `[1, 2] is List of u8` in a package that declares `List` names the package's `List`, and is valid only if that type satisfies `std.prelude.Sequencing` (otherwise `T010`, Rule 5.10, case 1). `[1, 2] is PreludeList of u8` names the prelude's.
+- **Satisfactions and `using`.** The capability of a `satisfies` declaration, of a `use … satisfies` tail and of `using T satisfies C` is resolved by Rule 4.3, so it is the package's capability where the package hides the prelude's. The prelude's satisfactions stay always in scope (Rule 8.4) whether or not their names are hidden: hiding changes what a name means, not which satisfactions exist. `Maybe satisfies Optional` keeps serving `std.prelude.Optional`, and never a package's own `cap Optional`.
+- **Visibility.** A declaration hides a prelude name in its own package whether it is `pub` or private (§8.6); `pub` decides only who else may name it.
+- **Exports.** A package that exports `pub data List` hides nothing in its importers. An importer means the prelude's `List` by `List` until it writes `use geometry.List`, which hides the prelude's there with `W060` (Rule 4.3.b), or `use geometry.List as Polyline`, which hides nothing. A signature of `geometry` that mentions its `List` means `geometry.List` in the importer whatever the importer's scope, and the importer's diagnostics print `geometry.List` where `List` means another entity (Rule 4.3.f).
+
+**Built today** (`docs/decisions/P0-spec-review-2026-11-20.md` §4). Built: the prelude is typed, walked and lowered in its own scope (`SymbolTable.prelude`), so the order of Rule 4.3 holds and Rule 4.3.g holds, including that a program's own `cap Show` or `cap Functor` is not derived; `Namer` reports `T004` for a named type variable (`IDENT is Bound`) that re-binds any bound name, prelude names included. Not built: `T004` for a bare `of` parameter and for a row variable (the namer reads a bound name there as a reference or as an effect); `W060` (hiding is silent, for declarations and for `use`); the path `std.prelude` and `use … as` (the parser has no `as` in a `use`, and no module is named `std.prelude`); Rule 4.3.f (a diagnostic or a hint can print the compiler's internal name `prelude.<name>`, which a program cannot write); Rule 4.3.c for `use`d names (the namer gives `T003` only to a declaration that follows a `use` of a name it could not resolve; otherwise the later binding wins). `docs/plans/implementation-plan.md`, Phase 4.2, item 23.
 
 ## 5. Type expressions
 
@@ -1207,7 +1286,7 @@ Money satisfies Ord named ByAmount:
 A satisfaction is **in scope** at a site where a `use` brings it in, or when it is declared in the site's own package. Derived satisfactions (§7.4), built-in ones (§6.6, and those the compiler provides for primitive types) and the prelude's satisfactions (`spec/stdlib.md` §5) are always in scope. A site **sees** a satisfaction that is in scope there; every other document uses "sees" in this sense. A `use` brings a satisfaction in with a `satisfies` clause:
 
 ```
-use std.maybe.Maybe satisfies Optional        // the type and the satisfaction
+use shop.box.Box satisfies Optional           // the type and the satisfaction
 use shop.money.Money satisfies Ord named ByAmount
 ```
 

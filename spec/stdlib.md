@@ -1,8 +1,10 @@
 # Fixed Standard Library — Core Types and Capabilities
 
-**Status:** Draft v0.3.3
+**Status:** Draft v0.3.4
 **Specifies:** the core data types and capabilities Fixed's stdlib provides; the cap-vs-data classification each one takes; the auto-derived satisfactions; the arithmetic effects and their handlers.
 **Last revised:** 2026-11-21
+
+**Changes from v0.3.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Shadowing of prelude names"). §1: the prelude is the package `std.prelude`; a program may hide a prelude name, and reaches the prelude's entity with `use std.prelude.<Name> as …` (`spec/type_system.md` §4.3). §3.5 and §5 say what hiding `Optional`, `inspect` or `trace` does, in those terms.
 
 **Changes from v0.3.2.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"). §4.9: the requirements of `Numeric` declare `Overflow` and `DivideByZero` (`spec/effects.md` Rule E3.6.c), and `Numeric` gains the members without effects (`wrapping…`, `saturating…`, `checked…`). New §4.13: the prelude's effects `Overflow` and `DivideByZero`, the alias `Arithmetic`, the data type `ArithmeticError`, the handlers `arithmeticOrNone` and `arithmeticOrError`, and the widening form `widen`. Not built.
 
@@ -18,7 +20,7 @@
 
 This document is the normative source for which built-in stdlib types are `data` types (closed sums or product records the programmer can match on by variant) and which are `cap`s (abstract capabilities the compiler picks a representation for). It also records the prelude's `satisfies` declarations that bridge them.
 
-The prelude is a package. Every declaration this document gives is `pub` in it (`spec/type_system.md` §8.6), and the code below writes `pub` on each.
+The prelude is the package `std.prelude`. Every declaration this document gives is `pub` in it (`spec/type_system.md` §8.6), and the code below writes `pub` on each. Its names are in scope everywhere, after a package's own declarations and `use`s. A package may declare a name the prelude declares, which then means the package's entity there (with `warning[W060]`); the prelude's stays reachable as `std.prelude.<Name>` through `use std.prelude.List as PreludeList`. Literals, operators, the built-in `show` and the derivation rules always mean the prelude's entities (`spec/type_system.md` §4.3).
 
 **Naming (Rule S1.1).** Value-level names are written in camelCase: functions, members of capabilities and of data types, effect operations, parameters, fields, bindings and props (`fromI64`, `isEmpty`, `foldRight`, `printLine`). Type-level names are written in PascalCase: data types, variants, capabilities, effects, type variables and named satisfactions. The standard library, the examples and this specification follow the convention without exception. The grammar fixes only the case of the first letter (`spec/syntax_grammar.ebnf`); the rest is a convention, which the compiler may report as a warning and never as an error.
 
@@ -106,7 +108,7 @@ pub Maybe satisfies Optional:
     Nothing as none
 ```
 
-The prelude's satisfier of `Optional` (§4.1), so a program that uses `Optional` without declaring a data type for it has a representation. It is declared in `Optional`'s own package, so it is the canonical satisfaction of `Optional` in the sense of §5: it wins a tie, and nothing else. A program that declares its own `cap Optional` hides the prelude's, together with this satisfaction. Added for the Phase 4.0 backend slice (`docs/plans/phase-4.0-backend-slice.md` §7.3); M11's built-in representation candidates may later make it unnecessary.
+The prelude's satisfier of `Optional` (§4.1), so a program that uses `Optional` without declaring a data type for it has a representation. It is declared in `Optional`'s own package, so it is the canonical satisfaction of `Optional` in the sense of §5: it wins a tie, and nothing else. A program that declares its own `cap Optional` hides the prelude's name (`spec/type_system.md` Rule 4.3.a). This satisfaction still serves `std.prelude.Optional`, which the prelude's own code and the program's `use std.prelude.Optional as …` reach, and never the program's capability. Added for the Phase 4.0 backend slice (`docs/plans/phase-4.0-backend-slice.md` §7.3); M11's built-in representation candidates may later make it unnecessary.
 
 ### 3.6 `data Order`
 
@@ -456,7 +458,7 @@ pub fn inspect(x: T) -> T = ...           // body supplied by the compiler
 pub fn trace(message: String) -> () = ... // body supplied by the compiler
 ```
 
-Being a sink is a property of these two declarations (`spec/diagnostics.md` Rules DG3.1, DG3.2): `inspect` takes a value of any type with no bound, and the argument of `trace` must be a string literal, whose names in braces are interpolated. A program that declares its own `inspect` or `trace` shadows the prelude's and gets an ordinary function.
+Being a sink is a property of these two declarations (`spec/diagnostics.md` Rules DG3.1, DG3.2): `inspect` takes a value of any type with no bound, and the argument of `trace` must be a string literal, whose names in braces are interpolated. A program that declares its own `inspect` or `trace` hides the prelude's (`warning[W060]`, `spec/type_system.md` Rule 4.3.a) and gets an ordinary function.
 
 ## 6. Migration from earlier drafts
 

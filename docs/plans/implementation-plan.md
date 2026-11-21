@@ -209,10 +209,10 @@ Maybe satisfies Optional:
 Satisfactions are modular — brought into scope via `use`:
 
 ```
-use std.maybe.Maybe satisfies Optional
+use shop.box.Box satisfies Optional
 
 fn wrap(x: A) -> is Optional of A =
-    Optional.some(x)   // compiler resolves to Maybe.Just(x) via satisfaction
+    Optional.some(x)   // a choice point: Box is a candidate through the imported satisfaction
 ```
 
 `use Type satisfies Cap` does two things in one line: it imports the type *and* brings the satisfaction mapping into scope.
@@ -428,7 +428,7 @@ fn factorial(n: u64) -> u64 =
 | Single-constructor data sugar | `data Config(host: String, port: u16)` | `data Config:` + `Config(host: String, port: u16)` |
 | Satisfaction decl | `Maybe satisfies Optional:` + `Just as some`, `Nothing as none` | Haskell's `instance`, Rust's `impl Trait for Type` |
 | Impossible mapping | `impossible as none` | Partial satisfaction — requirement with no implementation; calls panic at runtime per type_system.md §8.2 |
-| Satisfaction import | `use std.maybe.Maybe satisfies Optional` | Brings satisfaction mapping into scope |
+| Satisfaction import | `use shop.box.Box satisfies Optional` | Brings satisfaction mapping into scope |
 | No semicolons | Newlines separate expressions | `;` statement terminators |
 | Cap-generating functions | `fn between(min, max) -> cap of N:` + indented `prop ...` | Separate type-level and value-level abstractions |
 | Cap sugar | `cap Between(min, max) of N:` + indented `prop ...` | `fn between(min, max) -> cap of N:` + indented prop (equivalent) |
@@ -827,7 +827,7 @@ Maybe satisfies Optional:
 Key design rules:
 - **`extends` vs `satisfies`**: `extends` is cap-to-cap inheritance (`cap Monad extends Functor`). `satisfies` is type-provides-cap implementation (`Maybe satisfies Optional`).
 - **Satisfaction declarations are separate** from data definitions — they can live in the same module or a different one. Third parties can write them.
-- **Brought into scope via `use`**: `use std.maybe.Maybe satisfies Optional` makes the satisfaction mapping available at the use site.
+- **Brought into scope via `use`**: `use shop.box.Box satisfies Optional` makes the satisfaction mapping available at the use site.
 - **Multiple satisfactions possible**: different packages can map the same data to different caps, and to the same cap more than once; `using` chooses between satisfactions of one pair (`spec/type_system.md` Rule 8.4).
 - **No orphan surprises**: a satisfaction is visible only where a `use` imports it or in its own package. Where several satisfactions of one pair are visible and nothing chooses, the site is an error, or, in a library, is bound at link (Rule 8.4.b).
 
@@ -986,6 +986,7 @@ Added by the owner's decisions of the fourth round (P6, "Owner's decisions (four
 | 20 | **Loop form of the derived `fold` of linear data**, adopted by the owner: the spine reversed (in place only where exclusively owned, into a copy otherwise), then folded from the end in a loop, so `fold`, `unfold` and `map` of linear data all run in bounded native stack. Trees keep one frame per level | `spec/type_system.md` Rule 7.4.b.3 | nothing; `unfold` and `map` of linear data are loops already |
 | 21 | **Derived `Functor` through a function result** (`u64 -> A`): `map` composes `f` after the field (`spec/type_system.md` Rule 7.4.c; P6 fourth round) | Not started |  |
 | 22 | **`Overflow` and `DivideByZero` effects** on integer arithmetic (P6 fourth round, confirmed). The prelude's effects, `Arithmetic`, `ArithmeticError`, `arithmeticOrNone`, `arithmeticOrError`; the rows of `Numeric`'s requirements and its `wrapping…`, `saturating…` and `checked…` members; checked operations in the emitter (`llvm.*.with.overflow`, a divisor test, `MIN / -1`) branching to the operation; `T025` for constant arithmetic; the runtime's handler at `main` (position, status `101`); `widen` in the typer (`T026` at 64 bits); a run-time check where an integer refinement is established without a proof. Today `+`, `-`, `*` wrap, `MIN / -1` is undefined behaviour, and division by zero exits `101`. Once built, the examples, benchmarks and test programs need `with Overflow` or a handler wherever they do integer arithmetic on unproved ranges | `spec/effects.md` §3.6, `spec/stdlib.md` §4.9, §4.13, `spec/type_system.md` §5.7 | effect inference (M7, built) and abortive operations in the backend (built); evidence passing for handlers other than `main`'s (Phase 4, not built); removing the effect by range needs the static prover (M9, not started), so until then every operation on unproved operands keeps the effect |
+| 23 | **Prelude names: hiding, a path, renaming imports** (P6 fourth round). `W060` where a declaration or a `use` hides a prelude name; the package `std.prelude` and `use … as …` (grammar `UseRename`) in the parser and namer; diagnostics and hints that print `std.prelude.<Name>` or another package's path instead of the internal `prelude.<name>`; `T003` for a declaration and a `use`d name, or two `use`s, with one name; `T004` for a bare `of` parameter and a row variable named like a bound name. Built already: the prelude's own scope, syntax and derivation naming the prelude's entities, and `T004` for `IDENT is Bound`. Most examples hide prelude names and get `W060` (02, 03 and 06 their own `Optional` and other capabilities, 03 and 08 `effect Fail`, 04 `data Json`, 05 `fn inspect`, 07 `data Nat`) | `spec/type_system.md` §4.3, grammar v0.4.15 | the prelude scope of 4.1 (built); exports to importers need packages (3, 13) |
 
 Also open from P6 and not listed as work: the suspected compiler fault behind the ownership-clone measurement (OQ-CM16), the unexplained 4% on `list_pipeline` and `records` and `fx_drop`'s recursion on children other than the last (OQ-CM17), and the 8-byte header hypothesis (OQ-CM15).
 

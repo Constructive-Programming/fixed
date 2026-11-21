@@ -274,3 +274,20 @@ Written into the specs as `spec/effects.md` §3.6 (Rules E3.6–E3.6.j), `spec/s
 
 **Open direction, not a decision.** The owner added: "we might need to introduce dependent types as a better solution to 'raise integer size'. It might even start simplifying other parts of our system." Recorded as `spec/type_system.md` OQ-T3, which names where the specs already meet the idea (refinement capabilities with value parameters, `boundedPositive(lo, hi)`, the prover removing `Overflow` by range) and designs nothing.
 
+
+### Shadowing of prelude names (fourth round, 2026-11-21)
+
+Owner: "B Allow and give prelude a path. S1: same rule. S2: yes, error is fine."
+
+The option as it was put: a program may declare a top-level name that the prelude also declares (data type, capability, effect, function); in the program the name then means the program's entity; the compiler warns at the declaration; the prelude's entity stays reachable by a qualified path the program can write, and diagnostics print that path; literals, operators, built-in `show` and the derivation rules always mean the prelude's entities (no rebindable syntax); a program's own capability named like a prelude capability is not derived. S1: the same rule for a name a `use` brings in. S2: a type parameter, or another local binder, that would hide a prelude type is an error, as re-binding an enclosing variable already is.
+
+Written into `spec/type_system.md` §4.3 (Rules 4.3–4.3.h), grammar v0.4.15 (`UseRename`), `spec/stdlib.md` §1, §3.5, §5 and `spec/diagnostics.md` Rule DG3.1. The scope order is local binders, then the package's declarations and its files' `use`s, then the prelude. Author's choices, each marked in the spec:
+
+- The warning is kept (`warning[W060]`), owner to confirm: the owner's answer did not repeat the word.
+- The prelude is the package `std.prelude`; a hidden entity is reached with `use std.prelude.List as PreludeList`. `use` gains renaming (`as` was already reserved); types are never written with a path in a signature or an expression.
+- Diagnostics print the name that means the entity at the site, otherwise its path (`std.prelude.List`, `geometry.List`), never `prelude.<name>`, and suggest the `use … as` that makes it nameable.
+- The specs said nothing about collisions inside a package: a declaration and a `use`d name, or two `use`s of different entities, with one name, are `T003`; the same entity twice is allowed.
+- S2 is `T004`, the code the compiler already gives a type variable that re-binds a bound name; new Rule 4.1.b states it for every binder position: named type variables, `of` parameters and row variables; value-level binders keep hiding a function in their scope, prelude or package, without a warning.
+- The prelude's satisfactions stay always in scope when their names are hidden: hiding changes what a name means, not which satisfactions exist. A program's `List` takes list literals only by satisfying `std.prelude.Sequencing`, and `[1, 2] is List of u8` names the program's `List`. `==` always needs `std.prelude.Eq`. A `pub data List` hides nothing in an importer until the importer `use`s it.
+
+Built: the prelude's own scope, syntax and derivation naming the prelude, no derivation of a program's capability (P0 §4), and `T004` for `IDENT is Bound` (`Namer.introduce`). Not built: `W060`, the path and `use … as`, paths in diagnostics, `T003` for `use`d names, `T004` for a bare `of` parameter and a row variable (`docs/plans/implementation-plan.md`, Phase 4.2, item 23).

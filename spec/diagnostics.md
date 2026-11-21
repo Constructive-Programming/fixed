@@ -1,8 +1,10 @@
 # Fixed Diagnostics: `inspect`, `trace` and Printing Values
 
-**Status:** Draft v0.1.1
+**Status:** Draft v0.1.2
 **Specifies:** the diagnostic channel, the two prelude declarations that write to it (`inspect`, `trace`), interpolation of values into a diagnostic message, what a printed value looks like, how build modes treat diagnostics, and where the printer gets the names it prints.
-**Last revised:** 2026-11-20
+**Last revised:** 2026-11-21
+
+**Changes from v0.1.1.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Shadowing of prelude names"): a program's own `inspect` or `trace` hides the prelude's with `warning[W060]` (`spec/type_system.md` Rule 4.3.a).
 
 **Changes from v0.1.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): `inspect` and `trace` are declared in the prelude, and a user declaration of the same name shadows them (Rule DG3.1); the sinks are `inspect`, `trace` and the message of `unreachable`, and interpolation exists only in a sink's message, as a name or field path (Rule DG3.2); a use in `inspect` or `trace` is an ordinary use where diagnostics are kept, and the compile error for a diagnostic use after the last use is withdrawn (Rule DG3.5); the test build keeps diagnostics (OQ-DG3 closed); an immediate of a choice point known at the site prints with the chosen type (Rule DG3.4); OQ-DG4 closed.
 
@@ -47,7 +49,7 @@ inspect(x)
 
 `inspect` takes one value of any type, with no bound on the type, writes a description of it to the **diagnostic channel** (Rule DG3.4), and returns `x` unchanged. Its type is that of `x`.
 
-`inspect` is declared in the prelude (`spec/stdlib.md` §5), and so is `trace`. Being a sink is a property of those two declarations: the compiler supplies their bodies, which cannot be written in Fixed, because a Fixed function of type `T -> T` with `T` unbounded cannot look at its argument. A program that declares its own `inspect` or `trace` shadows the name and gets an ordinary function (`spec/syntax_grammar.ebnf` §13). `inspect` may stand wherever its argument could:
+`inspect` is declared in the prelude (`spec/stdlib.md` §5), and so is `trace`. Being a sink is a property of those two declarations: the compiler supplies their bodies, which cannot be written in Fixed, because a Fixed function of type `T -> T` with `T` unbounded cannot look at its argument. A program that declares its own `inspect` or `trace` hides the prelude's, with `warning[W060]`, and gets an ordinary function (`spec/type_system.md` Rule 4.3.a, `spec/syntax_grammar.ebnf` §13). `inspect` may stand wherever its argument could:
 
 ```
 let total = inspect(xs).fold(0, (acc, x) -> acc + x)

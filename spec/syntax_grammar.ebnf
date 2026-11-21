@@ -3,9 +3,19 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4.14
+   Status:        DRAFT v0.4.15
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
    Last revised:  2026-11-21
+
+   Refinements in v0.4.15
+   ----------------------
+   Owner's decision of 2026-11-21, fourth round (docs/decisions/P6,
+   "Shadowing of prelude names"): a `use` may rename what it imports,
+   `use std.prelude.List as PreludeList` (`UseRename`, §3), also inside
+   a use-group (`use a.b.{List as Polyline, Point}`). It is how a
+   package names a prelude entity that one of its declarations hides;
+   the prelude is the package `std.prelude`. Scoping and hiding are
+   spec/type_system.md §4.3. `as` was already reserved.
 
    Refinements in v0.4.14
    ----------------------
@@ -445,7 +455,19 @@ Visibility
    ============================================================ *)
 
 UseDecl
-    = "use" UsePath UseTail?
+    = "use" UsePath ( UseRename | UseTail )?
+    ;
+
+(* v0.4.15. The imported entity is named by the new name in this file,
+   and its own name is not brought in (spec/type_system.md Rules 4.3.b,
+   4.3.e). The new name keeps the case of the last segment of the path:
+   an UPPER_IDENT for a type-level entity, a LOWER_IDENT for a function.
+   A `use … satisfies` tail takes no renaming. A path that names a
+   package takes no `as`, and a new name of the other case is not
+   admitted; the parser cannot tell either, so the namer reports both
+   as unsupported forms (`T005`) (author's choice). *)
+UseRename
+    = "as" ( UPPER_IDENT | LOWER_IDENT )
     ;
 
 UsePath
@@ -463,7 +485,7 @@ UseTail
    another package can be imported by name: `use shop.money.{Money, parseAmount}`.
    A UsePath whose last segment is a LOWER_IDENT names a package or a
    function; the namer decides which. *)
-UseSel  = UPPER_IDENT | LOWER_IDENT ;
+UseSel  = ( UPPER_IDENT | LOWER_IDENT ) UseRename? ;
 
 (* v0.4.11. A top-level `using` names satisfactions that decide, for this
    file, which satisfaction of a pair a site uses (spec/type_system.md
@@ -1056,8 +1078,9 @@ UnaryExpr
    `inspect(x)` and `trace("…")` need no production. `inspect` and
    `trace` are LOWER_IDENT atoms applied by AppSuffix; the prelude
    declares them (spec/stdlib.md), the compiler knows those two
-   declarations, and a user declaration of the same name shadows them
-   and is an ordinary function (examples/05_phantom_types.fixed
+   declarations, and a user declaration of the same name hides them
+   (with warning W060, spec/type_system.md Rule 4.3.a) and is an
+   ordinary function (examples/05_phantom_types.fixed
    declares its own `fn inspect`). `unreachable` has its own production
    in AtomExpr, with an optional string-literal message. Their meaning
    is given by spec/diagnostics.md. *)
