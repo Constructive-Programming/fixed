@@ -771,6 +771,7 @@ TypeAtom
     = "!"
     | "Self" SelfOf?
     | IsBound
+    | RefinedType
     | NamedAlias
     | TypeRef
     | CapType
@@ -783,6 +784,19 @@ SelfOf
 
 NamedAlias
     = UPPER_IDENT "is" CapBoundChain
+    ;
+
+(* A refinement of a type that is already known: `u8 is between(0, 150)`,
+   `Bytes is validUtf8()`, `(List of u8) is nonEmpty()`
+   (spec/type_system.md Rule 6.3.0; owner's decision, fourth round of P6).
+   A primitive type or a parenthesised type starts it without ambiguity.
+   An UPPER_IDENT before `is` parses as NamedAlias; the typer reads it as
+   a refinement when the name is a type in scope and every bound of the
+   chain is a RefinementCall. An `is` after `of` belongs to the argument:
+   `List of u8 is positive()` refines the element; parentheses refine the
+   whole type. *)
+RefinedType
+    = ( PrimitiveType | "(" TypeExpr ")" ) "is" RefinementCall ( "+" RefinementCall )*
     ;
 
 (* `cap of T` and `cap extends C` admitted as TypeAtoms — needed for

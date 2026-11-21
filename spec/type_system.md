@@ -614,18 +614,9 @@ fn validateAge(age: u8 is between(0, 150)) -> u8 = age
 
 Per the grammar (`syntax_grammar.ebnf` §10 — `CapBound = CapRef | RefinementCall | PrimitiveType`), a `RefinementCall` is exactly `LOWER_IDENT "(" ArgList? ")"` — the lowercase generator name applied to value-args. The result is a refinement cap that the typer treats as if it were a Marker-classified cap with the generator's prop body as obligation.
 
-**Higher-order positions.** When a cap-generator value is passed as an argument or stored as a binding, its *type* requires the `cap of T` form (per the grammar's `CapType` admitted as a `TypeAtom`):
+**What may stand before `is`** (owner's decision, fourth round of P6). A refinement applies to any type that is already known, not only to a type parameter: a primitive type (`u8 is between(0, 150)`), a declared type (`Bytes is validUtf8()`), an applied type in parentheses (`(List of u8) is nonEmpty()`); grammar `RefinedType`. Where the name before `is` is a type in scope and every bound of the chain is a refinement call, the form refines that type and binds no name, so Rule 4.3.d (`T004`) does not apply to it. Without parentheses an `is` after `of` belongs to the argument: `List of u8 is positive()` refines the element.
 
-```
-fn validateWith(
-    value: N is Numeric,
-    constraint: (N, N) -> cap of N,    // higher-order parameter type
-    lo: N,
-    hi: N,
-) -> N is constraint(lo, hi) = ...
-```
-
-The parameter `constraint` has type `(N, N) -> cap of N`. When applied at the use site (`is constraint(lo, hi)`), the call is a `RefinementCall` with `constraint` as the (now value-bound) generator name.
+**Higher-order positions.** A generator's *type* is written `cap of T` (grammar `CapType`): `(N, N) -> cap of N` is the type of a parameter that carries a generator. Such a parameter cannot be applied in a bound yet: its arguments would be values of the run, which Rule 6.3.3 does not admit. (Earlier versions showed `-> N is constraint(lo, hi)` here; the owner chose constants only, fourth round of P6.)
 
 Rule 6.3.0 establishes the equivalence:
 
@@ -700,27 +691,21 @@ Not admitted in v0:
 - Capability-method calls
 - Module-level constant references that aren't covered by the above (a `let` at module scope with a literal initializer **is** admitted; anything else isn't)
 
-Programs that need richer computed bounds must lift the computation to a `let` whose initializer satisfies the v0 rule, or wait for v1 (totality-gated, below).
+Programs that need richer computed bounds must lift the computation to a `let` whose initializer satisfies the rule.
 
-**v1 rule (target — Phase 3 totality).** Once the function-totality checker lands in Phase 3, the v0 rule relaxes to: any expression whose evaluation is *total* per the function-totality rule may be a cap-generator value-arg. Because Fixed already requires every `fn` to be total (recursion-via-fold-only, no self-recursion), this relaxation makes every fn call a safe cap-generator value-arg.
-
-The v0→v1 promotion is purely a relaxation; programs valid under v0 are valid under v1.
+**Arguments are constants** (owner's decision, fourth round of P6: "Let's start with constants, but this is another feature pushing us to bring in dependent types"). The rule above is the rule of the language, not a first stage. A bound that names a parameter of the same signature (`-> i64 is between(lo, hi)`) or any value of the run is a type error and is the subject of OQ-T3. The relaxation earlier versions planned ("any total expression") is withdrawn as a plan and kept as part of that open direction; it would also have to say what `Diverge` and effects mean in such an expression (Rule 7.4.h).
 
 ```
-// v0 — accepted:
+// accepted:
 fn validateAge(age: u8 is between(0, 150)) -> u8 = age
 let upper = 150
 fn validateAge2(age: u8 is between(0, upper)) -> u8 = age   // upper is a literal-initialized binding
 
-// v0 — rejected (computed bound):
+// rejected (a value of the run):
 let upper = config.maxAge()
-fn validateAge3(age: u8 is between(0, upper)) -> u8 = age   // error: not a literal
-
-// v1 (when totality lands):
-// All three forms are accepted; the totality checker certifies `config.maxAge()`.
+fn validateAge3(age: u8 is between(0, upper)) -> u8 = age   // error: not a constant
+fn clamp(lo: i64, hi: i64, x: i64) -> i64 is between(lo, hi) = ...   // error: lo, hi are parameters
 ```
-
-Tracking gate: see implementation-plan.md Phase 3 totality-checker delivery.
 
 ### 6.4 Capability classification
 
@@ -1606,7 +1591,7 @@ Subtyping in Fixed is intentionally narrow:
 - **OQ-T6 — Mutually defined default bodies.** Rule 7.4.j rejects a capability whose default bodies define each other (`eq` by `ne` and `ne` by `eq`). Checking each satisfaction in its place would admit the pattern and report a satisfaction that leaves the cycle unbroken. Kept as a possibility by the owner; not planned.
 - **OQ-T5 — Data that holds a function of itself** (accepted, known gap). A value of `data Rec: R(f: Rec -> u64)` can apply its own field to itself, so a program can fail to terminate with no recursive named function and no `Diverge`. Owner (fourth round of P6): "Allow for now. Let's see if this becomes a problem later, not now."
 - **OQ-T4 — Stating termination of `unfold`.** Rule 7.4.i gives an `unfold` the effect `Diverge` unless its termination is `proved` or `assumed`. Open: how the user states the measure, and which step shapes the static prover accepts without one. Until the prover exists, enforcing the rule would put `Diverge` on every `unfold`.
-- **OQ-T3 — Dependent types for integer ranges** (open direction, not a decision). The owner's note on the arithmetic effects (P6, fourth round): "we might need to introduce dependent types as a better solution to 'raise integer size'. It might even start simplifying other parts of our system." The widening form `widen` (`spec/effects.md` Rule E3.6.h) fixes one wider type; a type that carried its range would let the result of `a * b` have the range the operands give it. The specs already show three places where values meet types: refinement capabilities with value parameters (§6.3, `cap Between(min, max)`, `fn between(min, max) -> cap of N`), `boundedPositive(lo, hi)` in `examples/11_properties.fixed`, and the static prover removing `Overflow` from an operation whose result range it proves from those refinements (`spec/effects.md` Rule E3.6.d). Nothing is designed.
+- **OQ-T3 — Dependent types for integer ranges** (open direction, not a decision). The owner's note on the arithmetic effects (P6, fourth round): "we might need to introduce dependent types as a better solution to 'raise integer size'. It might even start simplifying other parts of our system." The widening form `widen` (`spec/effects.md` Rule E3.6.h) fixes one wider type; a type that carried its range would let the result of `a * b` have the range the operands give it. The specs already show three places where values meet types: refinement capabilities with value parameters (§6.3, `cap Between(min, max)`, `fn between(min, max) -> cap of N`), `boundedPositive(lo, hi)` in `examples/11_properties.fixed`, and the static prover removing `Overflow` from an operation whose result range it proves from those refinements (`spec/effects.md` Rule E3.6.d). Nothing is designed. A second push in the same direction (owner, fourth round of P6): refinement arguments are constants only (Rule 6.3.3), so `clamp(lo, hi, x) -> i64 is between(lo, hi)`, `take(n)` with a result of at most `n` elements and an index below `xs.length` cannot be typed; a signature whose bounds may name its own parameters is the first step that would type them.
 
 **Pre-resolved deferrals (lift into the indicated spec doc when drafted):**
 
