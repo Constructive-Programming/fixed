@@ -1350,7 +1350,7 @@ Money satisfies Ord named ByAmount:
     fn compare(other: Self) -> is Ordering = self.amount.compare(other.amount)
 ```
 
-(`named` is provisional, `spec/syntax_grammar.ebnf` §9.) A satisfaction's name lives with the type names of its package and is imported by `use` like one (`use shop.money.ByAmount`). An unnamed satisfaction can be chosen only by the levels of the resolution order below that name no satisfaction (`use` of the pair, the only one in the link unit).
+(`named` is provisional, `spec/syntax_grammar.ebnf` §9.) A satisfaction's name lives with the type names of its package and is imported by `use` like one (`use shop.money.ByAmount`). An unnamed satisfaction has an automatic name (Rule 8.4.d), so every level of the resolution order below can choose it.
 
 A satisfaction is **in scope** at a site where a `use` brings it in, or when it is declared in the site's own package. Derived satisfactions (§7.4), built-in ones (§6.6, and those the compiler provides for primitive types) and the prelude's satisfactions (`spec/stdlib.md` §5) are always in scope. A site **sees** a satisfaction that is in scope there; every other document uses "sees" in this sense. A `use` brings a satisfaction in with a `satisfies` clause:
 
@@ -1372,13 +1372,25 @@ Otherwise the site is ambiguous, and that is an error (`E061`) when its package 
 
 **Derived and unnamed satisfactions get no preference.** A derived satisfaction (§7.4, `spec/stdlib.md` §5) counts like a declared one, and an unnamed satisfaction like a named one. A pair that has a derived satisfaction and a named one in scope has two, and a site that no `using` decides is ambiguous. Declaring a named satisfaction for a pair that already has one therefore makes every site that sees both ambiguous until a `using` chooses. A `using` always names a satisfaction by a name.
 
-**Rule 8.4.d (Automatic names).** A satisfaction that is declared without `named`, whether derived, built in or given a body, has the automatic name `Derived` + the name of the type + the name of the capability: `Money satisfies Ord` is `DerivedMoneyOrd`, and `using DerivedMoneyOrd` selects it. (Owner's decision, fourth round of P6; it replaces the pair form `using Money satisfies Ord`.)
+**Rule 8.4.d (Automatic names).** A satisfaction declared without `named` has an automatic name, and `using` selects it by that name. There are two prefixes, each followed by the name of the type and the name of the capability.
 
-*(Author's choices, owner to confirm.)*
-1. The name of a primitive type is capitalised in the automatic name: the built-in `i64 satisfies Eq` is `DerivedI64Eq`. So a scope with `using Loose` (Rule 8.4.c) returns to the built-in satisfaction with `using DerivedI64Eq`.
-2. The prefix is `Derived` for every unnamed satisfaction, also for one whose members are written in a body.
-3. The arguments of the capability are not part of the name: `Store satisfies Map of (String, u64)` is `DerivedStoreMap`. Two unnamed satisfactions of one type for one capability at different arguments would share a name; the second must be `named` (`E066`).
-4. An automatic name is in scope wherever its satisfaction is, and is exported and imported with it (`use a.b.Money satisfies Ord` brings `DerivedMoneyOrd`). A declaration that takes an automatic name of a satisfaction in scope is a collision (`T003`, Rule 4.3.c).
+- `Default…` names the unnamed satisfaction of the pair: `DefaultMoneyOrd`.
+- `Derived…` names the satisfaction the compiler derives for the pair (§7.4), where it derives one: `DerivedMoneyOrd`.
+
+Three cases follow.
+
+| The pair has | `DefaultMoneyOrd` is | `DerivedMoneyOrd` is |
+|---|---|---|
+| only the derived satisfaction | the derived one | the derived one |
+| only an unnamed satisfaction with a written body (the compiler derives none) | the written one | not declared |
+| both | the written one | the derived one |
+
+In the third case the two are separate satisfactions, and `using DerivedMoneyOrd` selects the derived one. *(Author's choice: the two are not ambiguous with each other; a site that no `using` decides takes the written one, as it does today, where a written body replaces the derivation. Against a `named` satisfaction the rule above is unchanged: no preference.)* (Owner's decisions, fourth round of P6: the automatic name replaces the pair form `using Money satisfies Ord`; the two prefixes and the three cases are the owner's.)
+
+1. The name of a primitive type is capitalised in the automatic name: `i64` gives `I64`. (Confirmed by the owner.)
+2. Where the satisfaction states arguments of the capability, the name expands with `Of` and the arguments: `List satisfies Sequencing of u8` is `DerivedListSequencingOfU8`, beside `DerivedListSequencingOfChar`. A satisfaction that leaves the arguments to its own parameters adds nothing. (Owner's decision.) *(Author's choices: several arguments follow in written order with no separator, `Store satisfies Map of (String, u64)` is `DefaultStoreMapOfStringU64`; an argument that is itself an applied type is spelled the same way, `OfListOfU8`.)*
+3. *(Author's choice.)* A built-in satisfaction counts as derived: `i64 satisfies Eq` is `DefaultI64Eq` and `DerivedI64Eq`. So a scope with `using Loose` (Rule 8.4.c) returns to the built-in satisfaction with either name. A satisfaction the prelude declares with a body is `Default…` only.
+4. *(Author's choice.)* An automatic name is in scope wherever its satisfaction is, and is exported and imported with it (`use a.b.Money satisfies Ord` brings its automatic names). A declaration that takes an automatic name of a satisfaction in scope is a collision (`T003`, Rule 4.3.c).
 
 A `using` names satisfactions, and each name determines its pair. At the call site it covers every resolution made in the call expression, including its arguments, unless an inner `using` decides first. In a type it covers the whole type expression it is written in (`spec/syntax_grammar.ebnf` §10). A top-level `using` declaration in a source file applies to that file. Package scope is a `using` declaration in the file `package.fixed` at the root of the package. The application root is that file in the package that declares `main`. Its `using` declarations are the application package's package scope (level 3) and reach no other package: a site of another package is decided when that package is compiled (Rule 8.4.b). A level that names two satisfactions of one pair is itself ambiguous.
 

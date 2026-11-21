@@ -497,7 +497,8 @@ UsingDecl
     ;
 
 (* Always a name: the `named` one, or the automatic name of an unnamed
-   satisfaction, `DerivedMoneyOrd` (spec/type_system.md Rule 8.4.d). The
+   satisfaction, `DefaultMoneyOrd` or `DerivedMoneyOrd` (spec/type_system.md
+   Rule 8.4.d). The
    pair form of v0.4.13 is withdrawn. *)
 SatisfactionRef
     = UPPER_IDENT
