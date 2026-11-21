@@ -2,13 +2,14 @@ package fixed.backend
 
 import fixed.CompilationUnit
 import fixed.core.{Denotation, SymKind, SymbolId, Type}
-import fixed.typer.Members
+import fixed.typer.{Members, Satisfaction}
 
 /** The slice's stand-in for representation selection (M11; slice §4.3): a value typed only by
-  * capability bounds is represented by the single data type in scope that satisfies all of them.
-  * With none, a product capability (one constructor requirement) is its own auto-flat-struct
-  * (`spec/type_system.md` §6.6): one field per constructor parameter, read by the method of the
-  * same name. Both rules are deleted when M11 lands.
+  * capability bounds is represented by the single data type that has all of them, declared or
+  * derived, and declares one of them ([[declares]]). With no data type declaring it, a product
+  * capability (one constructor requirement) is its own auto-flat-struct (`spec/type_system.md`
+  * §6.6): one field per constructor parameter, read by the method of the same name. Both rules are
+  * deleted when M11 lands.
   */
 final class Representation(unit: CompilationUnit):
   private val symbols = unit.symbols
@@ -29,12 +30,17 @@ final class Representation(unit: CompilationUnit):
 
   private def caps(bounds: List[Type]): Option[Type] =
     val wanted = Members.expandAliases(symbols, bounds).collect { case Type.CapRef(c, args) => (c, args.map(apply)) }
-    topLevelData.filter(d => wanted.forall((c, _) => satisfies(d, c))) match
-      case List(d) if wanted.nonEmpty =>
-        val params = symbols.typeParamsOf(d.id).size
-        val args = wanted.map(_._2).find(_.nonEmpty).getOrElse(Nil).takeRight(params)
-        Some(Type.TypeRef(d.id, List.fill(params - args.size)(Type.UnitType) ++ args))
-      case Nil =>
+
+    /** `d` at the arguments the bounds give its rightmost parameters. */
+    def at(d: Denotation): Type.TypeRef =
+      val params = symbols.typeParamsOf(d.id).size
+      val args = wanted.map(_._2).find(_.nonEmpty).getOrElse(Nil).takeRight(params)
+      Type.TypeRef(d.id, List.fill(params - args.size)(Type.UnitType) ++ args)
+    topLevelData.filter(d =>
+      wanted.exists((c, _) => declares(at(d), c)) && wanted.forall((c, _) => holds(at(d), c))
+    ) match
+      case List(d) => Some(at(d))
+      case Nil     =>
         wanted match
           case List((c, args)) if constructor(c).isDefined => Some(Type.CapRef(c, args))
           case _                                           => None
@@ -46,6 +52,21 @@ final class Representation(unit: CompilationUnit):
       case Type.CapRef(declared, _) => declared == cap || members.exists(_.closure(declared).contains(cap.toInt))
       case _                        => false
     }
+
+  /** `d` has `cap`, declared (directly or through a capability that extends it) or derived (Rule 7.4). */
+  private def holds(t: Type.TypeRef, cap: SymbolId): Boolean =
+    unit.typing.exists(Satisfaction.holds(_, t, cap, Nil).isDefined)
+
+  /** `d` declares `cap` (or a capability extending it), except where the declaration only names a
+    * derivation of the prelude's: `Json satisfies Show`, which would otherwise make a bare `is Show`
+    * ambiguous with `String`. A program's declarations all count, as do `Clone` (on request only)
+    * and a type without variants, for which `derived` holds vacuously.
+    */
+  private def declares(t: Type.TypeRef, cap: SymbolId): Boolean =
+    val d = symbols(t.sym)
+    satisfies(d, cap) &&
+    !(d.owner == SymbolId.Prelude && symbols.variantsOf(d.id).nonEmpty &&
+      unit.typing.exists(s => !Satisfaction.onRequest(s, cap) && Satisfaction.derived(s, d.id, cap, t.args, Set.empty)))
 
   /** A product capability's one constructor requirement, when no data type satisfies the capability. */
   def constructor(cap: SymbolId): Option[Denotation] =

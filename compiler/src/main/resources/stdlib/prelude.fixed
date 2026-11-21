@@ -11,8 +11,9 @@ data Json:
     Bool(value: bool)
     Number(value: f64)
     String(value: String)
-    Array(elements: is Sequencing of Json)
-    Object(fields: is Map of (String, Json))
+    // The derived `Json satisfies Show` and `Eq` call `show` and `eq` on these fields (stdlib.md 3.2).
+    Array(elements: is Sequencing of Json + Show + Eq)
+    Object(fields: is Map of (String, Json) + Show + Eq)
 
 data Tuple of (A, B):
     Tuple(first: A, second: B)
@@ -159,8 +160,8 @@ Maybe satisfies Optional:
     fn find(pred: Part -> bool) = match self:
         Maybe.Just(v) => if pred(v): self else: Maybe.Nothing
         Maybe.Nothing => self
-// Json has no Show, Eq or Clone: its `is Sequencing of Json` and `is Map of (String, Json)`
-// fields promise none of them, so no satisfaction could define its members (P6 D17).
+Json satisfies Show
+Json satisfies Eq
 String satisfies Clone
 List satisfies Clone
 Maybe satisfies Clone

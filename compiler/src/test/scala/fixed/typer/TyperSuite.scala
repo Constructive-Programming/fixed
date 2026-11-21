@@ -1,7 +1,7 @@
 package fixed.typer
 
 import fixed.ast.{Tree, Trees}
-import fixed.core.{Context, Proto, SymbolId, render}
+import fixed.core.{Context, Proto, SymbolId, Type, render}
 import fixed.parsing.{Parser, Scanner}
 import fixed.util.{DiagCode, Reporter, SourceFile}
 
@@ -715,6 +715,16 @@ class TyperSuite extends munit.FunSuite:
       (c.diags, c.constructors.collect { case (_, d, v) if c.symbols(d).name != "Maybe" => v }),
       (Nil, List("Hi"))
     )
+
+  test("P6 D17: Json's fields carry Show + Eq, and Json satisfies Show and Eq"):
+    val typed = typedUnit(
+      "fn s(j: Json) -> String = j.show()\nfn e(a: Json, b: Json) -> bool = a == b\n" +
+        "fn f(j: Json) -> bool = match j:\n    Json.Array(es) => es.show() == \"\" && es == es\n" +
+        "    Json.Object(fs) => fs.show() == \"\" && fs == fs\n    _ => false\n"
+    )
+    assertEquals(typed.diags, Nil)
+    val json = Type.TypeRef(typed.symbols.scope("Json"), Nil)
+    assertEquals(typed.symbols.satisfactionsOf(json).map(typed.symbols.render).toSet, Set("Show", "Eq"))
 
   test("3.1.M3: the stdlib's own satisfies declarations pass the checks"):
     val (table, _) = Namer.index(Parser.parse(SourceFile.fromString("<empty>", "")).tree)

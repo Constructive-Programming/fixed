@@ -196,10 +196,10 @@ object Satisfaction:
     * has it (recursive fields assumed). A capability with `Self.fn` requirements is never derived.
     *
     * A field's type is read at the instance's arguments `args`, so `List of T` has `Show` only if
-    * `T` has it.
+    * `T` has it. The shape test alone: it ignores declarations and `Clone`'s request ([[holds]]
+    * applies both).
     */
-  private def derived(s: TyperState, data: SymbolId, cap: SymbolId, args: List[Type], assumed: Set[SymbolId])
-      : Boolean =
+  def derived(s: TyperState, data: SymbolId, cap: SymbolId, args: List[Type], assumed: Set[SymbolId]): Boolean =
     val capName = s.symbols(cap).name
     val params = s.symbols.typeParamsOf(data)
     lazy val variants = s.symbols.variantsOf(data).toList

@@ -1,0 +1,22 @@
+// The prelude's Json array holds `is Sequencing of Json + Show + Eq`: `List` represents it, since it
+// declares `Sequencing` and derives `Show` and `Eq`. `Json satisfies Show` and `Eq` name
+// derivations, so a bare `is Show` or `is Eq` is still represented by `String`.
+use std.io.Console
+
+fn count(j: Json) -> u64 = match j:
+    Json.Array(es) => es.length()
+    _ => 0
+
+fn greeting() -> is Show = "hi"
+
+fn word() -> is Eq = "a"
+
+fn main() -> () with Console =
+    let a = Json.Array([Json.Number(1.0), Json.Null])
+    Console.printLine(count(a).show())
+    match a:
+        Json.Array(es) => es.head().fold((h) -> Console.printLine("has head"), () -> Console.printLine("none"))
+        _ => Console.printLine("other")
+    Console.printLine(greeting().show())
+    let w = word()
+    Console.printLine((w == w).show())
