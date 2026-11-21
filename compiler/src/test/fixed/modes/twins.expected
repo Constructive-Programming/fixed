@@ -1,0 +1,4 @@
+9 9
+C(1, C(3, C(4, C(5, E)))) C(1, C(3, C(4, C(5, E))))
+N(N(Leaf, 2, Leaf), 5, N(N(Leaf, 7, Leaf), 9, Leaf)) N(N(Leaf, 2, Leaf), 5, N(N(Leaf, 7, Leaf), 9, Leaf))
+16 16

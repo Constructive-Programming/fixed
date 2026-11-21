@@ -15,7 +15,8 @@ object TyperPhase extends Phase:
     unit.tree.fold(unit) { tree =>
       val (symbols, namerDiags) = Namer.index(tree)
       val typed = typeBodies(tree, symbols)
-      unit.copy(symbols = typed.symbols, typing = Some(typed)).report(namerDiags ++ typed.diags)
+      val recursion = if typed.errors == 0 then Totality.check(tree, typed) else Nil
+      unit.copy(symbols = typed.symbols, typing = Some(typed)).report(namerDiags ++ typed.diags ++ recursion)
     }
 
   /** Type every top-level `fn` body and check the declarations, the program's in its scope and the
