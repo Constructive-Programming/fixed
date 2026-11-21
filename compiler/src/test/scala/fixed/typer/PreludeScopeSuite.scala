@@ -50,6 +50,37 @@ class PreludeScopeSuite extends munit.FunSuite:
       case Some(Resolution.CapMember(cap, _)) => assertEquals(cap, table.scope("Show"))
       case other                              => fail(s"resolved to $other")
 
+  test("a member of the program's capability on an unbounded parameter asks for the program's bound"):
+    /** `own` declares the program's `Show`, which has `show` itself or through `extends`. */
+    def program(own: String, bound: String) =
+      own + s"data W of ($bound):\n    W(a: A)\nW satisfies Show:\n    fn show = self.a.show()\n" +
+        s"fn g(x: $bound) -> String = x.show()\n"
+    val direct = "cap Show:\n    fn show -> String\n"
+    val inherited = "cap Pretty:\n    fn show -> String\ncap Show extends Pretty:\n    fn other -> u64 = 0\n"
+    List(direct, inherited).foreach { own =>
+      val code = program(own, "A")
+      val (_, _, s) = typed(code)
+      assertEquals(
+        s.diags.map(d => (d.code, d.span.start, d.message, d.suggestion)).sortBy(_._2),
+        List(
+          (
+            DiagCode.T022,
+            code.indexOf("self.a.show"),
+            "`.show` on a value of type A needs the bound `Show`",
+            Some("write the bound: `data W of (A is Show)`")
+          ),
+          (
+            DiagCode.T022,
+            code.indexOf("x.show"),
+            "`.show` on a value of type A needs the bound `Show`",
+            Some("write the bound: `A is Show`")
+          )
+        )
+      )
+      val (_, _, ok) = typed(program(own, "A is Show"))
+      assertEquals(ok.diags, Nil)
+    }
+
   test("a program's satisfier of the prelude's Optional leaves the prelude's own Optional.some unambiguous"):
     val (_, _, s) = typed(
       "data Opt2 of A:\n    Yes(v: A)\n    No\nOpt2 satisfies Optional:\n    Yes as some\n    No as none\n" +

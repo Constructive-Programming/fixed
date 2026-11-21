@@ -382,7 +382,7 @@ object Typer:
                   case _ =>
                     Members.autoDerivedCap(s1, t.method) match
                       case Some(cap) if Members.abstractType(s1, resolved) =>
-                        (requireBound(s1, needs(cap)), Type.NeverType)
+                        (requireBound(s1, needs(Members.lackedBound(s1, cap, t.method))), Type.NeverType)
                       case Some(cap) if Satisfaction.onRequest(s1, cap) =>
                         (notCloned(s1, resolved, t.span), Type.NeverType)
                       case _ =>

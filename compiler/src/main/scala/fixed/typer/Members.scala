@@ -138,7 +138,7 @@ object Members:
     * (`spec/stdlib.md` §4.7, §4.8, §4.10), and `Clone` (§4.11) except on data types and tuples,
     * which have it only on request. A call of one requires the receiver to have the capability
     * (`Typer.requireBound`; for `Clone`, `T010` from `notCloned`). On an abstract receiver they are
-    * not found, and [[autoDerivedCap]] names the bound it lacks.
+    * not found, and [[lackedBound]] names the bound it lacks.
     */
   private val autoDerived = List("Show", "Eq", "Ord", "Clone")
 
@@ -151,9 +151,18 @@ object Members:
       case _: Type.IsBound | _: Type.CapRef => true
       case _                                => false
 
-  /** The capability among [[autoDerived]] that declares `member`: what an abstract receiver lacks. */
+  /** The capability among [[autoDerived]] that declares `member`. */
   def autoDerivedCap(s: TyperState, member: String): Option[SymbolId] =
     autoDerived.flatMap(s.symbols.prelude.get).find(s.symbols.membersOf(_).exists(_.name == member))
+
+  /** The bound an abstract receiver lacks when it calls `member` of prelude capability `cap`: the
+    * program's capability of the same name when it has `member`, itself or through `extends`
+    * (it shadows `cap` in the program's code), and otherwise `cap`.
+    */
+  def lackedBound(s: TyperState, cap: SymbolId, member: String): SymbolId =
+    s.symbols.scope.get(s.symbols.preludeName(cap))
+      .filter(own => s.symbols(own).kind == SymKind.Cap && s.members.lookup(own, SymKind.Method, member).nonEmpty)
+      .getOrElse(cap)
 
   /** Every instance member `name` on `recv`, best first: a data type's own field, then its
     * capabilities, then its derived `fold`. Calls with several candidates pick by argument shape.
