@@ -305,3 +305,31 @@ object Layout:
         if t.boxed then m | 1 << s else m
       case (m, _) => m
     }
+
+/** The Core types of the typer's scalar types, and the runtime functions that show them. */
+object Scalars:
+  import fixed.core.Type
+
+  private val ints =
+    Map("i8" -> 8, "i16" -> 16, "i32" -> 32, "i64" -> 64, "u8" -> 8, "u16" -> 16, "u32" -> 32, "u64" -> 64)
+
+  /** The runtime function that shows a scalar of Core type `t` (a `char` if `char`), and the type it takes. */
+  def formatter(t: CType, char: Boolean): Option[(String, CType)] =
+    t match
+      case _ if char          => Some(("fx_show_char", t))
+      case CType.Int(_, true) => Some(("fx_show_i64", CType.Int(64, signed = true)))
+      case CType.Int(_, _)    => Some(("fx_show_u64", CType.Int(64, signed = false)))
+      case CType.Float(_)     => Some(("fx_show_f64", CType.Float(64)))
+      case CType.Bool         => Some(("fx_show_bool", CType.Bool))
+      case _                  => None
+
+  /** The Core type of a scalar typer type. */
+  def scalar(t: Type): Option[CType] =
+    t match
+      case Type.PrimType(n) if ints.contains(n) => Some(CType.Int(ints(n), signed = n.startsWith("i")))
+      case Type.PrimType("f32")                 => Some(CType.Float(32))
+      case Type.PrimType("f64")                 => Some(CType.Float(64))
+      case Type.PrimType("bool")                => Some(CType.Bool)
+      case Type.PrimType("char")                => Some(CType.Int(32, signed = false))
+      case Type.UnitType | Type.NeverType       => Some(CType.Unit)
+      case _                                    => None
