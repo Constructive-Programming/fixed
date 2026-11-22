@@ -215,6 +215,8 @@ Values are immutable and have no identity, so the compiler may **copy** a value 
 
 Evacuation makes analysis imprecision a performance cost, never a soundness hole. It is reported per site (§19).
 
+**Rule MM5.5.a (`clone` is evacuation asked for by the program).** A call of `clone` (`spec/stdlib.md` §4.11) yields a value of class `Heap`. Where the receiver is in another class, this is an evacuation to the heap at the place the program wrote; where the receiver is built by the expression `clone` is called on, class assignment (§5.3) gives that value the class `Heap` and nothing is copied. The program uses it for a value it knows to be long-lived where the analysis would choose a shorter class and evacuate later, perhaps more than once. The report lists these sites with the evacuations the compiler inserted (§19). (Owner's decision, fourth round of P6.) Not built: every cell is a `Heap` cell today.
+
 Copying the demanded part of a shared value in the shared entry of a `fip fn` (§18.3) is a different operation: it produces a second, exclusively owned value in the same class, through the witness operation `copy`. It is reported with the evacuations and warned by W110 in the same way.
 
 **Warning W110 (evacuation in hot code).** The compiler warns when it inserts an evacuation in hot code. Without profile data, hot means inside a `fold` / `unfold` step, or inside a handler clause that runs inside one. With profile data (Phase 6), the profile decides.

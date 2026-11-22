@@ -52,7 +52,7 @@ It does **not** specify:
 | `Ord`         | cap  | `<`/`<=`/`>`/`>=` operator support, extends `Eq` (§4.8)                 |
 | `Numeric`     | cap  | `+`/`-`/`*`/`/`/`%` operator support, extends `Eq + Ord` (§4.9)         |
 | `Show`        | cap  | `.show -> String` (§4.10)                                                |
-| `Clone`       | cap  | Explicit `.clone()` returning an equal value; never needed for ownership (§4.11) |
+| `Clone`       | cap  | Explicit `.clone()`: an equal value on the heap, for a value the program knows is long-lived (§4.11) |
 
 > **Update from prior drafts.** Earlier drafts of `docs/plans/implementation-plan.md` listed `Pair` and `Ordering` as data types. The classification above supersedes that — they are caps, with `Tuple` (new) as the canonical concrete satisfier of `Pair`. See §6 for migration guidance.
 
@@ -336,15 +336,17 @@ pub cap Clone:
     fn clone -> Self
 ```
 
-`clone` returns a value equal to the receiver (P6 D10): where `Self` also satisfies `Eq`, `x.clone == x`. `Clone` does not extend `Eq`, so the law is stated here and not as a `prop` of the capability. The satisfier chooses how. A **sharing** satisfier returns the same cells with their counts incremented, and states it in a cost prop:
+`clone` returns a value equal to the receiver (P6 D10): where `Self` also satisfies `Eq`, `x.clone == x`. `Clone` does not extend `Eq`, so the law is stated here and not as a `prop` of the capability.
 
-```
-    prop cloneShares: constructs(clone) <= 0
-```
+**What `clone` is for** (owner's decision, fourth round of P6). `clone` copies the value to the heap, where it is counted by reference from then on: the result has the lifetime class `Heap` (`spec/memory_management.md` Rules MM3.1, MM5.5.a). It is the program's escape hatch for a value it knows will live long. The compiler otherwise picks the class of every value by its analysis, and copies a value out of a shorter-lived class where the analysis fell short (evacuation, Rule MM5.5); `clone` is that same step asked for by the program, at a place the program chooses. Called on a value right after it is built, it is the same as having asked for the value to be allocated on the heap: the compiler builds it there and copies nothing. It is never needed for ownership or for sharing, which plain use of a value already gives.
 
-A **copying** satisfier builds fresh cells, so the result does not keep the receiver's cells alive, and states its bound, for example `prop cloneCopies: constructs(clone) <= size(self)`. Values are immutable, so the two are indistinguishable in results. They differ in cost and in how long the receiver's cells live, and the cost prop tells which one a caller gets (`spec/cost.md` §4).
+**Derived `clone`.** `T satisfies Clone` with no body derives it. The result is a `Heap` value equal to the receiver. Parts of the receiver that are already `Heap` cells are shared, with their counts raised, and not copied; a receiver that is wholly on the heap is returned itself *(author's reading: the decision says where the result lives, and a copy of a cell that is already there would change nothing the program can observe)*. Scalars, `()` and `String` are returned as they are.
+
+**A written `clone`.** A satisfaction may give `clone` a body. This is how a program tunes memory management for a type: the body decides which parts are rebuilt and which are shared, for example rebuilding a compact copy of a value whose cells are scattered, or dropping a cache field. The law above still binds it. A satisfier states its cost in a cost prop, as before: `prop cloneShares: constructs(clone) <= 0` for one that only shares, `prop cloneCopies: constructs(clone) <= size(self)` for one that rebuilds (`spec/cost.md` §4).
 
 A type that must not be duplicated does not satisfy `Clone`.
+
+**Built today.** Every cell of the compiler today is a counted heap cell, so `clone` has no class to change. The derived `clone` builds a fresh cell for each level of a data value and clones each field, which the rule allows and which costs more than the sharing it permits; it takes one native frame per level (`docs/decisions/P0-spec-review-2026-11-20.md` §4).
 
 `clone` on a value of a type parameter needs `T is Clone` (`spec/type_system.md` Rule 5.1.3).
 
