@@ -181,8 +181,14 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
   - **Fixed** (`Generated.foldDown`, `foldUp`; owner's decision, Rule 7.4.b.3): two loops, reversing in place where the value is exclusively owned. A shared value is copied from its first shared cell on, one allocation per cell, and its stack stays bounded. Measured on `nat_loop`: +8.1% instructions, -22.7% best cycles; the other four benchmarks are unchanged.
 - The compiler accepted any recursion between functions, and `para` was not derived.
   - **Fixed** (owner's decision, Rule 7.4.h): `typer/Totality.scala` accepts structural recursion and recursion under the effect `Diverge`, and reports the rest as `T027` with the ways out. `para` (Rule 7.4.g) is derived in both build modes; for linear data it runs in bounded stack, keeps every original sub-value alive on a stack of frames (one allocation per cell, no reuse in place). Benchmarks are unchanged.
+- One-line bodies the grammar allows were rejected by the parser with `P001` ("expected INDENT"): `data One: Only`, `cap X: fn x -> T`, `effect E: fn f() -> !`, `T satisfies C: fn …`.
+  - **Fixed** (`DeclParsers.parseMemberList`, Rule 7.1.b): the four bodies take an indented block or exactly one member on the line; a second member, on the line or indented below it, is one `P001`.
+- `data Metres` with no body, which the grammar allows, was `P013`.
+  - **Fixed** (`DeclParsers.parseDataDecl`, `EmitLLVM`, Rule 7.1.a): it declares a type with no variant. No expression builds one (`T001`); a `match` on one, and its derived `show` and `==`, lower to a switch with no case, emitted as `unreachable`. `fold` is not derived for it (`T001`).
 
 Found and not fixed:
+
+- A `match` takes only the indented block of cases, though `MatchCaseList` allows one case on the line (`match x: _ => 0` is `P001`).
 
 - A type that refers to itself at other arguments gets only baseline versions of its generated members.
 - The result of a closure call is always taken as shared. Measured: 4.0 instructions per tested reuse, at most 0.30% on `records`. Left as it is.
@@ -227,8 +233,6 @@ Limits and gaps of the first implementation, against the spec:
 - See `spec/compilation_model.md` OQ-CM10 to OQ-CM12. **Resolved:** closed by P6 D15.
 - Found by the documentation pass of 2026-11-21 (samples in the README and on the site), not fixed:
   - Derived `Functor` needs a declaration. `spec/type_system.md` Rule 7.4.c derives it with none; the compiler gives `map` only after `T satisfies Functor`. The owner confirmed the rule (P6, fourth round): this is a fault of the compiler.
-  - One-line bodies the grammar allows are rejected by the parser with `P001` ("expected INDENT"): `data One: Only`, `cap X: fn x -> T`, `effect E: fn f() -> !`, `T satisfies C: fn …`.
-  - `data Metres` with no body, which the grammar allows, is `P013`.
   - `clone` on a type with `Box satisfies Clone` passes the typer and is `B005` in the backend.
   - `spec/type_system.md` Rule 6.3.0 writes `age: u8 is between(0, 150)`; the grammar allows only an upper-case name before `is`. Rule 6.3.3 admits only constant arguments to a capability generator, while Rule 6.3.0 passes parameters, and its text on totality predates `Diverge`. For the owner.
   - `spec/quantities.md` §10.1 still shows `fibIter`, which is `T027`.

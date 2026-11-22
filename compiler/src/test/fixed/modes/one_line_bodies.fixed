@@ -1,0 +1,14 @@
+// One member on the line after `:` (Rule 7.1.b): `data`, `cap`, `effect` and `satisfies`.
+use std.io.Console
+
+data One: Only
+cap Named: fn name -> String
+effect Abort: fn abort() -> !
+data Box: Box(n: u64)
+Box satisfies Show: fn show = "box"
+Box satisfies Named: fn name = "named"
+
+fn main() -> () with Console =
+    Console.printLine(One.Only.show())
+    Console.printLine(Box.Box(1).show())
+    Console.printLine(Box.Box(1).name())

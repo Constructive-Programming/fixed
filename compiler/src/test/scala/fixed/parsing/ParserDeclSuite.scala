@@ -1,7 +1,7 @@
 package fixed.parsing
 
 import fixed.ast.{Tree, Trees}
-import fixed.util.SourceFile
+import fixed.util.{DiagCode, SourceFile}
 import munit.FunSuite
 
 /** Parser: declarations (data, cap, type alias, match, satisfies, effect). */
@@ -498,3 +498,62 @@ class ParserDeclSuite extends FunSuite with ParserTestSupport:
           case Trees.TypeRef("Nat", None, _) => ()
           case other                         => fail(s"expected TypeRef('Nat'), got $other")
       case other => fail(s"expected single DataDecl, got $other")
+
+  test("Rule 7.1.b: one member on the line after `:`"):
+    val pr = Parser.parse(
+      SourceFile.fromString(
+        "<test>",
+        """data One: Only
+          |cap Named: fn name -> String
+          |effect Abort: fn abort() -> !
+          |Box satisfies Show: fn show = "box"
+          |Box satisfies Named: fn name =
+          |    "box"
+          |""".stripMargin
+      )
+    )
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(
+            List(
+              d: Trees.DataDecl,
+              c: Trees.CapDecl,
+              e: Trees.EffectDecl,
+              s: Trees.SatisfiesDecl,
+              b: Trees.SatisfiesDecl
+            ),
+            _
+          ) =>
+        assertEquals(d.variants.map(_.name), List("Only"))
+        assertEquals(c.body.length, 1)
+        assertEquals(e.members.length, 1)
+        assertEquals((s.mappings.length, b.mappings.length), (1, 1))
+      case other => fail(s"expected data, cap, effect and satisfies, got $other")
+
+  test("Rule 7.1.b: several members on one line, or more below one, are one P001"):
+    List(
+      "data Two: A B\n",
+      "data Two: A, B\n",
+      "effect E: fn a() -> () fn b() -> ()\n",
+      "effect E: fn a() -> ()\n    fn b() -> ()\n",
+      "Box satisfies Show: fn show = \"box\"\n    fn debug -> String =\n        \"b\"\n"
+    ).foreach { src =>
+      val pr = Parser.parse(SourceFile.fromString("<test>", src + "data After: A\n"))
+      assertEquals(pr.diagnostics.map(_.code), List(DiagCode.P001), src)
+      assert(pr.diagnostics.head.message.contains("one-line body"), pr.diagnostics.toString)
+      pr.tree match
+        case Trees.CompilationUnit(List(_, d: Trees.DataDecl), _) => assertEquals(d.name, "After", src)
+        case other                                                => fail(s"expected two items, got $other")
+    }
+
+  test("Rule 7.1.b: a `:` with no member is an error"):
+    val pr = Parser.parse(SourceFile.fromString("<test>", "data X:\ndata Y: A\n"))
+    assertEquals(pr.diagnostics.map(_.code), List(DiagCode.P013))
+
+  test("Rule 7.1.a: `data` without a body is an empty type"):
+    val pr = Parser.parse(SourceFile.fromString("<test>", "data Metres\ndata Length of U: Length(v: u64)\n"))
+    assert(!pr.hasErrors, pr.diagnostics.toString)
+    pr.tree match
+      case Trees.CompilationUnit(List(m: Trees.DataDecl, _: Trees.DataDecl), _) =>
+        assertEquals((m.name, m.variants, m.props), ("Metres", Nil, Nil))
+      case other => fail(s"expected two DataDecls, got $other")

@@ -105,6 +105,14 @@ final class EmitLLVM:
         val n = ids.next()
         line(s"  br i1 ${operand(c)}, label %then.$n, label %else.$n")
         join(x, n, List(s"then.$n" -> t, s"else.$n" -> f), tail)
+
+      /** A type with no variant has no value (Rule 7.1.a): the switch is never reached. */
+      case Rhs.Switch(_, Nil) =>
+        val n = ids.next()
+        line("  unreachable")
+        line(s"dead.$n:")
+        aliases(x.name) = "poison"
+        s"dead.$n"
       case Rhs.Switch(v, cases) =>
         val n = ids.next()
         line(s"  %tagp.$n = getelementptr inbounds i8, ptr ${operand(v)}, i64 8")

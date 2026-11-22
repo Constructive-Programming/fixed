@@ -2,7 +2,7 @@ package fixed
 
 import fixed.ast.Trees
 import fixed.core.Type
-import fixed.util.SourceFile
+import fixed.util.{DiagCode, SourceFile}
 
 class CompilerSuite extends munit.FunSuite:
 
@@ -70,3 +70,9 @@ class CompilerSuite extends munit.FunSuite:
     }
     assertEquals(Main.modeOf(plain :+ "--budget")._2, plain :+ "--budget")
     assertEquals(Main.modeOf(plain ++ List("--budget", "-1"))._2, plain ++ List("--budget", "-1"))
+
+  test("Rule 7.1.a: no expression builds a value of a type with no body"):
+    val unit = Compiler.compile(
+      CompilationUnit(SourceFile.fromString("<test>", "data Metres\nfn mk() -> Metres = Metres.Metres\n"))
+    )
+    assertEquals(unit.diagnostics.map(_.code), List(DiagCode.T001))
