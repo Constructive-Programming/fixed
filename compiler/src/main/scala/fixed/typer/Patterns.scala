@@ -82,7 +82,7 @@ object Patterns:
         bindAll(s5, pats.zip(fieldTypes ++ extra))
 
   /** `match scrutinee: cases` — each case binds its pattern, checks its guard, and its body meets
-    * the prototype (or the first body's type).
+    * the prototype (or the first body's type that is not `!`, which fits any and decides none).
     */
   def typedMatch(s: TyperState, m: Trees.MatchExpr, pt: Proto)(using ctx: Context): (TyperState, Type) =
     val (s1, scrutinee) = Typer.typedExpr(s, m.scrutinee, Proto.Wildcard)
@@ -91,7 +91,7 @@ object Patterns:
       val si2 = c.guard.fold(si1)(g => Typer.typedExpr(si1, g, Proto.ExpectedType(Typer.bool))(using ci)._1)
       val expect = pt.orExpect(first)
       val (si3, bodyType) = Typer.typedExpr(si2, c.body, expect)(using ci)
-      (si3.record(c, bodyType), first.orElse(Some(bodyType)))
+      (si3.record(c, bodyType), first.orElse(Some(bodyType).filter(si3.unifier.resolve(_) != Type.NeverType)))
     }
 
     /** Bodies were checked against an expected type already; report each mismatch once. */

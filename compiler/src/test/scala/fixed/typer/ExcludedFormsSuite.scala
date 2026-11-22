@@ -75,8 +75,10 @@ class ExcludedFormsSuite extends munit.FunSuite:
       "fn n(xs: List of u8) -> u64 = xs.length()\nfn b() -> u64 = n([])\nfn c() -> List of String = []\n" +
         "fn e() -> u64 =\n    let ys = []\n    n(ys)\nfn f(_x: A) -> List of A = []\nfn g() -> bool = [] == [1]\n" +
         "fn m(xs: List of List of u8) -> u64 = xs.length()\nfn i() -> u64 = m([[], [1]])\n" +
-        "data Box(xs: List of u8)\nfn j() -> u64 =\n    let _b = Box.Box([])\n    0\n"
+        "data Box(xs: List of u8)\nfn j() -> u64 =\n    let _b = Box.Box([])\n    0\n" +
+        "fn l() -> List of ! = []\nfn o() -> u64 = l().length()\n"
     assertEquals(diags(fixedBy), Nil)
+
     val open = "fn a() -> u64 = [].length()\nfn h() -> u64 = [[]].length()\n"
     val t029 = "cannot infer the element type of []; ascribe a type"
     assertEquals(diags(open), List(open.indexOf("[]"), open.indexOf("[[]]") + 1).map((DiagCode.T029, _, t029)))
@@ -131,3 +133,19 @@ class ExcludedFormsSuite extends munit.FunSuite:
       "fn e(_x: D of u8, _y: D of (u8, 1), _z: E of (1, u8), _b: is Between of u8) -> u64 = 1\n" +
       "data W of (A is Map of (u8, K)):\n    W(a: A)\nfn f(_w: W of u8, _p: (Maybe) of u8) -> u64 = 1\n"
     assertEquals(diags(decls + right), Nil)
+
+  test("§5.6: a branch, element or other value of type ! decides no type"):
+    /** A value of type `!` fits every type and fixes nothing: `x`, `z` and the elements of `ys` are
+      * `String`s, which `need` does not take.
+      */
+    val never = "fn need(n: u64) -> u64 = n\nfn p(c: bool) -> u64 =\n    let x = if c: unreachable else: \"s\"\n" +
+      "    let ys = [unreachable, \"t\"]\n    let z = match c:\n        true => unreachable\n        false => \"u\"\n" +
+      "    need(x) + need(z) + ys.fold(0, (acc, y) -> acc + need(y))\n"
+    val string = "expected u64, got String"
+    assertEquals(diags(never), List("x) +", "z) +", "y))").map(at => (DiagCode.T002, never.indexOf(at), string)))
+
+    /** A `!` that is not written as an argument of a type fixes no variable: `y` and `g`'s parameter stay free. */
+    val free = "fn need(n: u64) -> u64 = n\nfn takes(_f: ! -> u64) -> u64 = 0\nfn p(c: bool) -> u64 =\n" +
+      "    let f = (y) -> if c: need(unreachable + y) else: need(y)\n    let g = (y) -> y\n" +
+      "    let _a = takes(g)\n    f(\"s\") + need(g(\"t\"))\n"
+    assertEquals(diags(free).map(_._1), List(DiagCode.T002, DiagCode.T002))

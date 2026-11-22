@@ -165,7 +165,21 @@ final case class Unifier(
     * applied (`M of A`) names the same type.
     */
   private def sameHead(xs: List[Type], ys: List[Type], numeric: Type => Boolean): Solved =
-    if xs.size == ys.size then unifyAll(xs, ys, numeric) else if xs.isEmpty || ys.isEmpty then Right(this) else Left(())
+    if xs.size == ys.size then
+      xs.zip(ys).foldLeft[Solved](Right(this)) { case (u, (x, y)) => u.flatMap(_.argument(x, y, numeric)) }
+    else if xs.isEmpty || ys.isEmpty then Right(this)
+    else Left(())
+
+  /** `!` fits every type (`spec/type_system.md` §5.6), so it fixes no variable it meets, which a
+    * later use may still solve, but as an argument of a type (`List of !`) it is written, never the
+    * type of a value that diverges: there it fixes a free variable in the same place (`[]`). A
+    * literal's variable or a bounded one keeps its constraints.
+    */
+  private def argument(x: Type, y: Type, numeric: Type => Boolean): Solved =
+    (resolve(x), resolve(y)) match
+      case (Type.NeverType, Type.TypeVar(v)) if !constrained(v) => bind(v, Type.NeverType, numeric)
+      case (Type.TypeVar(v), Type.NeverType) if !constrained(v) => bind(v, Type.NeverType, numeric)
+      case _                                                    => unify(x, y, numeric)
 
   private def unifyShared(left: List[Type], right: List[Type], numeric: Type => Boolean): Solved =
     val pairs =

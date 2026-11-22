@@ -376,11 +376,15 @@ object Typer:
     val s1 = elems.foldLeft(s0)((si, e) => typedExpr(si, e, Proto.ExpectedType(elem))._1)
     (s1, Type.TypeRef(s1.symbols.prelude("List"), List(elem)))
 
-  /** `if c: a else: b` — `c` is `bool`; both branches meet the prototype (or the first branch's type). */
+  /** `if c: a else: b` — `c` is `bool`; both branches meet the prototype (or the first branch's type
+    * unless it is `!`, which fits any and decides none, §5.6).
+    */
   private def typedIf(s: TyperState, t: Trees.IfExpr, pt: Proto)(using Context): (TyperState, Type) =
     val (s1, _) = typedExpr(s, t.cond, Proto.ExpectedType(bool))
     val (s2, thenType) = typedExpr(s1, t.thenBranch, pt)
-    (typedExpr(s2, t.elseBranch, pt.orExpect(Some(thenType)))._1, pt.orElse(thenType))
+    val decided = Some(thenType).filter(s2.unifier.resolve(_) != Type.NeverType)
+    val (s3, elseType) = typedExpr(s2, t.elseBranch, pt.orExpect(decided))
+    (s3, pt.orElse(decided.getOrElse(elseType)))
 
   /** A lambda. Against an expected function type of the same arity, parameters take its parameter
     * types and the body its result type; otherwise they are fresh variables.
