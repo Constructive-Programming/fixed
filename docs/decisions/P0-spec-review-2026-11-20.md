@@ -191,6 +191,8 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
   - **Fixed** (`Typer.typedExpr`, `Patterns.bind`, `Namer.typeOf`; owner's decision, P6 fourth round, Rule 5.12): a tuple expression, pattern or type with three or more elements is `T031`. The parameter list of a function type and the arguments of `of` (also `cap of`) are lists and keep any length. Example 02's `binarySearch` keeps its state in a `data Search`, and the test program `long_tuples` became `triples`, on data types `Three` and `Four`; the backend's run-time table no longer has a case for other tuples.
 - The typer accepted `i128` and `u128` as types and as declared names.
   - **Fixed** (`Namer.reserved`; owner's decision, P6 fourth round, `spec/stdlib.md` §4.9): `T032` where one is written as a type (`Namer.typeOf`, `capBound`, a `satisfies` header) or declared (`Namer`'s declarations, `Patterns.bind`, lambda parameters, the parameters of a `satisfies` body). A name imported by `use` is reported at the `use`.
+- An empty list literal whose element type nothing fixed (`[].length()`) was accepted with an unsolved element type.
+  - **Fixed** (`Typer.emptyLists`; owner's decision, P6 fourth round, Rule 5.10, "Elements"): it is `T029` when the unit finishes, after literal defaults, unless the literal already has an error; a parameter, field, result or another element still fixes the type. The help names the ascription `[] is List of u8`, which does not parse yet: neither ascription (Rule 5.11) nor a list literal's choice point (Rule 5.10, case 3) is built. A declared `List of !` does not fix it (the unifier never binds a variable to `!`), so `fn f() -> List of ! = []` is `T029`.
 
 Found and not fixed:
 

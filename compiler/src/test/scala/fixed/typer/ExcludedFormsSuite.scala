@@ -4,7 +4,7 @@ import fixed.util.{DiagCode, SourceFile}
 import fixed.{CompilationUnit, Compiler}
 
 /** Forms the rules exclude, each with its own error: a tuple of more than two elements (`T031`), the
-  * reserved names `i128` and `u128` (`T032`).
+  * reserved names `i128` and `u128` (`T032`), an empty list literal of unknown element type (`T029`).
   */
 class ExcludedFormsSuite extends munit.FunSuite:
 
@@ -55,3 +55,20 @@ class ExcludedFormsSuite extends munit.FunSuite:
       diags(code).sortBy(_._2),
       at.map((s, n) => (DiagCode.T032, code.indexOf(s), s"$n is reserved; the widest integer type is i64")).sortBy(_._2)
     )
+
+  test("Rule 5.10: [] whose element type nothing fixes is T029; a parameter, field, result or element fixes it"):
+    val fixedBy =
+      "fn n(xs: List of u8) -> u64 = xs.length()\nfn b() -> u64 = n([])\nfn c() -> List of String = []\n" +
+        "fn e() -> u64 =\n    let ys = []\n    n(ys)\nfn f(_x: A) -> List of A = []\nfn g() -> bool = [] == [1]\n" +
+        "fn m(xs: List of List of u8) -> u64 = xs.length()\nfn i() -> u64 = m([[], [1]])\n" +
+        "data Box(xs: List of u8)\nfn j() -> u64 =\n    let _b = Box.Box([])\n    0\n"
+    assertEquals(diags(fixedBy), Nil)
+    val open = "fn a() -> u64 = [].length()\nfn h() -> u64 = [[]].length()\n"
+    val t029 = "cannot infer the element type of []; ascribe a type"
+    assertEquals(diags(open), List(open.indexOf("[]"), open.indexOf("[[]]") + 1).map((DiagCode.T029, _, t029)))
+    val unit = Compiler.compile(CompilationUnit(SourceFile.fromString("<unit>", open)))
+    assertEquals(unit.diagnostics.head.suggestion, Some("for example `[] is List of u8`"))
+
+    /** A literal that already has an error gets no second one. */
+    val mismatch = "fn k() -> u64 = []\n"
+    assertEquals(diags(mismatch).map(_._1), List(DiagCode.T002))

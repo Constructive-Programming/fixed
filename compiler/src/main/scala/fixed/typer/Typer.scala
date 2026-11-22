@@ -130,7 +130,7 @@ final case class TyperState(
       Satisfaction.discharge(si, value, bound, span)
     }
     val bounded = boundChecks.reverse.foldLeft(checked.copy(boundChecks = Nil))(Typer.requireBound(_, _, last = true))
-    val ranged = Typer.literalRanges(bounded)
+    val ranged = Typer.emptyLists(Typer.literalRanges(bounded))
     ranged.copy(diags = ranged.diags.reverse)
 
 object TyperState:
@@ -265,7 +265,7 @@ object Typer:
     val operands = negated.map(_._2.span).toSet
     val plain = trees.collect { case l: Trees.IntLit if !operands(l.span) => (l.span, l) }
     val literals = negated.map((at, l) => (at, -l.value, l)) ++ plain.map((at, l) => (at, l.value, l))
-    literals.sortBy((at, _, _) => (at.file.fold("")(_.path), at.start)).foldLeft(s) { case (si, (at, value, lit)) =>
+    literals.sortBy((at, _, _) => sourceOrder(at)).foldLeft(s) { case (si, (at, value, lit)) =>
       val integer = si.typeOf(lit).collect {
         case Type.PrimType(n) if n.matches("[iu](8|16|32|64)")               => (n, n)
         case Type.TypeRef(id, _) if si.symbols(id).kind == SymKind.TypeParam =>
@@ -278,6 +278,22 @@ object Typer:
         if value >= lo && value <= hi then si
         else si.error(DiagCode.T023, at, s"$value is out of the range of $named ($lo to $hi)")
       }
+    }
+
+  /** A sort key for spans: file, then offset. */
+  private def sourceOrder(at: Span): (String, Int) = (at.file.fold("")(_.path), at.start)
+
+  /** `T029` (Rule 5.10): an empty list literal whose element type nothing fixed, unless an error
+    * is already reported there.
+    */
+  private[typer] def emptyLists(s: TyperState): TyperState =
+    val empty = s.types.trees.collect { case l @ Trees.ListExpr(Nil, at) => (at, l) }
+    empty.sortBy((at, _) => sourceOrder(at)).foldLeft(s) { case (si, (at, l)) =>
+      si.typeOf(l) match
+        case Some(Type.TypeRef(_, List(Type.TypeVar(_)))) if !si.diags.exists(_.span == at) =>
+          val hint = Some("for example `[] is List of u8`")
+          si.error(DiagCode.T029, at, "cannot infer the element type of []; ascribe a type", hint)
+        case _ => si
     }
 
   /** Numeric literals are polymorphic (`spec/type_system.md`): a fresh `Numeric` variable defaulting to `default`. */
