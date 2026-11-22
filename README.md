@@ -308,6 +308,15 @@ Next: formal specification (Phase 1) and parser implementation (Phase 2).
 
 See [`docs/plans/implementation-plan.md`](docs/plans/implementation-plan.md) for the full roadmap.
 
+## Lean formalization
+
+[`formal/`](formal/README.md) contains a standalone Lean project proving type
+safety and empty-type consistency for an initial simply typed core, plus
+checker correctness, the quantity algebra, and abstract memory safety for frame
+reclamation, heap ownership, scoped borrows, and drop obligations. It does not yet
+verify the full language or Scala compiler. Run `cd formal && lake build` with
+elan installed.
+
 ## References
 
 - [Death of Data](https://degoes.net/articles/kill-data) — De Goes on eliminating premature type commitment

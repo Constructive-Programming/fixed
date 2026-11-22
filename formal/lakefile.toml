@@ -1,0 +1,6 @@
+name = "fixed-formal"
+version = "0.1.0"
+defaultTargets = ["Fixed"]
+
+[[lean_lib]]
+name = "Fixed"
