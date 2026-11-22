@@ -1,0 +1,30 @@
+// A small tree built, counted and dropped per step: depth 6 (127 cells), 20000 times.
+// Size: tree of depth 6, 20,000 times
+// Measures placement of a structure that does not outlive its step (frames, regions).
+use std.io.Console
+
+data Tree:
+    Leaf
+    Node(left: Tree, right: Tree)
+
+fn make(depth: u64) -> Tree =
+    Tree.unfold(depth, (d) ->
+        if d == 0:
+            Tree.Leaf
+        else:
+            Tree.Node(d - 1, d - 1)
+    )
+
+fn count(t: Tree) -> u64 =
+    t.fold(() -> 1, (l, r) -> l + r + 1)
+
+fn upto(n: u64) -> List of u64 =
+    List.unfold(0, (i) ->
+        if i >= n:
+            List.Nil
+        else:
+            List.Cons(i, i + 1)
+    )
+
+fn main() -> () with Console =
+    Console.printLine(upto(20000).fold(0, (acc, _) -> acc + count(make(6))).show())

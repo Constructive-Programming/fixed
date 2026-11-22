@@ -1,0 +1,77 @@
+// Data that holds no reference and fits 64 bits, at the edges where a value kept inside a slot goes
+// wrong: exactly 64 bits, one bit more, signed fields that are negative (sign extension), a bool and
+// a char beside numbers, a small value inside another, inside a list, behind a type parameter, in a
+// capability table, as a fold accumulator, compared and printed.
+use std.io.Console
+
+data Pair32:
+    Pair32(x: u32, y: u32)
+
+data Wide:
+    Wide(x: u64, y: u8)
+
+data Signed:
+    Signed(a: i8, b: i16, c: i32)
+
+data Mixed:
+    Mixed(flag: bool, letter: char, n: u16)
+
+data Inner:
+    Inner(v: Pair32)
+
+data Choice:
+    None
+    One(a: u8)
+    Two(a: u8, b: u8)
+
+data Cell of T:
+    Cell(v: T)
+
+fn id(x: T) -> T = x
+
+fn shown(x: T is Show) -> String = x.show()
+
+fn same(a: T is Eq, b: T) -> bool = a == b
+
+fn bump(p: Pair32) -> Pair32 = Pair32.Pair32(p.x + 1, p.y + 1)
+
+fn pairs(n: u32) -> List of Pair32 =
+    List.unfold(0, (i) ->
+        if i >= n:
+            List.Nil
+        else:
+            List.Cons(Pair32.Pair32(i, 4294967295), i + 1)
+    )
+
+fn size(c: Choice) -> u8 =
+    match c:
+        Choice.None => 0
+        Choice.One(a) => a
+        Choice.Two(a, b) => a + b
+
+fn main() -> () with Console =
+    let edge = Pair32.Pair32(4294967295, 0)
+    Console.printLine(edge.show())
+    Console.printLine(id(edge).show())
+    Console.printLine(shown(Pair32.Pair32(0, 4294967295)))
+    Console.printLine(Wide.Wide(18446744073709551615, 255).show())
+    Console.printLine(id(Wide.Wide(1, 2)).show())
+    let s = Signed.Signed(-128, -32768, -2147483648)
+    Console.printLine(s.show())
+    Console.printLine(id(s).show())
+    Console.printLine(shown(Signed.Signed(-1, -1, -1)))
+    Console.printLine(same(s, Signed.Signed(-128, -32768, -2147483648)).show())
+    Console.printLine(same(s, Signed.Signed(127, -32768, -2147483648)).show())
+    Console.printLine(Mixed.Mixed(true, 'z', 65535).show())
+    Console.printLine(id(Mixed.Mixed(false, 'a', 0)).show())
+    Console.printLine(Inner.Inner(edge).show())
+    Console.printLine(Cell.Cell(edge).show())
+    Console.printLine(id(Cell.Cell(s)).show())
+    Console.printLine((size(Choice.None) + size(Choice.One(200)) + size(id(Choice.Two(20, 30)))).show())
+    Console.printLine(shown(Choice.Two(255, 255)))
+    Console.printLine(same(Choice.One(1), Choice.Two(1, 0)).show())
+    let folded = pairs(1000).fold(Pair32.Pair32(0, 0), (acc, p) -> Pair32.Pair32(acc.x + p.x, p.y))
+    Console.printLine(folded.show())
+    Console.printLine(pairs(3).map((p) -> bump(Pair32.Pair32(p.x, 9))).show())
+    Console.printLine((edge == Pair32.Pair32(4294967295, 0)).show())
+    Console.printLine((edge == Pair32.Pair32(0, 4294967295)).show())

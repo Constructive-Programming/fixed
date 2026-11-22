@@ -12,7 +12,7 @@ cd "$(dirname "$0")/../.."
 runs=${1:-5}
 out=target/bench-runtime
 mkdir -p "$out"
-progs=(bintrees nat_loop list_pipeline records fail_chain shared_map fresh_map acc_loop)
+progs=(bintrees nat_loop list_pipeline records fail_chain shared_map fresh_map acc_loop points temps scratch_tree)
 mode=${MODE:-default}
 case $mode in
   default) flag="" ;;

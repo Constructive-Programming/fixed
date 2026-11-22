@@ -1,0 +1,22 @@
+Pair32(4294967295, 0)
+Pair32(4294967295, 0)
+Pair32(0, 4294967295)
+Wide(18446744073709551615, 255)
+Wide(1, 2)
+Signed(-128, -32768, -2147483648)
+Signed(-128, -32768, -2147483648)
+Signed(-1, -1, -1)
+true
+false
+Mixed(true, z, 65535)
+Mixed(false, a, 0)
+Inner(Pair32(4294967295, 0))
+Cell(Pair32(4294967295, 0))
+Cell(Signed(-128, -32768, -2147483648))
+250
+Two(255, 255)
+false
+Pair32(499500, 4294967295)
+Cons(Pair32(1, 10), Cons(Pair32(2, 10), Cons(Pair32(3, 10), Nil)))
+true
+false

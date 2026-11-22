@@ -1,0 +1,22 @@
+// Temporaries that never leave their step: a record of three u64 (too wide for a slot) built,
+// Size: 2,000,000 records of three u64, each used once
+// read and dropped once per step. Measures placement of values that do not escape (frames).
+use std.io.Console
+
+data Box3:
+    Box3(a: u64, b: u64, c: u64)
+
+fn make(i: u64) -> Box3 = Box3.Box3(i, i + 1, i % 5)
+
+fn volume(b: Box3) -> u64 = b.a + b.b * 2 + b.c
+
+fn upto(n: u64) -> List of u64 =
+    List.unfold(0, (i) ->
+        if i >= n:
+            List.Nil
+        else:
+            List.Cons(i, i + 1)
+    )
+
+fn main() -> () with Console =
+    Console.printLine(upto(2000000).fold(0, (acc, i) -> acc + volume(make(i))).show())

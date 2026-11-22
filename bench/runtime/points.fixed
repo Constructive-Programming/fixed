@@ -1,0 +1,33 @@
+// Small records without references: a list of 5000 points of two u32 (64 bits), each shifted,
+// Size: 5,000 points of two u32, 200 times
+// then weighed and summed; 200 times. Measures values that fit a slot (immediates).
+use std.io.Console
+
+data P:
+    P(x: u32, y: u32)
+
+fn points(n: u32) -> List of P =
+    List.unfold(0, (i) ->
+        if i >= n:
+            List.Nil
+        else:
+            List.Cons(P.P(i, i % 7), i + 1)
+    )
+
+fn shift(p: P) -> P = P.P(p.x + 1, p.y + 2)
+
+fn weight(p: P) -> u32 = p.x + p.y
+
+fn round() -> u32 =
+    points(5000).map((p) -> shift(p)).fold(0, (acc, p) -> acc + weight(p))
+
+fn upto(n: u64) -> List of u64 =
+    List.unfold(0, (i) ->
+        if i >= n:
+            List.Nil
+        else:
+            List.Cons(i, i + 1)
+    )
+
+fn main() -> () with Console =
+    Console.printLine(upto(200).fold(0, (acc, _) -> acc + round()).show())
