@@ -30,6 +30,19 @@ class ExcludedFormsSuite extends munit.FunSuite:
       List("(u64, u64, u64)", "(a, b, c)", "(1, 2, 3, 4)").map(at => (DiagCode.T031, tuples.indexOf(at), t031))
     )
 
+  test("Rule 5.12: doubled parentheses keep a tuple inside an `of` argument list or a parameter list"):
+    val triples = "data Box of A: B(v: A)\nfn k(_x: Box of ((u64, u64, u64))) -> u64 = 0\n" +
+      "fn m(_g: ((u64, u64, u64)) -> u64) -> u64 = 0\n"
+    val t031 = "a tuple has two elements; declare a data type with named fields"
+    assertEquals(
+      diags(triples),
+      List(triples.indexOf("(u64, u64, u64)"), triples.lastIndexOf("(u64, u64, u64)")).map((DiagCode.T031, _, t031))
+    )
+    val pairs = "data Box of A: B(v: A)\nfn f(g: ((u64, u64)) -> u64) -> u64 = g((1, 2))\n" +
+      "fn h(b: Box of ((u64, u64))) -> (u64, u64) = match b: B(v) => v\n" +
+      "fn d(x: ((u64, u64))) -> (u64, u64) = x\nfn u(g: (()) -> u64) -> u64 = g(())\n"
+    assertEquals(diags(pairs), Nil)
+
   test("stdlib §4.9: i128 and u128 are reserved, as a type and as a declared name (T032)"):
     val code =
       "fn a(_x: i128) -> u64 = 0\nfn u128() -> u64 = 0\nfn c(i128: u64) -> u64 = i128\ndata D:\n    D(u128: u64)\n" +

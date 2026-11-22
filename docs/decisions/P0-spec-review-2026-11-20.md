@@ -197,6 +197,8 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
   - **Fixed** (`Generated.derivedClone`, `Satisfied.cloneValue`, `Tables`, `Lower.resolved`; `spec/stdlib.md` §4.11): the derived `clone` copies, a fresh cell of the same variant with each field cloned, through a program's `satisfies Clone` body where a field's type has one; a scalar, `()` or `String` is the value itself; a type parameter goes through its table, whose entries are built for scalars, `String` and data types, also at run time. It takes one native frame per level of the value, so a list of about 260,000 cells overflows an 8 MiB stack (Rule 7.4.b.3 does not cover `clone`).
 - A `match` took only the indented block of cases, though `MatchCaseList` allows one case on the line (`match x: _ => 0` was `P001`); a `handle` likewise took only the indented block of clauses, though `HandlerClauseList` allows one.
   - **Fixed** (`DeclParsers.parseMemberList`, `Parser.expectLineEnd`): `match` and `handle` share the routine of Rule 7.1.b. The one case or clause ends with its line, before `else`, or before a `,` or closing bracket that an enclosing production waits for; a second one on the line, or one on a line indented deeper below it, is one `P001` that says the line holds one case (or clause).
+- The parser dropped doubled parentheses, so `Box of ((A, B, C))` was `Box` at three arguments and `((A, B, C)) -> D` a function of three parameters, and both escaped `T031` (a pair lost its tuple the same way: `((A, B)) -> D` took two parameters, and `(()) -> D` none).
+  - **Fixed** (`TypeParsers.listOfOne`): a tuple or `()` in its own parentheses inside the parentheses of an `of` argument list or of an arrow's parameters stays the one item of the list, so the typer's `T031` sees a tuple; `((A, B)) -> D` takes one parameter, a pair, and `(()) -> D` one of type `()`. `Box of (A, B, C)` and `(A, B, C) -> D` are lists, as before.
 
 Found and not fixed:
 
@@ -219,7 +221,7 @@ Found and not fixed:
 - Float literal patterns are `B005` (`spec/pattern_matching.md` §3.3 asks for bitwise equality; the backend has no bitcast), and so is a literal in a `let` pattern.
 - Input is not checked to be valid UTF-8, which `spec/stdlib.md` Rule S3.7 requires of every `String`: `Console.readLine` passes bytes through.
 - A program's `satisfies Ord` body on a scalar defines `compare`, but `<` and the table's `lt` and `le` stay built in, so they can disagree. Open, with the other built-in scalar members.
-- Two ways to write a tuple type of three elements still escape `T031`. The parser drops doubled parentheses, so `Box of ((A, B, C))` is `Box` at three arguments and `((A, B, C)) -> D` a function of three parameters (a pair loses its tuple the same way: `((A, B)) -> D` takes two parameters). And the number of `of` arguments is not checked, so `Tuple of (A, B, C)` and `List of (A, B)` are accepted; no value of such a type can be built.
+- The number of `of` arguments is not checked, so `Tuple of (A, B, C)` and `List of (A, B)` are accepted; no value of such a type can be built. This lets a tuple type of three elements escape `T031`.
 - The type written on a parameter of a `satisfies` body is never resolved: an unknown name there, or `i128` (`T032`), is not reported.
 - The `T010` hint for `clone` (`Typer.notCloned`) says "declare it: `List satisfies Clone`" also when the type declares it and only an argument lacks `Clone` (`[P.P(1)].clone()`).
 - Exhaustiveness is more conservative than §6.1 of `spec/pattern_matching.md`: `W(n, true)` / `W(n, false)` is `T020`.
