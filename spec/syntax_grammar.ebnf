@@ -3,9 +3,19 @@
    spec/syntax_grammar.ebnf
    ============================================================
 
-   Status:        DRAFT v0.4.15
+   Status:        DRAFT v0.4.16
    Extracted from: examples/01_basics.fixed .. examples/11_properties.fixed
    Last revised:  2026-11-21
+
+   Refinements in v0.4.16
+   ----------------------
+   Owner's decisions of 2026-11-21 and 2026-11-22, fourth round
+   (docs/decisions/P6): the name of a satisfaction follows `as`
+   (`SatisfactionName`, §9; `named` is withdrawn, and a `use` takes no
+   satisfaction-name tail); a refinement of a known type, `RefinedType`
+   (§10), also on the right of a type alias (`TypeAliasRhs`, §7); a
+   handler clause parameter may carry a type, `HandlerParam` (§13); a
+   `data` declaration without a body declares an empty type.
 
    Refinements in v0.4.15
    ----------------------
@@ -638,8 +648,12 @@ TypeAliasParams
     = "(" ValueParam ( "," ValueParam )* ","? ")"
     ;
 
+(* The second form names a refined type: `type Username = String is
+   minLength(3) + maxLength(32)` (spec/type_system.md Rule 6.3.0). The
+   first form covers the other spelling, `String + minLength(3)`. *)
 TypeAliasRhs
     = CapBound ( "+" CapBound )*
+    | ( UPPER_IDENT | PrimitiveType | "(" TypeExpr ")" ) "is" RefinementCall ( "+" RefinementCall )*
     ;
 
 
