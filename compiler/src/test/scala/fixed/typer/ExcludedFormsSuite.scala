@@ -3,7 +3,9 @@ package fixed.typer
 import fixed.util.{DiagCode, SourceFile}
 import fixed.{CompilationUnit, Compiler}
 
-/** Forms the rules exclude, each with its own error: a tuple of more than two elements (`T031`). */
+/** Forms the rules exclude, each with its own error: a tuple of more than two elements (`T031`), the
+  * reserved names `i128` and `u128` (`T032`).
+  */
 class ExcludedFormsSuite extends munit.FunSuite:
 
   private def diags(code: String): List[(DiagCode, Int, String)] =
@@ -26,4 +28,30 @@ class ExcludedFormsSuite extends munit.FunSuite:
     assertEquals(
       diags(tuples),
       List("(u64, u64, u64)", "(a, b, c)", "(1, 2, 3, 4)").map(at => (DiagCode.T031, tuples.indexOf(at), t031))
+    )
+
+  test("stdlib §4.9: i128 and u128 are reserved, as a type and as a declared name (T032)"):
+    val code =
+      "fn a(_x: i128) -> u64 = 0\nfn u128() -> u64 = 0\nfn c(i128: u64) -> u64 = i128\ndata D:\n    D(u128: u64)\n" +
+        "fn d() -> u64 =\n    let u128 = 3\n    let f = (i128) -> i128 + 1\n    f(u128)\n" +
+        "fn e(x: u64) -> u64 =\n    fn i128() -> u64 = 1\n    match x:\n        u128 => u128 + i128()\n" +
+        "fn g(_y: is u128) -> u64 = 0\nD satisfies Eq:\n    fn eq(i128: D) = true\nu128 satisfies Show:\n    fn show = \"\"\n"
+
+    /** A declared function is reported at its `fn`, a `satisfies` declaration at its type's name. */
+    val at = List(
+      "i128) -> u64" -> "i128",
+      "fn u128" -> "u128",
+      "i128: u64" -> "i128",
+      "u128: u64" -> "u128",
+      "u128 = 3" -> "u128",
+      "i128) -> i128" -> "i128",
+      "fn i128" -> "i128",
+      "u128 =>" -> "u128",
+      "u128) -> u64" -> "u128",
+      "i128: D" -> "i128",
+      "u128 satisfies" -> "u128"
+    )
+    assertEquals(
+      diags(code).sortBy(_._2),
+      at.map((s, n) => (DiagCode.T032, code.indexOf(s), s"$n is reserved; the widest integer type is i64")).sortBy(_._2)
     )

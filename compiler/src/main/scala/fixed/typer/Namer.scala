@@ -18,6 +18,10 @@ object Namer:
   /** `T031` (Rule 5.12): a tuple expression, pattern or type with more than two elements. */
   private[typer] val tupleSize = "a tuple has two elements; declare a data type with named fields"
 
+  /** `T032` (`spec/stdlib.md` §4.9): the names of the 128-bit integer types are reserved. */
+  private[typer] def reserved(name: String): Option[String] =
+    Option.when(name == "i128" || name == "u128")(s"$name is reserved; the widest integer type is i64")
+
   /** Index a compilation unit against the stdlib: its symbol table (with the final top-level
     * scope) and the Namer's diagnostics, in source order. The prelude's declarations are in scope
     * everywhere; a stdlib module's (`std.io`) only through `use`.
@@ -87,7 +91,7 @@ object Namer:
   ):
     def enter(name: String, kind: SymKind, info: Type, span: Span): (Ctx, SymbolId) =
       val (t, id) = table.enter(name, owner, kind, info, span)
-      (copy(table = t), id)
+      (copy(table = t).reservedName(name, span), id)
 
     def bind(name: String, id: SymbolId): Ctx = copy(frames = frames.head.updated(name, id) :: frames.tail)
 
@@ -108,6 +112,8 @@ object Namer:
 
     def error(code: DiagCode, span: Span, message: String): Ctx =
       copy(diags = Diagnostic(Severity.Error, code, span, message) :: diags)
+
+    def reservedName(name: String, span: Span): Ctx = reserved(name).fold(this)(error(DiagCode.T032, span, _))
 
     /** Run `f` in a fresh lexical frame owned by `owner`; keep its symbols and diagnostics, drop its bindings. */
     def nested[A](owner: SymbolId)(f: Ctx => (Ctx, A)): (Ctx, A) =
@@ -156,8 +162,8 @@ object Namer:
   private def typeDecl(c: Ctx, tree: Tree, id: SymbolId): Ctx =
     val (c1, info) = c.nested(id) { ci =>
       tree match
-        case Trees.SatisfiesDecl(typeName, capRef, mappings, _) =>
-          val (ci1, cap) = capBound(ci, capRef)
+        case Trees.SatisfiesDecl(typeName, capRef, mappings, span) =>
+          val (ci1, cap) = capBound(ci.reservedName(typeName, span), capRef)
 
           /** The satisfying type as this scope resolves it: a program's own `data Order` is not the prelude's. */
           val data = ci1.lookup(typeName).filter(ci1.table(_).kind == SymKind.Data)
@@ -292,6 +298,8 @@ object Namer:
   private def typeOf(c: Ctx, tree: Tree): (Ctx, Type) =
     tree match
       /** A lower-case name is a primitive, or a value parameter forwarded as an argument (`Range of (lo, N)`). */
+      case Trees.PrimitiveType(name, span) if reserved(name).isDefined =>
+        (c.reservedName(name, span), Type.NeverType)
       case Trees.PrimitiveType(name, _) =>
         val param =
           c.lookup(name).filter(id => c.table(id).kind == SymKind.ValueParam && !Satisfaction.primitives(name))
@@ -383,8 +391,8 @@ object Namer:
       case Trees.RefinementCall(name, args, span) =>
         val (c1, terms) = mapAccum(c, args)(symbolicTerm)
         resolve(c1, name, span, "capability generator")(Type.RefinementType(_, terms.flatten))
-      case Trees.PrimitiveType(name, _) => (c, Some(Type.PrimType(name)))
-      case other                        =>
+      case Trees.PrimitiveType(name, span) => (c.reservedName(name, span), Some(Type.PrimType(name)))
+      case other                           =>
         (c.error(DiagCode.T005, other.span, "not a capability bound"), None)
 
   /** A refinement-call argument as a symbolic term. */

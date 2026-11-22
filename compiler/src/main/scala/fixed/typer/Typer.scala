@@ -96,6 +96,10 @@ final case class TyperState(
   def report(more: List[Diagnostic]): TyperState =
     copy(diags = more.reverse ++ diags, errors = errors + more.count(_.isError))
 
+  /** `T032` where `name`, declared at `span`, is reserved. */
+  def reservedName(name: String, span: Span): TyperState =
+    Namer.reserved(name).fold(this)(error(DiagCode.T032, span, _))
+
   def warn(code: DiagCode, span: Span, message: String): TyperState =
     copy(diags = Diagnostic(Severity.Warning, code, span, message) :: diags)
 
@@ -384,7 +388,11 @@ object Typer:
           unify(si1.copy(symbols = table).report(diags), p.span, annotated, declared)
         }
         val (table, id) = si2.symbols.enter(p.name, ci.owner, SymKind.Local, declared, p.span)
-        (si2.copy(symbols = table).record(p, declared), ci.bind(p.name, id), acc :+ declared)
+        (
+          si2.reservedName(p.name, p.span).copy(symbols = table).record(p, declared),
+          ci.bind(p.name, id),
+          acc :+ declared
+        )
     }
     val bodyProto = expectedResult.fold(Proto.Wildcard)(Proto.ExpectedType(_))
     val (s2, bodyType, row) = Effects.isolated(s1)(typedExpr(_, t.body, bodyProto)(using inner))

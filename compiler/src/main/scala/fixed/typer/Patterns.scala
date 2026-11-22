@@ -17,7 +17,7 @@ object Patterns:
       case Trees.WildcardPat(_)        => (s.record(pat, t), ctx)
       case Trees.BinderPat(name, span) =>
         val (table, id) = s.symbols.enter(name, ctx.owner, SymKind.Local, t, span)
-        (s.copy(symbols = table).record(pat, t), ctx.bind(name, id))
+        (s.reservedName(name, span).copy(symbols = table).record(pat, t), ctx.bind(name, id))
       case Trees.LiteralPat(value, _)  => (Typer.typedExpr(s, value, Proto.ExpectedType(t))._1.record(pat, t), ctx)
       case Trees.TuplePat(elems, span) =>
         val (s1, vars) = s.freshVars(elems.size)

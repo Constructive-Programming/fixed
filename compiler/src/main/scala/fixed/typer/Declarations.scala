@@ -177,7 +177,8 @@ object Declarations:
           case None    => si.error(DiagCode.T014, fn.span, s"${si.symbols(cap).name} has no member ${fn.name}")
           case Some(e) =>
             val sub = Members.Subst(Members.Subst.of(Nil, Nil), Set(e.cap), Some(self), part)
-            memberBody(si, fn, e.member, sub, cap, Nil, Option.when(kind == SymKind.Method)(self))
+            val si1 = fn.params.foldLeft(si)((sj, p) => sj.reservedName(p.name, p.span))
+            memberBody(si1, fn, e.member, sub, cap, Nil, Option.when(kind == SymKind.Method)(self))
       }
     }
 
