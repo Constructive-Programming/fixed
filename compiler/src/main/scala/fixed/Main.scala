@@ -31,13 +31,14 @@ object Main:
   def main(args: Array[String]): Unit =
     val (steps, others) = proverSteps(args.toList.filterNot(_ == "--"))
     val (mode, rest) = modeOf(others)
-    def load(file: String) = PropsLock.record(Compiler.compile(CompilationUnit(read(file), proverSteps = steps)))
+    def load(src: SourceFile) = PropsLock.record(Compiler.compile(CompilationUnit(src, proverSteps = steps)))
+    def compiled(file: String) = load(read(file))
     rest match
-      case "compile" :: file :: "-o" :: out :: Nil => sys.exit(backend(load(file), mode)(write(Path.of(out), _)))
+      case "compile" :: file :: "-o" :: out :: Nil => sys.exit(backend(compiled(file), mode)(write(Path.of(out), _)))
       case "compile" :: file :: "--explain-memory" :: format if format == Nil || format == List("--format", "json") =>
-        sys.exit(explain(load(file), json = format.nonEmpty, mode))
+        sys.exit(explain(compiled(file), json = format.nonEmpty, mode))
       case "ship" :: file :: "-o" :: out :: Nil =>
-        sys.exit(backend(load(file), mode)(ir =>
+        sys.exit(backend(compiled(file), mode)(ir =>
           Backend.ship(ir, Path.of(out)).fold(d => { print(file, d); exitCode(List(d)) }, _ => 0)
         ))
       case Nil | ("compile" | "ship") :: _ =>
@@ -48,7 +49,7 @@ object Main:
         )
         sys.exit(2)
       case paths =>
-        val units = paths.map(load)
+        val units = paths.map(read).map(load)
         units.foreach(report)
         sys.exit(exitCode(units.flatMap(_.diagnostics)))
 
@@ -69,8 +70,9 @@ object Main:
 
   /** The static prover's budget `args` ask for (`--prover-steps=N`, the default otherwise), and the other arguments. */
   private[fixed] def proverSteps(args: List[String]): (Long, List[String]) =
-    val flag = args.find(a => a.startsWith("--prover-steps=") && a.drop(15).toLongOption.exists(_ >= 0))
-    (flag.fold(Prover.defaultBudget)(_.drop(15).toLong), args.filterNot(flag.contains))
+    val flag = "--prover-steps="
+    val asked = args.find(a => a.startsWith(flag) && a.stripPrefix(flag).toLongOption.exists(_ >= 0))
+    (asked.fold(Prover.defaultBudget)(_.stripPrefix(flag).toLong), args.filterNot(asked.contains))
 
   /** Lower the checked `unit` to LLVM IR and hand the IR to `use`; on an error, its [[exitCode]]. An
     * output that `use` cannot write is 18.
@@ -129,8 +131,9 @@ object Main:
 
   /** The static prover's count (`spec/properties.md` Rule P7.1, step 3); a refuted prop is an error, reported apart. */
   private[fixed] def props(unit: CompilationUnit): String =
-    val proved = unit.props.map(_.result).count { case _: Result.Proved => true; case _ => false }
-    val open = unit.props.map(_.result).count { case _: Result.Open => true; case _ => false }
+    val results = unit.props.map(_.result)
+    val proved = results.count { case _: Result.Proved => true; case _ => false }
+    val open = results.count { case _: Result.Open => true; case _ => false }
     s"props: $proved proved, $open open"
 
   private def summary(unit: CompilationUnit): String =

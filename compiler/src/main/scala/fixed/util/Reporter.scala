@@ -4,8 +4,9 @@ package fixed.util
 enum Severity:
   case Error, Warning, Info
 
-/** Diagnostic codes. The case name is the rendered code. `E*`: lexical
-  * (scanner), and `E102`, a prop the static prover refutes; `P*`: syntactic (parser); `T*`: typer; `B*`: backend
+/** Diagnostic codes. The case name is the rendered code. `E*`: lexical (scanner) and a few later
+  * checks (`E072`; `E102`, a prop the static prover refutes; `E110`); `P*`: syntactic (parser);
+  * `T*`: typer; `B*`: backend
   * (`docs/plans/phase-4.0-backend-slice.md` §5).
   */
 enum DiagCode:
@@ -28,8 +29,8 @@ enum DiagCode:
     case T011                                                                                            => 7
     case T009 | T015 | T016 | T018 | T019                                                                => 8
     case T020                                                                                            => 9
-    case E072                                                                                            => 12
     case E102                                                                                            => 11
+    case E072                                                                                            => 12
     case E110                                                                                            => 14
     case B004                                                                                            => 18
     case T005 | B001 | B002 | B003 | B005                                                                => 99
