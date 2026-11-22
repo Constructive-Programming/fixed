@@ -173,3 +173,9 @@ class SatisfactionSuite extends munit.FunSuite:
         (DiagCode.T001, bad.indexOf("x.lt"))
       )
     )
+
+  test("Rule 7.4.c: map is found with no Functor declaration, beside another capability's map"):
+    val box = "data Box of A:\n    Box(v: A)\nfn f(b: Box of u64) -> Box of bool = b.map((v) -> v == 1)\n"
+    val mappy = "cap Mappy:\n    fn map(n: u64) -> u64\nBox satisfies Mappy:\n    fn map(n: u64) -> u64 = n\n"
+    assertEquals(typedUnit(box).diags, Nil)
+    assertEquals(typedUnit(box + mappy).diags, Nil)

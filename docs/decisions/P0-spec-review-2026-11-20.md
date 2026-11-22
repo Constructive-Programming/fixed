@@ -185,6 +185,8 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
   - **Fixed** (`DeclParsers.parseMemberList`, Rule 7.1.b): the four bodies take an indented block or exactly one member on the line; a second member, on the line or indented below it, is one `P001`.
 - `data Metres` with no body, which the grammar allows, was `P013`.
   - **Fixed** (`DeclParsers.parseDataDecl`, `EmitLLVM`, Rule 7.1.a): it declares a type with no variant. No expression builds one (`T001`); a `match` on one, and its derived `show` and `==`, lower to a switch with no case, emitted as `unreachable`. `fold` is not derived for it (`T001`).
+- Derived `Functor` needed a declaration (found by the documentation pass of 2026-11-21): the compiler gave `map` only after `T satisfies Functor`.
+  - **Fixed** (`Members.candidates`; owner's decision, P6 fourth round, Rule 7.4.c): a data type whose shape derives `Functor` (`Members.functor`) has `map` without a declaration, beside the members of the capabilities it declares; where the shape does not allow it, `map` is `T001` with the hint of `Members.notFunctor` (the blocking field, or the bound). A program that writes `T satisfies Functor` still compiles.
 
 Found and not fixed:
 
@@ -232,7 +234,6 @@ Limits and gaps of the first implementation, against the spec:
 - A result is treated as caller-chosen only where every returned value already has the result's slot form; functions polymorphic only in their result are compiled as instances. The rule this was measured against is replaced by P6 D2 (`compilation_model.md` Rule CM4.5); the compiler still implements the old split.
 - See `spec/compilation_model.md` OQ-CM10 to OQ-CM12. **Resolved:** closed by P6 D15.
 - Found by the documentation pass of 2026-11-21 (samples in the README and on the site), not fixed:
-  - Derived `Functor` needs a declaration. `spec/type_system.md` Rule 7.4.c derives it with none; the compiler gives `map` only after `T satisfies Functor`. The owner confirmed the rule (P6, fourth round): this is a fault of the compiler.
   - `clone` on a type with `Box satisfies Clone` passes the typer and is `B005` in the backend.
   - `spec/type_system.md` Rule 6.3.0 writes `age: u8 is between(0, 150)`; the grammar allows only an upper-case name before `is`. Rule 6.3.3 admits only constant arguments to a capability generator, while Rule 6.3.0 passes parameters, and its text on totality predates `Diverge`. For the owner.
   - `spec/quantities.md` §10.1 still shows `fibIter`, which is `T027`.

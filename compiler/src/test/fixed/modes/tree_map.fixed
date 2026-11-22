@@ -1,11 +1,10 @@
-// The derived map of a tree whose element is a tree, at known arguments and generic.
+// The derived map of a tree whose element is a tree, at known arguments and generic, with no
+// `satisfies Functor` declaration (Rule 7.4.c).
 use std.io.Console
 
 data Tree of A:
     Leaf
     Node(left: Tree of A, value: A, right: Tree of A)
-
-Tree satisfies Functor
 
 fn leaf1(x: u64) -> Tree of u64 = Tree.Node(Tree.Leaf, x, Tree.Leaf)
 

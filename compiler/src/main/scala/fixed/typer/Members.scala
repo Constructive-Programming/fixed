@@ -176,8 +176,11 @@ object Members:
         val d = s.symbols(id)
         d.kind match
           case SymKind.Data =>
+            /** Rule 7.4.c: a data type whose shape derives `Functor` has it without a declaration. */
+            val derivedFunctor =
+              s.symbols.prelude.get("Functor").filter(_ => functor(s.symbols, id)).map(Type.CapRef(_, Nil))
             field(s, id, args, name).toList ++
-              capMember(s, s.symbols.satisfactionsOf(t), t, name) ++
+              capMember(s, (s.symbols.satisfactionsOf(t) ++ derivedFunctor).distinct, t, name) ++
               Option.when((name == "fold" || name == "para") && s.symbols.variantsOf(id).nonEmpty) {
                 val para = name == "para"
                 Candidate(Resolution.DerivedFold(id, para), () => derivedFold(s, id, args, para))
