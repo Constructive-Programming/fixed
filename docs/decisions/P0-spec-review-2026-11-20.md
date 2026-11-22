@@ -201,6 +201,8 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
   - **Fixed** (`TypeParsers.listOfOne`): a tuple or `()` in its own parentheses inside the parentheses of an `of` argument list or of an arrow's parameters stays the one item of the list, so the typer's `T031` sees a tuple; `((A, B)) -> D` takes one parameter, a pair, and `(()) -> D` one of type `()`. `Box of (A, B, C)` and `(A, B, C) -> D` are lists, as before.
 - Since `data X` with no body is legal (Rule 7.1.a), `data X = A | B` lost its `P013` and got a top-level `P002` and follow-on errors, and `data X { … }` a `P002`. A declaration did not have to end with its line: `data Metres data Other: A` and `cap Locked data X: A` were accepted.
   - **Fixed** (`DeclParsers.parseDataDecl`, `Parser.parseCompilationUnit`): `=` or `{` after `data X` is one `P013` that shows `data X: A` and `data X(field: T, ...)`, and the rest of the declaration is skipped. A top-level declaration that parsed without error must end with its line (`Parser.expectLineEnd`); what follows it on the line, or on lines indented below it, is one `P001`.
+- The number of `of` arguments was not checked: `Tuple of (A, B, C)` and `List of (A, B)` were accepted, and no value of such a type can be built.
+  - **Fixed** (`Satisfaction.arity`, `SymbolTable.arityOf`): `T006` at the written type, with the number taken and the number given. A data type or effect takes the parameters of its `of` clause, type and value, where trailing value parameters with a default may be left out (Rule 7.3.a); a capability takes at most its parameters (Rule 5.4.b), fewer written directly as through an alias (Rule 5.8), and one with no `of` clause its implicit `Part` (Rule 5.3); an alias distributes its arguments, each capability taking what it declares. A type parameter applied to arguments (`F of A`) is not checked, nor is the number of arguments of `Self of` (Rule 5.4.b): the Namer keeps only the first.
 
 Found and not fixed:
 
@@ -223,8 +225,6 @@ Found and not fixed:
 - Float literal patterns are `B005` (`spec/pattern_matching.md` §3.3 asks for bitwise equality; the backend has no bitcast), and so is a literal in a `let` pattern.
 - Input is not checked to be valid UTF-8, which `spec/stdlib.md` Rule S3.7 requires of every `String`: `Console.readLine` passes bytes through.
 - A program's `satisfies Ord` body on a scalar defines `compare`, but `<` and the table's `lt` and `le` stay built in, so they can disagree. Open, with the other built-in scalar members.
-- `spec/syntax_grammar.ebnf` `CompilationUnit = ( NEWLINE | TopItem )*`, read literally, admits two declarations with no NEWLINE between them (`data Metres data Other: A`); the layout rules imply that a declaration ends with its line, and the parser now requires it. The production could say so: `NEWLINE* ( TopItem ( NEWLINE+ TopItem )* NEWLINE* )?`. For the owner.
-- The number of `of` arguments is not checked, so `Tuple of (A, B, C)` and `List of (A, B)` are accepted; no value of such a type can be built. This lets a tuple type of three elements escape `T031`.
 - The type written on a parameter of a `satisfies` body is never resolved: an unknown name there, or `i128` (`T032`), is not reported.
 - The `T010` hint for `clone` (`Typer.notCloned`) says "declare it: `List satisfies Clone`" also when the type declares it and only an argument lacks `Clone` (`[P.P(1)].clone()`).
 - Exhaustiveness is more conservative than §6.1 of `spec/pattern_matching.md`: `W(n, true)` / `W(n, false)` is `T020`.

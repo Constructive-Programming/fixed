@@ -108,19 +108,45 @@ object Satisfaction:
       case named                  => s.tryUnify(named, value).isDefined
     }
 
-  /** `T010`: type `t`, written at `span` as `D of args` (a data type, effect, capability or alias of
-    * capabilities), has an argument that lacks a bound of `D`'s type parameter at its position,
-    * with the other parameters in the bound replaced by their arguments. A type parameter as an
-    * argument has the bounds it was declared with (`data W of A: W(b: Box of A)` needs
-    * `A is Numeric` when `Box` does). Value arguments, literals or value parameters, are skipped.
+  /** `T006`: type `t`, written at `span` as `D of args` (a data type, effect, capability or alias of
+    * capabilities), gives `D` a number of arguments it does not take ([[arity]]). Else `T010`: it
+    * has an argument that lacks a bound of `D`'s type parameter at its position, with the other
+    * parameters in the bound replaced by their arguments. A type parameter as an argument has the
+    * bounds it was declared with (`data W of A: W(b: Box of A)` needs `A is Numeric` when `Box`
+    * does). Value arguments, literals or value parameters, are skipped.
     */
   def checkWritten(s: TyperState, t: Type, span: Span): TyperState =
     t match
+      /** Rule 5.8: an alias's arguments are distributed, each capability taking what it declares. */
       case Type.TypeRef(head, _) if s.symbols(head).kind == SymKind.TypeAlias =>
-        Members.expandAliases(s.symbols, List(t)).foldLeft(s)(checkWritten(_, _, span))
-      case Type.TypeRef(head, args) => arguments(s, t, head, args, span)
-      case Type.CapRef(head, args)  => arguments(s, t, head, args, span)
-      case _                        => s
+        Members.expandAliases(s.symbols, List(t)).foldLeft(s) {
+          case (si, d @ Applied(h, args)) => arguments(si, d, h, args, span)
+          case (si, _)                    => si
+        }
+      case Applied(head, args) =>
+        arity(s, head, args.size).fold(arguments(s, t, head, args, span))(s.error(DiagCode.T006, span, _))
+      case _ => s
+
+  /** `D of args`: a data type, effect or capability applied to its arguments. */
+  private object Applied:
+    def unapply(t: Type): Option[(SymbolId, List[Type])] = PartialFunction.condOpt(t) {
+      case Type.TypeRef(head, args) => (head, args)
+      case Type.CapRef(head, args)  => (head, args)
+    }
+
+  /** Why `count` arguments do not fit `head`'s `of` clause. A data type or effect takes its `of`
+    * parameters, type and value, where trailing value parameters with a default may be left out
+    * (Rule 7.3.a). A capability takes at most its parameters (Rule 5.4.b), fewer written directly
+    * as through an alias (Rule 5.8), and one with no `of` clause its implicit `Part` (Rule 5.3).
+    * A type parameter applied to arguments (`F of A`) is not checked.
+    */
+  private def arity(s: TyperState, head: SymbolId, count: Int): Option[String] =
+    val d = s.symbols(head)
+    s.symbols.arityOf(head).flatMap { (fewest, declared) =>
+      val (least, most) = if d.kind == SymKind.Cap then (0, declared.max(1)) else (fewest, declared)
+      lazy val takes = if least == most then s"$most" else if least == 0 then s"at most $most" else s"$least to $most"
+      Option.when(count < least || count > most)(s"${d.name} takes $takes argument(s), given $count")
+    }
 
   private def arguments(s: TyperState, t: Type, head: SymbolId, args: List[Type], span: Span): TyperState =
     val params = s.symbols.typeParamsOf(head)

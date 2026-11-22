@@ -57,7 +57,8 @@ final case class SymbolTable(
     constructors: Map[(Int, String), List[(SymbolId, String)]],
     defaulted: scala.collection.immutable.BitSet,
     written: List[(Type, Span)] = Nil,
-    modules: Map[String, Map[String, SymbolId]] = Map.empty
+    modules: Map[String, Map[String, SymbolId]] = Map.empty,
+    arities: IntMap[(Int, Int)] = IntMap.empty
 ):
 
   def apply(id: SymbolId): Denotation = entries(id.toInt - SymbolTable.firstId)
@@ -100,6 +101,13 @@ final case class SymbolTable(
 
   /** Record applied type `t`, written at `span`. */
   def recordWritten(t: Type, span: Span): SymbolTable = copy(written = (t, span) :: written)
+
+  /** Record that declaration `id`'s `of` clause takes `least` to `most` arguments. */
+  def recordArity(id: SymbolId, least: Int, most: Int): SymbolTable =
+    copy(arities = arities.updated(id.toInt, (least, most)))
+
+  /** The fewest and most arguments declaration `id`'s `of` clause takes, if it is a data type, effect or capability. */
+  def arityOf(id: SymbolId): Option[(Int, Int)] = arities.get(id.toInt)
 
   /** Record that field (or parameter) `id` declares a default value. */
   def markDefaulted(id: SymbolId): SymbolTable = copy(defaulted = defaulted.incl(id.toInt))

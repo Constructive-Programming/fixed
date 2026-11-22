@@ -4,7 +4,8 @@ import fixed.util.{DiagCode, SourceFile}
 import fixed.{CompilationUnit, Compiler}
 
 /** Forms the rules exclude, each with its own error: a tuple of more than two elements (`T031`), the
-  * reserved names `i128` and `u128` (`T032`), an empty list literal of unknown element type (`T029`).
+  * reserved names `i128` and `u128` (`T032`), an empty list literal of unknown element type (`T029`),
+  * a type applied to a number of arguments it does not take (`T006`).
   */
 class ExcludedFormsSuite extends munit.FunSuite:
 
@@ -85,3 +86,48 @@ class ExcludedFormsSuite extends munit.FunSuite:
     /** A literal that already has an error gets no second one. */
     val mismatch = "fn k() -> u64 = []\n"
     assertEquals(diags(mismatch).map(_._1), List(DiagCode.T002))
+
+  test(
+    "T006: a data type or effect takes the arguments it declares; a capability at most those (Rules 5.3, 5.4.b, 7.3.a)"
+  ):
+    val decls = "effect Log of A:\n    fn log(a: A) -> ()\ndata V of (n: u64, A):\n    V(a: A)\n" +
+      "data D of (A, lo: u64 = 0):\n    D(a: A)\ndata E of (lo: u64 = 0, A):\n    E(a: A)\n" +
+      "cap Between(min: N is Ord, max: N) of N:\n    fn lo -> N\n"
+    val wrong = List(
+      "fn g(_t: Tuple of (u8, u8, u8)) -> u64 = 1\n" -> ("Tuple of (u8, u8, u8)", "Tuple takes 2 argument(s), given 3"),
+      "fn g(_t: List of (u8, u8)) -> u64 = 1\n" -> ("List of (u8, u8)", "List takes 1 argument(s), given 2"),
+      "fn g(_t: Maybe of List of (u8, u8)) -> u64 = 1\n" -> ("List of (u8, u8)", "List takes 1 argument(s), given 2"),
+      "fn g(_t: List) -> u64 = 1\n" -> ("List)", "List takes 1 argument(s), given 0"),
+      "fn g(_t: V of u8) -> u64 = 1\n" -> ("V of u8", "V takes 2 argument(s), given 1"),
+      "fn g() -> u64 with Log of (u8, u8) = 1\n" -> ("Log of (u8, u8)", "Log takes 1 argument(s), given 2"),
+      "fn g(_x: is Sized of (u8, u64, u8)) -> u64 = 1\n" ->
+        ("Sized of (u8, u64, u8)", "Sized takes at most 2 argument(s), given 3"),
+      "fn g(_x: is Show of (u8, u8)) -> u64 = 1\n" -> ("Show of (u8, u8)", "Show takes at most 1 argument(s), given 2"),
+      "fn g(_x: is Between of (u8, u8)) -> u64 = 1\n" ->
+        ("Between of (u8, u8)", "Between takes at most 1 argument(s), given 2"),
+      "fn g(_x: D) -> u64 = 1\n" -> ("D)", "D takes 1 to 2 argument(s), given 0"),
+      "fn g(_x: D of (u8, 1, 2)) -> u64 = 1\n" -> ("D of (u8, 1, 2)", "D takes 1 to 2 argument(s), given 3"),
+      "fn g(_x: E of u8) -> u64 = 1\n" -> ("E of u8", "E takes 2 argument(s), given 1"),
+      "fn g() -> u64 with Log = 1\n" -> ("Log =", "Log takes 1 argument(s), given 0"),
+      "data Num of (A is Numeric):\n    Num(a: A)\nfn g(_x: Num of (String, u8)) -> u64 = 1\n" ->
+        ("Num of (String, u8)", "Num takes 1 argument(s), given 2")
+    )
+
+    /** Only the `T006`: an effect declared and not performed is also `T017`, a warning. */
+    wrong.foreach { case (code, (at, message)) =>
+      assertEquals(
+        diags(decls + code).filter(_._1 != DiagCode.T017),
+        List((DiagCode.T006, (decls + code).indexOf(at), message)),
+        code
+      )
+    }
+
+    /** A trailing value parameter with a default may be left out; a capability takes fewer
+      * (`Sized of u8`), one with no `of` its `Part`; an alias distributes, each capability taking
+      * what it declares. A variable named only in a parameter's bound (`K`) is not a parameter.
+      */
+    val right = "fn a(_t: Tuple of (u8, u8), _v: V of (3, u8)) -> u64 = 1\nfn b(_x: is Sized of u8) -> u64 = 1\n" +
+      "fn c(_x: is Folding of u64) -> u64 = 1\ntype SS = Sized + Show\nfn d(_x: is SS of (u8, u64, u8)) -> u64 = 1\n" +
+      "fn e(_x: D of u8, _y: D of (u8, 1), _z: E of (1, u8), _b: is Between of u8) -> u64 = 1\n" +
+      "data W of (A is Map of (u8, K)):\n    W(a: A)\nfn f(_w: W of u8, _p: (Maybe) of u8) -> u64 = 1\n"
+    assertEquals(diags(decls + right), Nil)

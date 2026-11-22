@@ -293,7 +293,13 @@ object Namer:
           val (ci1, t) = typeOf(ci, other)
           (ci1, Some(t))
     }
-    (c1, ts.flatten)
+
+    /** Rule 7.3.a: trailing value parameters with a default may be left out where the type is applied. */
+    val least = params.lastIndexWhere {
+      case fp: Trees.FnParam => fp.default.isEmpty
+      case _                 => true
+    } + 1
+    (c1.copy(table = c1.table.recordArity(c.owner, least, params.size)), ts.flatten)
 
   private def typeOf(c: Ctx, tree: Tree): (Ctx, Type) =
     tree match
@@ -351,7 +357,12 @@ object Namer:
             val (c1, bounds) = mapAccum(c, caps)(capBound)
             (c1, Type.CapType(Some(Type.IsBound(bounds.flatten))))
       case Trees.ParenTypeApp(inner, ofArg, span) =>
-        val (c1, t) = typeOf(c, inner)
+        val (c0, t) = typeOf(c, inner)
+
+        /** The name is recorded applied below, not bare. */
+        val c1 = c0.table.written match
+          case (_, at) :: rest if at == inner.span => c0.copy(table = c0.table.copy(written = rest))
+          case _                                   => c0
         val (c2, args) = typeArgs(c1, Some(ofArg))
         t match
           case Type.TypeRef(id, Nil) => (c2.wrote(Type.TypeRef(id, args), span), Type.TypeRef(id, args))

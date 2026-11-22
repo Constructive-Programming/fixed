@@ -487,7 +487,7 @@ class TyperSuite extends munit.FunSuite:
       "data V of (n: u64, A is Named):\n    V(a: A)\nfn g(v: V of (3, Box)) -> u64 = 1\n",
       "data R of (lo: u64, N is Numeric):\n    R(n: N)\ndata O of (k: u64, M is Numeric):\n    O(r: R of (k, M))\n",
       "fn f(u8: u64, x: u8) -> u8 = x\nfn g() -> u8 = f(1, 2)\n",
-      "data P of (u8: u64, A):\n    P(a: A, b: u8)\nfn g() -> P of u64 = P.P(1, 2)\n"
+      "data P of (A, u8: u64 = 0):\n    P(a: A, b: u8)\nfn g() -> P of u64 = P.P(1, 2)\n"
     ).foreach(code => assertEquals(typedUnit(named + code).diags.filter(_.isError), Nil, code))
 
   test("Rule 5.1.1: a literal meeting a named bound is checked once; a bounded argument not solved yet is Clone"):
