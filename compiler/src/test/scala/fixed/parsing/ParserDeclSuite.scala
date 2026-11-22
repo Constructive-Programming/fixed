@@ -557,3 +557,42 @@ class ParserDeclSuite extends FunSuite with ParserTestSupport:
       case Trees.CompilationUnit(List(m: Trees.DataDecl, _: Trees.DataDecl), _) =>
         assertEquals((m.name, m.variants, m.props), ("Metres", Nil, Nil))
       case other => fail(s"expected two DataDecls, got $other")
+
+  test("`data X = …` and `data X { … }` are one P013 that shows the forms of a data body"):
+    List("data X = A | B\n", "data X { a: u64 }\n", "data X of A =\n    | A\n    | B\n").foreach { src =>
+      val pr = Parser.parse(SourceFile.fromString("<test>", src + "data After: A\n"))
+      assertEquals(pr.diagnostics.map(_.code), List(DiagCode.P013), src)
+      assert(pr.diagnostics.head.message.contains("`:` or `(` after `data X`"), pr.diagnostics.toString)
+      assert(pr.diagnostics.head.suggestion.exists(_.contains("`data X(field: T, ...)`")), pr.diagnostics.toString)
+      pr.tree match
+        case Trees.CompilationUnit(List(x: Trees.DataDecl, a: Trees.DataDecl), _) =>
+          assertEquals((x.name, a.name), ("X", "After"), src)
+        case other => fail(s"expected two DataDecls, got $other")
+    }
+
+  test("a declaration ends with its line: a second one on the line is one P001"):
+    List(
+      "data Metres data Other: A\n",
+      "cap Locked data X: A\n",
+      "fn f() -> u64 = 0 fn g() -> u64 = 1\n",
+      "data Metres\n    A\n"
+    ).foreach {
+      src =>
+        val pr = Parser.parse(SourceFile.fromString("<test>", src + "data After: A\n"))
+        assertEquals(pr.diagnostics.map(_.code), List(DiagCode.P001), src)
+        assert(pr.diagnostics.head.message.contains("the end of the line after a declaration"), pr.diagnostics.toString)
+        pr.tree match
+          case Trees.CompilationUnit(List(_, a: Trees.DataDecl), _) => assertEquals(a.name, "After", src)
+          case other                                                => fail(s"expected two items, got $other")
+    }
+
+  test("a declaration with an error, or after an unclosed bracket, gets no second error for its line end"):
+    List("data X(a u64) junk\n", "fn f() -> u64 = g(\nfn h() -> u64 = 1\n").foreach { src =>
+      val pr = Parser.parse(SourceFile.fromString("<test>", src + "fn after() -> u64 = 0\n"))
+      assert(pr.hasErrors, src)
+      assert(!pr.diagnostics.exists(_.message.contains("after a declaration")), pr.diagnostics.toString)
+      pr.tree match
+        case Trees.CompilationUnit(items, _) =>
+          assertEquals(items.lastOption.collect { case f: Trees.FnDecl => f.sig.name }, Some("after"), src)
+        case other => fail(s"expected a compilation unit, got $other")
+    }

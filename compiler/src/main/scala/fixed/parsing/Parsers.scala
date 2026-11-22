@@ -269,14 +269,14 @@ object Parser:
     src.content.indexWhere(_ != ' ', start) - start + 1
 
   /** True where a construct that ends with its line, on a line indented at `indent`, has ended:
-    * at EOF, a DEDENT, a NEWLINE before a line indented no deeper (its span is that line's first
-    * token), or a [[waited]] token.
+    * at EOF, a DEDENT, a [[waited]] token, or a token at column `indent` or less, which starts a
+    * line indented no deeper: a NEWLINE (its span is the next line's first token), or a token on
+    * such a line that an open bracket kept the NEWLINE from.
     */
   private def atLineEnd(s: ParserState, indent: Int)(using reporter: Reporter): Boolean =
     s.current.kind match
       case TokenKind.Eof | TokenKind.Dedent => true
-      case TokenKind.Newline                => reporter.source.lineColumn(s.current.span.start)._2 <= indent
-      case _                                => waited(s)
+      case _ => reporter.source.lineColumn(s.current.span.start)._2 <= indent || waited(s)
 
   /** A `,` or closing bracket that an enclosing production waits for. */
   private def waited(s: ParserState): Boolean = s.current.kind match
@@ -384,16 +384,30 @@ object Parser:
     )
   end Anchors
 
-  def parseCompilationUnit(s0: ParserState)(using Reporter): Parsed[Tree] =
+  def parseCompilationUnit(s0: ParserState)(using reporter: Reporter): Parsed[Tree] =
     val s1 = skipNewlines(s0)
     val (s2, items) = withAnchors(s1, Anchors.topLevel) { st =>
-      /** Items at top level are separated by NEWLINE; allow blank lines. */
+      /** Items at top level are separated by NEWLINE; allow blank lines. An item that parsed
+        * without error must end with its line; after one with an error, its own recovery decides.
+        */
       @tailrec
       def loop(state: ParserState, acc: List[Tree]): Parsed[List[Tree]] =
         if state.current.kind == TokenKind.Eof then (state, acc.reverse)
         else
+          val errors = reporter.errorCount
           val (state1, item) = parseTopItem(state)
-          val state2 = skipNewlines(state1)
+          val state2 = skipNewlines(
+            if reporter.errorCount > errors then state1
+            else
+              expectLineEnd(
+                state1,
+                1,
+                DiagCode.P001,
+                "the end of the line after a declaration",
+                "a declaration ends with its line, and the next one starts in column 1; " +
+                  "an indented line belongs to a body after `:` or `=`"
+              )
+          )
           loop(state2, item :: acc)
       loop(st, Nil)
     }

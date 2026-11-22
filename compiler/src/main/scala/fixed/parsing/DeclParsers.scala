@@ -305,6 +305,17 @@ private[parsing] object DeclParsers:
       val (s4, fields) = parseFieldList(s3)
       val variant = Trees.DataVariant(nameTok.lexeme, fields, span(nameTok.span, s4.current.span))
       (s4, Trees.DataDecl(nameTok.lexeme, ofParams, List(variant), Nil, span(startTok.span, s4.current.span)))
+    else if s3.current.kind == TokenKind.Eq || s3.current.kind == TokenKind.LBrace then
+      val name = nameTok.lexeme
+      val s4 = expectLineEnd(
+        s3,
+        1,
+        DiagCode.P013,
+        s"`:` or `(` after `data $name`",
+        s"variants follow a `:`, one on the line (`data $name: A`) or one per line indented below it; " +
+          s"the fields of a single constructor go in parentheses: `data $name(field: T, ...)`"
+      )
+      (s4, Trees.DataDecl(name, ofParams, Nil, Nil, span(startTok.span, s4.current.span)))
     else
       val (s4, (variants, props)) = s3.optionalOrEmpty(TokenKind.Colon)(parseDataBody)
       (s4, Trees.DataDecl(nameTok.lexeme, ofParams, variants, props, span(startTok.span, s4.current.span)))
