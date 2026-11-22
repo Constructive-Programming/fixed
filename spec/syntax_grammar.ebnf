@@ -375,7 +375,7 @@
    the same logical line. Multi-line function signatures are written:
 
        fn participant(name: String) -> ()
-           with Console + Channel of (is Message) + Async:
+           with Console + Channel of (is Message) + Async =
            ...body...
 
    Comments
@@ -436,8 +436,10 @@ DEDENT          = (* synthetic token: closing of an indented block *) ;
    2. Compilation unit
    ============================================================ *)
 
+(* A top-level declaration ends its line: two declarations on one line
+   are an error (`P001`). *)
 CompilationUnit
-    = ( NEWLINE | TopItem )*
+    = NEWLINE* ( TopItem ( NEWLINE+ TopItem )* NEWLINE* )?
     ;
 
 TopItem
