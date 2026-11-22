@@ -420,7 +420,7 @@ Error:
 
 Warning:
 
-- `warning[E081]: unused declared effect <E>`: an effect is declared in `R` but does not appear in `R_inferred`. It is a warning because an unused declaration may be intentional, for forward compatibility. The effect is then removed from the row callers see inside the package, and kept in the exported row of a `pub` function (Rule E3.6.e.3).
+- `warning[E081]: unused declared effect <E>`: an effect is declared in `R` but does not appear in `R_inferred`. It is a warning because an unused declaration may be intentional, for forward compatibility. (The compiler reports it today under its own code `T017` and keeps the effect in the row.) The effect is then removed from the row callers see inside the package, and kept in the exported row of a `pub` function (Rule E3.6.e.3).
 
 ### 5.3 Handler clause coverage and subtraction (Rule E5.3)
 
