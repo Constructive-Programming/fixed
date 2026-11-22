@@ -153,7 +153,7 @@ object Declarations:
     withBodies(s, d.body) { (si, fn, kind) =>
       si.symbols.membersOf(cap).find(m => m.kind == kind && m.name == fn.name).fold(si) { m =>
         val sub = Members.Subst(Members.Subst.of(Nil, Nil), Set.empty, Some(self), None)
-        memberBody(si, fn, m, sub, cap, params, Option.when(kind == SymKind.Method)(self))
+        memberBody(si, fn, m, sub, cap, params, Option.when(kind == SymKind.Method)(self), satisfying = false)
       }
     }
 
@@ -178,15 +178,72 @@ object Declarations:
           case Some(e) =>
             val sub = Members.Subst(Members.Subst.of(Nil, Nil), Set(e.cap), Some(self), part)
             val si1 = fn.params.foldLeft(si)((sj, p) => sj.reservedName(p.name, p.span))
-            memberBody(si1, fn, e.member, sub, cap, Nil, Option.when(kind == SymKind.Method)(self))
+            memberBody(si1, fn, e.member, sub, cap, Nil, Option.when(kind == SymKind.Method)(self), satisfying = true)
       }
+    }
+
+  /** Rule 6.1.1, phase 2: the types a `satisfies` body writes on its parameters and its result,
+    * resolved like a signature's with the satisfying type's parameters in scope and read at the
+    * satisfying type, must fit the requirement's signature `sig` (`T002`). A type variable written
+    * there stands for one of the requirement's type variables, under any name and with the bounds
+    * it restates (`T010`), never for another type (`o: Strng` where `Self` is required); an
+    * anonymous bound `is C` is checked as a bound. The applied types written there are checked at
+    * what their variables stand for. A wrong number of parameters is [[method]]'s to report.
+    */
+  private def conform(s: TyperState, fn: Trees.FnLike, sub: Members.Subst, sig: Type): TyperState =
+    /** One arrow, so that a name written twice is one variable; its result is `()` when none is written. */
+    val params = fn.params.map(_.typeAnn)
+    val tree = Trees.ArrowType(
+      Trees.TupleArrowLhs(params, fn.span),
+      fn.returnType.getOrElse(Trees.UnitType(fn.span)),
+      None,
+      fn.span
+    )
+    val own = sub.self match
+      case Some(Type.TypeRef(_, args)) => args.collect { case Type.TypeRef(id, Nil) => s.symbols(id).name -> id }.toMap
+      case _                           => Map.empty
+    val (table, written, diags) = Namer.translate(s.symbols, List(own, s.symbols.scope), SymbolId.Root, tree)
+    val introduced = (s.symbols.nextId until table.nextId).map(SymbolId(_)).filter(table(_).kind ==
+      SymKind.TypeParam).toList
+    val applied = table.written.take(table.written.size - s.symbols.written.size)
+
+    /** One instantiation, so that the written types, their variables and the applied types share fresh variables. */
+    val (s1, Type.TupleType(List(at, Type.TupleType(vars), Type.TupleType(wrote)))) = Members.instantiate(
+      s.copy(symbols = table.copy(written = s.symbols.written)).report(diags),
+      Type.TupleType(List(
+        written,
+        Type.TupleType(introduced.map(Type.TypeRef(_, Nil))),
+        Type.TupleType(applied.map(_._1))
+      )),
+      sub.copy(freshOwners = Set(SymbolId.Root))
+    ): @unchecked
+    val s3 = (at, sig) match
+      case (Type.ArrowType(wl, wr, _), Type.ArrowType(rl, rr, _)) if Members.params(rl).sizeIs == params.size =>
+        val pairs = (params ++ fn.returnType).zip(Members.params(wl).zip(Members.params(rl)) :+ (wr, rr))
+        val s2 = pairs.foldLeft(s1) { case (si, (t, (w, req))) => Typer.unify(si, t.span, req, w) }
+
+        /** A variable that stands for a type which is not a variable, where it is first written. */
+        def standsFor(si: TyperState, id: SymbolId, v: Type): TyperState =
+          si.unifier.zonk(v) match
+            case Type.TypeVar(_)                                                 => si
+            case Type.TypeRef(p, Nil) if si.symbols(p).kind == SymKind.TypeParam => si
+            case other                                                           =>
+              pairs.find((_, types) => Members.mentions(types._1, v)).fold(si) { (t, _) =>
+                si.error(DiagCode.T002, t.span, s"expected ${si.symbols.render(other)}, got ${si.symbols(id).name}")
+              }
+        if s2.diags.sizeIs > s1.diags.size then s2
+        else introduced.zip(vars).foldLeft(s2) { case (si, (id, v)) => standsFor(si, id, v) }
+      case _ => s1
+    applied.zip(wrote).foldLeft(s3) { case (si, ((_, span), w)) =>
+      Satisfaction.checkWritten(si, si.unifier.zonk(w), span)
     }
 
   /** A body of capability member `m`, typed against its signature under `sub`. The member's own
     * type parameters stay rigid; their bounds, instantiated under the same `sub` (`Self`, `Part`,
     * the capability's arguments), hold while the body is typed: for member lookup and satisfaction
     * (`TyperState.rigidBounds`) and for unification (`Unifier.paramBounds`). The signature and the
-    * bounds are instantiated as one tuple so that both get the same fresh variables.
+    * bounds are instantiated as one tuple so that both get the same fresh variables. A
+    * `satisfying` body's written types must fit the signature ([[conform]]).
     */
   private def memberBody(
       s: TyperState,
@@ -195,7 +252,8 @@ object Declarations:
       sub: Members.Subst,
       cap: SymbolId,
       scoped: List[SymbolId],
-      self: Option[Type]
+      self: Option[Type],
+      satisfying: Boolean
   ): TyperState =
     val params = s.symbols.typeParamsOf(m.id)
     val bounds = params.map(p => Type.IsBound(Members.boundsOf(s.symbols, p)))
@@ -206,7 +264,9 @@ object Declarations:
     })
     val declared = s1.unifier.paramBounds
     val inBody = s1.unifier.copy(paramBounds = p => rigid.getOrElse(p.toInt, declared(p)))
-    val typed = method(s1.copy(rigidBounds = rigid, unifier = inBody), fn, sig, cap, scoped ++ params, self)
+    val inRigid = s1.copy(rigidBounds = rigid, unifier = inBody)
+    val typed =
+      method(if satisfying then conform(inRigid, fn, sub, sig) else inRigid, fn, sig, cap, scoped ++ params, self)
     typed.copy(rigidBounds = rigid.empty, unifier = typed.unifier.copy(paramBounds = declared))
 
   /** Fold `f` over the methods in `items` that have a body, with their member kind. */

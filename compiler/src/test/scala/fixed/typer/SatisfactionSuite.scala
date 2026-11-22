@@ -179,3 +179,44 @@ class SatisfactionSuite extends munit.FunSuite:
     val mappy = "cap Mappy:\n    fn map(n: u64) -> u64\nBox satisfies Mappy:\n    fn map(n: u64) -> u64 = n\n"
     assertEquals(typedUnit(box).diags, Nil)
     assertEquals(typedUnit(box + mappy).diags, Nil)
+
+  test("Rule 6.1.1: the types a satisfies body writes are resolved and must fit the requirement's"):
+    val d =
+      "data D:\n    D(n: u64)\ncap Greet:\n    fn greet(t: T, n: u64) -> u64\ncap Shout:\n    fn shout(t: T is Show) -> u64\n" +
+        "data P of (A is Ord, B):\n    P(a: A, b: B)\ncap Fold2:\n    fn fold2(init: R, f: (R, Part) -> R) -> R\n"
+    val wrong = List(
+      "D satisfies Eq:\n    fn eq(o: Strng) = true\n" -> ("Strng", DiagCode.T002, "expected D, got Strng"),
+      "D satisfies Eq:\n    fn eq(o: u64) = true\n" -> ("u64) =", DiagCode.T002, "expected D, got u64"),
+      "D satisfies Eq:\n    fn eq(o: i128) = true\n" ->
+        ("i128", DiagCode.T032, "i128 is reserved; the widest integer type is i64"),
+      "D satisfies Eq:\n    fn eq(o: D) -> u64 = true\n" -> ("u64 =", DiagCode.T002, "expected bool, got u64"),
+      "D satisfies Eq:\n    fn eq(o: D) -> X = true\n" -> ("X =", DiagCode.T002, "expected bool, got X"),
+      "P satisfies Ord:\n    fn compare(other: P of (B, A)) = Order.Equal\n" ->
+        ("P of (B, A)", DiagCode.T002, "expected P of (A, B), got P of (B, A)"),
+      "D satisfies Greet:\n    fn greet(t: T, n: String) = 1\n" ->
+        ("String) =", DiagCode.T002, "expected u64, got String"),
+      "D satisfies Greet:\n    fn greet(t: X, n: X) = 1\n" -> ("X) =", DiagCode.T002, "expected u64, got T"),
+      "P satisfies Ord:\n    fn compare(other: P of A) = Order.Equal\n" ->
+        ("P of A", DiagCode.T006, "P takes 2 argument(s), given 1"),
+      "D satisfies Fold2:\n    fn fold2(init: S is Show, f: (S, u64) -> S) = init\n" ->
+        ("S is Show", DiagCode.T010, "R does not satisfy Show")
+    )
+
+    /** One error each, but for two written types that are wrong twice: `P of A` also differs from the
+      * requirement's `P of (A, B)` (`T002`), and `P of (B, A)` gives `B` where `P` needs `Ord` (`T010`).
+      */
+    wrong.foreach { case (code, (at, c, message)) =>
+      val ds = typedUnit(d + code).diags.filter(_.isError).map(x => (x.code, x.span.start, x.message))
+      assertEquals(ds.filter(_._1 == c), List((c, (d + code).indexOf(at), message)), code)
+      assertEquals(ds.size, if at == "P of A" || at == "P of (B, A)" then 2 else 1, code)
+    }
+
+    /** `Self`, the data type at its parameters (`B` is `P`'s `Part`), `Part`, the requirement's type
+      * variables under any name, with a bound they already have, and an anonymous bound that holds.
+      */
+    val right = "P satisfies Ord:\n    fn compare(other: P of (A, B)) = other.a.compare(self.a)\n" +
+      "D satisfies Eq:\n    fn eq(o: Self) -> bool = o.n == self.n\nD satisfies Greet:\n    fn greet(t: X, n: u64) = n\n" +
+      "P satisfies Fold2:\n    fn fold2(init: S, f: (S, B) -> S) -> S = init\n" +
+      "data L of A:\n    Nil\n    Cons(h: A, t: L of A)\nL satisfies Fold2:\n    fn fold2(init: R, f: (R, Part) -> R) = init\n" +
+      "L satisfies Show:\n    fn show() -> is Show = \"l\"\nD satisfies Shout:\n    fn shout(t: X is Show) = 1\n"
+    assertEquals(typedUnit(d + right).diags.filter(_.isError), Nil)
