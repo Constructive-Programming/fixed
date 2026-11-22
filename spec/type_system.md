@@ -512,7 +512,7 @@ Not built: the grammar has had no annotation on an expression before v0.4.14 (`l
 
 ### 5.12 Tuples (Rule 5.12)
 
-**Rule 5.12.** A tuple expression has exactly two elements: `(a, b)` is `Tuple(a, b)`, of type `Tuple of (A, B)` (`spec/stdlib.md` §3.3), and `()` is the unit. A tuple expression, a tuple pattern or a tuple type in value position with three or more elements is `error[T031]: a tuple has two elements; declare a data type with named fields`. The parameter list of a function type (`(A, B, C) -> D`) and the arguments of `of` (`Cap of (A, B, C)`) are lists, not tuples, and are not limited. (Owner's decision, fourth round of P6: "C for now. Let's make Tuple a proper HList … later on"; see OQ-T7.) Not built: the typer accepts larger tuples and resolves the two members of `Tuple` on them (`docs/decisions/P0-spec-review-2026-11-20.md` §4).
+**Rule 5.12.** A tuple expression has exactly two elements: `(a, b)` is `Tuple(a, b)`, of type `Tuple of (A, B)` (`spec/stdlib.md` §3.3), and `()` is the unit. A tuple expression, a tuple pattern or a tuple type in value position with three or more elements is `error[T031]: a tuple has two elements; declare a data type with named fields`. The parameter list of a function type (`(A, B, C) -> D`) and the arguments of `of` (`Cap of (A, B, C)`) are lists, not tuples, and are not limited. (Owner's decision, fourth round of P6: "C for now. Let's make Tuple a proper HList … later on"; see OQ-T7.) Built (`T031`), except two spellings with doubled parentheses that the parser flattens, `Box of ((A, B, C))` and `((A, B, C)) -> D` (`docs/decisions/P0-spec-review-2026-11-20.md` §4).
 
 ## 6. Capability declarations
 
