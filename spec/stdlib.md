@@ -546,6 +546,6 @@ Earlier drafts (`docs/plans/implementation-plan.md` line 352) classified `List`,
 
 ## 8. Open questions
 
-- **OQ-S1 — Built-in `Show`.** Should `bool`, `i64`, `f64`, etc. auto-satisfy `Show`? Most programs need `.show()` constantly; refusing the default is friction. Provisional yes, formalize once `cap Show` lands.
+- **OQ-S1 — Built-in `Show`.** Closed: every primitive type satisfies `Show` (§4, and in the compiler).
 - **OQ-S2 — Map/Set.** `cap Map of (K, V)` and `cap Set of A` are mentioned in examples but not yet specified here. Defer to a Phase-5 stdlib doc.
-- **OQ-S3 — `String`.** Currently ambiguous: a primitive in the grammar (`PrimitiveType`), but example 11 declares refinements (`type Username = String + minLength(3)`) that expect cap-like composition. Decision: `String` is a primitive *and* satisfies a `cap Stringlike` (or similar) for refinement purposes. Formalize separately.
+- **OQ-S3 — `String`.** Settled by the owner (fourth round of P6): `String` is a type, and a refinement of it is written `String is minLength(3)` or, with the same meaning, `String + minLength(3)` (`spec/type_system.md` Rule 6.3.0). No capability `Stringlike` is introduced.
