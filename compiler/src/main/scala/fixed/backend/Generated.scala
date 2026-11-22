@@ -614,8 +614,7 @@ private[backend] trait Generated:
     * witness of each of `args` and of `r`, and a `satisfies` body also their tables ([[hiddenArgsOf]]); the
     * clone for known `args` and `r`, if chosen, and an instance where the baseline version cannot be
     * built, are built at `args` and `r` and take the hidden parameters of the type parameters they
-    * mention, which the caller has under the same names. A tuple of other than two elements has
-    * none: its declaration's members are `Tuple`'s, of two (`B005`).
+    * mention, which the caller has under the same names.
     */
   protected def member(data: SymbolId, args: List[Type], r: Option[Type])(
       gen: (List[Type], Type) => String

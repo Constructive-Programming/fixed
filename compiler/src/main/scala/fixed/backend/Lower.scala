@@ -890,15 +890,10 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case Type.Layer(d, args, _) => Some(d -> args)
       case _                      => None
 
-  /** A variant's field types for data arguments `args`; inside a layer, recursive fields hold the
-    * seed. The prelude's `Tuple` declares two fields, but a tuple of any size is `Tuple` at its
-    * element types, one field per element.
-    */
+  /** A variant's field types for data arguments `args`; inside a layer, recursive fields hold the seed. */
   protected def fieldTypes(data: SymbolId, args: List[Type], variant: SymbolId): List[Type] =
-    if symbols.prelude.get("Tuple").contains(data) then args
-    else
-      val sigma = symbols.typeParamsOf(data).zip(args).toMap
-      symbols.fieldsOf(variant).map(f => concrete(f.info, sigma)).toList
+    val sigma = symbols.typeParamsOf(data).zip(args).toMap
+    symbols.fieldsOf(variant).map(f => concrete(f.info, sigma)).toList
 
   private def runtime(name: String, args: List[Atom], t: Tree, sc: Scope)(k: K): Expr =
     bind(Rhs.Call(name, args, runtime = true), t, sc)(k)

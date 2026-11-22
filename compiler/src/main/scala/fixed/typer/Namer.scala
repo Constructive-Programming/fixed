@@ -15,6 +15,9 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span, mapAccum}
   */
 object Namer:
 
+  /** `T031` (Rule 5.12): a tuple expression, pattern or type with more than two elements. */
+  private[typer] val tupleSize = "a tuple has two elements; declare a data type with named fields"
+
   /** Index a compilation unit against the stdlib: its symbol table (with the final top-level
     * scope) and the Namer's diagnostics, in source order. The prelude's declarations are in scope
     * everywhere; a stdlib module's (`std.io`) only through `use`.
@@ -315,23 +318,27 @@ object Namer:
       case Trees.IsBound(caps, _) =>
         val (c1, bounds) = mapAccum(c, caps)(capBound)
         (c1, Type.IsBound(bounds.flatten))
+
+      /** A parameter list is a list, not a tuple: no limit on its size (Rule 5.12). */
       case Trees.ArrowType(lhs, rhs, withClause, _) =>
-        val (c1, l) = typeOf(c, lhs)
+        val (c1, params) = lhs match
+          case Trees.TupleArrowLhs(types, _) => mapAccum(c, types)(typeOf)
+          case _: Trees.UnitType             => (c, Nil)
+          case single                        =>
+            val (ci, t) = typeOf(c, single)
+            (ci, List(t))
         val (c2, r) = typeOf(c1, rhs)
-        val params = (lhs, l) match
-          case (_: Trees.TupleArrowLhs, Type.TupleType(ts)) => ts
-          case (_: Trees.UnitType, _)                       => Nil
-          case (_, single)                                  => List(single)
         arrow(c2, Type.TupleType(params), r, withClause)
-      case Trees.TupleArrowLhs(types, _) =>
+      case Trees.TupleArrowLhs(types, span) =>
         val (c1, ts) = mapAccum(c, types)(typeOf)
-        (c1, Type.TupleType(ts))
+        if ts.sizeIs > 2 then (c1.error(DiagCode.T031, span, tupleSize), Type.NeverType)
+        else (c1, Type.TupleType(ts))
       case Trees.CapType(spec, _) =>
         spec match
           case None                               => (c, Type.CapType(None))
           case Some(Trees.CapReturnSpec.OfArg(a)) =>
-            val (c1, t) = typeOf(c, a)
-            (c1, Type.CapType(Some(t)))
+            val (c1, ts) = typeArgs(c, Some(a))
+            (c1, Type.CapType(Some(ts match { case List(t) => t; case _ => Type.TupleType(ts) })))
           case Some(Trees.CapReturnSpec.Extends(caps)) =>
             val (c1, bounds) = mapAccum(c, caps)(capBound)
             (c1, Type.CapType(Some(Type.IsBound(bounds.flatten))))

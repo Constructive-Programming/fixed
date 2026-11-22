@@ -166,7 +166,8 @@ object Typer:
       case Trees.Ident(name, span)   => typedIdent(s, name, span)
       case Trees.TupleExpr(elems, _) =>
         val (s2, ts) = typedAll(s, elems)
-        (s2, Type.TupleType(ts))
+        if ts.sizeIs > 2 then (s2.error(DiagCode.T031, tree.span, Namer.tupleSize), Type.NeverType)
+        else (s2, Type.TupleType(ts))
       case t: Trees.BinOp                    => typedBinOp(s, t, pt)
       case t: Trees.UnaryOp                  => typedUnaryOp(s, t, pt)
       case t: Trees.Apply                    => typedApply(s, t)

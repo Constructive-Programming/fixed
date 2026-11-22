@@ -166,9 +166,12 @@ fn concat(left: C is Sequencing + Folding, right: C) -> C =
 //
 // Functions in Fixed are total — bisection cannot self-recurse. We
 // fold a Nat of depth `sorted.size` (a loose but sound upper bound; log2
-// would suffice but is harder to compute portably). State is the
-// (result, low, high) triple; once `result` is set or `low >= high`,
+// would suffice but is harder to compute portably). State is a `Search`
+// (result, low, high); once `result` is set or `low >= high`,
 // further steps are idempotent no-ops.
+data Search of R:
+    Search(result: R, low: u64, high: u64)
+
 fn binarySearch(
     sorted: C is ArrayLike of (A is Ord),
     target: A,
@@ -177,23 +180,22 @@ fn binarySearch(
         if k == 0: Nat.Zero
         else: Nat.Succ(k - 1)
     ).fold(
-        () -> (R.empty, 0, sorted.size),                       // (result, low, high)
+        () -> Search.Search(R.empty, 0, sorted.size),
         (acc) ->
-            let (result, low, high) = acc
-            if result.isDefined || low >= high:
+            if acc.result.isDefined || acc.low >= acc.high:
                 acc
             else:
-                let mid = low + (high - low) / 2
+                let mid = acc.low + (acc.high - acc.low) / 2
                 sorted.get(mid).fold(
                     (value) ->
                         target.compare(value).fold(
-                            () -> (result, low, mid),           // lt
-                            () -> (R.some(mid), low, high),     // eq — found
-                            () -> (result, mid + 1, high),      // gt
+                            () -> Search.Search(acc.result, acc.low, mid),         // lt
+                            () -> Search.Search(R.some(mid), acc.low, acc.high),   // eq — found
+                            () -> Search.Search(acc.result, mid + 1, acc.high),    // gt
                         ),
                     () -> acc,                                   // out of bounds
                 )
-    ).first
+    ).result
 
 // --- Uses type alias for cleaner signatures ---
 //

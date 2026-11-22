@@ -22,7 +22,9 @@ object Patterns:
       case Trees.TuplePat(elems, span) =>
         val (s1, vars) = s.freshVars(elems.size)
         val tuple = Type.TupleType(vars)
-        val s2 = Typer.unify(s1, span, tuple, t).record(pat, tuple)
+        val s2 =
+          if elems.sizeIs > 2 then s1.error(DiagCode.T031, span, Namer.tupleSize)
+          else Typer.unify(s1, span, tuple, t).record(pat, tuple)
         bindAll(s2, elems.zip(vars))
       case p: Trees.DataVariantPat                               => variant(s, p, t)
       case Trees.StructDestructurePat(typeName, fields, _, span) =>

@@ -35,7 +35,7 @@ class TyperSuite extends munit.FunSuite:
 
   test("literals default per kind; tuples and logic"):
     assertEquals(typed("1.5 * 2")._3, "f64")
-    assertEquals(typed("(1, \"a\", true)")._3, "(i64, String, bool)")
+    assertEquals(typed("(1, \"a\")")._3, "(i64, String)")
     assertEquals(typed("1 < 2 && !false")._3, "bool")
 
   test("identifiers resolve to their symbols; calls check arguments"):
@@ -312,8 +312,7 @@ class TyperSuite extends munit.FunSuite:
       "fn f(p: (T is Show, u64)) -> String = p.show()\n",
       "fn f(x: T is Ord, y: T) -> bool = x < y\n",
       "fn f(xs: List of List of u64, ys: List of List of u64) -> bool = xs == ys\n",
-      "fn f(x: u64, c: char, s: String) -> bool = x < 3 && c <= 'a' && c == 'b' && s > \"b\"\n",
-      "fn f(p: (T is Show, u64, u64)) -> String = p.show()\n"
+      "fn f(x: u64, c: char, s: String) -> bool = x < 3 && c <= 'a' && c == 'b' && s > \"b\"\n"
     ).foreach(code => assertEquals(typedUnit(code).diags, Nil, code))
 
   test("P6 D10: a receiver whose type is solved to a type parameter later is checked when the unit finishes"):

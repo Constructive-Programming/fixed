@@ -1,5 +1,5 @@
 false true
 false true false
-Tuple(1, a, true) Tuple(1, b, 2, c) Tuple(5, 5, 5)
+Three(1, a, true) Four(1, b, 2, c) Three(5, 5, 5)
 true false true false
 x 2

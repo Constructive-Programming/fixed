@@ -187,6 +187,8 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
   - **Fixed** (`DeclParsers.parseDataDecl`, `EmitLLVM`, Rule 7.1.a): it declares a type with no variant. No expression builds one (`T001`); a `match` on one, and its derived `show` and `==`, lower to a switch with no case, emitted as `unreachable`. `fold` is not derived for it (`T001`).
 - Derived `Functor` needed a declaration (found by the documentation pass of 2026-11-21): the compiler gave `map` only after `T satisfies Functor`.
   - **Fixed** (`Members.candidates`; owner's decision, P6 fourth round, Rule 7.4.c): a data type whose shape derives `Functor` (`Members.functor`) has `map` without a declaration, beside the members of the capabilities it declares; where the shape does not allow it, `map` is `T001` with the hint of `Members.notFunctor` (the blocking field, or the bound). A program that writes `T satisfies Functor` still compiles.
+- The typer accepted a tuple of three or more elements where `Pair of (A, B)` is required, and the program crashed; `Members.candidates` resolved `Tuple`'s two-field members on tuples of any size. A run-time table, or a generated member's baseline, at a tuple of other than two elements was `B005`.
+  - **Fixed** (`Typer.typedExpr`, `Patterns.bind`, `Namer.typeOf`; owner's decision, P6 fourth round, Rule 5.12): a tuple expression, pattern or type with three or more elements is `T031`. The parameter list of a function type and the arguments of `of` (also `cap of`) are lists and keep any length. Example 02's `binarySearch` keeps its state in a `data Search`, and the test program `long_tuples` became `triples`, on data types `Three` and `Four`; the backend's run-time table no longer has a case for other tuples.
 
 Found and not fixed:
 
@@ -212,7 +214,7 @@ Found and not fixed:
 - Float literal patterns are `B005` (`spec/pattern_matching.md` §3.3 asks for bitwise equality; the backend has no bitcast), and so is a literal in a `let` pattern.
 - Input is not checked to be valid UTF-8, which `spec/stdlib.md` Rule S3.7 requires of every `String`: `Console.readLine` passes bytes through.
 - A program's `satisfies Ord` body on a scalar defines `compare`, but `<` and the table's `lt` and `le` stay built in, so they can disagree. Open, with the other built-in scalar members.
-- The typer accepts a tuple of three or more elements where `Pair of (A, B)` is required, and the program crashes; `Members.candidates` resolves `Tuple`'s two-field members on tuples of any size. A run-time table, or a generated member's baseline, at a tuple of other than two elements is `B005`.
+- Two ways to write a tuple type of three elements still escape `T031`. The parser drops doubled parentheses, so `Box of ((A, B, C))` is `Box` at three arguments and `((A, B, C)) -> D` a function of three parameters (a pair loses its tuple the same way: `((A, B)) -> D` takes two parameters). And the number of `of` arguments is not checked, so `Tuple of (A, B, C)` and `List of (A, B)` are accepted; no value of such a type can be built.
 - Exhaustiveness is more conservative than §6.1 of `spec/pattern_matching.md`: `W(n, true)` / `W(n, false)` is `T020`.
 - An out-of-range literal that reaches its type through a type parameter (`order(18446744073709551615, 1)` with `T is Ord`) defaults to `i64` and wraps.
 - `Box of (A is Eq)` reached from `T is Ord` through a growing type is `B005` ("no table of `Eq`").
