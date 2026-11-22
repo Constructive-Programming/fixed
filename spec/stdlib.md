@@ -346,7 +346,7 @@ pub cap Clone:
 
 A type that must not be duplicated does not satisfy `Clone`.
 
-**Built today.** Every cell of the compiler today is a counted heap cell, so `clone` has no class to change. The derived `clone` builds a fresh cell for each level of a data value and clones each field, which the rule allows and which costs more than the sharing it permits; it takes one native frame per level (`docs/decisions/P0-spec-review-2026-11-20.md` §4).
+**Built today.** Every cell of the compiler today is a counted heap cell, so `clone` has no class to change. The derived `clone` is therefore a plain share: the call yields the receiver, and ownership raises its count where the original stays live. A written `clone` body runs as written.
 
 `clone` on a value of a type parameter needs `T is Clone` (`spec/type_system.md` Rule 5.1.3).
 
@@ -354,7 +354,7 @@ A type that must not be duplicated does not satisfy `Clone`.
 
 In current example code, `.clone()` was used defensively in places where borrow inference is expected to handle the duplication implicitly; the v0.4.5 sweep removed those calls.
 
-**Derivation on request.** `Clone` is never derived silently. A `data` type whose every field type satisfies `Clone` gets the derived `clone` by declaring the satisfaction without a body (`Money satisfies Clone`). Without that declaration the type does not satisfy `Clone`, and that is how a type that must not be duplicated stays so. The prelude declares it for each of its own data types. The derived `clone` copies: it builds a fresh cell of the same variant and clones each field. It states `constructs(clone) <= 1 + ` the sum of what cloning each field builds. An immediate (`spec/compilation_model.md` Rule CM3.5) has no cell, so its derived `clone` builds nothing. Primitives satisfy `Clone` trivially. Capabilities do not auto-derive `Clone`, because the representation is not fixed. A satisfying type must opt in.
+**Derivation on request.** `Clone` is never derived silently. A `data` type whose every field type satisfies `Clone` gets the derived `clone` by declaring the satisfaction without a body (`Money satisfies Clone`). Without that declaration the type does not satisfy `Clone`, and that is how a type that must not be duplicated stays so. The prelude declares it for each of its own data types. The derived `clone` is the one described above: it builds only what is not yet on the heap, so for a receiver on the heap it states `constructs(clone) <= 0`. An immediate (`spec/compilation_model.md` Rule CM3.5) has no cell, so its derived `clone` builds nothing. Primitives satisfy `Clone` trivially. Capabilities do not auto-derive `Clone`, because the representation is not fixed. A satisfying type must opt in.
 
 ### 4.12 Cost contracts (provisional)
 
