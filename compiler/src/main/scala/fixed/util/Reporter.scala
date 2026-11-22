@@ -5,11 +5,11 @@ enum Severity:
   case Error, Warning, Info
 
 /** Diagnostic codes. The case name is the rendered code. `E*`: lexical
-  * (scanner); `P*`: syntactic (parser); `T*`: typer; `B*`: backend
+  * (scanner), and `E102`, a prop the static prover refutes; `P*`: syntactic (parser); `T*`: typer; `B*`: backend
   * (`docs/plans/phase-4.0-backend-slice.md` §5).
   */
 enum DiagCode:
-  case E001, E002, E003, E004, E005, E006, E007, E008, E009, E072, E110
+  case E001, E002, E003, E004, E005, E006, E007, E008, E009, E072, E102, E110
   case P001, P002, P003, P004, P005, P006, P007, P008, P010, P011, P012, P013, P014, P015, P016, P017, P018, P019, P099
   case T001, T002, T003, T004, T005, T006, T007, T008, T009, T010, T011, T013, T014, T015, T016, T017, T018, T019, T020,
     T021, T022, T023, T027, T028, T029, T031, T032
@@ -29,6 +29,7 @@ enum DiagCode:
     case T009 | T015 | T016 | T018 | T019                                                                => 8
     case T020                                                                                            => 9
     case E072                                                                                            => 12
+    case E102                                                                                            => 11
     case E110                                                                                            => 14
     case B004                                                                                            => 18
     case T005 | B001 | B002 | B003 | B005                                                                => 99

@@ -214,7 +214,7 @@ cap Stack extends Sequencing + Sized:
         s.push(x).pop == s
 ```
 
-The static prover checks a prop where it can. Property-based testing in a separate test build (`fixed verify`) checks the others. Only a proved prop, or one the program states with `assume prop` (Rule P7.7), steers what the compiler does; a prop that was only tested is evidence, not a fact the compiler relies on. The compiler today parses `prop` and ignores it, and does not parse `assume`.
+The static prover checks a prop where it can. Property-based testing in a separate test build (`fixed verify`) checks the others. Only a proved prop, or one the program states with `assume prop` (Rule P7.7), steers what the compiler does; a prop that was only tested is evidence, not a fact the compiler relies on. The compiler today sends a prop to the static prover when its body is integer and `bool` arithmetic over `forall` binders of the integer types and `bool` (`proved`, `error[E102]` with a counterexample, or open), leaves every other prop open, and does not parse `assume`.
 
 ### Refinements: functions that generate capabilities
 

@@ -101,7 +101,7 @@ object Prover:
   private def initialising: Boolean =
     walker.walk(_.anyMatch(f => f.getMethodName == "<clinit>" && f.getClassName.startsWith("ap.")))
 
-  private def all[A](xs: List[Either[String, A]]): Either[String, List[A]] =
+  private[prover] def all[A](xs: List[Either[String, A]]): Either[String, List[A]] =
     xs.foldRight[Either[String, List[A]]](Right(Nil))((x, acc) => x.flatMap(a => acc.map(a :: _)))
 
   private def lit(v: BigInt): ITerm = IIntLit(IdealInt(v.bigInteger))

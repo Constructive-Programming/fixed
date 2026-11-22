@@ -4,6 +4,7 @@ import java.nio.file.{Files, Path}
 
 import fixed.ast.Trees
 import fixed.backend.{Backend, MemoryReport, Mode}
+import fixed.prover.{PropVerdict, Prover, Result}
 import fixed.util.{Diagnostic, Reporter, SourceFile}
 
 /** Command-line entry point.
@@ -18,30 +19,35 @@ import fixed.util.{Diagnostic, Reporter, SourceFile}
   *     budget of Rule CM5.3 instead of the reference value, for measurement;
   *     `--no-ownership-clones`, in any position, keeps the clones of the type axis and builds
   *     none of the ownership axis but those a `fip` body needs, for measurement.
+  *   - `--prover-steps=N`, in any position, sets the static prover's budget per prop (`spec/properties.md` Rule
+  *     P7.1.a). A check, `compile -o` and `ship` report how many props were proved and how many are open; a malformed
+  *     value stays among the arguments, as `--budget`'s does.
   *
   * Exit codes (`spec/reports.md` Rule RP5.5): 0 for no error, 2 for a usage error (also an input
   * file that cannot be read), 18 for an output that cannot be written, else [[exitCode]].
   */
 object Main:
   def main(args: Array[String]): Unit =
-    val (mode, rest) = modeOf(args.toList.filterNot(_ == "--"))
+    val (steps, others) = proverSteps(args.toList.filterNot(_ == "--"))
+    val (mode, rest) = modeOf(others)
+    def load(file: String) = Compiler.compile(CompilationUnit(read(file), proverSteps = steps))
     rest match
-      case "compile" :: file :: "-o" :: out :: Nil => sys.exit(backend(file, mode)(ir => write(Path.of(out), ir)))
+      case "compile" :: file :: "-o" :: out :: Nil => sys.exit(backend(load(file), mode)(write(Path.of(out), _)))
       case "compile" :: file :: "--explain-memory" :: format if format == Nil || format == List("--format", "json") =>
-        sys.exit(explain(file, json = format.nonEmpty, mode))
+        sys.exit(explain(load(file), json = format.nonEmpty, mode))
       case "ship" :: file :: "-o" :: out :: Nil =>
-        sys.exit(backend(file, mode)(ir =>
+        sys.exit(backend(load(file), mode)(ir =>
           Backend.ship(ir, Path.of(out)).fold(d => { print(file, d); exitCode(List(d)) }, _ => 0)
         ))
       case Nil | ("compile" | "ship") :: _ =>
         Console.err.println(
           "usage: fixed <file.fixed>... | fixed compile|ship <file.fixed> -o <out>" +
             " | fixed compile <file.fixed> --explain-memory [--format json];" +
-            " --no-specialise, --budget <n> or --no-ownership-clones anywhere"
+            " --no-specialise, --budget <n>, --no-ownership-clones or --prover-steps=<n> anywhere"
         )
         sys.exit(2)
       case paths =>
-        val units = paths.map(read).map(src => Compiler.compile(CompilationUnit(src)))
+        val units = paths.map(load)
         units.foreach(report)
         sys.exit(exitCode(units.flatMap(_.diagnostics)))
 
@@ -60,11 +66,15 @@ object Main:
     val mode = if flags.contains("--no-specialise") then Mode.NoSpecialise else budget.fold(Mode.Default)(Mode(_))
     (mode.copy(ownership = !flags.contains("--no-ownership-clones")), rest)
 
-  /** Check `file`, lower it to LLVM IR and hand the IR to `use`; on an error, its [[exitCode]]. An
+  /** The static prover's budget `args` ask for (`--prover-steps=N`, the default otherwise), and the other arguments. */
+  private[fixed] def proverSteps(args: List[String]): (Long, List[String]) =
+    val flag = args.find(a => a.startsWith("--prover-steps=") && a.drop(15).toLongOption.exists(_ >= 0))
+    (flag.fold(Prover.defaultBudget)(_.drop(15).toLong), args.filterNot(flag.contains))
+
+  /** Lower the checked `unit` to LLVM IR and hand the IR to `use`; on an error, its [[exitCode]]. An
     * output that `use` cannot write is 18.
     */
-  private def backend(file: String, mode: Mode)(use: String => Int): Int =
-    val unit = Compiler.compile(CompilationUnit(read(file)))
+  private def backend(unit: CompilationUnit, mode: Mode)(use: String => Int): Int =
     if unit.hasErrors then
       report(unit)
       exitCode(unit.diagnostics)
@@ -74,15 +84,15 @@ object Main:
           report(unit.report(ds))
           exitCode(ds)
         case Right(ir) =>
+          println(props(unit))
           try use(ir)
           catch
             case e: java.io.IOException =>
               Console.err.println(s"cannot write the output: ${e.getMessage}")
               18
 
-  /** Print the memory report of `file`; on an error, its [[exitCode]]. */
-  private def explain(file: String, json: Boolean, mode: Mode): Int =
-    val unit = Compiler.compile(CompilationUnit(read(file)))
+  /** Print the memory report of the checked `unit`; on an error, its [[exitCode]]. */
+  private def explain(unit: CompilationUnit, json: Boolean, mode: Mode): Int =
     Option.when(!unit.hasErrors)(Backend.analyse(unit, mode.budget, mode.ownership)) match
       case Some(Right(a)) =>
         println(if json then MemoryReport.json(unit, a) else MemoryReport.text(unit, a))
@@ -113,7 +123,14 @@ object Main:
     val reporter = new Reporter(unit.source)
     unit.diagnostics.foreach(reporter.add)
     if unit.diagnostics.nonEmpty then println(reporter.formatAll)
-    println(s"${unit.source.path}: ${summary(unit)}")
+    val counted = if unit.hasErrors && unit.props.isEmpty then "" else s"; ${props(unit)}"
+    println(s"${unit.source.path}: ${summary(unit)}$counted")
+
+  /** The static prover's count (`spec/properties.md` Rule P7.1, step 3); a refuted prop is an error, reported apart. */
+  private[fixed] def props(unit: CompilationUnit): String =
+    val proved = unit.props.count { case PropVerdict(_, _, _: Result.Proved) => true; case _ => false }
+    val open = unit.props.count { case PropVerdict(_, _, _: Result.Open) => true; case _ => false }
+    s"props: $proved proved, $open open"
 
   private def summary(unit: CompilationUnit): String =
     unit.tree match
