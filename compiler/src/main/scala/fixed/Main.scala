@@ -19,8 +19,8 @@ import fixed.util.{Diagnostic, Reporter, SourceFile}
   *     `--no-ownership-clones`, in any position, keeps the clones of the type axis and builds
   *     none of the ownership axis but those a `fip` body needs, for measurement.
   *
-  * Exit codes (implementation plan, "Agent-Friendly CLI"): 0 success, 1 compile error, 2 usage,
-  * 3 build failure.
+  * Exit codes (`spec/reports.md` Rule RP5.5): 0 for no error, 2 for a usage error (also an input
+  * file that cannot be read), 18 for an output that cannot be written, else [[exitCode]].
   */
 object Main:
   def main(args: Array[String]): Unit =
@@ -30,7 +30,9 @@ object Main:
       case "compile" :: file :: "--explain-memory" :: format if format == Nil || format == List("--format", "json") =>
         sys.exit(explain(file, json = format.nonEmpty, mode))
       case "ship" :: file :: "-o" :: out :: Nil =>
-        sys.exit(backend(file, mode)(ir => Backend.ship(ir, Path.of(out)).fold(d => { print(file, d); 3 }, _ => 0)))
+        sys.exit(backend(file, mode)(ir =>
+          Backend.ship(ir, Path.of(out)).fold(d => { print(file, d); exitCode(List(d)) }, _ => 0)
+        ))
       case Nil | ("compile" | "ship") :: _ =>
         Console.err.println(
           "usage: fixed <file.fixed>... | fixed compile|ship <file.fixed> -o <out>" +
@@ -39,9 +41,15 @@ object Main:
         )
         sys.exit(2)
       case paths =>
-        val units = paths.map(p => Compiler.compile(CompilationUnit(SourceFile.fromPath(p))))
+        val units = paths.map(read).map(src => Compiler.compile(CompilationUnit(src)))
         units.foreach(report)
-        sys.exit(if units.exists(_.hasErrors) then 1 else 0)
+        sys.exit(exitCode(units.flatMap(_.diagnostics)))
+
+  /** The exit code of a run that reported `diagnostics` (Rule RP5.5): the smallest class among its
+    * errors, or 0 when it has none.
+    */
+  private[fixed] def exitCode(diagnostics: Seq[Diagnostic]): Int =
+    diagnostics.filter(_.isError).map(_.code.errorClass).minOption.getOrElse(0)
 
   /** The build mode `args` ask for, and the other arguments. */
   private[fixed] def modeOf(args: List[String]): (Mode, List[String]) =
@@ -52,32 +60,47 @@ object Main:
     val mode = if flags.contains("--no-specialise") then Mode.NoSpecialise else budget.fold(Mode.Default)(Mode(_))
     (mode.copy(ownership = !flags.contains("--no-ownership-clones")), rest)
 
-  /** Check `file`, lower it to LLVM IR and hand the IR to `use`; exit code 1 on any error. */
+  /** Check `file`, lower it to LLVM IR and hand the IR to `use`; on an error, its [[exitCode]]. An
+    * output that `use` cannot write is 18.
+    */
   private def backend(file: String, mode: Mode)(use: String => Int): Int =
-    val unit = Compiler.compile(CompilationUnit(SourceFile.fromPath(file)))
+    val unit = Compiler.compile(CompilationUnit(read(file)))
     if unit.hasErrors then
       report(unit)
-      1
+      exitCode(unit.diagnostics)
     else
       Backend.compile(unit, mode) match
         case Left(ds) =>
           report(unit.report(ds))
-          1
-        case Right(ir) => use(ir)
+          exitCode(ds)
+        case Right(ir) =>
+          try use(ir)
+          catch
+            case e: java.io.IOException =>
+              Console.err.println(s"cannot write the output: ${e.getMessage}")
+              18
 
-  /** Print the memory report of `file`; exit code 1 on any error. */
+  /** Print the memory report of `file`; on an error, its [[exitCode]]. */
   private def explain(file: String, json: Boolean, mode: Mode): Int =
-    val unit = Compiler.compile(CompilationUnit(SourceFile.fromPath(file)))
+    val unit = Compiler.compile(CompilationUnit(read(file)))
     Option.when(!unit.hasErrors)(Backend.analyse(unit, mode.budget, mode.ownership)) match
       case Some(Right(a)) =>
         println(if json then MemoryReport.json(unit, a) else MemoryReport.text(unit, a))
         0
       case Some(Left(ds)) =>
         report(unit.report(ds))
-        1
+        exitCode(ds)
       case None =>
         report(unit)
-        1
+        exitCode(unit.diagnostics)
+
+  /** The source at `path`; one that cannot be read is a usage error, before any phase runs. */
+  private def read(path: String): SourceFile =
+    try SourceFile.fromPath(path)
+    catch
+      case e: java.io.IOException =>
+        Console.err.println(s"cannot read $path: ${e.getMessage}")
+        sys.exit(2)
 
   private def write(out: Path, ir: String): Int =
     val _ = Files.writeString(out, ir)

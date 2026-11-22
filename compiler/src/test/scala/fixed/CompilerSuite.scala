@@ -76,3 +76,25 @@ class CompilerSuite extends munit.FunSuite:
       CompilationUnit(SourceFile.fromString("<test>", "data Metres\nfn mk() -> Metres = Metres.Metres\n"))
     )
     assertEquals(unit.diagnostics.map(_.code), List(DiagCode.T001))
+
+  test("Rule RP5.5: every diagnostic code has a class of the table; codes that are only warnings have 0"):
+    val classes = Set(0) ++ (3 to 20).filterNot(_ == 13) + 99
+    DiagCode.values.foreach(c => assert(classes.contains(c.errorClass), s"$c has class ${c.errorClass}"))
+    assertEquals(DiagCode.values.filter(_.errorClass == 0).toList, List(DiagCode.T017, DiagCode.T021))
+
+  test("Rule RP5.5: the exit code is the smallest class among the errors of the run"):
+    def exit(sources: String*) =
+      Main.exitCode(sources.toList.flatMap(s =>
+        Compiler.compile(CompilationUnit(SourceFile.fromString("<t>", s))).diagnostics
+      ))
+    assertEquals(exit("fn f() -> u64 = 0\n"), 0)
+    assertEquals(exit("fn f(x: u64) -> u64 = 0\n"), 0, "a warning (T021) sets no exit code")
+    assertEquals(exit("fn f(x: i64 -> i64 = x\n"), 4)
+    assertEquals(exit("fn f() -> u64 = true\n"), 6)
+    assertEquals(exit("fn f() -> u64 = true\nfn g() -> u64 = nope\n"), 5)
+    assertEquals(exit("fn f() -> u64 = true\n", "fn g(x: i64 -> i64 = x\n"), 4)
+    val unsupported = "fn h(_x: ((u64, u64)) of u64) -> u64 = 0\n"
+    assertEquals(exit(unsupported), 99)
+    assertEquals(exit(unsupported, "fn f() -> u64 = true\n"), 6, "a limit of the compiler ranks below a type error")
+    val b004 = util.Diagnostic(util.Severity.Error, DiagCode.B004, util.Span.NoSpan, "`clang` not found on PATH")
+    assertEquals(Main.exitCode(List(b004)), 18)
