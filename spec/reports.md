@@ -1,8 +1,10 @@
 # Fixed Reports: Coverage, Cardinality and the Tool Interface
 
-**Status:** Draft v0.2.8
+**Status:** Draft v0.2.9
 **Specifies:** two analyses the compiler runs and reports — coverage of code by verification, and cardinality of types — the report of what the link step chose, the files a build reads besides its sources, the interface external tools use, and the exit codes of every command.
-**Last revised:** 2026-11-21
+**Last revised:** 2026-11-22
+
+**Changes from v0.2.8.** Rule RP4.1 is restated around the four-term carrier `a·ε₀ + b·ωⁿ + c·ω + d` (new Rules RP4.1.a–RP4.1.c). The intermediate `ωⁿ` tier separates a finite product of countably infinite spaces from a countable sum without recording exponents; `ε₀` caps unbounded multiplicative depth. Addition keeps coefficients, multiplication is bilinear over the tier table, and powers use repeated squaring. A function whose row contains a resumable effect now counts as `ε₀` times its pure count, replacing the former flat `ω` (`bool -> bool with Console` is `4ε₀`), so the coefficient distinguishes such functions. The count is exact only in the finite tier; above it the tiers are structural, not cardinal numbers. Rule RP4.4 prints the normal form, and the JSON form gives the four coefficients.
 
 **Changes from v0.2.7.** Rule RP4.1: the count of a function type is exact only for a function without `Diverge` (`spec/type_system.md` Rule 7.4.h); how to count one with it is left to the owner. Later the same day the owner settled it: each abortive effect of the row, `Diverge` included, adds its outcomes to the count of the result.
 
@@ -96,15 +98,121 @@ A property-based test driver may use region counters to prefer inputs that reach
 
 ### 4.1 The count (Rule RP4.1)
 
-The **cardinality** of a type is the number of values it has.
+The **cardinality** of a type is the number of values it has. For a finite type the count is exact. Above the finite tier the report gives a **structural estimate**, not a cardinal number: every countably infinite type has the same cardinality, so the count records how the space is built — a sum, a product, a power, or an unbounded number of factors — because that is what the report compares. The estimate is the four-term polynomial of Rule RP4.1.a.
 
 - A sum adds: a `data` type's cardinality is the sum over its variants.
 - A product multiplies: a variant's cardinality is the product over its fields.
-- A function type exponentiates: `|A -> B| = |B|^|A|`. This is exact in Fixed for a function without `Diverge` in its row, because such a function is total and pure: there is no non-termination and no exception to add (apart from the known gap of `spec/type_system.md` OQ-T5, data that holds a function of itself, and an `unfold` until Rule 7.4.i is built).
-- A row adds outcomes to the result (owner's decision, fourth round of P6): `|A -> B with R| = (|B| + outcomes(R))^|A|`. `outcomes(R)` is the sum over the abortive effects of `R`, and an abortive effect counts the sum, over its operations, of the count of the operation's arguments, since a call that performs the operation ends with those values in place of a result. So `Diverge` gives 1 (the call may not return, `spec/type_system.md` Rule 7.4.h), `Overflow` 1 and `DivideByZero` 1 (the position is hidden from the program, `spec/effects.md` Rule E3.6.j), `Fail of E` gives `|E|`, and `Decode` gives `|u64|`, the offset its handler receives (`spec/stdlib.md` Rule S3.7.a). `bool -> bool` counts 4, and `bool -> bool with Diverge` counts 9. Resumable effects (`Console`) stay outside the count, as before. An effect removed by proof (`spec/effects.md` Rules E3.6.e to E3.6.e.3) is not in the row and adds nothing, so the count falls when an effect is proved away.
-- An effect adds to the result: `A -> B with Fail of E` counts as `A -> (B + E)`. A function whose row contains an effect with a resuming operation counts as `ω`, because its meaning depends on the handler.
-- A recursive type, and `String`, count as `ω` (countably infinite).
-- A refinement capability (`spec/type_system.md` §6.4) lowers the count when the prover can count its inhabitants: `u8 + between(0, 150)` is 151. Otherwise the count of the base type stands as an upper bound.
+- A function type exponentiates: `|A -> B| = |B|^|A|`, evaluated in the carrier of Rule RP4.1.a. The expression is exact in Fixed for a function without `Diverge` in its row, because such a function is total and pure: there is no non-termination and no exception to add (apart from the known gap of `spec/type_system.md` OQ-T5, data that holds a function of itself, and an `unfold` until Rule 7.4.i is built).
+- A row adds outcomes to the result (owner's decision, fourth round of P6): `|A -> B with R| = (|B| + outcomes(R))^|A|`. `outcomes(R)` is the sum over the abortive effects of `R`, and an abortive effect counts the sum, over its operations, of the count of the operation's arguments, since a call that performs the operation ends with those values in place of a result. So `Diverge` gives 1 (the call may not return, `spec/type_system.md` Rule 7.4.h), `Overflow` 1 and `DivideByZero` 1 (the position is hidden from the program, `spec/effects.md` Rule E3.6.j), `Fail of E` gives `|E|`, and `Decode` gives `|u64|`, the offset its handler receives (`spec/stdlib.md` Rule S3.7.a). `bool -> bool` counts 4, and `bool -> bool with Diverge` counts 9. This is the **pure count** of the function: the total pure results, including the abortive outcomes, before any resumable effect is applied; `outcomes(R)` counts only the abortive effects. An effect removed by proof (`spec/effects.md` Rules E3.6.e to E3.6.e.3) is not in the row and adds nothing, so the count falls when an effect is proved away.
+- An effect adds to the result: `A -> B with Fail of E` counts as `A -> (B + E)`. A function whose row contains an effect with a resuming operation (`Console`) counts as `ε₀` times its pure count: the count of the same function type with the resumable effects removed from the row, abortive outcomes still included. Each resumable effect contributes a factor `ε₀`; since `ε₀ · ε₀ = ε₀`, the row contributes one such factor. So `bool -> bool with Console` is `4ε₀`, `bool -> bool with Console + Diverge` is `9ε₀`, and `String -> bool with Console` is `ε₀ · ω = ε₀`. A resuming operation may run and resume arbitrarily many times, so the handler's meaning is an unbounded sequence of pure results; that is the `ε₀` tier. The coefficient distinguishes functions whose pure count is finite; it is absorbed once the pure count is already infinite.
+- `String` counts as `ω` (countably infinite).
+- A recursive type counts from its construction (Rule RP4.1.c): a productive recursion with a finite label space per step is `ω` (`Nat`), a product of two independent recursive values is `ωⁿ` (`(Nat, Nat)`), and a recursion whose depth multiplies an infinite label space is `ε₀` (`List of String`).
+- A refinement capability (`spec/type_system.md` §6.4) lowers the finite part when the prover can count its inhabitants: `u8 + between(0, 150)` is 151. Otherwise the count of the base type stands as an upper bound.
+
+The function bullet is exact as an expression; the tiers evaluate it structurally. Above the finite tier, `ω^ω` is the `ε₀` tier, not the cardinal `2^ℵ₀`: the report measures the space a finite program can build, not the set of all mathematical functions. Rule RP4.1.b gives the power rules.
+
+#### 4.1.1 The carrier (Rule RP4.1.a)
+
+A count is a four-term polynomial
+
+```text
+a·ε₀ + b·ωⁿ + c·ω + d        a, b, c, d >= 0
+```
+
+The terms are the four **tiers**, highest first: `ε₀`, `ωⁿ`, `ω`, and the finite part `d`. `ωⁿ` is the **intermediate power tier**: it stands for `ω^k` for any finite `k > 1`, without recording or comparing the exponent. `ω²`, `ω³` and `ω^(2^32)` are the same tier, and the report prints it as `ωⁿ`.
+
+`ε₀` is the least fixed point of `α ↦ ω^α`, the tier above every finite power of `ω`. It caps a construction whose number of factors is unbounded. It is a countable ordinal, not an uncountable cardinal, and it is a marker: the report does not claim that a type in the `ε₀` tier has more values than one in the `ωⁿ` tier.
+
+**Why these four terms.** The tiers are a structural scale, not cardinal numbers. `ω` is one countably infinite factor (or a sum of countably many alternatives); `ωⁿ` is a finite product of at least two countably infinite factors; `ε₀` is a construction with unbounded multiplicative depth. All three are countable in the finite-program reading, and the report does not claim that one tier has more values than another in the set-theoretic sense. The order is the order of the constructions, which is what the report compares. For example, a data type with two `String`-only variants is `2ω`, while a variant with two `String` fields is `ωⁿ`; without the intermediate tier both would read `ω`, and the report could not tell the tagged sum from the product.
+
+- Coefficients are kept because a sum is tagged: two countable alternatives (`2ω`) are not one countable space (`ω`), and collapsing them would lose the case count. Addition is componentwise.
+- Finite powers are collapsed because the exponent is not a decision the report makes. Every finite product of countably infinite spaces is countably infinite, and recording `2^32` or a symbolic exponent costs space without changing which type has the larger state space. The tier keeps the distinction that matters: a product of countables (`ωⁿ`) ranks above a countable sum (`2ω`), because it has more independent infinite choices to narrow. That is the order a state-space report needs.
+- `ε₀` caps unbounded degree. A finite polynomial cannot represent a construction whose number of factors is itself unbounded (`List of String`); the least fixed point of `α ↦ ω^α` is the smallest tier above every finite power, and it is countable, so it does not turn the estimate into an uncountable claim.
+- `ε₀` does not absorb the lower terms: `ε₀ + 1` is above `ε₀`, and `2ε₀` is above `ε₀`. Keeping the coefficients makes addition distributive and keeps `a` meaningful.
+
+**Order (Rule RP4.1.a.1).** Two numeric counts compare lexicographically by `(a, b, c, d)`: `ε₀` first, then `ωⁿ`, then `ω`, then the finite part. So `ωⁿ > 2ω`, `ε₀ + 1 > ε₀`, `2ε₀ > ε₀`, and `4ε₀ > 3ε₀`. For a finite count this is the ordinary numeric order. For the infinite tiers it is structural, not a cardinal inequality: the tiers themselves are countable ordinals. A count with a symbolic coefficient (Rule RP4.2) is not ordered unless the coefficients are provably ordered.
+
+**Rendering (Rule RP4.1.a.2).** The report prints the polynomial in descending tier order, omitting zero terms and a coefficient of one: `0`, `1`, `ω`, `2ω`, `ωⁿ`, `2ωⁿ`, `ε₀`, `2ε₀`, `ωⁿ + 2ω + 1`, `ε₀ + ω + 3`. A finite count prints as its decimal value. The JSON form gives the four coefficients as numbers, or as symbolic expressions under Rule RP4.2, beside the rendered form.
+
+#### 4.1.2 Arithmetic (Rule RP4.1.b)
+
+Addition is componentwise:
+
+```text
+(aε₀ + bωⁿ + cω + d) + (a'ε₀ + b'ωⁿ + c'ω + d')
+  = (a+a')ε₀ + (b+b')ωⁿ + (c+c')ω + (d+d')
+```
+
+Coefficients are natural numbers for a closed count and expressions in symbols under Rule RP4.2; they are never absorbed. This is the **natural sum**, not ordinal addition: `1 + ω` and `ω + 1` are both `ω + 1`. Zero is the empty sum and annihilates a product (`0 · x = 0`); one is the finite `1` and preserves it (`1 · x = x`).
+
+Multiplication is bilinear over the tier table:
+
+| × | 1 | ω | ωⁿ | ε₀ |
+| --- | --- | --- | --- | --- |
+| 1 | 1 | ω | ωⁿ | ε₀ |
+| ω | ω | ωⁿ | ωⁿ | ε₀ |
+| ωⁿ | ωⁿ | ωⁿ | ωⁿ | ε₀ |
+| ε₀ | ε₀ | ε₀ | ε₀ | ε₀ |
+
+Multiply the coefficients and add every contribution to its output tier. Written out, the product of `aε₀ + bωⁿ + cω + d` and `a'ε₀ + b'ωⁿ + c'ω + d'` is:
+
+```text
+ε₀: a·a' + a·(b' + c' + d') + a'·(b + c + d)
+ωⁿ: b·b' + b·c' + c·b' + c·c' + b·d' + d·b'
+ω:  c·d' + d·c'
+1:  d·d'
+```
+
+In particular `2ω · 3ω = 6ωⁿ`, `ωⁿ · ω = ωⁿ`, and `(ωⁿ + ω)·ω = 2ωⁿ`. The `ε₀` row retains the coefficient (`2ε₀ · 3ω = 6ε₀`), so distributivity holds there too. The table is the tier operation, not ordinal multiplication: `ε₀ · ε₀` stays `ε₀` (with the coefficients multiplied), because `ε₀` is the cap.
+
+Powers use the same table by repeated squaring on the four coordinates:
+
+- `x^0 = 1` and `x^1 = x` for every count `x`, including `x = ε₀`.
+- `ω^k = ωⁿ` and `(ωⁿ)^k = ωⁿ` for a finite `k > 1`; `ε₀^k = ε₀` for `k > 0`.
+- An infinite base raised to an infinite exponent is `ε₀`: `ω^ω = ε₀`, `(ωⁿ)^ω = ε₀`.
+- A finite base greater than one raised to an infinite exponent is `ω`: `2^ω = ω`. A base of `0` or `1` follows the identities `0^x = 0` (`x > 0`) and `1^x = 1`.
+- A mixed sum raised to a finite power is multiplied out with the table; do not select its highest tier. `(1 + ω)^2 = 1 + 2ω + ωⁿ`, which prints `ωⁿ + 2ω + 1`.
+- A power whose exponent is a finite bound the analysis cannot evaluate stays an expression with that bound; the report does not replace it with a guessed coefficient.
+
+The arithmetic identities `b^0 = 1`, `b^1 = b`, `1^b = 1` and `0^b = 0` (`b` nonzero) hold for every tier.
+
+#### 4.1.3 Collections and recursion (Rule RP4.1.c)
+
+Count a collection from the model it denotes, not by iterating its recursive equation in the carrier. The equation alone cannot distinguish a fixed product from an unbounded number of factors; both eventually reach `ωⁿ`. The **label space** of a recursive step is the set of labels its constructors carry at that step — the element type of a `List`, the non-recursive field values of a variant. A finite label space and a finite number of recursive positions per step is `ω`; an infinite label space or an infinite number of recursive positions can reach `ε₀`.
+
+- `List of A` is the type of finite sequences of `A`.
+  - `List of !` is `1` (the empty list only).
+  - `List of A` with `|A|` finite and at least `1` is `ω`: finitely many symbols per position, unbounded length.
+  - `List of A` with `|A|` infinite is `ε₀`: the length is unbounded and each position ranges over an infinite set, so no finite power of `ω` bounds it.
+- A tuple or a single-variant `data` type is a product: `(String, String)` is `ωⁿ`, a third `String` field in a variant does not change the tier, and `(bool, String)` is `2ω`.
+- A `data` type whose variants are sums of products follows the same rules: a type with two `String`-only variants is `2ω`; a variant with two `String` fields is `ωⁿ`; a type with both contributes both terms.
+- A concrete data type that denotes finite subsets or finite partial functions counts by that model. For a finite `A` with `n` values, the finite-subset type over `A` is `2^n`; for an infinite `A` it is `ω`, because a finite subset is a finite amount of data. A finite partial function with an infinite domain is `ω`, not the `ε₀` of the total function space. With a finite domain `D` and codomain `V`, each key is absent or holds a value, so the count is `(1 + |V|)^|D|`; a finite partial function from `bool` to `String` is `(1 + ω)^2 = ωⁿ + 2ω + 1`. A total function `A -> B` is the exponential of Rule RP4.1; it is not a finite partial function.
+- A recursive type is counted by its construction. `Nat` (`Z` and `S(prev: Nat)`) is `ω`: each step adds one constructor and the label space is finite. `(Nat, Nat)` is `ωⁿ`, because it is the product of two independent recursive values; a type with one `Nat` field is `ω`, not `ε₀`.
+- Do not promote a type to `ε₀` merely because a field is recursive. Promotion requires unbounded multiplicative depth: the recursive equation must multiply an infinite label space at each step, as `List of String` does. A settled `Nat` used once stays `ω`; two independent uses multiply to `ωⁿ`; a consumer of a recursive value does not collapse just because its child is recursive.
+
+Worked examples:
+
+| Type | Count |
+| --- | --- |
+| `bool` | `2` |
+| `String` | `ω` |
+| a `data` type with two `String`-only variants | `2ω` |
+| a variant with two `String` fields | `ωⁿ` |
+| a variant with three `String` fields | `ωⁿ` |
+| `(bool, String)` | `2ω` |
+| `(Maybe of String, Maybe of String)` | `ωⁿ + 2ω + 1` |
+| `bool -> String` | `ωⁿ` |
+| `String -> bool` | `ω` |
+| `String -> String` | `ε₀` |
+| `i64 -> String` | `ωⁿ` |
+| `bool -> bool with Console` | `4ε₀` |
+| `bool -> bool with Console + Diverge` | `9ε₀` |
+| `String -> bool with Console` | `ε₀` |
+| `List of !` | `1` |
+| `List of bool` | `ω` |
+| `List of String` | `ε₀` |
+| `Nat` | `ω` |
+| `(Nat, Nat)` | `ωⁿ` |
 
 ### 4.2 Capability-bounded types are symbolic (Rule RP4.2)
 
@@ -117,6 +225,8 @@ Substituting a number for the symbol over-counts the implementations of a polymo
 1. the **symbolic bound**: the expression of Rule RP4.1 with the symbols left in place;
 2. the **parametric count**, only where it is finite: the number of distinct terms of the result type that can be built from the parameters and the members of the bounds. It is finite when no member of the bounds can be applied to its own result without end. Otherwise the report says `law-bounded` and gives no number: counting terms up to the capabilities' props is not decidable in general.
 
+The four-term normal form of Rule RP4.1.a is the closed form of that expression; while symbols remain, the report prints the expression and does not claim a tier order.
+
 **An unbounded type variable admits no inspection.** `show`, `==` and `clone` on a value of an unbounded type parameter are type errors (`docs/decisions/P6-resolution-round-2026-11-20.md` D10), and diagnostics, which print any value, return nothing to the program (`spec/diagnostics.md` Rule DG3.3). So `T -> T` with `T` unbounded has one implementation, and the parametric count is as above. The alternative debated was universal `show` and `==`: every type variable would then count as bounded by `Show + Eq`, the count would still exist but would be the count for that bound, and every signature's count would grow. It was rejected.
 
 ### 4.3 Who uses the count (Rule RP4.3)
@@ -124,14 +234,14 @@ Substituting a number for the symbol over-counts the implementations of a polymo
 Counting inhabitants is one service with several users inside the compiler:
 
 - exhaustiveness of `match` and of handler clauses (`spec/pattern_matching.md` §6);
-- generators: when the product of a prop's binder cardinalities is no larger than the iteration budget, the driver enumerates every combination instead of sampling (`spec/properties.md` Rule P8.5);
+- generators: when the product of a prop's binder cardinalities is finite and no larger than the iteration budget, the driver enumerates every combination instead of sampling (`spec/properties.md` Rule P8.5); a count with a nonzero infinite tier is never enumerable;
 - the report below.
 
 Layout does not use the count. A type with more than one variant has a one-byte tag when it is an immediate (`spec/compilation_model.md` Rule CM3.5) and a link-unique tag in its descriptor when it is a cell, and each type has one layout (`spec/memory_management.md` Rule PR3.1): no tag is narrowed to `⌈log₂ n⌉` bits or shared with a field.
 
 ### 4.4 The report (Rule RP4.4)
 
-`fixed compile --explain-cardinality` prints, per `data` declaration, its state space, and per public signature, its implementation space, each as a number, `ω`, or a symbolic expression with the parametric count where Rule RP4.2 allows one. `--format json` gives the same data. The symbolic cardinality of every public declaration is part of the interface tier (`spec/compilation_model.md` Rule CM7.1), so two versions of a package can be compared.
+`fixed compile --explain-cardinality` prints, per `data` declaration, its state space, and per public signature, its implementation space, each as a finite number or a four-term count (Rule RP4.1.a), or as a symbolic expression with the parametric count where Rule RP4.2 allows one. `--format json` gives the same data, with the four coefficients beside the rendered form. The symbolic cardinality of every public declaration is part of the interface tier (`spec/compilation_model.md` Rule CM7.1), so two versions of a package can be compared.
 
 ## 5. The tool interface
 
