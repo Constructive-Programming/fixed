@@ -81,7 +81,10 @@ class EmitSuite extends munit.FunSuite:
     "nat_loop" -> (List(2000200L, 2000000L, 0L, 0L), List(0L, 4000200L, 0L, 2000800L)),
     "list_pipeline" -> (List(6000200L, 4000000L, 0L, 0L), List(0L, 10000200L, 0L, 16000800L)),
     "records" -> (List(2000100L, 2000000L, 0L, 0L), List(0L, 4000100L, 0L, 6000400L)),
-    "fail_chain" -> (List(2000200L, 0L, 0L, 0L), List(0L, 2000200L, 0L, 7999400L))
+    "fail_chain" -> (List(2000200L, 0L, 0L, 0L), List(0L, 2000200L, 0L, 7999400L)),
+    "shared_map" -> (List(2010200L, 0L, 2000000L, 0L), List(0L, 2010200L, 2000000L, 6040800L)),
+    "fresh_map" -> (List(4010200L, 2000000L, 0L, 0L), List(0L, 6010200L, 0L, 12040800L)),
+    "acc_loop" -> (List(2000000L, 2000000L, 0L, 0L), List(0L, 4000000L, 0L, 8000000L))
   )
 
   programs.foreach { (dir, name) =>
