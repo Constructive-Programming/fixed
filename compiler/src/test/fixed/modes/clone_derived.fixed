@@ -1,5 +1,6 @@
-// Clone on request (spec/stdlib.md §4.11): the derived clone copies each cell and clones each field,
-// through a program's own satisfies body where a field's type has one; scalars and String are
+// Clone on request (spec/stdlib.md §4.11): every cell is a heap cell, so the derived clone shares
+// the receiver, also a field whose type has its own satisfies body (`Wrap`'s `Own` keeps its 1);
+// a program's body runs where the receiver's type has one (`Own`); scalars and String are
 // themselves; at a type parameter through its table, built at run time for `Box of T` in `wrapDup`.
 // The original stays usable after the clone.
 use std.io.Console
@@ -37,6 +38,6 @@ fn main() -> () with Console =
     let c = t.clone()
     Console.printLine(c.show().concat(" ").concat(t.show()))
     Console.printLine(dup(3).concat(" ").concat(dup("s")).concat(" ").concat(dup(Box.Box(7))).concat(" ").concat(dup([1, 2])))
-    Console.printLine(boxed(Box.Box("x")).concat(" ").concat(Wrap.Wrap(Own.Own(1), "w").clone().show()))
+    Console.printLine(boxed(Box.Box("x")).concat(" ").concat(Wrap.Wrap(Own.Own(1), "w").clone().show()).concat(" ").concat(Own.Own(1).clone().show()))
     Console.printLine((5).clone().show().concat(" ").concat("s".clone()).concat(" ").concat([1, 2].clone().show()))
-    Console.printLine(wrapDup(3).concat(" ").concat(wrapDup([1, 2])))
+    Console.printLine(wrapDup(3).concat(" ").concat(wrapDup([1, 2])).concat(" ").concat(dup(Own.Own(5))))

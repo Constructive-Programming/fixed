@@ -376,6 +376,21 @@ class EmitSuite extends munit.FunSuite:
     assertEquals((code, out), (0, "12\n"), err)
     assertEquals(sites(Native.counters(err)), List(0L, 12L, 0L, 0L))
 
+  /** Every cell is a heap cell, so the derived `clone` returns its receiver with its count raised
+    * (`spec/stdlib.md` §4.11): a list of 1,000,000 cells is cloned in one step, directly and, with
+    * `--no-specialise`, through a table, and nothing is allocated beyond the program that does not
+    * clone. One native frame per cell would overflow the stack.
+    */
+  test("the derived clone of a list of 1,000,000 cells shares it: no allocation, no frame per cell"):
+    def src(clone: String) = header + "fn upto(n: u64) -> List of u64 =\n    List.unfold(0, (i) ->\n" +
+      "        if i >= n:\n            List.Nil\n        else:\n            List.Cons(i, i + 1)\n    )\n\n" +
+      s"fn again(x: T is Clone) -> T = x$clone\n\nfn main() -> () with Console =\n    let xs = upto(1000000)\n" +
+      s"    let ys = xs$clone\n    let zs = again(xs)\n" +
+      "    Console.printLine(ys.length().show().concat(\" \").concat(zs.length().show()).concat(\" \").concat(xs.length().show()))\n"
+    val out = "1000000 1000000 1000000\n"
+    val (cloned, shared) = (check("clone_long", src(".clone()"), out), check("clone_none", src(""), out))
+    modes.foreach(m => assertEquals(cloned(m).get("allocs"), shared(m).get("allocs"), m))
+
   test("one baseline version of a generic function runs at String and at i8, freeing every String (Rule CM3.1)"):
     val src = BaselineSuite.generic
     val counts = check("generic", src, "cd\n-100\nxy-7\n")

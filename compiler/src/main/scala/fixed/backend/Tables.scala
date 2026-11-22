@@ -77,7 +77,7 @@ private[backend] trait Tables extends Satisfied:
   private def dynamicTable(t: Type, cap: SymbolId): Either[String, Atom.DynTable] =
     dataOf(t).toRight(s"no table at `${symbols.render(t)}`, which has type parameters").flatMap { (data, args) =>
       val own = symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil))
-      val derivedCap = Option.when(Set("Show", "Eq", "Ord", "Clone")(symbols.preludeName(cap)))(cap)
+      val derivedCap = Option.when(Set("Show", "Eq", "Ord")(symbols.preludeName(cap)))(cap)
       assumed.withValue(derivedCap.fold(Map.empty)(c => own.map(_ -> c).toMap)) {
         val layout = own.flatMap(hiddenOf)
         val tooMany = s"a table at `${symbols.render(t)}` holds more than ${Tables.maxCaptures} witnesses and tables"
@@ -252,7 +252,14 @@ private[backend] trait Tables extends Satisfied:
       case (Some("Sequencing"), "length", _) if list =>
         Some(adapter(name, length(data, own, Type.PrimType("u64"), Span.NoSpan), args, own))
       case (Some("Functor"), "map", Some(b)) => Some(adapter(name, derivedMap(data, own, b, Span.NoSpan), args, own))
-      case (None, "lt" | "le", _)            => comparison(t, member).map((g, _) => adapter(name, g, args, own))
+
+      /** Every cell is a heap cell, so the derived `clone` shares the receiver (`spec/stdlib.md` §4.11). */
+      case (Some("Clone"), "clone", _) =>
+        Some(instance(name) {
+          val self: Atom.Var = Atom.Var("self", CType.Boxed)
+          Fn(name, List(table, self), CType.Boxed, Expr.Ret(self))
+        })
+      case (None, "lt" | "le", _) => comparison(t, member).map((g, _) => adapter(name, g, args, own))
       case (Some(c), m, _) if derivers.contains((c, m)) =>
         derived(t, derivers((c, m))).map(_._1).map(adapter(name, _, args, own))
       case _ => body(fromPrelude = true))
@@ -262,8 +269,7 @@ private[backend] trait Tables extends Satisfied:
     Map(
       ("Show", "show") -> derivedShow,
       ("Eq", "eq") -> derivedEq,
-      ("Ord", "compare") -> derivedCompare,
-      ("Clone", "clone") -> derivedClone
+      ("Ord", "compare") -> derivedCompare
     )
 
   /** An auto-flat-struct's entry `name` (`spec/type_system.md` §6.6): its constructor `ctor` builds

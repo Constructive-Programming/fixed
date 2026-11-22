@@ -49,9 +49,6 @@ private[backend] trait Generated:
   /** `v`, a value of type `t`, shown: `k` gets the `String` ([[Satisfied]]). */
   protected def showValue(t: Type, v: Atom)(k: K): Expr
 
-  /** `v`, a value of type `t`, cloned: `k` gets the clone ([[Satisfied]]). */
-  protected def cloneValue(t: Type, v: Atom)(k: K): Expr
-
   /** Whether `a` and `b`, values of type `t`, are equal: `k` gets the `bool` ([[Satisfied]]). */
   protected def equalValues(t: Type, a: Atom, b: Atom)(k: K): Expr
 
@@ -394,16 +391,6 @@ private[backend] trait Generated:
       val ctor = symbols.variantsOf(data).toList(tag).name
       if loaded.isEmpty then Expr.Ret(Atom.StrC(ctor)) else fields(loaded, Atom.StrC(s"$ctor("), first = true)
     }
-
-  /** Derived `clone` (`spec/stdlib.md` §4.11, on request): a fresh cell of the same variant, each
-    * field cloned by [[cloneValue]]; hidden parameters as for [[derivedShow]].
-    * ponytail: one native frame per level, so a list of about 260,000 cells overflows an 8 MiB
-    * stack; loop like `map` (Rule 7.4.b.3) if long values are cloned.
-    */
-  protected def derivedClone(data: SymbolId, args: List[Type]): String =
-    unary(data, args, "clone")((tag, loaded) =>
-      construction(tag, loaded, (ft, v) => Some(cloneValue(ft, v)), Type.TypeRef(data, args))
-    )
 
   /** A derived member `name` of one value of `data` at `args`, with a boxed result: `body` of each
     * variant's fields.

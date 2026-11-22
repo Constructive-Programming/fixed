@@ -145,23 +145,6 @@ private[backend] trait Satisfied extends Generated:
     )
     body.orElse(derived(t, gen))
 
-  /** `v` of type `t` cloned (`spec/stdlib.md` §4.11): a scalar, `()` or a `String` is the value itself
-    * (values are immutable); a data type by the program's `satisfies Clone` body or else its derived
-    * `clone`, a type parameter through its table; anything else is a problem (`B005`).
-    */
-  protected def cloneValue(t: Type, v: Atom)(k: K): Expr =
-    if !v.tpe.counted || isStringType(t) then k(v)
-    else
-      bodyOrDerived(t, "Clone", "clone", derivedClone) match
-        case Some((f, ws)) =>
-          val c = fresh("c", v.tpe)
-          Expr.Let(c, Rhs.Call(f, ws :+ v, runtime = false), k(c))
-        case None =>
-          throughTable(t, "Clone", "clone", List(v), v.tpe)(k).getOrElse {
-            report(s"`clone` on ${symbols.render(t)}")
-            k(v)
-          }
-
   /** Whether `a` and `b` of type `t` are equal: units always, scalars by a comparison, else by
     * [[equality]]; a type it cannot compare is a problem (`B005`).
     */
