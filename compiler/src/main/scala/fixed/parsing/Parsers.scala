@@ -262,6 +262,48 @@ object Parser:
         if s.current.kind == TokenKind.Eof || inner.contains(s.current.kind) then s
         else syncToAnchors(s.advance)
 
+  /** The column (1-based) of the first token on the line of `offset`. */
+  private[parsing] def lineIndent(offset: Int)(using reporter: Reporter): Int =
+    val src = reporter.source
+    val start = src.lineOffsets(src.lineOf(offset) - 1)
+    src.content.indexWhere(_ != ' ', start) - start + 1
+
+  /** True where a construct that ends with its line, on a line indented at `indent`, has ended:
+    * at EOF, a DEDENT, a NEWLINE before a line indented no deeper (its span is that line's first
+    * token), or a [[waited]] token.
+    */
+  private def atLineEnd(s: ParserState, indent: Int)(using reporter: Reporter): Boolean =
+    s.current.kind match
+      case TokenKind.Eof | TokenKind.Dedent => true
+      case TokenKind.Newline                => reporter.source.lineColumn(s.current.span.start)._2 <= indent
+      case _                                => waited(s)
+
+  /** A `,` or closing bracket that an enclosing production waits for. */
+  private def waited(s: ParserState): Boolean = s.current.kind match
+    case k @ (TokenKind.Comma | TokenKind.RParen | TokenKind.RBracket | TokenKind.RBrace) =>
+      s.anchors.exists(_.contains(k))
+    case _ => false
+
+  /** End a construct at [[atLineEnd]]; otherwise report what follows it, on its line or on
+    * lines indented deeper, as one `code` and skip it, taking INDENT/DEDENT pairs whole. A
+    * [[waited]] token inside such a pair stops the skip too, and the DEDENTs still open are
+    * owed (as in [[parseIndentedBody]]).
+    */
+  private[parsing] def expectLineEnd(s: ParserState, indent: Int, code: DiagCode, what: String, hint: String)(using
+      Reporter
+  ): ParserState =
+    @tailrec def skip(st: ParserState, depth: Int): ParserState = st.current.kind match
+      case TokenKind.Eof                            => st
+      case TokenKind.Indent                         => skip(st.advance, depth + 1)
+      case TokenKind.Dedent if depth > 0            => skip(st.advance, depth - 1)
+      case _ if depth == 0 && atLineEnd(st, indent) => st
+      case _ if waited(st)                          => (1 to depth).foldLeft(st)((owing, _) => owing.addOwed)
+      case _                                        => skip(st.advance, depth)
+    if atLineEnd(s, indent) then s
+    else
+      reportExpected(skipNewlines(s), code, what, Some(hint))
+      skip(s, 0)
+
   /** Count of DEDENT tokens that an inner block-style parser exited
     * bracket-aware (without consuming a matching DEDENT). The scanner
     * will eventually emit those DEDENTs when the indent stack collapses

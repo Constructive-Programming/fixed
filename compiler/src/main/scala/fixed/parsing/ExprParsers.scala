@@ -233,7 +233,7 @@ private[parsing] object ExprParsers:
       (s7, Trees.IfExpr(cond, thenBranch, elseBranch, span(startTok.span, elseBranch.span)))
     }
 
-  /** MatchExpr ::= "match" Expr ":" INDENT MatchCase+ DEDENT
+  /** MatchExpr ::= "match" Expr ":" (MatchCase | INDENT MatchCase+ DEDENT)
     * MatchCase ::= OrPattern ("if" Expr)? "=>" InlineOrBlockExpr
     */
   private[parsing] def parseMatchExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
@@ -245,7 +245,7 @@ private[parsing] object ExprParsers:
     }
 
   private[parsing] def parseMatchCases(s0: ParserState)(using Reporter): Parsed[List[Trees.MatchCase]] =
-    val (s1, cases) = parseIndentedBody(s0, List.empty[Trees.MatchCase]) { (st, acc) =>
+    val (s1, cases) = parseMemberList(s0, List.empty[Trees.MatchCase], "case") { (st, acc) =>
       val (st1, matchCase) = parseMatchCase(st)
       (st1, matchCase :: acc)
     }
@@ -341,7 +341,7 @@ private[parsing] object ExprParsers:
       (s5, Trees.ForallExpr(binders, suchThat, body, span(startTok.span, body.span)))
     }
 
-  /** HandleExpr ::= "handle" Expr ":" INDENT HandlerClause+ DEDENT
+  /** HandleExpr ::= "handle" Expr ":" (HandlerClause | INDENT HandlerClause+ DEDENT)
     * HandlerClause ::= OperationClause | ReturnClause
     *   OperationClause ::= UPPER_IDENT "." LOWER_IDENT ("(" PatternList ")")? "=>" Body
     *   ReturnClause ::= "return" "(" Pattern ")" "=>" Body
@@ -359,7 +359,7 @@ private[parsing] object ExprParsers:
 
   /** Internal accumulator for handler-clause parsing: we collect normal
     * operation clauses and (possibly) a single return clause in lockstep so the body
-    * loop stays a single fold over `parseIndentedBody`.
+    * loop stays a single fold over `parseMemberList`.
     */
   final private case class HandlerAcc(
       operationClauses: List[Trees.OperationClause],
@@ -369,7 +369,7 @@ private[parsing] object ExprParsers:
   private[parsing] def parseHandlerClauses(
       s0: ParserState
   )(using Reporter): (ParserState, List[Trees.OperationClause], Option[Trees.ReturnClause]) =
-    val (s1, acc) = parseIndentedBody(s0, HandlerAcc(Nil, None)) { (st, acc) =>
+    val (s1, acc) = parseMemberList(s0, HandlerAcc(Nil, None), "clause") { (st, acc) =>
       val (st1, parsed) = parseHandlerClause(st)
       val acc1 = parsed match
         case ra: Trees.ReturnClause    => acc.copy(returnClause = Some(ra))

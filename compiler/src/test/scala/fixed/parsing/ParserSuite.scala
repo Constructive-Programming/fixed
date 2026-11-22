@@ -463,3 +463,62 @@ class ParserSuite extends FunSuite with ParserTestSupport:
         |""".stripMargin
     ))
     assert(!pr.hasErrors, pr.diagnostics.toString)
+
+  test("MatchCaseList and HandlerClauseList: one case or clause on the `:` line"):
+    val (t, rep) = parse(
+      """fn f(x: u64) -> u64 =
+        |    let y = match x: _ => 0
+        |    let z = g(match y: 1 => 2, handle h(): return(v) => v)
+        |    if z == 0: match z: _ => 1 else: handle k(): Fail.fail(e) => 3
+        |    [match z: _ => 4, 5].length()
+        |fn g(x: u64) -> u64 = match x: n => n
+        |""".stripMargin
+    )
+    assert(!rep.hasErrors, rep.formatAll)
+    t match
+      case Trees.CompilationUnit(List(f: Trees.FnDecl, g: Trees.FnDecl), _) =>
+        f.body match
+          case Some(Trees.Block(List(Trees.LetExpr(_, m: Trees.MatchExpr, _), Trees.LetExpr(_, call, _), _, _), _)) =>
+            assertEquals(m.cases.length, 1)
+            call match
+              case Trees.Apply(_, List(_: Trees.MatchExpr, h: Trees.HandleExpr), _) => assert(h.returnClause.isDefined)
+              case other => fail(s"expected `g` at a match and a handle, got $other")
+          case other => fail(s"expected a block of four statements, got $other")
+        g.body match
+          case Some(m: Trees.MatchExpr) => assertEquals(m.cases.length, 1)
+          case other                    => fail(s"expected a match, got $other")
+      case other => fail(s"expected two functions, got $other")
+
+  test("MatchCaseList and HandlerClauseList: a second case or clause on the line, or below it, is one P001"):
+    List(
+      "    let y = match x: 1 => 0 _ => 2\n" -> "case",
+      "    let y = match x: 1 => 0\n        _ => 2\n" -> "case",
+      "    let y = handle h(): Fail.fail(e) => 0 return(v) => v\n" -> "clause"
+    ).foreach { (body, member) =>
+      val (t, rep) = parse("fn f(x: u64) -> u64 =\n" + body + "    y\nfn after() -> u64 = 0\n")
+      assertEquals(rep.diagnostics.map(_.code), List(fixed.util.DiagCode.P001), body)
+      assert(rep.diagnostics.head.message.contains("one-line body"), rep.formatAll)
+      assert(rep.diagnostics.head.suggestion.exists(_.contains(s"holds one $member")), rep.formatAll)
+      t match
+        case Trees.CompilationUnit(List(f: Trees.FnDecl, a: Trees.FnDecl), _) =>
+          assertEquals(a.sig.name, "after", body)
+          f.body match
+            case Some(Trees.Block(stmts, _)) => assertEquals(stmts.length, 2, body)
+            case other                       => fail(s"expected a block, got $other")
+        case other => fail(s"expected two functions, got $other")
+    }
+
+  test("MatchCaseList: the skip after a second case stops at the `,` the enclosing call waits for"):
+    val (t, rep) = parse("fn f(x: u64) -> u64 = g(match x: 1 => 0 _ =>\n    2, 3)\nfn after() -> u64 = 0\n")
+
+    /** The DEDENT owed by the skipped block is reported at top level (P002), as after a
+      * multi-line lambda argument in the same place.
+      */
+    assertEquals(rep.diagnostics.map(_.code), List(fixed.util.DiagCode.P001, fixed.util.DiagCode.P002), rep.formatAll)
+    t match
+      case Trees.CompilationUnit(
+            List(Trees.FnDecl(_, _, _, _, _, Some(Trees.Apply(_, args, _)), _), _: Trees.Error, a: Trees.FnDecl),
+            _
+          ) =>
+        assertEquals((args.length, a.sig.name), (2, "after"))
+      case other => fail(s"expected `f` calling `g` at two arguments, then `after`, got $other")

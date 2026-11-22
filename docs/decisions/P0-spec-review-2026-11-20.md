@@ -195,10 +195,10 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
   - **Fixed** (`Typer.emptyLists`; owner's decision, P6 fourth round, Rule 5.10, "Elements"): it is `T029` when the unit finishes, after literal defaults, unless the literal already has an error; a parameter, field, result or another element still fixes the type. The help names the ascription `[] is List of u8`, which does not parse yet: neither ascription (Rule 5.11) nor a list literal's choice point (Rule 5.10, case 3) is built. A declared `List of !` does not fix it (the unifier never binds a variable to `!`), so `fn f() -> List of ! = []` is `T029`.
 - `clone` on a type with `Box satisfies Clone` passed the typer and was `B005` in the backend (found by the documentation pass of 2026-11-21): the backend built no `clone` for any type, scalars and `String` included, though the plan listed `Clone` on request as done.
   - **Fixed** (`Generated.derivedClone`, `Satisfied.cloneValue`, `Tables`, `Lower.resolved`; `spec/stdlib.md` §4.11): the derived `clone` copies, a fresh cell of the same variant with each field cloned, through a program's `satisfies Clone` body where a field's type has one; a scalar, `()` or `String` is the value itself; a type parameter goes through its table, whose entries are built for scalars, `String` and data types, also at run time. It takes one native frame per level of the value, so a list of about 260,000 cells overflows an 8 MiB stack (Rule 7.4.b.3 does not cover `clone`).
+- A `match` took only the indented block of cases, though `MatchCaseList` allows one case on the line (`match x: _ => 0` was `P001`); a `handle` likewise took only the indented block of clauses, though `HandlerClauseList` allows one.
+  - **Fixed** (`DeclParsers.parseMemberList`, `Parser.expectLineEnd`): `match` and `handle` share the routine of Rule 7.1.b. The one case or clause ends with its line, before `else`, or before a `,` or closing bracket that an enclosing production waits for; a second one on the line, or one on a line indented deeper below it, is one `P001` that says the line holds one case (or clause).
 
 Found and not fixed:
-
-- A `match` takes only the indented block of cases, though `MatchCaseList` allows one case on the line (`match x: _ => 0` is `P001`).
 
 - A type that refers to itself at other arguments gets only baseline versions of its generated members.
 - The result of a closure call is always taken as shared. Measured: 4.0 instructions per tested reuse, at most 0.30% on `records`. Left as it is.

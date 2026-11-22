@@ -223,34 +223,29 @@ private[parsing] object DeclParsers:
       }
       (s1, items.reverse)
 
-  /** The body after the `:` of a `data`, `cap`, `effect` or `satisfies` declaration
-    * (Rule 7.1.b): an indented block, or exactly one member on the same line.
-    * Anything after that one member, on its line or on indented lines below,
-    * is one `P001` and is skipped up to the next token in column 1. These
-    * declarations are top-level only, so the skip takes INDENT/DEDENT pairs whole.
+  /** The body after a `:` that is an indented block or exactly one `member` on the same line:
+    * of a `data`, `cap`, `effect` or `satisfies` declaration (Rule 7.1.b), of a `match`
+    * (`MatchCaseList`) and of a `handle` (`HandlerClauseList`). The one member ends with its
+    * line, or before `else` or a `,` or bracket an enclosing production waits for
+    * ([[expectLineEnd]]); anything else after it, on its line or on lines indented deeper than
+    * the `:` line, is one `P001` and is skipped.
     */
-  private[parsing] def parseMemberList[A](s0: ParserState, acc0: A)(
+  private[parsing] def parseMemberList[A](s0: ParserState, acc0: A, member: String = "member")(
       step: (ParserState, A) => Parsed[A]
-  )(using reporter: Reporter): Parsed[A] =
+  )(using Reporter): Parsed[A] =
     if s0.current.kind == TokenKind.Indent then parseIndentedBody(s0, acc0)(step)
     else
       val (s1, acc) = withAnchors(s0, Anchors.blockBody)(step(_, acc0))
-      val src = reporter.source
-      val layout = KindSet(TokenKind.Newline, TokenKind.Indent, TokenKind.Dedent)
-      def stray(st: ParserState) = st.current.kind != TokenKind.Eof &&
-        (layout.contains(st.current.kind) || src.lineColumn(st.current.span.start)._2 > 1)
-      @tailrec def skip(st: ParserState, p: ParserState => Boolean): ParserState =
-        if p(st) then skip(st.advance, p) else st
-      val next = skip(s1, st => layout.contains(st.current.kind))
-      if !stray(next) then (s1, acc)
+      if s1.current.kind == TokenKind.KwElse then (s1, acc)
       else
-        reportExpected(
-          next,
+        val end = expectLineEnd(
+          s1,
+          lineIndent(s0.peek(-1).span.start),
           DiagCode.P001,
           "the end of a one-line body",
-          Some("a body on the `:` line holds one member; end the line at `:` and indent each member on its own line")
+          s"a body on the `:` line holds one $member; end the line at `:` and indent each $member on its own line"
         )
-        (skip(next, stray), acc)
+        (end, acc)
 
   /** INDENT item (NEWLINE item)* DEDENT, in source order. Each item must end
     * its line; trailing junk is reported as `code` ("unexpected … after
