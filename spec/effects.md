@@ -548,6 +548,23 @@ handle parse(input):
 
 Where the subject's row holds one instance of the effect, a clause needs no type, as before. Where it holds several, a clause whose parameters, with the types written on them, fit exactly one instance handles that one; a clause that fits several is `error[E096]: Fail.fail matches Fail of String and Fail of i64; write the type of a parameter`. Coverage (`E093`) is per instance: a `handle` may handle one instance and leave the other in the row. An operation whose parameters do not mention the `of` argument cannot be told apart this way; for it, and for readability in general, the clause names an alias of the instance (Rule E4.5.c.1). (Owner's decision, fourth round of P6; it settles OQ-E10.) Not built.
 
+**Rule E6.1.b (Performing one of two instances).** The same two means pick the instance at the place where an operation is performed, in a function whose row holds one effect at several `of` arguments (owner's decision, fourth round of P6):
+
+```
+type ParseFail = Fail of String
+
+fn parse(s: String) -> u64 with ParseFail + Fail of i64 =
+    if s.isEmpty(): Fail.fail("empty")      // Fail of String, by the argument's type
+    else if s == "?": ParseFail.fail("?")   // the same instance, by its alias
+    else: Fail.fail(404 is i64)             // Fail of i64
+```
+
+1. The types of the arguments decide where they fit exactly one instance of the row. For an operation whose parameters do not mention the `of` argument (`State of S` with `fn get -> S`), the type the context expects of the result decides in the same way.
+2. An alias of exactly one effect (Rule E4.5.c.1) names the instance, is always allowed, and is required where the types do not decide.
+3. A call that fits several instances and names no alias is `error[E096]`, as for a clause; the diagnostic lists the instances and suggests an ascription (`spec/type_system.md` Rule 5.11) or an alias. An integer literal alone does not decide between two integer instances.
+
+With one instance of the effect in the row nothing changes. Not built.
+
 ### 6.2 Operational semantics (Rule E6.2)
 
 Evaluating `handle SUBJECT: clauses` proceeds:
