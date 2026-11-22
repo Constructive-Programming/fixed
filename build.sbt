@@ -90,6 +90,7 @@ lazy val compiler = (project in file("compiler"))
     name := "fixed-compiler",
     libraryDependencies ++= Seq(
       "dev.constructive" %% "cats-eo" % "1.3.0", // brings cats-core
+      ("io.github.uuverifiers" %% "princess" % "2025-06-25").cross(CrossVersion.for3Use2_13),
       "org.scalameta" %% "munit" % "1.0.0" % Test
     ),
     Test / parallelExecution := false,
