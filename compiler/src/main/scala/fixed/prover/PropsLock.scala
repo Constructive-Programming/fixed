@@ -12,9 +12,9 @@ import fixed.CompilationUnit
 
 /** The record of statuses, `props.lock` (`spec/properties.md` Rule P7.1.b), beside the source file.
   *
-  * One line per prop, sorted by name: the source file and the prop's qualified name, its status (`proved` or `open`),
-  * the steps used, its key, the prover's version, the budget, and for an open prop the reason. A refuted prop is an
-  * error and has no status, so it has no line. Today a package is one source file, and several may share a directory, so
+  * One line per prop, sorted by name: the source file and the prop's qualified name, its status (`proved`, `open` or `failed`),
+  * the steps used, its key, the prover's version, the budget, and for an open prop the reason. A refuted prop is
+  * recorded as `failed` and never taken from the lock: it is proved again, so its `E102` is reported each time. Today a package is one source file, and several may share a directory, so
   * one `props.lock` holds the lines of every file beside it, each name prefixed by its file.
   *
   * The key of a prop in the fragment is a hash of its obligation: the binders with their types, the range goals and the
@@ -52,11 +52,7 @@ object PropsLock:
   def record(unit: CompilationUnit): CompilationUnit =
     path(unit).filter(_ => !unit.hasErrors || unit.props.nonEmpty).foreach { p =>
       val prefix = s"${fileOf(unit)}:"
-      val mine = unit.props.flatMap { v =>
-        v.result match
-          case _: Result.Refuted => None
-          case r                 => Some(Entry(prefix + v.name, r, v.key, Prover.version, unit.proverSteps).line)
-      }
+      val mine = unit.props.map(v => Entry(prefix + v.name, v.result, v.key, Prover.version, unit.proverSteps).line)
       val kept = lines(unit).filterNot(l => l == header || l.startsWith(prefix))
       if mine.nonEmpty || Files.exists(p) then
         try

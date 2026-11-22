@@ -56,13 +56,15 @@ class PropsLockSuite extends munit.FunSuite:
     assertEquals(recorded(budget).map(_._2), List(false, false))
     assert(Files.readString(file.resolveSibling("props.lock")).contains(" 5000"))
 
-  test("the lines of another file beside it are kept; a refuted prop has no line"):
+  test("the lines of another file beside it are kept; a refuted prop is recorded as failed"):
     val d = dir("two")
     val _ = compile(d.resolve("a.fixed"), List(fits))
     val b = compile(d.resolve("b.fixed"), List("prop wraps: forall (x: u8) -> x + 1 > x", small))
     assert(b.hasErrors)
     val names = Files.readString(d.resolve("props.lock")).linesIterator.toList.tail.map(_.takeWhile(_ != ' '))
-    assertEquals(names, List("a.fixed:Checked.fits", "b.fixed:Checked.small"))
+    assertEquals(names, List("a.fixed:Checked.fits", "b.fixed:Checked.small", "b.fixed:Checked.wraps"))
+    assert(Files.readString(d.resolve("props.lock")).contains("b.fixed:Checked.wraps failed "))
+    assert(compile(d.resolve("b.fixed"), List("prop wraps: forall (x: u8) -> x + 1 > x", small)).hasErrors)
 
   test("lines the compile does not own, readable or not, are kept as they are"):
     val file = dir("foreign").resolve("a.fixed")

@@ -19,7 +19,7 @@ final case class PropVerdict(name: String, span: Span, result: Result, key: Stri
   * an optional `suchThat`, around an expression built from those binders, integer and `bool` literals, `+`, `-`, `*`
   * (one side constant), unary `-` on a signed type, comparisons, `&&`, `||`, `!`, `implies`. The integers are
   * mathematical; every `+`, `-`, `*` and negation must stay in the range of its type wherever it is evaluated (Rule
-  * P4.2): `&&` and `||` evaluate their right operand only when it decides, `implies` evaluates both (Rule P6.2), and the
+  * P4.2): `&&`, `||` and `implies` evaluate their right operand only when it decides (Rule P6.2), and the
   * body only under its `suchThat`. The typer does not type prop bodies yet, so this phase checks the types it relies on:
   * the operands of an operation or comparison have one type, a literal fits it, and a comparison of literals alone is
   * outside the fragment. Anything else (`Self`, a field, a call, `match`, `/`) leaves the prop open.
@@ -121,7 +121,7 @@ object Props extends Phase:
       case Trees.UnaryOp(Trees.UnaryOperator.Not, a, _) => cond(a, scope).map(c => Cond(Formula.Not(c.value), c.wd))
       case Trees.BinOp(B.And, a, b, _)                  => join(a, b)(Formula.And(_, _))(lazily(identity))
       case Trees.BinOp(B.Or, a, b, _)                   => join(a, b)(Formula.Or(_, _))(lazily(Formula.Not(_)))
-      case Trees.Implies(a, b, _)                       => join(a, b)(Formula.Implies(_, _))(eager)
+      case Trees.Implies(a, b, _)                       => join(a, b)(Formula.Implies(_, _))(lazily(identity))
       case Trees.BinOp(op @ (B.Eq | B.Neq), a, b, _) if isBool(a, scope) || isBool(b, scope) =>
         join(a, b)((p, q) => if op == B.Eq then Formula.Iff(p, q) else Formula.Not(Formula.Iff(p, q)))(eager)
       case Trees.BinOp(op, a, b, _) if comparison.contains(op) =>
