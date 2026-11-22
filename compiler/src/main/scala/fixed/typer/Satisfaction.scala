@@ -244,7 +244,7 @@ object Satisfaction:
     Option.when(bounds.isEmpty || boundsReach(s, bounds, cap))(s)
 
   /** A `t satisfies C'` with `cap` in `closure(C')`. */
-  private def declared(s: TyperState, t: Type, cap: SymbolId): Boolean =
+  private[typer] def declared(s: TyperState, t: Type, cap: SymbolId): Boolean =
     boundsReach(s, s.symbols.satisfactionsOf(t), cap)
 
   /** Data type `data` provides capability member `m` without a body: the derived `fold` (Rule

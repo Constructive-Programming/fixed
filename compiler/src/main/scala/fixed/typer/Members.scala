@@ -137,7 +137,7 @@ object Members:
   /** Capabilities whose members are looked up on a concrete type that does not declare them
     * (`spec/stdlib.md` §4.7, §4.8, §4.10), and `Clone` (§4.11) except on data types and tuples,
     * which have it only on request. A call of one requires the receiver to have the capability
-    * (`Typer.requireBound`; for `Clone`, `T010` from `notCloned`). On an abstract receiver they are
+    * (`Typer.requireBound`, which for `Clone` gives the hint of `notCloned`). On an abstract receiver they are
     * not found, and [[lackedBound]] names the bound it lacks.
     */
   private val autoDerived = List("Show", "Eq", "Ord", "Clone")

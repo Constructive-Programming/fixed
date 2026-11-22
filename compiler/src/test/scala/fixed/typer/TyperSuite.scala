@@ -275,6 +275,7 @@ class TyperSuite extends munit.FunSuite:
       "fn f(xs: List of T, ys: List of T) -> bool = xs == ys\n" -> ("xs == ys", "`T is Eq`"),
       "fn f(xs: List of T) -> String = ((z) -> z.show())(xs)\n" -> ("z.show()", "`T is Show`"),
       (box + "fn f(b: Box of T) -> String = b.show()\n") -> ("b.show()", "`T is Show`"),
+      "fn f(xs: List of T) -> List of T = xs.clone()\n" -> ("xs.clone()", "`T is Clone`"),
       "fn f(p: (T, u64)) -> String = p.show()\n" -> ("p.show()", "`T is Show`"),
       "fn f(x: T, y: T) -> bool = x < y\n" -> ("x < y", "`T is Ord`"),
       "fn f(x: T is Eq, y: T) -> bool = x >= y\n" -> ("x >= y", "`T is Eq + Ord`"),
@@ -737,12 +738,13 @@ class TyperSuite extends munit.FunSuite:
       box.map(d => (d.message, d.suggestion)),
       List(("Box of u64 does not satisfy Clone", Some("declare it: `Box satisfies Clone`")))
     )
+    val inP = Some("P inside it does not; declare `P satisfies Clone`")
     List(
-      p + "fn f(x: List of P) -> List of P = x.clone()\n",
-      p + "fn f(x: (P, u64)) -> (P, u64) = x.clone()\n",
-      p + "data Box of A:\n    Box(v: A)\nBox satisfies Clone\nfn f(x: Box of P) -> Box of P = x.clone()\n",
-      "fn f(g: u64 -> u64) -> u64 -> u64 = g.clone()\n"
-    ).foreach(code => assertEquals(codes(typedUnit(code)), List(DiagCode.T010), code))
+      p + "fn f(x: List of List of P) -> List of List of P = x.clone()\n" -> inP,
+      p + "fn f(x: (P, u64)) -> (P, u64) = x.clone()\n" -> inP,
+      p + "data Box of A:\n    Box(v: A)\nBox satisfies Clone\nfn f(x: Box of P) -> Box of P = x.clone()\n" -> inP,
+      "fn f(g: u64 -> u64) -> u64 -> u64 = g.clone()\n" -> None
+    ).foreach((c, h) => assertEquals(typedUnit(c).diags.map(d => (d.code, d.suggestion)), List((DiagCode.T010, h)), c))
     assertEquals(
       typedUnit(p + "data Q:\n    Q(p: P)\nQ satisfies Clone\n").diags.map(_.message),
       List("Q does not satisfy Clone: missing clone")

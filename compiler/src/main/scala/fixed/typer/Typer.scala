@@ -444,7 +444,7 @@ object Typer:
                       case Some(cap) if Members.abstractType(s1, resolved) =>
                         (requireBound(s1, needs(Members.lackedBound(s1, cap, t.method))), Type.NeverType)
                       case Some(cap) if Satisfaction.onRequest(s1, cap) =>
-                        (notCloned(s1, resolved, t.span), Type.NeverType)
+                        (requireBound(s1, needs(cap)), Type.NeverType)
                       case _ =>
                         (
                           s1.error(
@@ -469,9 +469,6 @@ object Typer:
                     rest.iterator.map(c => (c, attempt(c))).find(_._2._1.errors == errors)
                       .getOrElse((first, firstAttempt))
                 val s3 = winner.origin match
-                  case Resolution.CapMember(cap, _)
-                      if Satisfaction.onRequest(s2, cap) && !Members.abstractType(s2, resolved) =>
-                    if Satisfaction.holds(s2, resolved, cap, Nil).isDefined then s2 else notCloned(s2, resolved, t.span)
                   case Resolution.CapMember(cap, _) if Members.autoDerivedCap(s2, t.method).contains(cap) =>
                     requireBound(s2, needs(cap))
                   case _ => s2
@@ -483,12 +480,28 @@ object Typer:
       case Type.TypeVar(id) if s.unifier.numericVars(id) => "a numeric literal"
       case _                                             => show(s, t)
 
-  /** `T010`: `clone` on a concrete type that is not `Clone`; a data type has it only on request. */
-  private def notCloned(s: TyperState, t: Type, span: Span): TyperState =
-    val data = t match
-      case Type.TypeRef(id, _) => s.symbols.dataNamed(s.symbols(id).name).filter(_ == id)
-      case _                   => None
-    val hint = data.map(id => s"declare it: `${s.symbols(id).name} satisfies Clone`")
+  /** `T010`: `clone` on a concrete type that is not `Clone`; a data type has it only on request, and
+    * with it only where its arguments have it. The hint names the type to declare it for: the type
+    * itself, or the first argument, going inward through types that declare it, that lacks it.
+    */
+  private def notCloned(s: TyperState, t: Type, cap: SymbolId, span: Span): TyperState =
+    def declares(u: Type) = u match
+      case Type.TypeRef(id, _) => Satisfaction.declared(s, Type.TypeRef(id, Nil), cap)
+      case _: Type.TupleType   => true
+      case _                   => false
+    def solved(u: Type) = s.unifier.resolve(u) match
+      case Type.TypeVar(_) | Type.AppliedVar(_, _) => false
+      case _                                       => true
+    def lacking(u: Type): Type =
+      if !declares(u) then u
+      else u.children.filter(solved).find(Satisfaction.holds(s, _, cap, Nil).isEmpty).fold(u)(lacking)
+    val zonked = s.unifier.zonk(t)
+    val culprit = lacking(zonked)
+    val hint = culprit match
+      case Type.TypeRef(id, _) if !declares(culprit) && s.symbols.dataNamed(s.symbols(id).name).contains(id) =>
+        val where = if culprit == zonked then "declare it: " else s"${show(s, culprit)} inside it does not; declare "
+        Some(s"$where`${s.symbols(id).name} satisfies Clone`")
+      case _ => None
     s.error(DiagCode.T010, span, s"${show(s, t)} does not satisfy Clone", hint)
 
   /** P6 D10: `c.op` needs `c.cap` of `c.value`. A type that still holds unsolved variables is
@@ -517,6 +530,7 @@ object Typer:
           /** The parameter that, alone without the bound, still makes the type lack it. */
           val needed = ps.find(p => lacks(assuming(ps.filterNot(_ == p))(t))).getOrElse(ps.head)
           missingBound(s, c.copy(value = t), needed)
+        else if Satisfaction.onRequest(s, c.cap) then notCloned(s, t, c.cap, c.span)
         else s.error(DiagCode.T010, c.span, s"${show(s, t)} does not satisfy ${s.symbols(c.cap).name}")
 
   /** `T022`, with the bound written out as the hint: on `param` (the type parameter or anonymous
