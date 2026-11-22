@@ -216,7 +216,7 @@ cap Stack extends Sequencing + Sized:
 
 The static prover checks a prop where it can. Property-based testing in a separate test build (`fixed verify`) checks the others. Only a proved prop, or one the program states with `assume prop` (Rule P7.7), steers what the compiler does; a prop that was only tested is evidence, not a fact the compiler relies on. The compiler today parses `prop` and ignores it, and does not parse `assume`.
 
-### Dependent types: functions that generate capabilities
+### Refinements: functions that generate capabilities
 
 A function can return a capability, which refines a type with a prop. **Specified, not built** (`spec/properties.md` Rule P3.4, `spec/type_system.md` Rule 6.3.0, and `TypeAliasParams` in §7 of the grammar):
 
@@ -230,7 +230,7 @@ type Port = u16 + between(1, 65535)
 type PortRange(min: u16, max: u16) = u16 + between(min, max)
 ```
 
-A capability generator is used in a bound by calling it (`between(0, 150)`); as a value, for example a parameter, it has the type `(N, N) -> cap of N`. A type alias can take value parameters. A refinement costs nothing at run time: it is checked at compile time, nothing wraps the value, and the value keeps its type. `cap Between(min: N is Ord, max: N) of N` is sugar for the function `between` (`spec/type_system.md` §6.3). The compiler today accepts these declarations and checks no refinement.
+A capability generator is used in a bound by calling it (`between(0, 150)`); as a value, for example a parameter, it has the type `(N, N) -> cap of N`. A type alias can take value parameters; it is expanded where it is used. The arguments of a refinement are constants (Rule 6.3.3): `PortRange(1024, 2048)` is legal, a bound that names a value of the run is not. Types that depend on run-time values (dependent types) are an open direction, not a feature (`spec/type_system.md` OQ-T3). A refinement costs nothing at run time: it is checked at compile time, nothing wraps the value, and the value keeps its type. `cap Between(min: N is Ord, max: N) of N` is sugar for the function `between` (`spec/type_system.md` §6.3). The compiler today accepts these declarations and checks no refinement.
 
 ## Design principles
 

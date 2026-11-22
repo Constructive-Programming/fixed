@@ -701,6 +701,8 @@ Programs that need richer computed bounds must lift the computation to a `let` w
 
 **Arguments are constants** (owner's decision, fourth round of P6: "Let's start with constants, but this is another feature pushing us to bring in dependent types"). The rule above is the rule of the language, not a first stage. A bound that names a parameter of the same signature (`-> i64 is between(lo, hi)`) or any value of the run is a type error and is the subject of OQ-T3. The relaxation earlier versions planned ("any total expression") is withdrawn as a plan and kept as part of that open direction; it would also have to say what `Diverge` and effects mean in such an expression (Rule 7.4.h).
 
+**Aliases with value parameters.** A type alias may take value parameters (`type PortRange(min: u16, max: u16) = u16 + between(min, max)`; grammar `TypeAliasParams`). The alias is expanded where it is used, and the rule above is checked on the expansion: `PortRange(1024, 2048)` is `u16 + between(1024, 2048)` and is legal; `PortRange(lo, 9000)` with `lo` a parameter of the enclosing function is the same error as `between(lo, 9000)`. Inside the alias's own declaration its parameters stand for the constants of each use. (Owner's decision, fourth round of P6.)
+
 ```
 // accepted:
 fn validateAge(age: u8 is between(0, 150)) -> u8 = age
