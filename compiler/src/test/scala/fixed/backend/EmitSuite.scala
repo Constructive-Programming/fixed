@@ -7,7 +7,8 @@ import fixed.{CompilationUnit, Compiler}
 
 /** Programs (examples, benchmarks and small inline ones) through the whole slice pipeline: check, lower, emit, `clang`, run. Each run
   * compares standard output and checks the runtime's counters: every allocation is freed
-  * (slice §4.8). These tests need `clang` and fail, not skip, without it.
+  * (slice §4.8), and every frame cell released by a reset of its scope. These tests need `clang`
+  * and fail, not skip, without it.
   */
 class EmitSuite extends munit.FunSuite:
 
@@ -43,6 +44,7 @@ class EmitSuite extends munit.FunSuite:
       val counts = Native.counters(err)
       assert(counts.contains("allocs") && counts.contains("frees"), s"$mode: no runtime counters: $err")
       assertEquals(counts.get("allocs"), counts.get("frees"), s"$mode: leak: $err")
+      assertEquals(counts.get("frame_allocs"), counts.get("frame_frees"), s"$mode: a frame cell never reset: $err")
       mode -> counts
     }.toMap
 

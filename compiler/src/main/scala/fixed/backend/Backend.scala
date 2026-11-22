@@ -102,7 +102,8 @@ object Backend:
     Analysed(all, versions.candidates, table, Memory(all, table, _ => Span.NoSpan).run(), fips, _ => Span.NoSpan)
 
   /** Write `ir` next to `out`, then link it with the runtime into the executable `out`. With
-    * `checks`, the runtime verifies every unconditional reuse (test builds).
+    * `checks`, the runtime verifies every unconditional reuse and poisons every frame cell its
+    * scope releases (test builds).
     */
   def ship(ir: String, out: Path, checks: Boolean = false): Either[Diagnostic, Path] =
     val dir = Option(out.toAbsolutePath.getParent).getOrElse(Path.of("."))
@@ -112,7 +113,7 @@ object Backend:
     val _ = Files.writeString(ll, ir)
     val _ = Files.write(rt, runtimeSource)
     val log = new StringBuilder
-    val cmd = Seq("clang", "-O2", "-std=c11") ++ Option.when(checks)("-DFX_CHECK_EXCL") ++
+    val cmd = Seq("clang", "-O2", "-std=c11") ++ (if checks then Seq("-DFX_CHECK_EXCL", "-DFX_CHECK_FRAME") else Nil) ++
       Seq("-o", out.toString, ll.toString, rt.toString, "-lm")
     val code =
       try Process(cmd).!(ProcessLogger(l => { val _ = log.append(l).append('\n') }))

@@ -47,6 +47,18 @@ static void fx_die(const char *msg, int code) {
     exit(code);
 }
 
+/* A released frame cell's count word, checked builds: FRAME_DEAD minus the size of the dead run it starts. */
+#define FRAME_DEAD (-((int64_t)1 << 40))
+
+/* Stop on a frame cell whose scope was reset (checked builds). */
+static inline void frame_live(const fx_header *h) {
+#ifdef FX_CHECK_FRAME
+    if (h->rc <= FRAME_DEAD) fx_die("internal error: a frame cell used after its scope ended", 103);
+#else
+    (void)h;
+#endif
+}
+
 void *fx_alloc(uint32_t tag, uint32_t refs, size_t payload) {
     fx_header *h = malloc(sizeof(fx_header) + payload);
     if (!h) fx_die("out of memory", 102);
@@ -107,6 +119,7 @@ void *fx_alloc_at(void *token, uint32_t tag, uint32_t refs, size_t payload) {
 
 void fx_dup(fx_header *h) {
     if (!h) return; /* the zero result of an aborted call */
+    frame_live(h);
     n_dup++;
     if (h->rc > 0) h->rc++;
 }
@@ -128,6 +141,7 @@ static __attribute__((noinline)) void free_cell(fx_header *h) {
             for (refs &= ~(1u << hi); refs; refs &= refs - 1) {
                 fx_header *c = slots[__builtin_ctz(refs)];
                 if (!c) continue;
+                frame_live(c);
                 n_drop++;
                 if (c->rc < 0 || --c->rc != 0) continue;
                 c->rc = (int64_t)(intptr_t)pending;
@@ -137,6 +151,7 @@ static __attribute__((noinline)) void free_cell(fx_header *h) {
         free(h);
         n_free++;
         if (last) {
+            frame_live(last);
             n_drop++;
             if (last->rc >= 0 && --last->rc == 0) {
                 h = last;
@@ -151,12 +166,113 @@ static __attribute__((noinline)) void free_cell(fx_header *h) {
 
 void fx_drop(fx_header *h) {
     if (!h) return;
+    frame_live(h);
     n_drop++;
     if (h->rc < 0 || --h->rc != 0) return;
     free_cell(h);
 }
 
 void fx_panic_div(void) { fx_die("panic: integer division by zero", 101); }
+
+/* ---- the data stack (spec/memory_management.md Rules MM6.1, MM6.2) ----
+
+   The `Frame` cells of a function activation are bumped above the mark it takes on entry and are
+   freed together when it resets the stack to that mark on exit. A list of chunks, the first 4 KiB
+   and each new one twice the last; a mark is the top pointer, whose chunk a reset finds by walking
+   back. Chunks above the top are kept for reuse. ponytail: chunks are not aligned to their size (Rule MM6.1) because
+   nothing masks a pointer to find its chunk yet; align them when a region descriptor is needed.
+
+   A frame cell has the header of every cell, its count word holding minus its size: negative, so
+   `fx_dup`, `fx_drop`, `fx_reuse` and the drop of a parent leave it alone, as they leave a static
+   cell (Rule PR3.1's immortal sentinel), and code that does not know a value's class cannot free
+   or count it. Only `fx_reuse_excl` must never see one: the compiler takes no reuse token from a
+   frame value, and FX_CHECK_EXCL stops on one. The size lets a checked build walk the cells.
+
+   FX_CHECK_FRAME (test builds): a reset does not rewind; it counts the cells it releases and
+   poisons them (count word below FRAME_DEAD, payload 0xA5), so a frame cell reached after its
+   scope ended reads poison, and `fx_dup` or `fx_drop` of it stops the program. The first header
+   of each poisoned run holds the run's length, so a later reset over it steps across it at once:
+   a loop that resets to one mark at every step walks each cell once. */
+
+typedef struct fx_chunk {
+    struct fx_chunk *prev, *next;
+    char *limit, *used; /* end of the chunk; where allocation stopped when it moved to the next */
+    char data[];
+} fx_chunk;
+
+char *fx_frame_top;
+static char *frame_limit;
+static fx_chunk *frame_chunk;
+static uint64_t n_frame_alloc, n_frame_free;
+
+/* Continue in the next chunk, one that holds at least `n` bytes. */
+static void frame_next(size_t n) {
+    fx_chunk *c = frame_chunk ? frame_chunk->next : NULL;
+    if (!c || (size_t)(c->limit - c->data) < n) {
+        size_t size = frame_chunk ? 2 * (size_t)(frame_chunk->limit - frame_chunk->data) : 4096;
+        while (size < n) size *= 2;
+        for (fx_chunk *old = c, *up; old; old = up) { up = old->next; free(old); }
+        c = malloc(sizeof *c + size);
+        if (!c) fx_die("out of memory", 102);
+        c->prev = frame_chunk;
+        c->next = NULL;
+        c->limit = c->data + size;
+        if (frame_chunk) frame_chunk->next = c;
+    }
+    if (frame_chunk) frame_chunk->used = fx_frame_top;
+    frame_chunk = c;
+    fx_frame_top = c->data;
+    frame_limit = c->limit;
+}
+
+void *fx_frame_alloc(uint32_t tag, uint32_t refs, size_t payload) {
+    size_t n = (sizeof(fx_header) + payload + 7) & ~(size_t)7;
+    if ((size_t)(frame_limit - fx_frame_top) < n) frame_next(n);
+    fx_header *h = (fx_header *)fx_frame_top;
+    fx_frame_top += n;
+    h->rc = -(int64_t)n;
+    h->tag = tag;
+    h->refs = refs;
+    n_frame_alloc++;
+    return h;
+}
+
+static bool in_chunk(const fx_chunk *c, const char *p) {
+    return (uintptr_t)p >= (uintptr_t)c->data && (uintptr_t)p <= (uintptr_t)c->limit;
+}
+
+#ifdef FX_CHECK_FRAME
+/* Poison the live cells from `from` to `end`, and make the whole range one dead run. */
+static void frame_poison(char *from, char *end) {
+    for (char *p = from; p < end;) {
+        fx_header *h = (fx_header *)p;
+        if (h->rc >= 0) fx_die("internal error: a cell on the data stack without a frame header", 103);
+        int64_t size = h->rc > FRAME_DEAD ? -h->rc : FRAME_DEAD - h->rc;
+        if (h->rc > FRAME_DEAD) {
+            n_frame_free++;
+            memset(h + 1, 0xA5, (size_t)size - sizeof(fx_header));
+            h->rc = FRAME_DEAD - size;
+        }
+        p += size;
+    }
+    if (from < end) ((fx_header *)from)->rc = FRAME_DEAD - (end - from);
+}
+#endif
+
+void fx_frame_reset(char *mark) {
+#ifdef FX_CHECK_FRAME
+    fx_chunk *c = frame_chunk;
+    while (c && !in_chunk(c, mark)) c = c->prev;
+    if (!c || (c == frame_chunk && mark > fx_frame_top))
+        fx_die("internal error: a mark not on the data stack", 103);
+    for (char *from = mark; c; c = c->next, from = c ? c->data : NULL)
+        frame_poison(from, c == frame_chunk ? fx_frame_top : c->used);
+#else
+    while (!in_chunk(frame_chunk, mark)) frame_chunk = frame_chunk->prev;
+    fx_frame_top = mark;
+    frame_limit = frame_chunk->limit;
+#endif
+}
 
 /* ---- value witnesses (spec/compilation_model.md Rule CM4.1, spec/memory_management.md Rule MM7.3) ----
 
@@ -416,8 +532,16 @@ extern int8_t fx_u_main(void);
 
 int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &t_start);
+    frame_next(0);
+#ifndef FX_CHECK_FRAME
+    char *bottom = fx_frame_top;
+#endif
     fx_u_main();
     fflush(stdout);
+#ifndef FX_CHECK_FRAME
+    /* Unchecked, a reset does not count cells: every one was released if the stack is back at its bottom. */
+    if (frame_chunk->prev == NULL && fx_frame_top == bottom) n_frame_free = n_frame_alloc;
+#endif
     if (getenv("FIXED_RT_STATS")) {
         struct timespec t_end;
         struct rusage ru;
@@ -427,8 +551,10 @@ int main(void) {
         fprintf(stderr,
                 "{\"allocs\":%" PRIu64 ",\"frees\":%" PRIu64 ",\"dups\":%" PRIu64 ",\"drops\":%" PRIu64
                 ",\"reuse_excl\":%" PRIu64 ",\"reuse_test_pass\":%" PRIu64 ",\"reuse_test_fail\":%" PRIu64
-                ",\"wops\":%" PRIu64 ",\"peak_rss_kb\":%ld,\"wall_ns\":%" PRId64 "}\n",
-                n_alloc, n_free, n_dup, n_drop, n_reuse_excl, n_test_pass, n_test_fail, n_wop, ru.ru_maxrss, wall_ns);
+                ",\"wops\":%" PRIu64 ",\"frame_allocs\":%" PRIu64 ",\"frame_frees\":%" PRIu64
+                ",\"peak_rss_kb\":%ld,\"wall_ns\":%" PRId64 "}\n",
+                n_alloc, n_free, n_dup, n_drop, n_reuse_excl, n_test_pass, n_test_fail, n_wop, n_frame_alloc,
+                n_frame_free, ru.ru_maxrss, wall_ns);
     }
     return 0;
 }
