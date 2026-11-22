@@ -449,7 +449,7 @@ object EmitLLVM:
       case CType.Float(_)                            => "double"
       case CType.Bool                                => "i1"
       case CType.Unit                                => "i8"
-      case CType.Slot(_)                             => "i64"
+      case CType.Slot(_) | _: CType.Imm              => "i64"
       case CType.Boxed | CType.Witness | CType.Table => "ptr"
 
   private def instruction(op: PrimOp, t: CType): String =

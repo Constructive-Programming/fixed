@@ -107,3 +107,45 @@ class MemorySuite extends munit.FunSuite:
     val body = prelude.indexWhere(_.startsWith("fn repeatStr(")) + 2
     assert(body > 1, "the prelude has repeatStr")
     assert(report.contains(s"at: stdlib/prelude.fixed:$body:5"), report)
+
+  test("the report gives each data type its layout: an immediate's width, or why it is a cell (Rule CM3.5)"):
+    val src = java.nio.file.Files.readString(java.nio.file.Path.of("compiler/src/test/fixed/modes/small_values.fixed"))
+    val u = unit(src)
+    val report = MemoryReport.json(u, Backend.analyse(u).fold(ds => fail(s"lowering failed: $ds"), identity))
+    val layouts = List(
+      "Pair32" -> ("imm8", "8 bytes: tag 0, fields 8"),
+      "Wide" -> ("cell", "9 bytes, more than 8"),
+      "Signed" -> ("imm8", "7 bytes: tag 0, fields 7"),
+      "Mixed" -> ("imm8", "7 bytes: tag 0, fields 7"),
+      "Inner" -> ("imm8", "8 bytes: tag 0, fields 8"),
+      "Choice" -> ("imm4", "3 bytes: tag 1, fields 2"),
+      "Cell" -> ("cell", "field `v` takes its layout from a type argument (not built)"),
+      "List" -> ("cell", "recursive")
+    )
+    val edges = "use std.io.Console\n\ndata Named:\n    Named(s: String, n: u8)\n\n" +
+      "data Wide:\n    Wide(x: u64, y: u8)\n\ndata Holder:\n    Holder(w: Wide)\n\n" +
+      "data A:\n    A(b: B)\n\ndata B:\n    End\n    More(a: A)\n\n" +
+      "data Full:\n    Seven(a: u32, b: u16, c: u8)\n    Other\n\n" +
+      "data Over:\n    Eight(a: u64)\n    None\n\n" +
+      "fn main() -> () with Console =\n    Console.printLine(Named.Named(\"a\", 1).show())\n" +
+      "    Console.printLine(Holder.Holder(Wide.Wide(1, 2)).show())\n" +
+      "    Console.printLine(A.A(B.End).show())\n    Console.printLine(Full.Other.show())\n" +
+      "    Console.printLine(Over.None.show())\n"
+    val e = unit(edges)
+    val more = MemoryReport.json(e, Backend.analyse(e).fold(ds => fail(s"lowering failed: $ds"), identity))
+    val edgeLayouts = List(
+      "Named" -> ("cell", "field `s` holds a reference"),
+      "Holder" -> ("cell", "field `w` holds a reference"),
+      "A" -> ("cell", "recursive"),
+      "B" -> ("cell", "field `a` holds a reference"),
+      "Full" -> ("imm8", "8 bytes: tag 1, fields 7"),
+      "Over" -> ("cell", "9 bytes, more than 8")
+    )
+    edgeLayouts.foreach { case (t, (layout, why)) =>
+      val entry = s"""{"type":"$t","layout":"$layout","why":"$why"}"""
+      assert(more.contains(entry), s"$entry: ${more.drop(more.indexOf("\"data\""))}")
+    }
+    layouts.foreach { case (t, (layout, why)) =>
+      val entry = s"""{"type":"$t","layout":"$layout","why":"$why"}"""
+      assert(report.contains(entry), s"$entry: ${report.drop(report.indexOf("\"data\""))}")
+    }

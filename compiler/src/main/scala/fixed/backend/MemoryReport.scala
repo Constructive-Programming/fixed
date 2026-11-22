@@ -9,7 +9,9 @@ import fixed.util.Span
   * and reasons, fork facts and copy sites; then each `handle`'s kind. Positions are `line:column`,
   * after `path:` in a library file (the prelude's code).
   * Every function except a clone and a `fip` shared entry also gives its baseline size and its
-  * clone candidates on both axes, built or not (`spec/compilation_model.md` Rule CM5.8).
+  * clone candidates on both axes, built or not (`spec/compilation_model.md` Rule CM5.8). Last,
+  * each data type lowered: `imm1` to `imm8` if it is an immediate of that width, else `cell`, and
+  * why (Rule CM3.5).
   */
 object MemoryReport:
 
@@ -90,7 +92,11 @@ object MemoryReport:
     val handlers = unit.tree.toList.flatMap(Trees.subtrees).collect { case h: Trees.HandleExpr =>
       unit.quantities.flatMap(_.handler(h)).map(k => Value.Obj(List("at" -> at(h.span), "kind" -> Value.Str(kind(k)))))
     }.flatten
-    Value.Obj(List("functions" -> Value.Arr(fns), "handlers" -> Value.Arr(handlers)))
+    val data = a.immediates.map { (name, imm, why) =>
+      val layout = imm.fold("cell")(i => s"imm${i.width}")
+      Value.Obj(List("type" -> Value.Str(name), "layout" -> Value.Str(layout), "why" -> Value.Str(why)))
+    }
+    Value.Obj(List("functions" -> Value.Arr(fns), "handlers" -> Value.Arr(handlers), "data" -> Value.Arr(data)))
 
   /** Rule CM5.8: the baseline size, the clones built and the candidates not built. A version has
     * as many `let`s as the baseline it was walked from, so `f`'s own body gives the size. A body

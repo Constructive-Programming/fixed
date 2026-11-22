@@ -22,7 +22,8 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
   * built is lowered per instance. Constructs beyond the current milestone are `B005`, and so is a
   * cell with a reference beyond its header's reference map (`refMapLimit`).
   */
-final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(String, String)] = Set.empty) extends Cases:
+final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(String, String)] = Set.empty)
+    extends Cases, Immediates:
   private type Env = Map[String, Var]
   private type Sigma = Map[SymbolId, Type]
 
@@ -947,7 +948,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
 
   protected def ctype(t: Type, span: Span): CType =
     Lower.scalar(t).getOrElse(t match
-      case _ if isStringType(t) || dataOf(t).isDefined             => CType.Boxed
+      /** Classified for the memory report only, until code generation builds immediates. */
+      case _ if isStringType(t) || dataOf(t).isDefined             => { val _ = immediate(t); CType.Boxed }
       case _ if isTypeParam(t)                                     => CType.Slot(witnessVar(t).name)
       case _: Type.ArrowType                                       => CType.Boxed
       case Type.CapRef(c, _) if represent.constructor(c).isDefined => CType.Boxed

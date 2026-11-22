@@ -12,8 +12,9 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
   * LLVM IR, and LLVM IR plus the C runtime to a native executable through `clang`.
   */
 /** Versioned Core and what M10 inferred about it; `fips` are the `fip fn` instances, `candidates`
-  * the clone candidates of each function, on both axes, and `typeClones` each clone of the type
-  * axis with the function it is a clone of and its key.
+  * the clone candidates of each function, on both axes, `typeClones` each clone of the type
+  * axis with the function it is a clone of and its key, and `immediates` each data type lowered
+  * with its layout if it is an immediate, and why (`Immediates`).
   */
 final case class Analysed(
     fns: List[Fn],
@@ -22,7 +23,8 @@ final case class Analysed(
     memory: MemoryTable,
     fips: Map[String, fixed.ast.Trees.Fip],
     spans: String => Span,
-    typeClones: Map[String, (String, String)] = Map.empty
+    typeClones: Map[String, (String, String)] = Map.empty,
+    immediates: List[(String, Option[CType.Imm], String)] = Nil
 )
 
 /** A build mode (`spec/compilation_model.md` Rule CM5.7), by the clone budget `B` it gives each
@@ -88,7 +90,7 @@ object Backend:
       val candidates = Core.merge(typeAxis, versions.candidates, Nil)(_ ++ _).view.mapValues(_.sortBy(_.key)).toMap
       val spans = (v: String) => lower.spans.getOrElse(v, Span.NoSpan)
       val memory = Memory(all, table, spans).run()
-      Analysed(all, candidates, table, memory, lower.fips.toMap, spans, typeClones)
+      Analysed(all, candidates, table, memory, lower.fips.toMap, spans, typeClones, lower.immediates)
     }
 
   /** Hand-built Core with no source types (tests): its versions, demands and memory facts. */

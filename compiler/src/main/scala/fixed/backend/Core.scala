@@ -19,6 +19,13 @@ enum CType:
   /** Pointers to a value witness record and to a capability table: static data, never counted. */
   case Witness, Table
 
+  /** An immediate data value (`spec/compilation_model.md` Rule CM3.5, `Immediates`): no cell, its
+    * bits in an `i64`, zero above its `width` bytes. With `tagged`, the variant tag is the low byte
+    * and the fields follow it; without, the fields start at bit 0. Each field takes its rest width
+    * ([[Layout.width]]), in declaration order, with no padding.
+    */
+  case Imm(width: scala.Int, tagged: Boolean)
+
   def boxed: Boolean = this == CType.Boxed
 
   def slot: Boolean = this match
@@ -320,6 +327,17 @@ object Layout:
   /** The slots among `slots(fields, first)` that may hold counted references. */
   def refSlotsOf(fields: List[CType], first: Int = 0): List[Int] =
     slots(fields, first).zip(fields).collect { case (s, t) if t.counted => s }
+
+  /** The rest width in bytes of a value of Core type `t` inside an immediate (`spec/compilation_model.md`
+    * Rule CM3.6): a scalar's size (`bool` and `()` one byte), an immediate's width; none for a reference.
+    */
+  def width(t: CType): Option[Int] =
+    t match
+      case CType.Int(bits, _)      => Some(bits / 8)
+      case CType.Float(bits)       => Some(bits / 8)
+      case CType.Bool | CType.Unit => Some(1)
+      case CType.Imm(w, _)         => Some(w)
+      case _                       => None
 
   /** The reference map's static bits (a slot's comes from its witness); overflow is `Lower`'s `B005`. */
   def refs(fields: List[CType], first: Int = 0): Int =
