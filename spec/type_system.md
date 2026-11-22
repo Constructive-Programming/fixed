@@ -1365,6 +1365,7 @@ A satisfaction is **in scope** at a site where a `use` brings it in, or when it 
 ```
 use shop.box.Box satisfies Optional           // the type and the satisfaction
 use shop.money.ByAmount                       // a named satisfaction, by its name
+use shop.money.ByAmount as ByValue            // renamed, like any other import
 ```
 
 Without the `satisfies` clause, a `use` imports only the type, and its satisfactions are not in scope, except those that are always in scope.

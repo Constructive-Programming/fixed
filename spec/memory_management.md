@@ -581,6 +581,19 @@ The compiler must guarantee tail-call optimization for compiler-emitted drop fun
 
 **Still owed.** `free_cell` still recurses on every marked child except the highest. A tree that is deep in a child other than the last (a list built in the other field, or a left-leaning tree) can exhaust the native stack. A conforming runtime keeps an explicit work list of cells whose count reached zero, for example threaded through the payload of cells already being freed, so that drop uses constant native stack for every shape. Until then the runtime does not conform to this rule.
 
+
+**Rule PR7.3.a (Tail calls in the program's code).** A call of a function to itself in tail position is a jump: it takes no native frame, in every version of the function (baseline and clone) and in every build. This is a guarantee of the language, so a loop written as recursion under `Diverge` (`spec/type_system.md` Rule 7.4.h) runs in bounded native stack:
+
+```
+fn serve(state: State) -> ! with Console + Diverge =
+    let next = step(state)
+    serve(next)
+```
+
+A call is in **tail position** when its result is the result of the function body with nothing left to do after it: it is the last expression of the body, or of a branch of an `if` or a `match` that is itself in tail position, and it is not inside a handler's body, whose handler must still be removed after it. Releases of owned values do not disturb the position: the compiler performs them before the call (§4). A call whose result is an argument of something else (`1 + f(n)`, `Cons(x, f(t))`) is not in tail position.
+
+Any other tail call carries no guarantee: the compiler may turn it into a jump and need not. Where a tail call goes round a cycle of functions (`a` calls `b` in tail position, `b` calls `a`) and the compiler does not turn it into a jump, it gives `warning[W087]: tail call to <b> in the cycle <a>, <b> takes a stack frame`, at the call. (Owner's decision, fourth round of P6: self tail calls guaranteed, plus a warning; a guarantee for every tail call stays possible later and would break no program.) Built: the jump for a self tail call. Not built: the warning.
+
 ## 13. Borrowing (inferred)
 
 ### 13.1 Borrow analysis (Rule PR8.1)
@@ -940,7 +953,7 @@ The `Lock` handler is installed once and consumed by `Lock.release`. Its continu
 - **OQ-PR2 — Atomic vs non-atomic counts.** Resolved for structured parallelism by Rule MM17.2. Reopens only if unstructured concurrency is added (§17.4).
 - **OQ-PR3 — Cyclic data.** Fixed data cannot form cycles. Deferred until mutability is in scope (it is not planned).
 - **OQ-PR4 — Borrow leakage through closures.** A borrowed parameter captured by a closure must not outlive the borrow. Rule MM5.2(a) and Rule PR5.6 cover escaping closures; the details belong to the borrow analyzer.
-- **OQ-PR5 — Tail-call guarantees.** Rule PR7.3 requires TCO for drop functions, and `fip(strict)` needs loops for list-shaped folds. Derived `fold`, `unfold` and `map` of linear data run in bounded native stack (`spec/type_system.md` Rule 7.4.b.3); derived members of trees do not yet. The contract for general code is still open.
+- **OQ-PR5 — Tail-call guarantees.** Rule PR7.3 requires TCO for drop functions, and `fip(strict)` needs loops for list-shaped folds. Derived `fold`, `unfold` and `map` of linear data run in bounded native stack (`spec/type_system.md` Rule 7.4.b.3); derived members of trees do not yet. For the program's own code the owner decided (fourth round of P6): a self tail call is a jump, and a tail call round a cycle that takes a frame is warned (Rule PR7.3.a). Open: a guarantee for every tail call.
 - **OQ-PR6 — Reuse fingerprint algorithm.** Implementation-defined until a second compiler exists.
 - ~~**OQ-MM1 — Grammar for `fip`.**~~ Resolved in v0.4. `fip`, `fip(n)` and `fip(strict)` are in `spec/syntax_grammar.ebnf` v0.4.10 (`FipModifier`), on function declarations, capability method requirements and `satisfies` methods (Rule MM18.5).
 - **OQ-MM2 — Chunk sizes and pools.** First-chunk size, the growth factor and fiber/lane pool policy are implementation-defined until measured.
