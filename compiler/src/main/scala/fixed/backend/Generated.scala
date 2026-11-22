@@ -49,6 +49,9 @@ private[backend] trait Generated:
   /** `v`, a value of type `t`, shown: `k` gets the `String` ([[Satisfied]]). */
   protected def showValue(t: Type, v: Atom)(k: K): Expr
 
+  /** `v`, a value of type `t`, cloned: `k` gets the clone ([[Satisfied]]). */
+  protected def cloneValue(t: Type, v: Atom)(k: K): Expr
+
   /** Whether `a` and `b`, values of type `t`, are equal: `k` gets the `bool` ([[Satisfied]]). */
   protected def equalValues(t: Type, a: Atom, b: Atom)(k: K): Expr
 
@@ -380,25 +383,48 @@ private[backend] trait Generated:
     * collect the parts and join them once if large values are shown.
     */
   protected def derivedShow(data: SymbolId, args: List[Type]): String =
+    val concat = (a: Atom, b: Atom) => bound(Rhs.Call("fx_str_concat", List(a, b), runtime = true), CType.Boxed)
+    def fields(fs: List[(Type, Var)], acc: Atom, first: Boolean): Expr =
+      fs match
+        case Nil             => concat(acc, Atom.StrC(")"))(Expr.Ret(_))
+        case (ft, v) :: rest =>
+          val sep: K => Expr = if first then _(acc) else concat(acc, Atom.StrC(", "))
+          sep(a => showValue(ft, v)(s => concat(a, s)(fields(rest, _, first = false))))
+    unary(data, args, "show") { (tag, loaded) =>
+      val ctor = symbols.variantsOf(data).toList(tag).name
+      if loaded.isEmpty then Expr.Ret(Atom.StrC(ctor)) else fields(loaded, Atom.StrC(s"$ctor("), first = true)
+    }
+
+  /** Derived `clone` (`spec/stdlib.md` §4.11, on request): a fresh cell of the same variant, each
+    * field cloned by [[cloneValue]]; hidden parameters as for [[derivedShow]].
+    * ponytail: one native frame per level, so a list of about 260,000 cells overflows an 8 MiB
+    * stack; loop like `map` (Rule 7.4.b.3) if long values are cloned.
+    */
+  protected def derivedClone(data: SymbolId, args: List[Type]): String =
+    unary(data, args, "clone")((tag, loaded) =>
+      construction(tag, loaded, (ft, v) => Some(cloneValue(ft, v)), Type.TypeRef(data, args))
+    )
+
+  /** A derived member `name` of one value of `data` at `args`, with a boxed result: `body` of each
+    * variant's fields.
+    */
+  private def unary(data: SymbolId, args: List[Type], name: String)(
+      body: (Int, List[(Type, Var)]) => Expr
+  ): String =
+    derivedMember(data, args, name) { (member, ws, t) =>
+      val x = typed(fresh("x", CType.Boxed), t, Span.NoSpan)
+      Fn(member, ws :+ x, CType.Boxed, switch(x, perVariant(data, args, x, Span.NoSpan)(body), CType.Boxed))
+    }
+
+  /** Derived member `name` of `data` at `args`, built once by `build` from its name, the hidden
+    * parameters of the type parameters the arguments mention, and the type.
+    */
+  private def derivedMember(data: SymbolId, args: List[Type], name: String)(build: (String, List[Var], Type) => Fn)
+      : String =
     val t = Type.TypeRef(data, args)
     val ws = typeParamsIn(t).flatMap(hiddenOf)
-    val name = generatedName(data, args, "show", ws.map(_.name).mkString(", "))
-    instance(name) {
-      val x = typed(fresh("x", CType.Boxed), t, Span.NoSpan)
-      val concat = (a: Atom, b: Atom) => bound(Rhs.Call("fx_str_concat", List(a, b), runtime = true), CType.Boxed)
-      def fields(fs: List[(Type, Var)], acc: Atom, first: Boolean): Expr =
-        fs match
-          case Nil             => concat(acc, Atom.StrC(")"))(Expr.Ret(_))
-          case (ft, v) :: rest =>
-            val sep: K => Expr = if first then _(acc) else concat(acc, Atom.StrC(", "))
-            sep(a => showValue(ft, v)(s => concat(a, s)(fields(rest, _, first = false))))
-      val branches = perVariant(data, args, x, Span.NoSpan) { (tag, loaded) =>
-        val ctor = symbols.variantsOf(data).toList(tag).name
-        if loaded.isEmpty then Expr.Ret(Atom.StrC(ctor)) else fields(loaded, Atom.StrC(s"$ctor("), first = true)
-      }
-      val shown = switch(x, branches, CType.Boxed)
-      Fn(name, ws :+ x, CType.Boxed, shown)
-    }
+    val member = generatedName(data, args, name, ws.map(_.name).mkString(", "))
+    instance(member)(build(member, ws, t))
 
   /** Rule 7.4 derived `eq` (`spec/stdlib.md` §4.7, component-wise): the same variant, and each pair
     * of fields equal by [[equalValues]]; hidden parameters as for [[derivedShow]].
@@ -440,10 +466,8 @@ private[backend] trait Generated:
       same: List[((Type, Var), (Type, Var))] => Expr,
       differ: (Int, Int) => Expr
   ): String =
-    val (t, span) = (Type.TypeRef(data, args), Span.NoSpan)
-    val ws = typeParamsIn(t).flatMap(hiddenOf)
-    val member = generatedName(data, args, name, ws.map(_.name).mkString(", "))
-    instance(member) {
+    val span = Span.NoSpan
+    derivedMember(data, args, name) { (member, ws, t) =>
       val (a, b) = (typed(fresh("a", CType.Boxed), t, span), typed(fresh("b", CType.Boxed), t, span))
       val branches = perVariant(data, args, a, span) { (tag, as) =>
         val inner = perVariant(data, args, b, span) { (other, bs) =>

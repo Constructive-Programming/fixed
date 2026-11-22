@@ -77,7 +77,7 @@ private[backend] trait Tables extends Satisfied:
   private def dynamicTable(t: Type, cap: SymbolId): Either[String, Atom.DynTable] =
     dataOf(t).toRight(s"no table at `${symbols.render(t)}`, which has type parameters").flatMap { (data, args) =>
       val own = symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil))
-      val derivedCap = Option.when(Set("Show", "Eq", "Ord")(symbols.preludeName(cap)))(cap)
+      val derivedCap = Option.when(Set("Show", "Eq", "Ord", "Clone")(symbols.preludeName(cap)))(cap)
       assumed.withValue(derivedCap.fold(Map.empty)(c => own.map(_ -> c).toMap)) {
         val layout = own.flatMap(hiddenOf)
         val tooMany = s"a table at `${symbols.render(t)}` holds more than ${Tables.maxCaptures} witnesses and tables"
@@ -259,7 +259,12 @@ private[backend] trait Tables extends Satisfied:
 
   /** The derived members of Rule 7.4 by prelude capability and member name. */
   private lazy val derivers: Map[(String, String), (SymbolId, List[Type]) => String] =
-    Map(("Show", "show") -> derivedShow, ("Eq", "eq") -> derivedEq, ("Ord", "compare") -> derivedCompare)
+    Map(
+      ("Show", "show") -> derivedShow,
+      ("Eq", "eq") -> derivedEq,
+      ("Ord", "compare") -> derivedCompare,
+      ("Clone", "clone") -> derivedClone
+    )
 
   /** An auto-flat-struct's entry `name` (`spec/type_system.md` §6.6): its constructor `ctor` builds
     * the struct from `fields`, and a member named like a field reads it.
@@ -373,6 +378,7 @@ private[backend] trait Tables extends Satisfied:
         Some((List(self, other), CType.Boxed, compareValues(at, self, other)(Expr.Ret(_))))
       case ("concat", CType.Boxed) => Some(runtime("fx_str_concat", List(self, other)))
       case ("show", CType.Boxed)   => Some((List(self), c, Expr.Ret(self)))
+      case ("clone", _)            => Some((List(self), c, Expr.Ret(self)))
       case ("show", _)             =>
         Lower.formatter(c, t == "char").map { (f, to) =>
           if to == c then runtime(f, List(self))

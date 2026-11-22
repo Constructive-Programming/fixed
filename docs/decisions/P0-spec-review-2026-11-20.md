@@ -193,6 +193,8 @@ Found and fixed while the faults above were being fixed (none was specific to Ph
   - **Fixed** (`Namer.reserved`; owner's decision, P6 fourth round, `spec/stdlib.md` §4.9): `T032` where one is written as a type (`Namer.typeOf`, `capBound`, a `satisfies` header) or declared (`Namer`'s declarations, `Patterns.bind`, lambda parameters, the parameters of a `satisfies` body). A name imported by `use` is reported at the `use`.
 - An empty list literal whose element type nothing fixed (`[].length()`) was accepted with an unsolved element type.
   - **Fixed** (`Typer.emptyLists`; owner's decision, P6 fourth round, Rule 5.10, "Elements"): it is `T029` when the unit finishes, after literal defaults, unless the literal already has an error; a parameter, field, result or another element still fixes the type. The help names the ascription `[] is List of u8`, which does not parse yet: neither ascription (Rule 5.11) nor a list literal's choice point (Rule 5.10, case 3) is built. A declared `List of !` does not fix it (the unifier never binds a variable to `!`), so `fn f() -> List of ! = []` is `T029`.
+- `clone` on a type with `Box satisfies Clone` passed the typer and was `B005` in the backend (found by the documentation pass of 2026-11-21): the backend built no `clone` for any type, scalars and `String` included, though the plan listed `Clone` on request as done.
+  - **Fixed** (`Generated.derivedClone`, `Satisfied.cloneValue`, `Tables`, `Lower.resolved`; `spec/stdlib.md` §4.11): the derived `clone` copies, a fresh cell of the same variant with each field cloned, through a program's `satisfies Clone` body where a field's type has one; a scalar, `()` or `String` is the value itself; a type parameter goes through its table, whose entries are built for scalars, `String` and data types, also at run time. It takes one native frame per level of the value, so a list of about 260,000 cells overflows an 8 MiB stack (Rule 7.4.b.3 does not cover `clone`).
 
 Found and not fixed:
 
@@ -219,6 +221,7 @@ Found and not fixed:
 - A program's `satisfies Ord` body on a scalar defines `compare`, but `<` and the table's `lt` and `le` stay built in, so they can disagree. Open, with the other built-in scalar members.
 - Two ways to write a tuple type of three elements still escape `T031`. The parser drops doubled parentheses, so `Box of ((A, B, C))` is `Box` at three arguments and `((A, B, C)) -> D` a function of three parameters (a pair loses its tuple the same way: `((A, B)) -> D` takes two parameters). And the number of `of` arguments is not checked, so `Tuple of (A, B, C)` and `List of (A, B)` are accepted; no value of such a type can be built.
 - The type written on a parameter of a `satisfies` body is never resolved: an unknown name there, or `i128` (`T032`), is not reported.
+- The `T010` hint for `clone` (`Typer.notCloned`) says "declare it: `List satisfies Clone`" also when the type declares it and only an argument lacks `Clone` (`[P.P(1)].clone()`).
 - Exhaustiveness is more conservative than §6.1 of `spec/pattern_matching.md`: `W(n, true)` / `W(n, false)` is `T020`.
 - An out-of-range literal that reaches its type through a type parameter (`order(18446744073709551615, 1)` with `T is Ord`) defaults to `i64` and wraps.
 - `Box of (A is Eq)` reached from `T is Ord` through a growing type is `B005` ("no table of `Eq`").
@@ -240,7 +243,6 @@ Limits and gaps of the first implementation, against the spec:
 - A result is treated as caller-chosen only where every returned value already has the result's slot form; functions polymorphic only in their result are compiled as instances. The rule this was measured against is replaced by P6 D2 (`compilation_model.md` Rule CM4.5); the compiler still implements the old split.
 - See `spec/compilation_model.md` OQ-CM10 to OQ-CM12. **Resolved:** closed by P6 D15.
 - Found by the documentation pass of 2026-11-21 (samples in the README and on the site), not fixed:
-  - `clone` on a type with `Box satisfies Clone` passes the typer and is `B005` in the backend.
   - `spec/type_system.md` Rule 6.3.0 writes `age: u8 is between(0, 150)`; the grammar allows only an upper-case name before `is`. Rule 6.3.3 admits only constant arguments to a capability generator, while Rule 6.3.0 passes parameters, and its text on totality predates `Diverge`. For the owner.
   - `spec/quantities.md` §10.1 still shows `fibIter`, which is `T027`.
 

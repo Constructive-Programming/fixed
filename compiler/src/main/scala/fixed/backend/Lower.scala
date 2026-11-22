@@ -598,6 +598,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
           case ("Concat", "concat", List(arg)) =>
             expr(m.receiver, sc)(r => expr(arg, sc)(a => runtime("fx_str_concat", List(r, a), m, sc)(k)))
           case ("Show", "show", Nil) if known         => expr(m.receiver, sc)(r => showValue(recvType, r)(k))
+          case ("Clone", "clone", Nil) if known       => expr(m.receiver, sc)(r => cloneValue(recvType, r)(k))
           case ("Ord", "compare", List(arg)) if known =>
             expr(m.receiver, sc)(r => expr(arg, sc)(a => compareValues(recvType, r, a)(k)))
           case ("Eq", "eq", List(arg)) if dataOf(recvType).isDefined || isStringType(recvType) =>

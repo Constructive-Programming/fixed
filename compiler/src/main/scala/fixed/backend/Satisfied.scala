@@ -103,16 +103,7 @@ private[backend] trait Satisfied extends Generated:
     */
   protected def equality(t: Type, l: Atom, r: Atom): Option[Rhs] =
     if isStringType(t) then Some(Rhs.Call("fx_str_eq", List(l, r), runtime = true))
-    else
-      val body =
-        for
-          (data, args) <- dataOf(t)
-          eq <- symbols.prelude.get("Eq").flatMap(symbols.membersOf(_).find(_.name == "eq"))
-          if hasBody(t, eq.id, fromPrelude = false)
-        yield
-          val (f, ws) = member(data, args, None)(dataBody(eq.id)(data, _, _))
-          Rhs.Call(f, ws ++ List(l, r), runtime = false)
-      body.orElse(derived(t, derivedEq).map((f, ws) => Rhs.Call(f, ws ++ List(l, r), runtime = false)))
+    else bodyOrDerived(t, "Eq", "eq", derivedEq).map((f, ws) => Rhs.Call(f, ws ++ List(l, r), runtime = false))
 
   /** The derived member `gen` builds for data type `t` (Rule 7.4), with the hidden arguments to call
     * it with: none at known arguments; else those of the type parameters `t` mentions, whose tables
@@ -136,19 +127,40 @@ private[backend] trait Satisfied extends Generated:
       case None if v.tpe == CType.Unit => k(Atom.StrC("()"))
       case None if isStringType(t)     => k(v)
       case None                        =>
-        val show = symbols.prelude.get("Show").flatMap(symbols.membersOf(_).find(_.name == "show"))
-        val body = show.filter(m => hasBody(t, m.id, fromPrelude = false)).flatMap(m =>
-          dataOf(t).map((data, args) =>
-            member(data, args, None)(dataBody(m.id)(data, _, _))
-          )
-        )
-        body.orElse(derived(t, derivedShow)) match
+        bodyOrDerived(t, "Show", "show", derivedShow) match
           case Some((f, ws)) => Expr.Let(s, Rhs.Call(f, ws :+ v, runtime = false), k(s))
           case None          =>
             throughTable(t, "Show", "show", List(v), CType.Boxed)(k).getOrElse {
               report(s"`show` on ${symbols.render(t)}")
               k(Atom.StrC(""))
             }
+
+  /** The function of member `cap.name` for data type `t`, with its hidden arguments: the program's
+    * `satisfies` body, else the member `gen` derives.
+    */
+  private def bodyOrDerived(t: Type, cap: String, name: String, gen: (SymbolId, List[Type]) => String) =
+    val m = symbols.prelude.get(cap).flatMap(symbols.membersOf(_).find(_.name == name))
+    val body = m.filter(m => hasBody(t, m.id, fromPrelude = false)).flatMap(m =>
+      dataOf(t).map((data, args) => member(data, args, None)(dataBody(m.id)(data, _, _)))
+    )
+    body.orElse(derived(t, gen))
+
+  /** `v` of type `t` cloned (`spec/stdlib.md` §4.11): a scalar, `()` or a `String` is the value itself
+    * (values are immutable); a data type by the program's `satisfies Clone` body or else its derived
+    * `clone`, a type parameter through its table; anything else is a problem (`B005`).
+    */
+  protected def cloneValue(t: Type, v: Atom)(k: K): Expr =
+    if !v.tpe.counted || isStringType(t) then k(v)
+    else
+      bodyOrDerived(t, "Clone", "clone", derivedClone) match
+        case Some((f, ws)) =>
+          val c = fresh("c", v.tpe)
+          Expr.Let(c, Rhs.Call(f, ws :+ v, runtime = false), k(c))
+        case None =>
+          throughTable(t, "Clone", "clone", List(v), v.tpe)(k).getOrElse {
+            report(s"`clone` on ${symbols.render(t)}")
+            k(v)
+          }
 
   /** Whether `a` and `b` of type `t` are equal: units always, scalars by a comparison, else by
     * [[equality]]; a type it cannot compare is a problem (`B005`).
