@@ -1245,8 +1245,20 @@ HandlerClauseList
     ;
 
 HandlerClause
-    = UPPER_IDENT "." LOWER_IDENT "(" PatternList? ")" "=>" BlockTail
+    = UPPER_IDENT "." LOWER_IDENT "(" HandlerParamList? ")" "=>" BlockTail
     | "return" "(" Pattern ")" "=>" BlockTail
+    ;
+
+(* A clause parameter may carry its type. The type picks the instance of
+   an effect that the subject performs at two `of` arguments:
+   `Fail.fail(e: String) => …` (spec/effects.md Rule E6.1.a; owner's
+   decision, fourth round of P6). Patterns elsewhere take no type. *)
+HandlerParamList
+    = HandlerParam ( "," HandlerParam )* ","?
+    ;
+
+HandlerParam
+    = Pattern ( ":" TypeExpr )?
     ;
 
 (* DoExpr: `do: BIND* FINAL`. Final form must be a non-bind expression. *)

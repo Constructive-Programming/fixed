@@ -524,6 +524,16 @@ handle SUBJECT:
 
 Per the grammar (`HandleExpr`), `SUBJECT` is a single `Expr`. For multi-line subject bodies, wrap in `do:` and parens: `handle (do: …): clauses`.
 
+**Rule E6.1.a (One effect at two `of` arguments).** `Fail of String` and `Fail of i64` are distinct effects (Rule E4.2), and one `handle` may handle both. A clause says which instance it handles by the type of a parameter (grammar `HandlerParam`):
+
+```
+handle parse(input):
+    Fail.fail(e: String) => 0
+    Fail.fail(code: i64) => code.toU64()
+```
+
+Where the subject's row holds one instance of the effect, a clause needs no type, as before. Where it holds several, a clause whose parameters, with the types written on them, fit exactly one instance handles that one; a clause that fits several is `error[E096]: Fail.fail matches Fail of String and Fail of i64; write the type of a parameter`. Coverage (`E093`) is per instance: a `handle` may handle one instance and leave the other in the row. An operation whose parameters do not mention the `of` argument cannot be told apart this way; for it, and for readability in general, a name for the instance is open (OQ-E12). (Owner's decision, fourth round of P6; it settles OQ-E10.) Not built.
+
 ### 6.2 Operational semantics (Rule E6.2)
 
 Evaluating `handle SUBJECT: clauses` proceeds:
@@ -721,7 +731,8 @@ fn each<E>(list: is List of A, f: A -> () with E) -> () with E =
 - **OQ-E8 — Row-polymorphic data (deferred).** A data type cannot take a row variable, so a structure that stores callbacks (a task queue) fixes their row: `List of (() -> () with Async)`. A callback with an extra rigid row variable cannot be stored in it. `examples/08_effects_handlers.fixed`'s `runScheduler` hits this case and keeps one `T015` until it is resolved.
 - **OQ-E9 — Parameterised effect aliases.** Rule E4.5.b: the grammar gives aliases value parameters only. An alias over an effect's `of` argument needs a type parameter on `TypeAlias` and a use form (`with AppEffect of String` would parse as an `EffectBound`).
 - **OQ-E11 — Removing effects by proof, in general.** The owner's direction (fourth round of P6): the compiler removes more effects as the system improves, in the end also a resumable effect such as `Console` that a body declares and does not use. The start is narrow: arithmetic effects by proof (Rule E3.6.e.1), a refined second function for the others (Rule E3.6.e.2), and the removal of a declared effect that the body cannot perform, with a warning (Rule E3.6.e.3). Open: removal of any other effect by proof at a call, a condition on an effect stated in the callee's signature ("performs `Decode` only if …"), which ties to dependent types (`spec/type_system.md` OQ-T3), and how a removal shows in the interface.
-- **OQ-E10 — Handler clauses for one effect at two `of` arguments.** `Fail of String` and `Fail of i64` are distinct effects (§3.4, Rule E4.2), but `HandlerClause` names only `E.op(…)` and cannot name the `of` argument. A `handle` whose subject performs both cannot say which one a clause handles. Needs a decision: a clause form with `of` (`Fail of String.fail(e) => …`), inference from the pattern's type, or a rule that one `handle` handles at most one instance of an effect.
+- **OQ-E10 — Handler clauses for one effect at two `of` arguments.** Settled by the owner (fourth round of P6): the type written on a clause parameter picks the instance (Rule E6.1.a).
+- **OQ-E12 — A name for an instance of an effect.** The owner, with the decision on OQ-E10: "we should also be able to give an alias name to help the program disambiguate". Open: whether a clause may name an effect alias of one instance (`type ParseFail = Fail of String`, then `ParseFail.fail(e) => …`), which Rule E4.5.a expands today before clauses are read; whether such a name is an alias or a new effect of its own; and how it meets parameterised aliases (OQ-E9).
 - **OQ-E4 — Higher-rank effect polymorphism (deferred).** A function whose argument is itself effect-polymorphic (`fn higher(g: forall E. (A -> B with E) -> ...)`) is not in v0.4.4. Defer until benchmark code reveals the need.
 
 **Closed (decided not to add):**
