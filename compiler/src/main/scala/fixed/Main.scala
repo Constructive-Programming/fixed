@@ -4,7 +4,7 @@ import java.nio.file.{Files, Path}
 
 import fixed.ast.Trees
 import fixed.backend.{Backend, MemoryReport, Mode}
-import fixed.prover.{PropVerdict, Prover, Result}
+import fixed.prover.{PropsLock, Prover, Result}
 import fixed.util.{Diagnostic, Reporter, SourceFile}
 
 /** Command-line entry point.
@@ -21,7 +21,8 @@ import fixed.util.{Diagnostic, Reporter, SourceFile}
   *     none of the ownership axis but those a `fip` body needs, for measurement.
   *   - `--prover-steps=N`, in any position, sets the static prover's budget per prop (`spec/properties.md` Rule
   *     P7.1.a). A check, `compile -o` and `ship` report how many props were proved and how many are open; a malformed
-  *     value stays among the arguments, as `--budget`'s does.
+  *     value stays among the arguments, as `--budget`'s does. A compile that reaches the prover writes the statuses to
+  *     `props.lock` beside the source (Rule P7.1.b).
   *
   * Exit codes (`spec/reports.md` Rule RP5.5): 0 for no error, 2 for a usage error (also an input
   * file that cannot be read), 18 for an output that cannot be written, else [[exitCode]].
@@ -30,7 +31,7 @@ object Main:
   def main(args: Array[String]): Unit =
     val (steps, others) = proverSteps(args.toList.filterNot(_ == "--"))
     val (mode, rest) = modeOf(others)
-    def load(file: String) = Compiler.compile(CompilationUnit(read(file), proverSteps = steps))
+    def load(file: String) = PropsLock.record(Compiler.compile(CompilationUnit(read(file), proverSteps = steps)))
     rest match
       case "compile" :: file :: "-o" :: out :: Nil => sys.exit(backend(load(file), mode)(write(Path.of(out), _)))
       case "compile" :: file :: "--explain-memory" :: format if format == Nil || format == List("--format", "json") =>
@@ -128,8 +129,8 @@ object Main:
 
   /** The static prover's count (`spec/properties.md` Rule P7.1, step 3); a refuted prop is an error, reported apart. */
   private[fixed] def props(unit: CompilationUnit): String =
-    val proved = unit.props.count { case PropVerdict(_, _, _: Result.Proved) => true; case _ => false }
-    val open = unit.props.count { case PropVerdict(_, _, _: Result.Open) => true; case _ => false }
+    val proved = unit.props.map(_.result).count { case _: Result.Proved => true; case _ => false }
+    val open = unit.props.map(_.result).count { case _: Result.Open => true; case _ => false }
     s"props: $proved proved, $open open"
 
   private def summary(unit: CompilationUnit): String =

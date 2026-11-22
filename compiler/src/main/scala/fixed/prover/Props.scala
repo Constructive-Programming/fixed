@@ -5,13 +5,15 @@ import fixed.ast.{Tree, Trees}
 import fixed.core.Phase
 import fixed.util.{DiagCode, Diagnostic, Severity, Span}
 
-/** What the static prover made of one prop: its qualified name, where it is declared, and the result. A prop outside
-  * the fragment is `Open` with the reason and no step; a `Refuted` one is `E102`.
+/** What the static prover made of one prop: its qualified name, where it is declared, the result, the key of its line
+  * in `props.lock`, and whether the result was read from there instead of proved. A prop outside the fragment is
+  * `Open` with the reason and no step; a `Refuted` one is `E102`.
   */
-final case class PropVerdict(name: String, span: Span, result: Result)
+final case class PropVerdict(name: String, span: Span, result: Result, key: String, recorded: Boolean)
 
 /** The static prover's place in the package compile (`spec/properties.md` Rule P7.1, step 1): right after the typer,
-  * every prop of the unit whose body lies in the fragment goes to the prover.
+  * every prop of the unit whose body lies in the fragment goes to the prover, unless `props.lock` records a result for
+  * its key, the prover's version and the budget (Rule P7.1.b).
   *
   * The fragment: a body that is a chain of `forall`s over binders of type `i8`…`i64`, `u8`…`u64` or `bool`, each with
   * an optional `suchThat`, around an expression built from those binders, integer and `bool` literals, `+`, `-`, `*`
@@ -26,9 +28,13 @@ object Props extends Phase:
   val name: String = "props"
 
   def run(unit: CompilationUnit): CompilationUnit =
+    val lock = PropsLock.recorded(unit)
     val checked = unit.tree.toList.flatMap(t => declared(items(t))).map { (n, p) =>
       val ob = obligation(p.body)
-      (PropVerdict(n, p.span, ob.fold(Result.Open(_, 0), (o, _) => Prover.prove(o, unit.proverSteps))), ob)
+      val key = ob.fold(_ => "-", o => PropsLock.key(o._1))
+      val known = lock.get(n).collect { case (`key`, r) => r }
+      val result = ob.fold(Result.Open(_, 0), (o, _) => known.getOrElse(Prover.prove(o, unit.proverSteps)))
+      (PropVerdict(n, p.span, result, key, ob.isRight && known.isDefined), ob)
     }
     unit.copy(props = checked.map(_._1)).report(checked.flatMap(failure))
 

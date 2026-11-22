@@ -22,8 +22,10 @@ import ap.util.{Debug, LRUCache, Timeout}
   * interface (`SimpleAPI`) proves on another thread, which the checker does not reach, so it is not used.
   */
 object Prover:
-  /** The library and its version; part of the key of a recorded status (Rule P7.1.b). */
-  val version: String = "princess-2025-06-25"
+  /** The library's version and this translation's (`+1`; raise it when the translation changes); part of the key of a
+    * recorded status (Rule P7.1.b).
+    */
+  val version: String = "princess-2025-06-25+1"
 
   /** The default budget in steps (Rule P7.1.a). */
   val defaultBudget: Long = 100000
