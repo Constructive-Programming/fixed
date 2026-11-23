@@ -25,8 +25,6 @@ final case class PropVerdict(name: String, span: Span, result: Result, key: Stri
   * outside the fragment. Anything else (`Self`, a field, a call, `match`, `/`) leaves the prop open.
   */
 object Props extends Phase:
-  val name: String = "props"
-
   def run(unit: CompilationUnit): CompilationUnit =
     val lock = PropsLock.recorded(unit)
     val checked = unit.tree.toList.flatMap(t => declared(items(t))).map { (n, p) =>

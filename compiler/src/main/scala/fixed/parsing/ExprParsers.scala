@@ -2,8 +2,6 @@ package fixed.parsing
 
 import scala.annotation.tailrec
 
-import cats.Monoid
-
 import Parser.*
 
 /** Expressions and patterns: operators, application, `if` / `match` / `do` / `handle`, lambdas, literals. */
@@ -376,8 +374,7 @@ private[parsing] object ExprParsers:
         case ha: Trees.OperationClause => acc.copy(operationClauses = ha :: acc.operationClauses)
 
         /** recovery; diagnostic already emitted */
-        case _: Trees.Error => acc
-        case _              => acc
+        case _ => acc
       (st1, acc1)
     }
     (s1, acc.operationClauses.reverse, acc.returnClause)

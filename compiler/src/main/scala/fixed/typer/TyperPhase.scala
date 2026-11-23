@@ -9,8 +9,6 @@ import fixed.core.{Context, Phase, SymKind, SymbolTable}
   * Cap, effect and satisfies method bodies join with capability member resolution (M5).
   */
 object TyperPhase extends Phase:
-  val name: String = "typer"
-
   def run(unit: CompilationUnit): CompilationUnit =
     unit.tree.fold(unit) { tree =>
       val (symbols, namerDiags) = Namer.index(tree)

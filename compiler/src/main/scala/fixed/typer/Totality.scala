@@ -157,8 +157,7 @@ object Totality:
           /** A name is a strict sub-value only if both sides bind it as one. */
           val right = bindings(r, of, inside)
           bindings(l, of, inside).map((n, o) => n -> (if right.get(n).contains(o) then o else Origin.Local))
-        case Trees.GuardedPat(q, _, _) => bindings(q, of, inside)
-        case other                     => locals(other)
+        case other => locals(other)
 
     private def locals(p: Tree): Env =
       Trees.subtrees(p).collect {

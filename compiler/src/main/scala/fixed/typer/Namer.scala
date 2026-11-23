@@ -373,8 +373,8 @@ object Namer:
         (c1, term.fold(Type.NeverType)(Type.ValueArg(_)))
 
       /** Gap nodes were already reported by the parser. */
-      case _: Trees.Error | _: Trees.Missing => (c, Type.NeverType)
-      case other                             =>
+      case _: Trees.Error => (c, Type.NeverType)
+      case other          =>
         (c.error(DiagCode.T005, other.span, "not supported in type position yet"), Type.NeverType)
 
   /** `of A` / `of (A, B)` / `of ()` as an argument list. */

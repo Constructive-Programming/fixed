@@ -66,8 +66,6 @@ object HandlerKind:
   * each in its own scope.
   */
 object QuantityPhase extends Phase:
-  val name: String = "quantities"
-
   def run(unit: CompilationUnit): CompilationUnit =
     if unit.typing.isEmpty then unit
     else
@@ -237,11 +235,7 @@ final private class Quantities(unit: CompilationUnit):
   private def matchCase(c: Trees.MatchCase, env: Env): Usage =
     val bs = binderPats(c.pattern)
     val inner = env ++ locals(bs)
-    record(bs, c.guard.fold(Usage.none)(expr(_, inner)) + guardOf(c.pattern, inner) + expr(c.body, inner))
-
-  private def guardOf(p: Tree, env: Env): Usage = p match
-    case Trees.GuardedPat(_, cond, _) => expr(cond, env)
-    case _                            => Usage.none
+    record(bs, c.guard.fold(Usage.none)(expr(_, inner)) + expr(c.body, inner))
 
   /** Clauses that resume may run once per operation performed, so they scale by ω (Rules Q5.7,
     * Q7.4). Abortive clauses and the return clause are exclusive: at most one of them runs.
@@ -336,7 +330,6 @@ final private class Quantities(unit: CompilationUnit):
       case Trees.DataVariantPat(_, _, fs, _)       => fs.toList.flatten.flatMap(binderPats)
       case Trees.StructDestructurePat(_, fs, _, _) => fs.flatMap(f => binderPats(f._2))
       case Trees.OrPat(l, _, _)                    => binderPats(l)
-      case Trees.GuardedPat(q, _, _)               => binderPats(q)
       case _                                       => Nil
 
   /** Direct subtrees, for the forms whose usage is the sum of their parts. */

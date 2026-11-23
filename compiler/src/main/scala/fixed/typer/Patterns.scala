@@ -47,11 +47,8 @@ object Patterns:
         /** ponytail: both alternatives must bind the same names (Rule M5.5.b); not checked yet. */
         val (s1, c1) = bind(s, left, t)
         (bind(s1, right, t)._1.record(pat, t), c1)
-      case Trees.GuardedPat(p, cond, _) =>
-        val (s1, c1) = bind(s, p, t)
-        (Typer.typedExpr(s1, cond, Proto.ExpectedType(Typer.bool))(using c1)._1, c1)
-      case _: Trees.Error | _: Trees.Missing => (s, ctx)
-      case other                             => (s.unsupported(other.span, "this pattern"), ctx)
+      case _: Trees.Error => (s, ctx)
+      case other          => (s.unsupported(other.span, "this pattern"), ctx)
 
   private def bindAll(s: TyperState, pairs: List[(fixed.ast.Tree, Type)])(using ctx: Context): (TyperState, Context) =
     pairs.foldLeft((s, ctx)) { case ((si, ci), (p, ty)) => bind(si, p, ty)(using ci) }

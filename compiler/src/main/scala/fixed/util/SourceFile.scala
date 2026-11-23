@@ -32,7 +32,6 @@ final class SourceFile(val path: String, val content: String, val library: Boole
   /** Returns the (1-indexed) line for an offset. */
   def lineOf(offset: Int): Int = lineColumn(offset)._1
 
-  /** Returns the substring at the given span. */
   def slice(start: Int, end: Int): String =
     require(
       start >= 0 && end >= start && end <= content.length,
@@ -40,7 +39,6 @@ final class SourceFile(val path: String, val content: String, val library: Boole
     )
     content.substring(start, end)
 
-  /** Total length in characters. */
   def length: Int = content.length
 
 object SourceFile:
@@ -56,8 +54,6 @@ final case class Span(start: Int, end: Int, file: Option[SourceFile] = None):
   require(start >= 0 && end >= start, s"invalid span [$start, $end]")
 
   def length: Int = end - start
-
-  def union(other: Span): Span = copy(start = start min other.start, end = end max other.end)
 
   def contains(offset: Int): Boolean = offset >= start && offset < end
 

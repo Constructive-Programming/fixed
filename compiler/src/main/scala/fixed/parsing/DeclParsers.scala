@@ -2,8 +2,6 @@ package fixed.parsing
 
 import scala.annotation.tailrec
 
-import cats.Monoid
-
 import Parser.*
 
 /** Declarations: top-level items, fn-like signatures and parameters, blocks, and data / cap / effect / satisfies / type-alias bodies. */
@@ -483,21 +481,11 @@ private[parsing] object DeclParsers:
     *   ImpossibleMapping  ::= "impossible" "as" LOWER_IDENT
     */
   private[parsing] def parseSatisfiesDecl(s0: ParserState)(using Reporter): Parsed[Tree] =
-    val (s1, typeName) = s0.current.kind match
-      case TokenKind.UpperIdent | TokenKind.LowerIdent =>
-        val (st, tok) = consume(s0); (st, tok.lexeme)
-      case _ =>
-        reportExpected(
-          s0,
-          DiagCode.P015,
-          "a type name to satisfy a capability",
-          Some("`<TypeName> satisfies <CapName>: ...`")
-        )
-        val (st, tok) = consume(s0); (st, tok.lexeme)
+    val (s1, nameTok) = consume(s0)
     val (s2, _) = expect(s1, TokenKind.KwSatisfies, "`satisfies`")
     val (s3, cap) = parseCapBound(s2)
     val (s4, items) = s3.optionalOrEmpty(TokenKind.Colon)(parseSatisfiesBody)
-    (s4, Trees.SatisfiesDecl(typeName, cap, items, span(s0.current.span, s4.current.span)))
+    (s4, Trees.SatisfiesDecl(nameTok.lexeme, cap, items, span(s0.current.span, s4.current.span)))
 
   private[parsing] def parseSatisfiesBody(s0: ParserState)(using Reporter): Parsed[List[Tree]] =
     val (s1, items) = parseMemberList(s0, List.empty[Tree]) { (state, acc) =>

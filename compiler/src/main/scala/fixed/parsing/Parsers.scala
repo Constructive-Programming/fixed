@@ -35,11 +35,6 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     val (_, tree) = ExprParsers.parseExpr(initialState(tokens))(using reporter)
     tree
 
-  /** Parse a single type expression; primarily used by tests. */
-  def parseTypeExpr(): Tree =
-    val (_, tree) = TypeParsers.parseTypeExpr(initialState(tokens))(using reporter)
-    tree
-
 end Parser
 
 object Parser:

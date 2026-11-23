@@ -10,10 +10,6 @@ enum Quantity:
   def +(that: Quantity): Quantity =
     if this == Zero then that else if that == Zero then this else Many
 
-  /** Scaling by a multiplicity context (§3.2). */
-  def *(that: Quantity): Quantity =
-    if this == Zero || that == Zero then Zero else if this == One then that else Many
-
   /** Exactly one of two exclusive observations happens (§3.3). */
   infix def join(that: Quantity): Quantity = if ordinal >= that.ordinal then this else that
 
@@ -35,6 +31,7 @@ final case class Usage(counts: IntMap[Quantity]):
   private def union(that: Usage, f: (Quantity, Quantity) => Quantity): Usage =
     Usage(counts.unionWith(that.counts, (_, x, y) => f(x, y)))
 
+  /** Scaling by a multiplicity context (§3.2). */
   def scale(q: Quantity): Usage =
     if q == Quantity.One || counts.isEmpty then this
     else if q == Quantity.Zero then Usage.none
