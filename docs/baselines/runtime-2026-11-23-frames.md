@@ -151,7 +151,8 @@ Default mode, instructions and heap allocations; frames on and off at the rebase
 - **Speed against pure Perceus.** Where frames apply, a frame cell saves 61 instructions against
   `malloc`, `free` and the count, which is about 6% of `temps`'s cycles. Most allocations leave by a
   closure result or through a recursive builder, which this increment does not reach.
-- **`Memory`'s escape facts are not sound for frames on their own.** On the test programs, most
+- **`Memory`'s escape facts were not sound for frames on their own** (repaired in the second round
+  below). On the test programs, most
   allocations it classes `Frame` stay on the heap. `--explain-memory` shows `class` against `placed`
   per site. Where its facts are too weak:
   - A field read does not flow back to the cell it was read from (`Memory.right`, `Rhs.Field`). A
@@ -195,9 +196,90 @@ Default mode, instructions and heap allocations; frames on and off at the rebase
 6. **No evacuation** (Rule MM5.5). A value classed `Frame` that reaches a closure, a table or a
    callee that keeps it stays on the heap. **Recommendation:** stay with that until a benchmark shows
    values lost to the heap by one such use.
-7. **`Memory`'s escape facts** (the four cases above). **Recommendation:** fix them in
-   `Memory.scala` in a separate commit, and keep the local proof in `Frames` as a check.
+7. **`Memory`'s escape facts** (the four cases above). **Done** in the second round below: fixed
+   in `Memory.scala`; the local check keeps only what a lifetime analysis does not compute.
 8. **A non-self call in tail position** keeps the caller's scope open: the reset comes after the
    call. This is sound, but it holds memory longer than Rule MM5.1 allows, and the call stops being
    a sibling call. **Recommendation:** reset before such a call when no argument is a frame value,
    once a benchmark shows the retention.
+
+## Second round: the lifetime analysis repaired
+
+`Memory.scala` now states its soundness condition: `Frame(f)` promises that no reference to the
+value is live once the activation of `f` that built it ends (its return, or a self call in tail
+position, which is a jump that resets the frame). Each unsound case got a test in `MemorySuite`
+that failed before its fix, and each fix was checked to be the one its test needs (the fix taken
+out alone, the test fails):
+
+| Case | Program in `MemorySuite` | Class before | After | Fix |
+|---|---|---|---|---|
+| A field read does not flow back to the cell read | `firstOf` returns a field of its parameter | `Frame(viaPart)` | `Dest(result)` | a counted `Field` result's escapes flow to the object read |
+| The same, through a `match` binder used as an abort payload | `sub` aborts with the head of its list | `Frame(viaHandle)` | `Region` (long-lived) | the same fix |
+| A reused cell does not take the escapes of the value built in it | `swap` reuses its parameter for its result | `Frame(viaReuse)` | `Dest(result)` | a `Reuse`'s cell gets the escapes of the result |
+| A self call in tail position does not close the scope | `spin` passes a new box to itself | `Frame(spin#x…)` | `Heap`, "passed to a self call in tail position" | its arguments are `Carried` by the loop, always long-lived |
+| A left fold returns its initial value on an empty input | step consumes `acc` exclusively, returns a new one | `Frame(viaFold)` | `Dest(result)` | the initial value also escapes where the fold's result does |
+| A closure's call may return a capture (further case) | `let f = (n) -> p; f(0)`, `p` a part of a holder | `Frame(viaClos)` | `Dest(result)` | a counted `CallClosure` result's escapes flow to the closure |
+| A closure's code may abort with a capture (further case) | `apply(f, i)`, `f` aborts with its capture | `Frame(viaClosAbort)` | `Heap` | a capture is `Unbounded` where the code's closure parameter is |
+
+Checked and found sound, no change: aliases through `let` and branch joins (each flows the
+variable's escapes to its sources), handler results (a clause's value flows like any branch),
+values passed to a capability table call or a closure the compiler cannot see, or to a callee
+outside the unit (`Unbounded`), abort payloads (`Unbounded`), values stored by a derived member (its
+code is analysed like any function), and runtime calls (they take and return strings).
+
+A call in tail position to another function is still a call that keeps the scope open until it
+returns (open question 8); `Memory` models the code as built, and says so.
+
+**`--explain-memory` and `examples/golden/01_basics.memory.json`.** No placement changed. The
+classes and parameter escapes that changed, all in derived loops of the prelude and in `fibIter`:
+
+- `unfoldLoop` (List and Nat): the cell passed on in tail position was `Frame` of the loop. It is
+  `Heap` in the versions that call themselves (a jump), and `Dest(result)` in the versions that
+  call another version of the loop instead (a call, which returns the result of the loop): the
+  baseline versions and `List of A.unfoldLoop[R]#x[4:List of A#1,cell]`. The accumulator
+  parameter becomes `into-result` in every version.
+- `Nat.foldDown` (both instances): the cell passed to the self call in tail position was `Frame`; it
+  is `Heap`.
+- `reverseOnto`: its parameter's cells are reused for the cells passed round the loop and returned:
+  `acc` becomes `into-result`, and the cell built becomes `Heap` (carried by the self tail call)
+  instead of `Dest(result)`.
+- `foldLeft`, `fold`, `foldUp`, `foldDown`, `unfold` of List and Nat: a parameter whose parts reach
+  a closure the loop cannot see (the list `xs`; the steps, whose results are handed back to a step)
+  becomes `unbounded`. So `fibIter`'s three closures become `Heap`, "kept by `Nat.unfold[R]` (or
+  `Nat.fold[R]`) beyond the call". Closures are never placed, so nothing moved.
+- `fibIter`'s baseline step `lambda.141` hands parts of `acc` to the `Numeric` table: `acc` becomes
+  `unbounded`; its `u64` instance `lambda.215` reuses `acc` for its result: `into-result`.
+
+**The local check in `Frames`.** With the lifetime in `Memory`, `Frames` takes its roots from
+`Memory` alone: a constructor or a `#frame` call result is a candidate only if `Memory` gives the
+variable `Frame` of the function (`MemoryTable.framed`, which covers call results as well as
+allocations). Removed from `Frames`: the test for a self call in tail position (the `jump` flag and
+the tail position threaded through its walk). Evidence: without the jump test and without
+`Memory`'s tail fix, `frame_more` stops in the checked build ("a frame cell used after its scope
+ended"); with `Memory`'s fix alone it passes.
+
+What `Frames` keeps is what a lifetime does not say, so `Memory` by its nature does not compute it:
+
+- **Containment (Rule MM4.1).** A frame cell may be pointed to only by frame cells of its
+  activation: a field of a cell that is not placed, a capture, or a parameter that a callee stores
+  or captures keeps the value on the heap, even where the container dies in the activation.
+- **Reuse.** The runtime reuses only heap cells: a value named by a `Reuse`, or passed to a
+  parameter that a callee may reuse, stays on the heap.
+- **Joins for `Rc`.** A variable that holds a frame cell holds one (or a static cell) on every path.
+
+These are why the parameter summary `kept` stays: it is the least set of parameters a callee may
+store, capture, reuse or hand to code that may, which is an ownership and containment fact.
+`Memory`'s `none` allows a callee to reuse its parameter or store it in a cell that dies with it.
+
+**The mutant experiment, re-run.** Both mutants are still caught by the test programs:
+
+- every use allowed (`harmless` always true): 21 tests fail. Eight programs, `frame_adv` and
+  `derived_show_eq` among them, abort in `free()` (a frame cell named by a local `Reuse` gets a
+  count of 1 and is later freed); ten stop with "reused a cell that is not exclusively owned" (a
+  callee's exclusive version reuses a frame cell); `acc_loop`'s reuse pins and FrameSuite's two
+  placement assertions fail.
+- no parameter kept (`kept` empty): 14 tests fail: eleven programs stop with "reused a cell that
+  is not exclusively owned", plus `acc_loop`'s pins and FrameSuite's two assertions.
+
+Before the repair these mutants were caught by values that escaped; now they are caught by
+containment and reuse, the part of the check that remains.

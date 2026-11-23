@@ -37,18 +37,32 @@ enum ParamEscape:
 /** Whether a `fold` / `unfold` call may fork (Rule Q5.13.a, d), and why not if it may not. */
 final case class ForkFact(call: String, loop: String, tree: Boolean, admissible: Boolean, reason: String, span: Span)
 
+/** @param framed per function, the counted variables that are `Frame` of it: neither returned nor
+  *   long-lived (Rule MM5.2), allocations and call results alike.
+  */
 final class MemoryTable(
     val allocations: Map[String, List[Allocation]],
     val escapes: Map[String, List[ParamEscape]],
-    val forks: Map[String, List[ForkFact]]
+    val forks: Map[String, List[ForkFact]],
+    val framed: Map[String, Set[String]]
 )
 
 /** Escape sets, lifetime classes, cohesive groups, garbage-free carry and fork facts over
   * versioned Core (`docs/plans/phase-3.4-qtt.md` 3.4.M4).
   *
+  * '''Soundness for frames.''' `Frame(f)` promises that no reference to the value, or to a part
+  * of it, is live once the activation of `f` that built it ends: when `f` returns, or jumps to its
+  * own start by a self call in tail position (Rule MM5.1; a call in tail position to another
+  * function keeps the scope open until it returns, as the code is generated). The escapes below
+  * over-approximate every flow that could keep one, so a part escaping makes the whole escape.
+  * `Frame` says nothing about ownership: a frame value may still be counted, reused or stored by
+  * code that does not know its class, which [[Frames]] rules out where it places one.
+  *
   * Escapes are found by one backward walk per function, repeated over the call graph until no
   * parameter's escape changes (`None < IntoResult < Unbounded`). A value stored into another
-  * escapes wherever that one does, so a field's escape set contains its container's.
+  * escapes wherever that one does, so a field's escape set contains its container's; a value read
+  * from another, or returned by a call of a closure, may be a part of it, so the container's
+  * escape set contains the part's.
   *
   * Classes follow Rule MM5.3 in order: a long-lived allocation (Rule MM5.2: unbounded escape, or
   * carried by a loop whose step is not garbage-free) is `Region` if it belongs to a cohesive group
@@ -67,12 +81,17 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
 
   def run(): MemoryTable =
     fixpoint()
-    MemoryTable(fns.map(f => f.name -> classes(f)).toMap, signatures.toMap, fns.map(f => f.name -> forks(f)).toMap)
+    MemoryTable(
+      fns.map(f => f.name -> classes(f)).toMap,
+      signatures.toMap,
+      fns.map(f => f.name -> forks(f)).toMap,
+      fns.map(f => f.name -> framed(f)).toMap
+    )
 
   private def fixpoint(): Unit =
     val before = signatures.toMap
     fns.foreach { f =>
-      val esc = walk(f.body, Set(Escape.Result), f.name)
+      val esc = walk(f.body, Set(Escape.Result), f.name, tail = true)
       escapeOf(f.name) = esc
       signatures(f.name) = f.params.map(p => summary(esc.getOrElse(p.name, Set.empty)))
     }
@@ -90,44 +109,57 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
   private def merge(a: Map[String, Set[Escape]], b: Map[String, Set[Escape]]): Map[String, Set[Escape]] =
     Core.merge(a, b, Set.empty[Escape])(_ ++ _)
 
-  /** The escapes of every variable `e` uses; a `Ret` flows to `target`. Bound variables keep their
-    * entries, so the result also gives each allocation's escape set.
+  /** The escapes of every variable `e` uses; a `Ret` flows to `target`, and `tail` says whether
+    * `e`'s result is `fn`'s. Bound variables keep their entries, so the result also gives each
+    * allocation's escape set.
     */
-  private def walk(e: Expr, target: Set[Escape], fn: String): Map[String, Set[Escape]] =
+  private def walk(e: Expr, target: Set[Escape], fn: String, tail: Boolean): Map[String, Set[Escape]] =
     e match
       case Ret(a)            => flows(List(a), target)
       case Let(x, rhs, body) =>
-        val inner = walk(body, target, fn)
-        merge(inner, right(x, rhs, inner.getOrElse(x.name, Set.empty), fn))
-      case Expr.Dup(_, b)  => walk(b, target, fn)
-      case Expr.Drop(_, b) => walk(b, target, fn)
+        val inner = walk(body, target, fn, tail)
+        merge(inner, right(x, rhs, inner.getOrElse(x.name, Set.empty), fn, tail && body == Ret(x)))
+      case Expr.Dup(_, b)  => walk(b, target, fn, tail)
+      case Expr.Drop(_, b) => walk(b, target, fn, tail)
 
   private def flows(as: List[Atom], es: Set[Escape]): Map[String, Set[Escape]] =
     as.flatMap(Core.countedVar).map(v => v.name -> es).toMap
 
-  /** What `let x = rhs` contributes, given `x`'s own escapes `ex`. */
-  private def right(x: Atom.Var, rhs: Rhs, ex: Set[Escape], fn: String): Map[String, Set[Escape]] =
+  /** What `let x = rhs` contributes, given `x`'s own escapes `ex`; `last` says whether `x` is
+    * `fn`'s result. A counted field read, and the result of a closure's call (which may be one of
+    * its captures), may be a part of the value read or called, so that value escapes where `x`
+    * does: a part escaping makes the whole escape.
+    */
+  private def right(x: Atom.Var, rhs: Rhs, ex: Set[Escape], fn: String, last: Boolean): Map[String, Set[Escape]] =
     val where = spans(x.name)
     rhs match
-      case Rhs.Move(a)               => flows(List(a), ex)
-      case Rhs.Con(_, fs)            => flows(fs, ex + Escape.Field(x.name))
-      case Rhs.Reuse(_, _, fs, _)    => flows(fs, ex + Escape.Field(x.name))
-      case Rhs.Closure(_, cs, _)     => flows(cs, ex + Escape.Closure(x.name))
-      case Rhs.CallClosure(_, as, _) =>
-        flows(as, Set(Escape.Unbounded(s"passed to a closure the compiler cannot see, at ${where.start}")))
+      case Rhs.Move(a)                      => flows(List(a), ex)
+      case Rhs.Field(o, _)                  => flows(List(o), ex)
+      case Rhs.Con(_, fs)                   => flows(fs, ex + Escape.Field(x.name))
+      case Rhs.Reuse(cell, _, fs, _)        => merge(flows(List(cell), ex), flows(fs, ex + Escape.Field(x.name)))
+      case Rhs.Closure(code, cs, exclusive) =>
+        val keeps = List(code, exclusive).filter(_.nonEmpty).exists(param(_, 0) == ParamEscape.Unbounded)
+        val kept = Option.when(keeps)(Escape.Unbounded(s"kept by the code of closure `${x.name}`, at ${where.start}"))
+        flows(cs, ex + Escape.Closure(x.name) ++ kept)
+      case Rhs.CallClosure(c, as, _) =>
+        val unseen = Escape.Unbounded(s"passed to a closure the compiler cannot see, at ${where.start}")
+        merge(flows(List(c), ex), flows(as, Set(unseen)))
       case Rhs.CallTable(_, _, as, _) =>
         flows(as, Set(Escape.Unbounded(s"passed through a capability table, at ${where.start}")))
       case Rhs.Call(f, as, true) if f == "fx_abort" =>
         flows(as, Set(Escape.Unbounded(s"an abort payload, at ${where.start}")))
+      case Rhs.Call(f, as, false) if last && f == fn =>
+        merge(call(f, as, ex, where, fn), flows(as, Set(Escape.Carried(fn))))
       case Rhs.Call(f, as, false) => call(f, as, ex, where, fn)
       case Rhs.Catch(f, as)       => call(f, as, ex, where, fn)
-      case Rhs.If(_, t, e)        => merge(walk(t, ex, fn), walk(e, ex, fn))
-      case Rhs.Switch(_, cases)   => cases.map(c => walk(c._2, ex, fn)).foldLeft(Map.empty)(merge)
+      case Rhs.If(_, t, e)        => merge(walk(t, ex, fn, last), walk(e, ex, fn, last))
+      case Rhs.Switch(_, cases)   => cases.map(c => walk(c._2, ex, fn, last)).foldLeft(Map.empty)(merge)
       case _                      => Map.empty
 
   /** A call's arguments escape as `f`'s parameters do. A loop's carried value instead escapes as
     * its step's parameter does, when the step is a closure built here: the loop itself only hands
-    * it to the step and returns what the step returns.
+    * it to the step and returns what the step returns, or, a left fold on an empty input, the
+    * initial value itself.
     */
   private def call(f: String, as: List[Atom], ex: Set[Escape], where: Span, fn: String): Map[String, Set[Escape]] =
     def by(e: ParamEscape, who: String) = e match
@@ -139,7 +171,9 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
         if !carried(f, i) then Map(v.name -> by(param(f, i), f))
         else
           val step = as.drop(i + 1).flatMap(Core.countedVar).flatMap(s => closureMap(fn).get(s.name)).headOption
-          Map(v.name -> (step.fold(by(ParamEscape.Unbounded, f))(code => by(param(code, 1), code)) + Escape.Carried(f)))
+          val returned = if f.contains(".foldLeft[") then ex else Set.empty
+          val viaStep = step.fold(by(ParamEscape.Unbounded, f))(code => by(param(code, 1), code))
+          Map(v.name -> (viaStep ++ returned + Escape.Carried(f)))
     }.foldLeft(Map.empty[String, Set[Escape]])(merge)
 
   private val closureMaps = mutable.HashMap.empty[String, Map[String, String]]
@@ -165,6 +199,7 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
       case (x, _: Rhs.Reuse)                                   => x.name
       case (x, Rhs.Closure(_, cs, _)) if cs.nonEmpty           => x.name
     }
+    val frame = framed(f)
     val longLived = sites.flatMap(x => long(x, esc.getOrElse(x, Set.empty), f.name).map(x -> _)).toMap
     val group = groups(longLived.keySet, esc)
     sites.map { x =>
@@ -174,15 +209,29 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
           group.get(x).fold((LifetimeClass.Heap, reason))(r =>
             (LifetimeClass.Region(r), s"$reason; in the cohesive group of `$r`")
           )
-        case None if es(Escape.Result) => (LifetimeClass.Dest, "returned")
-        case None                      => (LifetimeClass.Frame(f.name), "")
+        case None if frame(x) => (LifetimeClass.Frame(f.name), "")
+        case None             => (LifetimeClass.Dest, "returned")
       Allocation(x, cls, es, Option(why).filter(_.nonEmpty).toList, spans(x))
     }
 
-  /** Why allocation `x` is long-lived (Rule MM5.2), if it is. */
+  /** The counted variables of `f` that are `Frame` of it: neither returned nor long-lived. */
+  private def framed(f: Fn): Set[String] =
+    val esc = escapeOf.getOrElse(f.name, Map.empty)
+    Core.lets(f.body).collect {
+      case (x, _)
+          if x.ctype.counted && !esc.getOrElse(x.name, Set.empty)(Escape.Result) &&
+            long(x.name, esc.getOrElse(x.name, Set.empty), f.name).isEmpty =>
+        x.name
+    }.toSet
+
+  /** Why allocation `x` is long-lived (Rule MM5.2), if it is. A value passed to a self call in
+    * tail position is carried by that loop past the scope that built it (Rule MM5.1).
+    */
   private def long(x: String, es: Set[Escape], fn: String): Option[String] =
     es.collectFirst { case Escape.Unbounded(why) => why }.orElse(
       es.collectFirst {
+        case Escape.Carried(loop) if loop == fn =>
+          "passed to a self call in tail position, a jump that ends this scope (Rule MM5.1)"
         case Escape.Carried(loop) if !garbageFree(loop, x, fn) =>
           s"carried by `$loop`, whose step is not garbage-free for it (Rule MM5.2(b))"
       }

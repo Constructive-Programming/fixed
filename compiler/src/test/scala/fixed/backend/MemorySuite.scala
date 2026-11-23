@@ -17,8 +17,8 @@ class MemorySuite extends munit.FunSuite:
     assert(!u.hasErrors, u.diagnostics)
     u
 
-  private def analysed(code: String, body: String): Analysed =
-    val u = unit(code + s"fn main() -> () with Console =\n    Console.printLine(($body).show())\n")
+  private def analysed(code: String, body: String, effects: String = "Console"): Analysed =
+    val u = unit(code + s"fn main() -> () with $effects =\n    Console.printLine(($body).show())\n")
     Backend.analyse(u).fold(ds => fail(s"lowering failed: $ds"), identity)
 
   /** The classes of `fn`'s allocations, in order. */
@@ -90,6 +90,111 @@ class MemorySuite extends munit.FunSuite:
       Trees.subtrees(stop.tree.get).collect { case h: Trees.HandleExpr => stop.quantities.get.handler(h) }.flatten,
       List(HandlerKind.Abortive)
     )
+
+  /** The classes of exactly function `fn`'s allocations, in order. */
+  private def classesOf(a: Analysed, fn: String): List[String] =
+    a.memory.allocations.getOrElse(fn, fail(s"no $fn in ${a.memory.allocations.keySet}")).map(_.cls.show)
+
+  /** The escapes of every version of `fn`. */
+  private def escapesOf(a: Analysed, fn: String): Set[List[ParamEscape]] =
+    a.memory.escapes.collect { case (f, es) if f == fn || f.startsWith(fn + "#") => es }.toSet
+
+  private val boxes = "data Box3:\n    Box3(a: u64, b: u64, c: u64)\n\n" +
+    "data Holder:\n    Holder(first: Box3, second: Box3)\n\nfn sum(b: Box3) -> u64 = b.a + b.b + b.c\n\n"
+
+  /** Soundness for frames: a class `Frame(f)` must be safe to act on, that is to free the value
+    * when `f`'s activation ends. Each program below has a value that outlives that activation. */
+
+  test("a part read from a value escapes for the whole: a match that returns a field"):
+    val code = "use std.io.Console\n\n" + boxes +
+      "fn firstOf(h: Holder) -> Box3 =\n    match h:\n        Holder.Holder(a, _) => a\n\n" +
+      "fn viaPart(i: u64) -> Box3 =\n    let h = Holder.Holder(Box3.Box3(i, i, i), Box3.Box3(i, i, i))\n    firstOf(h)\n\n"
+    val a = analysed(code, "sum(viaPart(1))")
+
+    /** `firstOf` returns a part of its parameter, and `viaPart` returns what it returns: the
+      * holder's first box outlives `viaPart`. The analysis does not know which part, so the holder
+      * and both boxes reach the result: Dest(result), never Frame(viaPart). */
+    assertEquals(escapesOf(a, "firstOf"), Set(List(ParamEscape.IntoResult)))
+    assertEquals(classesOf(a, "viaPart"), List.fill(3)("Dest(result)"))
+
+  test("a part read from a value escapes for the whole: an abort payload"):
+    val code = "use std.io.Console\n\n" + boxes + "data L:\n    E\n    C(h: Box3, t: L)\n\n" +
+      "fn sub(xs: L) -> u64 with Fail of Box3 =\n    match xs:\n        L.C(h, t) => Fail.fail(h)\n" +
+      "        L.E => 0\n\n" +
+      "fn viaHandle(i: u64) -> Box3 =\n    let l = L.C(Box3.Box3(i, i, i), L.E)\n    handle sub(l):\n" +
+      "        Fail.fail(b) => b\n        return(v) => Box3.Box3(v, v, v)\n\n"
+    val a = analysed(code, "sum(viaHandle(1))")
+
+    /** `sub` aborts with the head of its list: an abort payload travels past every scope up to the
+      * handler (Unbounded), so the list cell and its head are long-lived: one cohesive region. The
+      * box of the `return` clause is the result. */
+    assertEquals(escapesOf(a, "sub"), Set(List(ParamEscape.Unbounded)))
+    val region = (c: String) => if c.startsWith("Region(") then "Region" else c
+    assertEquals(classesOf(a, "viaHandle").map(region), List("Region", "Region", "Dest(result)"))
+
+  test("a reused cell takes the escapes of the value built in it (Rule MM11.4)"):
+    val code = "use std.io.Console\n\n" + boxes +
+      "fn swap(b: Box3) -> Box3 =\n    match b:\n        Box3.Box3(x, y, z) => Box3.Box3(y, x, z)\n\n" +
+      "fn viaReuse(i: u64) -> Box3 =\n    let t = Box3.Box3(i, i + 1, i)\n    swap(t)\n\n"
+    val a = analysed(code, "sum(viaReuse(1))")
+
+    /** `swap` builds its result in its parameter's cell, and `viaReuse` returns that result: the
+      * memory of `t` outlives `viaReuse`, so `t` is Dest(result). */
+    assertEquals(escapesOf(a, "swap"), Set(List(ParamEscape.IntoResult)))
+    assertEquals(classesOf(a, "viaReuse"), List("Dest(result)"))
+
+  test("a call in tail position closes the caller's scope (Rule MM5.1)"):
+    val code = "use std.io.Console\n\n" + boxes +
+      "fn spin(n: u64, b: Box3) -> u64 with Diverge =\n    if n == 0:\n        sum(b)\n    else:\n" +
+      "        spin(n - 1, Box3.Box3(n, n, n))\n\n"
+    val a = analysed(code, "spin(3, Box3.Box3(1, 1, 1))", "Console + Diverge")
+
+    /** The self call in tail position is a jump that resets the frame before the next step reads
+      * the box: the box is carried by the loop past the scope that built it, so it is not Frame of
+      * the loop. Nothing shows the loop garbage-free for it, so it is long-lived: Heap. (`spin`
+      * itself calls its exclusive version, a call that keeps its scope open until it returns.) */
+    val loops = a.fns.filter(f =>
+      f.name.startsWith("spin") && Core.lets(f.body).exists {
+        case (_, Rhs.Call(g, _, false)) => g == f.name; case _ => false
+      }
+    )
+    val spins = loops.flatMap(f => a.memory.allocations(f.name))
+    assert(loops.nonEmpty && spins.nonEmpty && spins.forall(_.cls == LifetimeClass.Heap), spins)
+    assert(spins.forall(_.reasons.exists(_.contains("tail position"))), spins)
+
+  test("a fold's initial value reaches its result: the fold returns it on an empty input"):
+    val code = "use std.io.Console\n\ndata Acc:\n    Acc(n: u64, m: u64)\n\n" +
+      "fn bump(a: Acc) -> u64 =\n    let t = Acc.Acc(a.m, a.n)\n    t.n\n\n" +
+      "fn viaFold(xs: List of u64) -> Acc = xs.fold(Acc.Acc(0, 0), (acc, x) -> Acc.Acc(bump(acc) + x, 0))\n\n"
+    val a = analysed(code, "viaFold([]).n + viaFold([1, 2]).n")
+
+    /** The step consumes its accumulator exclusively (garbage-free) and returns a new one, but on an
+      * empty list the fold returns the initial `Acc(0, 0)` itself, which `viaFold` returns. */
+    assertEquals(classesOf(a, "viaFold"), List("Dest(result)"))
+
+  test("a closure's call may return what it captured"):
+    val code = "use std.io.Console\n\n" + boxes +
+      "fn viaClos(i: u64) -> Box3 =\n    let h = Holder.Holder(Box3.Box3(i, i, i), Box3.Box3(i, i, i))\n" +
+      "    let p = h.first\n    let f = (n) -> p\n    f(0)\n\n"
+    val a = analysed(code, "sum(viaClos(1))")
+
+    /** `f(0)` returns the captured `p`, a part of `h`, and `viaClos` returns it: the closure, the
+      * holder and its boxes reach the result. */
+    assertEquals(classesOf(a, "viaClos"), List.fill(4)("Dest(result)"))
+
+  test("a closure whose code aborts with what it captured keeps it beyond any call"):
+    val code = "use std.io.Console\n\n" + boxes +
+      "fn apply(f: u64 -> u64 with Fail of Box3, n: u64) -> u64 with Fail of Box3 = f(n)\n\n" +
+      "fn viaClosAbort(i: u64) -> u64 with Fail of Box3 =\n    let b = Box3.Box3(i, i, i)\n" +
+      "    let f = (n) -> if n > 0: Fail.fail(b) else: n\n    apply(f, i)\n\n" +
+      "fn caught(i: u64) -> Box3 =\n    handle viaClosAbort(i):\n        Fail.fail(b) => b\n" +
+      "        return(v) => Box3.Box3(v, v, v)\n\n"
+    val a = analysed(code, "sum(caught(0)) + sum(caught(2))")
+
+    /** `apply` only calls `f`, but `f`'s code aborts with the captured box: the payload travels past
+      * `viaClosAbort` to the handler in `caught`, so the box is Heap, not Frame(viaClosAbort). The
+      * closure cell itself only reaches `apply`, which drops it. */
+    assertEquals(classesOf(a, "viaClosAbort"), List("Heap", "Frame(viaClosAbort)"))
 
   test("every run example and benchmark gets classes, escapes and fork facts"):
     val files = List("01_basics", "03_option_result", "04_json", "05_phantom_types").map(n => s"examples/$n.fixed") ++

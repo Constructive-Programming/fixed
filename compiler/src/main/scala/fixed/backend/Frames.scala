@@ -7,17 +7,19 @@ import fixed.backend.Expr.{Let, Ret}
   * [[Consume]], before [[Aborts]] and [[Rc]].
   *
   * A constructor is placed on its function's frame (`Frame(f)`, Rule MM3.1) when [[Memory]] gives
-  * it that class and every use of the value proves it again here, locally: of the value and of
-  * every variable that holds it or a part of it (an alias, a field read, a branch's result), each
-  * use is a field read, a `match`, a field of another cell placed on the same frame, or an argument
-  * of a direct call whose parameter is not kept ([[kept]]); a self call in tail position is a jump
-  * that resets the frame. Anything else keeps the value on the heap. A frame cell refers only to
-  * frame cells of its activation or static cells, so a reset owes no `drop` (Rule MM4.2 without a
-  * drop list), and a variable holding a frame cell holds one on every path, so `Rc` skips it.
+  * it that class, which settles its lifetime; its uses must also show what a lifetime does not:
+  * that only frame cells of the activation point to it (Rule MM4.1) and that no code reuses it (the
+  * runtime reuses heap cells only). Of the value and of every variable that holds
+  * it or a part of it (an alias, a field read, a branch's result), each use is a field read, a
+  * `match`, a field of another cell placed on the same frame, or an argument of a direct call
+  * whose parameter is not kept ([[kept]]). Anything else keeps the value on the heap. A frame cell
+  * refers only to frame cells of its activation or static cells, so a reset owes no `drop` (Rule
+  * MM4.2 without a drop list), and a variable holding a frame cell holds one on every path, so
+  * `Rc` skips it.
   *
   * A function `g` whose results are all reference-free cells it builds (`Dest(result)`) gets a
   * clone `g#frame` that bumps them in its caller's frame, with no mark of its own; a call of `g`
-  * whose result passes the checks calls it (Rule MM7.1, the destination as a clone, not a hidden
+  * whose result [[Memory]] gives `Frame` of the caller and that passes the checks calls it (Rule MM7.1, the destination as a clone, not a hidden
   * parameter). Baseline versions take part alike: frame cells reach slots, where the sentinel in
   * their count word makes the witness's `dup` and `drop` nothing (Rule MM7.3).
   *
@@ -43,14 +45,13 @@ object Frames:
 
   /** How a use treats the value of a variable: `Into(x)`, variable `x` holds it or a part of it
     * (an alias, a counted field read, a branch's result); `In(x)`, a field of the new cell `x`;
-    * `Arg`, argument `i` of a direct call of `f`, `jump` if a self call in tail position; `Read`,
-    * a `match` or a read of a field that is not a reference; `Result`, the function's result;
-    * `Out`, anything else.
+    * `Arg`, argument `i` of a direct call of `f`; `Read`, a `match` or a read of a field that is
+    * not a reference; `Result`, the function's result; `Out`, anything else.
     */
   private enum Use:
     case Into(x: String)
     case In(x: String)
-    case Arg(f: String, i: Int, jump: Boolean)
+    case Arg(f: String, i: Int)
     case Read, Result, Out
 
   /** A function's uses, the variables each variable flows into, its `let`s and its static cells. */
@@ -76,17 +77,17 @@ object Frames:
       * group), read, `match`ed or lent to a call whose parameter `lent` says is not kept, or `more`
       * accepts it.
       */
-    def harmless(group: Set[String], lent: (String, Int, Boolean) => Boolean)(more: Use => Boolean): Boolean =
+    def harmless(group: Set[String], lent: (String, Int) => Boolean)(more: Use => Boolean): Boolean =
       uses.forall { (v, u) =>
         !group(v) ||
         (u match
           case Use.Into(_) | Use.Read => true
-          case Use.Arg(g, i, jump)    => lent(g, i, jump)
+          case Use.Arg(g, i)          => lent(g, i)
           case other                  => more(other))
       }
 
   def apply(fns: List[Fn], memory: MemoryTable): Frames =
-    val facts = fns.map(f => f.name -> Facts(f, uses(f.body, None, tail = true, f.name), lets(f))).toMap
+    val facts = fns.map(f => f.name -> Facts(f, uses(f.body, None), lets(f))).toMap
     val keeps = kept(facts)
     val notKept = (f: String, i: Int) => facts.contains(f) && !keeps((f, i))
     val dests = facts.values.flatMap(fs => results(fs, memory, notKept).map(fs.fn.name -> _)).toMap
@@ -113,30 +114,26 @@ object Frames:
 
   private def vars(as: List[Atom]): List[String] = as.flatMap(Core.countedVar).map(_.name)
 
-  /** The uses in `e` of counted variables; `into` is the variable a `Ret` flows into, if a branch's,
-    * `tail` whether `e`'s result is the function's.
-    */
-  private def uses(e: Expr, into: Option[String], tail: Boolean, self: String): List[(String, Use)] =
+  /** The uses in `e` of counted variables; `into` is the variable a `Ret` flows into, if a branch's. */
+  private def uses(e: Expr, into: Option[String]): List[(String, Use)] =
     e match
       case Ret(a)            => vars(List(a)).map(_ -> into.fold(Use.Result)(Use.Into(_)))
-      case Expr.Dup(_, b)    => uses(b, into, tail, self)
-      case Expr.Drop(_, b)   => uses(b, into, tail, self)
+      case Expr.Dup(_, b)    => uses(b, into)
+      case Expr.Drop(_, b)   => uses(b, into)
       case Let(x, rhs, body) =>
-        val last = tail && body == Ret(x)
         def all(as: List[Atom], u: Use) = vars(as).map(_ -> u)
-        def args(f: String, as: List[Atom], jump: Boolean) =
-          as.zipWithIndex.flatMap((a, i) => vars(List(a)).map(_ -> Use.Arg(f, i, jump)))
-        def branch(b: Expr) = uses(b, Some(x.name), last, self)
+        def args(f: String, as: List[Atom]) = as.zipWithIndex.flatMap((a, i) => vars(List(a)).map(_ -> Use.Arg(f, i)))
+        def branch(b: Expr) = uses(b, Some(x.name))
         val here = rhs match
           case Rhs.Move(a)            => all(List(a), Use.Into(x.name))
           case Rhs.Field(o, _)        => all(List(o), if x.ctype.counted then Use.Into(x.name) else Use.Read)
           case Rhs.Switch(s, cases)   => all(List(s), Use.Read) ++ cases.flatMap(c => branch(c._2))
           case Rhs.If(_, t, f)        => branch(t) ++ branch(f)
           case Rhs.Con(_, fs)         => all(fs, Use.In(x.name))
-          case Rhs.Call(f, as, false) => args(f, as, last && f == self)
-          case Rhs.Catch(f, as)       => args(f, as, jump = false)
+          case Rhs.Call(f, as, false) => args(f, as)
+          case Rhs.Catch(f, as)       => args(f, as)
           case other                  => all(Core.atoms(other), Use.Out)
-        here ++ uses(body, into, tail, self)
+        here ++ uses(body, into)
 
   /** The parameters a function may keep beyond a call: those that reach anything but a read, a
     * `match` or another call's parameter that is not kept. The least such set, grown from none over
@@ -148,7 +145,7 @@ object Frames:
         fs.fn.params.zipWithIndex.collect {
           case (p, i)
               if p.ctype.counted && !keeps((fs.fn.name, i)) &&
-                !fs.harmless(fs.group(Set(p.name)), (g, j, _) => facts.contains(g) && !keeps((g, j)))(_ => false) =>
+                !fs.harmless(fs.group(Set(p.name)), (g, j) => facts.contains(g) && !keeps((g, j)))(_ => false) =>
             (fs.fn.name, i)
         }
       }
@@ -176,12 +173,13 @@ object Frames:
     )
     val fine = cells.forall(c =>
       dest(c) && vars(Core.atoms(fs.defs(c))).forall(fs.statics) &&
-        fs.harmless(fs.group(Set(c)), (g, i, _) => notKept(g, i))(_ == Use.Result)
+        fs.harmless(fs.group(Set(c)), notKept)(_ == Use.Result)
     )
     Option.when(cells.nonEmpty && shapes && fine && fs.pure(fs.group(cells), fs.group(cells)))(cells)
 
-  /** The frame roots of `fs`'s function (its constructors and the results of `#frame` calls), and
-    * among them the calls, by result variable, as a greatest fixed point.
+  /** The frame roots of `fs`'s function (its constructors and the results of `#frame` calls that
+    * [[Memory]] gives `Frame` of it), and among them the calls, by result variable, as a greatest
+    * fixed point.
     */
   private def place(
       fs: Facts,
@@ -189,20 +187,15 @@ object Frames:
       notKept: (String, Int) => Boolean,
       dests: Set[String]
   ): (Set[String], Set[(String, String)]) =
-    val name = fs.fn.name
-    val framed = memory.allocations.getOrElse(name, Nil).collect {
-      case a if a.cls == LifetimeClass.Frame(name) && fs.defs.get(a.name).exists {
-            case _: Rhs.Con => true; case _ => false
-          } =>
-        a.name
-    }
-    val calls = fs.defs.collect { case (x, Rhs.Call(g, _, false)) if dests(g) => x -> g }
+    val framed = memory.framed.getOrElse(fs.fn.name, Set.empty)
+    val cons = fs.defs.collect { case (x, Rhs.Con(_, as)) if as.nonEmpty && framed(x) => x }
+    val calls = fs.defs.collect { case (x, Rhs.Call(g, _, false)) if dests(g) && framed(x) => x -> g }
     def ok(r: String, roots: Set[String], held: Set[String]): Boolean =
       val group = fs.group(Set(r))
       val fields = fs.defs.get(r).fold(Nil)(rhs => if calls.contains(r) then Nil else vars(Core.atoms(rhs)))
       fields.forall(v => held(v) || fs.statics(v)) &&
       fs.pure(group, held) &&
-      fs.harmless(group, (g, i, jump) => !jump && notKept(g, i)) {
+      fs.harmless(group, notKept) {
         case Use.In(x) => roots(x)
         case _         => false
       }
@@ -210,7 +203,7 @@ object Frames:
       val held = fs.group(roots)
       val next = roots.filter(ok(_, roots, held))
       if next == roots then roots else fix(next)
-    val roots = fix(framed.toSet ++ calls.keySet)
+    val roots = fix(cons.toSet ++ calls.keySet)
     (roots, calls.filter((x, _) => roots(x)).toSet)
 
   /** `e` with the call bound to each variable of `to` going to the `#frame` clone of its function. */
