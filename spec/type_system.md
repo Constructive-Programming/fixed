@@ -1044,7 +1044,7 @@ The compiler iterates `step` until no recursive seeds remain. The combination of
 
 1. The result of an `unfold` (or of a conversion the compiler derives from one, such as `toNat`) is consumed by exactly one `fold`.
 2. That result is used once (quantity 1, `spec/quantities.md` §5): nothing else observes it. Exclusive ownership is not required, because the structure is never built.
-3. Both calls resolve to auto-derived `fold` / `unfold` (Rules 7.4.a, 7.4.b) of a data type that is statically known at the call site.
+3. Both calls resolve to auto-derived `fold` / `unfold` (Rules 7.4.a, 7.4.b) of a data type that is statically known at the call site. The left fold that the prelude's `Folding` gives a list (`xs.fold(init, (acc, x) -> …)`, `spec/stdlib.md` §4.7) counts as auto-derived here (owner's decision, 2026-11-23), as does the catamorphism of Rule 7.4.a.
 
 Outside this class the compiler is permitted, but not required, to fuse.
 

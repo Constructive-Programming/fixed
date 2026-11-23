@@ -373,3 +373,4 @@ Built: the prelude's own scope, syntax and derivation naming the prelude, no der
 - Count of a function with a resumable effect whose pure count is infinite: "let's drop the coefficient for now"; it counts one `ε₀` (`spec/reports.md` Rule RP4.1).
 - `props.lock`: "failed props should be recorded." They are, as `failed`, and are never reused from the record.
 - Code of the warning for an unused declared effect: `E081`, the spec's; the compiler's `T017` is to be renamed.
+- Fusion (Rule 7.4.b.1, condition 3), 2026-11-23: owner, "Folding.fold count as auto-derived for fusion? Yes". The measurement that fusion is built nowhere is in `docs/baselines/runtime-2026-11-23-debts.md`.
