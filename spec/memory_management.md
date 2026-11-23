@@ -890,7 +890,7 @@ Every performance statement in this document is a hypothesis until measured; the
 - The convention of calls through capability tables (Rule CM4.6): before it is frozen, a benchmark with capability-bounded parameters measures it against passing every argument `own`.
 - The header (Rule PR3.1): an 8-byte header with a 32-bit count, as in Koka and Lean, against the present count plus descriptor. A hypothesis, not a decision.
 - The descriptor on `Frame` and `Region` cells (OQ-MM7): memory and time against headerless placement.
-- About 4% on `list_pipeline` and `records` against the monomorphising backend remains unexplained after the runtime fix of Rule PR7.3.
+- About 4% on `list_pipeline` and `records` against the monomorphising backend remained unexplained after the runtime fix of Rule PR7.3. Measured again at `d646b53` (`docs/baselines/runtime-2026-11-23-debts.md` §2): it does not reproduce; both take 8% and 6% fewer cycles than `5a0eedd` while executing 14% and 4% more instructions. More than half of their instructions and cycles go to allocating and freeing cells, mostly in glibc `malloc` and `free`; inlining the separately compiled runtime removes 14% to 24% of instructions and 25% to 44% of cycles on the eleven benchmarks.
 - How often the dynamic `rc == 1` path (§11.1) reuses a cell that static exclusivity missed. If it is rare, the shared version could drop the test.
 
 ## 22. Worked examples
