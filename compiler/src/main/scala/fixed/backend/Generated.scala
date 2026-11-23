@@ -1,7 +1,7 @@
 package fixed.backend
 
 import fixed.backend.Atom.Var
-import fixed.core.{SymbolId, SymbolTable, Type, render}
+import fixed.core.{SymbolId, Type, render}
 import fixed.util.Span
 
 /** Members the compiler derives or generates as Core functions: Rule 7.4.a `fold` (through functors
@@ -13,56 +13,12 @@ import fixed.util.Span
   * ([[hidden]]).
   */
 private[backend] trait Generated:
+  this: Lower =>
+
   protected type K = Atom => Expr
-  protected type VarK = Var => Expr
 
   /** A field transform for [[rebuild]]: for a field that changes, how to bind its replacement. */
   protected type Transform = (Type, Var) => Option[K => Expr]
-
-  protected def symbols: SymbolTable
-  protected def instance(name: String)(build: => Fn): String
-  protected def fresh(base: String, t: CType): Var
-  protected def ctype(t: Type, span: Span): CType
-  protected def isStringType(t: Type): Boolean
-  protected def fieldTypes(data: SymbolId, args: List[Type], variant: SymbolId): List[Type]
-  protected def dataOf(t: Type): Option[(SymbolId, List[Type])]
-
-  /** The baseline versions built, the members still built per instance with the reason, and the
-    * clones built with their baseline version and key (`Lower`).
-    */
-  def baselines: collection.mutable.Set[String]
-  def instances: collection.mutable.Map[String, String]
-  def typeClones: collection.mutable.Map[String, (String, String)]
-
-  /** The key of the clone a call of baseline version `of` at `types` calls, if any (`Lower.specialised`). */
-  protected def specialised(of: String, types: List[Type]): Option[String]
-
-  /** `body`, or the first problem it reported, everything it built discarded (`Lower.attempt`). */
-  protected def attempt[A](body: => A): Either[String, A]
-
-  /** Report `what` as a problem of the code being lowered (`B005`). */
-  protected def report(what: String): Unit
-
-  /** The anonymous bound each implicit type parameter of a baseline version stands for (`Lower.baselineOf`). */
-  protected def implicitBounds: collection.Map[Type, Type]
-
-  /** `v`, a value of type `t`, shown: `k` gets the `String` ([[Satisfied]]). */
-  protected def showValue(t: Type, v: Atom)(k: K): Expr
-
-  /** Whether `a` and `b`, values of type `t`, are equal: `k` gets the `bool` ([[Satisfied]]). */
-  protected def equalValues(t: Type, a: Atom, b: Atom)(k: K): Expr
-
-  /** How `a` compares with `b`, values of type `t`: `k` gets the prelude's `Order` ([[Satisfied]]). */
-  protected def compareValues(t: Type, a: Atom, b: Atom)(k: K): Expr
-
-  /** The hidden parameters of type parameter `p`: its witness, then its tables (`Tables.hiddenOf`). */
-  protected def hiddenOf(p: Type): List[Var]
-
-  /** The hidden arguments of function `f`, built at `own` and called at `args` (`Tables.hiddenArgsOf`). */
-  protected def hiddenArgsOf(f: String, own: List[Type], args: List[Type]): List[Atom]
-
-  /** The function built under `name` (`Lower.functionNamed`). */
-  protected def functionNamed(name: String): Fn
 
   /** The leading hidden parameters (witnesses and tables) of function `f`; `None` while `f` is a
     * generated member still being built, which has no parameters yet (a function lowered from
@@ -72,12 +28,6 @@ private[backend] trait Generated:
     Option(functionNamed(f).params).filter(_.nonEmpty).map(_.takeWhile(p =>
       p.ctype == CType.Witness || p.ctype == CType.Table
     ))
-
-  /** Record `x`'s typer type for `Demands`; returns `x`. */
-  protected def typed(x: Var, t: Type, span: Span): Var
-
-  /** A closure over `body` taking `params` (see `Lower.closure`). */
-  protected def closure(params: List[Var], body: => Expr, ret: CType)(k: VarK): Expr
 
   /** Rule 7.4.a: `x.fold(onV1, ..., onVn)`, recursive fields folded first; Rule 7.4.a.1: a field
     * `F of ... Self` is mapped through `F`'s derived `map`, so the callback receives `F of ... R`.

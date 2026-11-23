@@ -117,7 +117,7 @@ private[backend] trait Satisfied extends Generated:
     * `String` as it is, a data type by the program's `satisfies Show` body or else its derived
     * `show`; anything else is a problem (`B005`).
     */
-  protected def showValue(t: Type, v: Atom)(k: K): Expr =
+  private[backend] def showValue(t: Type, v: Atom)(k: K): Expr =
     val s = fresh("s", CType.Boxed)
     def call(f: String, a: Atom) = Expr.Let(s, Rhs.Call(f, List(a), runtime = true), k(s))
     Scalars.formatter(v.tpe, t == Type.PrimType("char")) match
@@ -154,7 +154,7 @@ private[backend] trait Satisfied extends Generated:
   /** Whether `a` and `b` of type `t` are equal: units always, scalars by a comparison, else by
     * [[equality]]; a type it cannot compare is a problem (`B005`).
     */
-  protected def equalValues(t: Type, a: Atom, b: Atom)(k: K): Expr =
+  private[backend] def equalValues(t: Type, a: Atom, b: Atom)(k: K): Expr =
     val r = fresh("eq", CType.Bool)
     if a.tpe == CType.Unit then k(Atom.BoolC(true))
     else if scalar(a) then Expr.Let(r, Rhs.Prim(PrimOp.Eq, List(a, b)), k(r))
@@ -243,7 +243,7 @@ private[backend] trait Satisfied extends Generated:
     * parameter's values through its table's `lt` and `le`; a data type's by its `compare`; any
     * other type is a problem (`B005`).
     */
-  protected def compareValues(t: Type, a: Atom, b: Atom)(k: K): Expr =
+  private[backend] def compareValues(t: Type, a: Atom, b: Atom)(k: K): Expr =
     def returned(v: String): Expr = order(v)(Expr.Ret(_))
     def choose(test: Rhs, yes: Expr, no: Expr)(k: K): Expr =
       val (flag, c) = (fresh("cmp", CType.Bool), fresh("order", orderType))

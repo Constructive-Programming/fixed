@@ -33,7 +33,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
 
   private val ids = Iterator.from(1)
   private val problems = mutable.ArrayBuffer.empty[Diagnostic]
-  protected val symbols: SymbolTable = unit.symbols
+  private[backend] val symbols: SymbolTable = unit.symbols
   private val fns = mutable.LinkedHashMap.empty[String, Fn]
   private val represent = Representation(unit)
 
@@ -64,7 +64,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   private val tried = mutable.Map.empty[String, Either[String, List[(Type, Type)]]]
 
   /** The anonymous bound each implicit type parameter stands for ([[baselineOf]]). */
-  protected val implicitBounds: mutable.Map[Type, Type] = mutable.HashMap.empty
+  private[backend] val implicitBounds: mutable.Map[Type, Type] = mutable.HashMap.empty
 
   /** The type parameters, each with its key ([[baselineOf]]), of each baseline version being built:
     * what a recursive call passes; a finished version drops its phantom ones unless one reached it ([[recursed]]).
@@ -90,7 +90,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   /** Every function instance built so far, including copies and table entries requested after [[program]]. */
   def functions: List[Fn] = fns.values.toList
 
-  protected def functionNamed(name: String): Fn = fns(name)
+  private[backend] def functionNamed(name: String): Fn = fns(name)
 
   /** A function copying a value of type `t`: cells at part keys `parts` copied, the rest shared. */
   def copy(t: Type, parts: Set[(String, Int)]): Option[String] =
@@ -128,7 +128,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   /** Build function `name` once. A request made while `build` runs meets a placeholder with no
     * parameters, which [[code]] replaces with the function's signature before it lowers a body.
     */
-  protected def instance(name: String)(build: => Fn): String =
+  private[backend] def instance(name: String)(build: => Fn): String =
     if !fns.contains(name) then
       fns(name) = Fn(name, Nil, CType.Unit, Expr.Ret(Atom.UnitC))
       fns(name) = owner.withValue(name)(build)
@@ -139,7 +139,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     * caller can lower the same code another way. (Implicit type parameters an abandoned attempt
     * made stay in `implicitBounds`, unused.)
     */
-  protected def attempt[A](body: => A): Either[String, A] =
+  private[backend] def attempt[A](body: => A): Either[String, A] =
     val (before, count, seen) = (fns.keySet.toSet, problems.size, tried.keySet.toSet)
     val (built, instead, entries) = (baselines.toSet, instances.keySet.toSet, calledEntries.toMap)
     val (asked, cloned) = (requests.size, typeClones.keySet.toSet)
@@ -463,7 +463,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     * type arguments `types`, calls the clone for them: if they are all known, the site requests
     * the clone (Rule CM5.4), and it calls it if the key is chosen. The key is the types' text.
     */
-  protected def specialised(of: String, types: List[Type]): Option[String] =
+  private[backend] def specialised(of: String, types: List[Type]): Option[String] =
     Option.when(types.nonEmpty && types.forall(typeParamsIn(_).isEmpty))(types.map(symbols.render(_)).mkString(","))
       .flatMap { key =>
         requests += Request(owner.value, of, key)
@@ -549,7 +549,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   /** A closure over `body`: a code function taking the closure first, then `params`. Its captures
     * ([[captures]]) are loaded from the closure on entry.
     */
-  protected def closure(params: List[Var], body: => Expr, ret: CType)(k: Var => Expr): Expr =
+  private[backend] def closure(params: List[Var], body: => Expr, ret: CType)(k: Var => Expr): Expr =
     val code = s"lambda.${ids.next()}"
     val lowered = owner.withValue(code)(body)
     val captures = this.captures(lowered, params)
@@ -892,7 +892,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case _                    => None
 
   /** A data type and its arguments: a data reference, a tuple (the prelude's `Tuple`) or an unfold layer. */
-  protected def dataOf(t: Type): Option[(SymbolId, List[Type])] =
+  private[backend] def dataOf(t: Type): Option[(SymbolId, List[Type])] =
     t match
       case Type.TypeRef(id, args) if symbols(id).kind == SymKind.Data && !isStringType(t) => Some(id -> args)
       case Type.TupleType(ts)     => symbols.prelude.get("Tuple").map(_ -> ts)
@@ -900,7 +900,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case _                      => None
 
   /** A variant's field types for data arguments `args`; inside a layer, recursive fields hold the seed. */
-  protected def fieldTypes(data: SymbolId, args: List[Type], variant: SymbolId): List[Type] =
+  private[backend] def fieldTypes(data: SymbolId, args: List[Type], variant: SymbolId): List[Type] =
     val sigma = symbols.typeParamsOf(data).zip(args).toMap
     symbols.fieldsOf(variant).map(f => concrete(f.info, sigma)).toList
 
@@ -919,7 +919,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     Expr.Let(x, rhs, k(x))
 
   /** Record `x`'s typer type and span; returns `x`. */
-  protected def typed(x: Var, t: Type, span: Span): Var =
+  private[backend] def typed(x: Var, t: Type, span: Span): Var =
     types(x.name) = t
     spans(x.name) = span
     x
@@ -943,7 +943,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       symbols.variantsOf(data).toList.lift(tag).map(v => fieldTypes(data, args, v.id).size)
     )
 
-  protected def fresh(base: String, t: CType): Var = Var(s"$base.${ids.next()}", t)
+  private[backend] def fresh(base: String, t: CType): Var = Var(s"$base.${ids.next()}", t)
 
   private[backend] def typeOf(t: Tree, sc: Scope): Type =
     concrete(unit.typeOf(t).getOrElse(Type.NeverType), sc.sigma, sc.bounds)
@@ -955,7 +955,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   /** The top-level function that `name` refers to in the scope of the code being lowered. */
   private def fnNamed(name: String): Option[SymbolId] = globals.get(name).filter(symbols(_).kind == SymKind.Fn)
 
-  protected def ctype(t: Type, span: Span): CType =
+  private[backend] def ctype(t: Type, span: Span): CType =
     Scalars.scalar(t).getOrElse(t match
       /** Pointer or immediate: Rule CM3.5 as [[Immediates]] applies it to the data type. */
       case _ if isStringType(t) || dataOf(t).isDefined             => immediate(t).getOrElse(CType.Boxed)
@@ -966,7 +966,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
         problems += problem(DiagCode.B005, span, s"values of type ${symbols.render(t)} are not supported yet")
         CType.Unit)
 
-  protected def report(what: String): Unit = problems += problem(DiagCode.B005, Span.NoSpan, what)
+  /** Report `what` as a problem of the code being lowered (`B005`). */
+  private[backend] def report(what: String): Unit = problems += problem(DiagCode.B005, Span.NoSpan, what)
 
   private def unsupportedThen(span: Span, what: String, rest: => Expr): Expr =
     problems += problem(DiagCode.B005, span, s"$what is not supported by the backend slice yet")

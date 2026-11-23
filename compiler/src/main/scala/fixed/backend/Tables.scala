@@ -131,7 +131,7 @@ private[backend] trait Tables extends Satisfied:
   /** The hidden parameters of type parameter `p`: its witness, then a table per capability of its
     * bound set (Rule CM4.3).
     */
-  protected def hiddenOf(p: Type): List[Atom.Var] = witnessVar(p) :: boundCaps(p).map(tableOf(p, _))
+  private[backend] def hiddenOf(p: Type): List[Atom.Var] = witnessVar(p) :: boundCaps(p).map(tableOf(p, _))
 
   /** The hidden parameters of a `satisfies` body at `types`: the witness and the tables of the
     * declared bounds (not those [[assumed]] adds) of each type parameter they mention.
@@ -149,7 +149,7 @@ private[backend] trait Tables extends Satisfied:
     params.map(p => at(p)().fold(why => { report(why); Atom.UnitC }, identity))
 
   /** [[hiddenAt]] for `f`; a generated member still being built takes only witnesses. */
-  protected def hiddenArgsOf(f: String, own: List[Type], args: List[Type]) =
+  private[backend] def hiddenArgsOf(f: String, own: List[Type], args: List[Type]) =
     hiddenParams(f).fold(args.map(witnessAtom))(hiddenAt(_, own, args))
 
   /** The hidden arguments of a call that instantiates each type parameter of `params` at its type:
