@@ -639,7 +639,7 @@ The **more capabilities** you request, the **fewer representations** qualify. Th
 | 4.0 Naive backend slice | done |
 | 4.1 Polymorphic baseline and specialiser | 4.1.M0–M8 done, 4.1.M9 (cleanup) open; parts of it superseded by P6 (`docs/plans/phase-4.1-baseline-specialiser.md`) |
 | 4.2 Resolution round P6 | in progress: items 10, 12, 17, 20, 25–27 done, 5, 13, 16, 23, 24 in part, the rest not started |
-| 4 Code generation | partial: LLVM IR emission and Perceus-style counting exist; fusion, region lowering and evidence passing do not |
+| 4 Code generation | partial: LLVM IR emission and Perceus-style counting exist; frame allocation is built for the scope of a function activation (`backend/Frames.scala`, `docs/baselines/runtime-2026-11-23-frames.md`); fusion, the rest of region lowering and evidence passing do not |
 | 5 Standard library, 6 PGO | not started |
 
 ## Phase 0: Example Programs — COMPLETE
@@ -1041,7 +1041,7 @@ Capability sets and quantities are pinned by the time codegen starts. The repres
 | **Match desugarer** (`transform/MatchDesugar.scala`) | Convert `match` to `fold` calls, `if` to `bool.fold`. Implemented as a `MiniPhase` |
 | **Fold specializer** (`transform/FoldSpecializer.scala`) | Guaranteed by the spec, not an optimization level: a mandatory specialisation, outside the clone budget and built in every build mode (`spec/compilation_model.md` Rule CM5.5). Inlines lambda and statically known function arguments of auto-derived `fold` / `unfold` (Rule 7.4.b.2), and fuses an `unfold` consumed by exactly one `fold` into a loop with no intermediate structure (Rule 7.4.b.1). `toNat(n).fold(...)` compiles to a counted loop. Runs after match desugaring, because desugaring produces more `fold` calls, and before Perceus, so the fused structure never gets reference counts |
 | **Perceus inserter** (`perceus/PerceusInserter.scala`) | Insert `dup`/`drop` operations guided by demand × lifetime class (`spec/memory_management.md` §3.2). 0-quantity bindings: erased. `read` borrows; exclusively owned values are reused without a test; Perceus RC only when `Heap` or `Region`; other classes are freed by their region |
-| **Region lowering** (`backend/Regions.scala`) | Chunked data stacks, scope marks and resets, drop lists, counted regions, destinations, class witnesses and evacuations per `spec/memory_management.md` §6–§7 |
+| **Region lowering** (`backend/Regions.scala`) | Chunked data stacks, scope marks and resets, drop lists, counted regions, destinations, class witnesses and evacuations per `spec/memory_management.md` §6–§7. **In part:** the data stack (chunks not aligned to their size, mark and reset, a checked mode that poisons) and `Frame(f)` for a function activation, with destinations as `#frame` clones, are built in `backend/Frames.scala` and the runtime; drop lists, counted regions, evacuation, class witnesses and destinations through closures are not |
 | **Evidence passer** (`effects/EvidencePasser.scala`) | Compile effects to evidence vector lookups |
 | **LLVM IR emitter** (`backend/EmitLLVM.scala`) | Emit textual LLVM IR (.ll). Prototype strategy: shell out to `llc` / `clang` for native code generation. |
 

@@ -128,9 +128,8 @@ class FrameSuite extends munit.FunSuite:
 
   /** The placement of the test program `name` in build mode `mode`. */
   private def placed(name: String, mode: Mode): Frames =
-    val path = Path.of("compiler", "src", "test", "fixed", "modes", s"$name.fixed")
-    val unit = Compiler.compile(CompilationUnit(SourceFile.fromString(s"$name.fixed", Files.readString(path))))
-    val a = Backend.analyse(unit, mode.budget).fold(ds => fail(s"$ds"), identity)
+    val a = Backend.analyse(unit(Path.of("compiler", "src", "test", "fixed", "modes", s"$name.fixed")), mode.budget)
+      .fold(ds => fail(s"$ds"), identity)
     Frames(Consume(a)._1, a.memory)
 
   /** Whether `f` places anything on a frame: a constructor, or a call of a `#frame` clone. */
@@ -150,6 +149,8 @@ class FrameSuite extends munit.FunSuite:
       List("viaTable", "viaPart", "viaNested", "viaFold", "viaPara", "viaSatisfies", "wrapSum").foreach(f =>
         assert(!places(more, f), f)
       )
+      val adv = placed("frame_adv", mode)
+      assert(adv.bumped.values.forall(_.isEmpty) && adv.clones.isEmpty, adv.bumped)
 
     test(s"temporaries that stay in their scope are placed on its frame ($mode)"):
       assert(places(placed("frame_escapes", mode), "main"))
@@ -158,3 +159,25 @@ class FrameSuite extends munit.FunSuite:
       assertEquals(more.bumped.get("make#frame").map(_.size), Some(1))
       assert(!more.scoped("make#frame"))
   }
+
+  /** The checked unit of the program at `path`. */
+  private def unit(path: Path) =
+    Compiler.compile(CompilationUnit(SourceFile.fromString(path.getFileName.toString, Files.readString(path))))
+
+  test("--no-frames keeps every cell on the heap"):
+    val (mode, rest) = fixed.Main.modeOf(List("ship", "--no-frames", "x.fixed"))
+    assertEquals((mode.frames, rest), (false, List("ship", "x.fixed")))
+    val temps = unit(Path.of("bench", "runtime", "temps.fixed"))
+    val ir = (m: Mode) => Backend.compile(temps, m).fold(ds => fail(s"$ds"), identity)
+    assert(ir(Mode.Default).contains("call ptr @fx_frame_alloc"))
+    val off = ir(Mode.Default.copy(frames = false))
+    assert(!off.contains("call ptr @fx_frame_alloc") && !off.contains("call void @fx_frame_reset"), off)
+
+  test("the memory report gives where the code places each allocation, and the calls of #frame clones"):
+    val more = unit(Path.of("compiler", "src", "test", "fixed", "modes", "frame_more.fixed"))
+    val a = Backend.analyse(more).fold(ds => fail(s"$ds"), identity)
+    val report = MemoryReport.text(more, a)
+    assert(report.contains("placed: Frame(local)"), report)
+    assert(report.contains("placed: Heap; in the caller's frame through `make#frame`"), report)
+    assert(report.contains("call: make#frame"), report)
+    assert(!MemoryReport.text(more, a, frames = false).contains("placed: Frame("))
