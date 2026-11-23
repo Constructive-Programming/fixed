@@ -5,14 +5,11 @@ import fixed.core.{Context, Proto, SymbolId, Type, render}
 import fixed.parsing.{Parser, Scanner}
 import fixed.util.{DiagCode, Reporter, SourceFile}
 
-class TyperSuite extends munit.FunSuite:
+class TyperSuite extends munit.FunSuite, TyperTestSupport:
 
   /** Index `decls`, then type `expr` against them; returns the finished state, the expression tree and its type. */
   private def typed(expr: String, decls: String = ""): (TyperState, Tree, String) =
-    val unit = Parser.parse(SourceFile.fromString("<decls>", decls))
-    assert(!unit.hasErrors, unit.diagnostics)
-    val (table, namerDiags) = Namer.index(unit.tree)
-    assertEquals(namerDiags, Nil)
+    val (_, table) = indexed(decls)
     val src = SourceFile.fromString("<expr>", expr)
     val rep = new Reporter(src)
     val tree = new Parser(new Scanner(src, rep), rep).parseExpr()
@@ -87,14 +84,6 @@ class TyperSuite extends munit.FunSuite:
     assertEquals(codes(s1), List(DiagCode.T002))
     val (s2, _) = typedBody("fn f(x: u64) -> u64 = x(1)\n")
     assertEquals(codes(s2), List(DiagCode.T007))
-
-  /** Index and body-type a whole unit, as `TyperPhase` does. */
-  private def typedUnit(code: String): TyperState =
-    val unit = Parser.parse(SourceFile.fromString("<unit>", code))
-    assert(!unit.hasErrors, unit.diagnostics)
-    val (table, namerDiags) = Namer.index(unit.tree)
-    assertEquals(namerDiags, Nil)
-    TyperPhase.typeBodies(unit.tree, table)
 
   test("M4: lambdas take parameter types from the expected function type"):
     val s = typedUnit("fn apply(f: u64 -> u64, x: u64) -> u64 = f(x)\nfn g() -> u64 = apply((n) -> n * 2, 3)\n")

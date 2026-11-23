@@ -2,20 +2,16 @@ package fixed.typer
 
 import fixed.ast.{Tree, Trees}
 import fixed.core.SymbolTable
-import fixed.parsing.Parser
-import fixed.util.{DiagCode, SourceFile}
+import fixed.util.DiagCode
 
 /** The prelude is resolved in its own scope: a program's declaration of a prelude name shadows it
   * in the program, and changes nothing the prelude's code, literals or built-in rules mean.
   */
-class PreludeScopeSuite extends munit.FunSuite:
+class PreludeScopeSuite extends munit.FunSuite, TyperTestSupport:
 
   private def typed(code: String): (Tree, SymbolTable, TyperState) =
-    val unit = Parser.parse(SourceFile.fromString("<unit>", code))
-    assert(!unit.hasErrors, unit.diagnostics)
-    val (table, namerDiags) = Namer.index(unit.tree)
-    assertEquals(namerDiags, Nil)
-    (unit.tree, table, TyperPhase.typeBodies(unit.tree, table))
+    val (tree, table) = indexed(code)
+    (tree, table, TyperPhase.typeBodies(tree, table))
 
   test("a program that takes every top-level name of the prelude leaves the prelude's code well typed"):
     val names = "String" :: Stdlib.prelude.collect {

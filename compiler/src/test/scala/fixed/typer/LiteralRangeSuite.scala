@@ -1,19 +1,14 @@
 package fixed.typer
 
-import fixed.parsing.Parser
-import fixed.util.{DiagCode, SourceFile}
+import fixed.util.DiagCode
 
 /** An integer literal outside the range of the type it takes is `T023` at the literal; a literal in a
   * variant pattern makes the case not cover its variant (`T020`).
   */
-class LiteralRangeSuite extends munit.FunSuite:
+class LiteralRangeSuite extends munit.FunSuite, TyperTestSupport:
 
   private def diags(code: String) =
-    val unit = Parser.parse(SourceFile.fromString("<unit>", code))
-    assert(!unit.hasErrors, unit.diagnostics)
-    val (table, namerDiags) = Namer.index(unit.tree)
-    assertEquals(namerDiags, Nil)
-    TyperPhase.typeBodies(unit.tree, table).diags.map(d => (d.code, d.span.start))
+    typedUnit(code).diags.map(d => (d.code, d.span.start))
 
   private val decls = "fn byte(x: u8) -> u8 = x\nfn small(x: i8) -> i8 = x\n"
 

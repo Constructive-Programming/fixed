@@ -1,10 +1,9 @@
 package fixed.typer
 
 import fixed.core.{SymbolId, Type}
-import fixed.parsing.Parser
-import fixed.util.{DiagCode, SourceFile}
+import fixed.util.DiagCode
 
-class SatisfactionSuite extends munit.FunSuite:
+class SatisfactionSuite extends munit.FunSuite, TyperTestSupport:
 
   private val decls =
     """|data Shape:
@@ -31,10 +30,7 @@ class SatisfactionSuite extends munit.FunSuite:
        |""".stripMargin
 
   private val state: TyperState =
-    val unit = Parser.parse(SourceFile.fromString("<sat>", decls))
-    assert(!unit.hasErrors, unit.diagnostics)
-    val (table, diags) = Namer.index(unit.tree)
-    assertEquals(diags, Nil)
+    val (_, table) = indexed(decls)
     TyperState(table)
 
   private def sym(name: String): SymbolId = state.symbols.scope(name)
@@ -79,14 +75,6 @@ class SatisfactionSuite extends munit.FunSuite:
     assert(holds(param("uses", "C"), "Folding"))
     assert(!holds(param("uses", "C"), "Numeric"))
     assert(Members.isNumeric(state, param("uses", "N")))
-
-  /** Index and body-type a whole unit, as `TyperPhase` does. */
-  private def typedUnit(code: String): TyperState =
-    val unit = Parser.parse(SourceFile.fromString("<unit>", code))
-    assert(!unit.hasErrors, unit.diagnostics)
-    val (table, namerDiags) = Namer.index(unit.tree)
-    assertEquals(namerDiags, Nil)
-    TyperPhase.typeBodies(unit.tree, table)
 
   test("a bound's capability arguments must unify with the ones a declared satisfaction writes"):
     /** `t` is written in, or reaches, every satisfaction but `C`'s; each call needs `u64` there.
