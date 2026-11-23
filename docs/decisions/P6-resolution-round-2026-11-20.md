@@ -380,4 +380,5 @@ Built: the prelude's own scope, syntax and derivation naming the prelude, no der
 The first increment of frame allocation (`docs/baselines/runtime-2026-11-23-frames.md`) left eight design points open. The owner's answers, one at a time:
 
 - **F1, how a result reaches the caller's frame:** "B. Hidden destination parameter, as spec." A function that may return a fresh cell takes the destination as a hidden parameter, through any call depth, closures and recursion included (`spec/memory_management.md` Rule MM7.1). The clones `g#frame` of the first increment are a stage on the way and are to be replaced. Not built.
+- **F2, a frame cell that holds a heap reference:** "A. Borrowed case is common one … and keeps reset trivial." A frame cell may hold a reference to a heap value whose owner provably outlives the frame (Rule MM4.2, case 1); no drop list is built for now (case 2), and a cell that would own a heap reference stays on the heap. Not built: waits on the repaired analysis.
 
