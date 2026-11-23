@@ -124,6 +124,28 @@ same machine and method).
   - Cycles move within ±2%, except `bintrees --no-specialise` (+2.7% on) and `acc_loop` default
     (−2.4% on). Their instructions are identical, so this is noise.
 
+### After the rebase onto `a272a68` (immediates, bounded-stack `free_cell`)
+
+Default mode, instructions and heap allocations; frames on and off at the rebased branch, against
+`a272a68` itself. Frame allocations are 0 everywhere except `temps` (2,000,000).
+
+| Program | `a272a68` | frames off | frames on | Heap allocations, off → on |
+|---|---:|---:|---:|---|
+| `bintrees` | 831,691,366 | 831,691,558 | 831,691,499 | 2,097,151 |
+| `nat_loop` | 1,452,915,668 | 1,452,915,723 | 1,452,915,723 | 4,000,402 |
+| `list_pipeline` | 2,042,731,011 | 2,042,731,178 | 2,042,731,167 | 4,000,602 |
+| `records` | 1,470,122,506 | 1,470,122,644 | 1,470,122,617 | 3,000,302 |
+| `fail_chain` | 1,372,614,788 | 1,372,614,965 | 1,372,614,958 | 4,000,602 |
+| `shared_map` | 1,161,462,195 | 1,161,462,375 | 1,161,462,367 | 2,020,404 |
+| `fresh_map` | 1,693,361,476 | 1,693,361,636 | 1,693,361,641 | 4,020,603 |
+| `acc_loop` | 1,432,292,122 | 1,432,292,293 | 1,432,292,301 | 4,000,003 |
+| `points` | 864,654,519 | 864,654,692 | 864,654,716 | 2,000,602 |
+| `temps` | 1,590,292,059 | 1,590,292,227 | 1,474,292,229 | 6,000,002 → 4,000,002 |
+| `scratch_tree` | 938,977,300 | 938,977,472 | 938,977,563 | 2,560,002 |
+
+`temps` loses 116,000,000 instructions (−7.3%), 58 per step. Elsewhere frames on and off are within
+200 instructions of `a272a68`.
+
 ## Against the hypotheses of §21
 
 - **Speed against pure Perceus.** Where frames apply, a frame cell saves 61 instructions against

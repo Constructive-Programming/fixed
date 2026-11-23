@@ -157,6 +157,8 @@ class FrameSuite extends munit.FunSuite:
       val more = placed("frame_more", mode)
       List("local", "spin", "main").foreach(f => assert(places(more, f) && more.scoped(f), f))
       assertEquals(more.bumped.get("make#frame").map(_.size), Some(1))
+      val imm = placed("frame_imm", mode)
+      assert(imm.scoped("extract") && imm.bumped.get("mkBig#frame").exists(_.nonEmpty), imm.bumped)
       assert(!more.scoped("make#frame"))
   }
 
