@@ -374,3 +374,10 @@ Built: the prelude's own scope, syntax and derivation naming the prelude, no der
 - `props.lock`: "failed props should be recorded." They are, as `failed`, and are never reused from the record.
 - Code of the warning for an unused declared effect: `E081`, the spec's; the compiler's `T017` is to be renamed.
 - Fusion (Rule 7.4.b.1, condition 3), 2026-11-23: owner, "Folding.fold count as auto-derived for fusion? Yes". The measurement that fusion is built nowhere is in `docs/baselines/runtime-2026-11-23-debts.md`.
+
+### Frame allocation: design points (2026-11-23)
+
+The first increment of frame allocation (`docs/baselines/runtime-2026-11-23-frames.md`) left eight design points open. The owner's answers, one at a time:
+
+- **F1, how a result reaches the caller's frame:** "B. Hidden destination parameter, as spec." A function that may return a fresh cell takes the destination as a hidden parameter, through any call depth, closures and recursion included (`spec/memory_management.md` Rule MM7.1). The clones `g#frame` of the first increment are a stage on the way and are to be replaced. Not built.
+
