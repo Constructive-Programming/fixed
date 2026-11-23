@@ -1,6 +1,10 @@
 /* Fixed runtime for the Phase 4.0 backend slice (docs/plans/phase-4.0-backend-slice.md §4.7).
  *
  * Linked by `clang` with the LLVM IR the compiler emits; the compiler itself emits only LLVM IR.
+ * `Backend.ship` compiles this file to bitcode and links it into the program's module before
+ * optimisation, so the fast paths below (fx_dup, fx_drop, the reuses, fx_alloc, fx_alloc_at, the
+ * frame allocations) are inlined where the program calls them; the slow paths stay out of line
+ * (free_cell, block_new, frame_next, fx_die).
  * Provides allocation, reference counting, strings, the console, scalar formatting and the
  * counters behind the baseline. Calling convention: every function consumes the boxed values
  * passed to it.
@@ -56,7 +60,7 @@ static uint64_t n_frame_alloc, n_frame_free, n_frame_bytes; /* frame cell bytes,
 #endif
 static struct timespec t_start;
 
-static void fx_die(const char *msg, int code) {
+static __attribute__((noreturn, cold)) void fx_die(const char *msg, int code) {
     fflush(stdout);
     fprintf(stderr, "fixed: %s\n", msg);
     exit(code);
@@ -169,7 +173,7 @@ static void block_free(fx_header *h) {
     if (words > LIST_WORDS) fx_die("internal error: freed a cell that no allocation made", 103);
     h->rc = FREED;
 #endif
-    *(fx_header **)(h + 1) = free_list[words];
+    memcpy((char *)(h + 1), &free_list[words], sizeof(void *));
     free_list[words] = h;
 }
 
@@ -181,7 +185,7 @@ void *fx_alloc(uint32_t tag, uint32_t refs, size_t payload) {
 #ifdef FX_CHECK_FREE
         if (h->rc != FREED) fx_die("internal error: a freed cell was counted or written", 103);
 #endif
-        free_list[words] = *(fx_header **)(h + 1);
+        memcpy(&free_list[words], (char *)(h + 1), sizeof(void *)); /* untyped: the slot held a field of another type */
     } else {
         h = block_new(words);
     }
@@ -333,8 +337,8 @@ char *fx_frame_top;
 static char *frame_limit;
 static fx_chunk *frame_chunk;
 
-/* Continue in the next chunk, one that holds at least `n` bytes. */
-static void frame_next(size_t n) {
+/* Continue in the next chunk, one that holds at least `n` bytes. Out of line: the slow path of frame_bump. */
+static __attribute__((noinline, cold)) void frame_next(size_t n) {
     fx_chunk *c = frame_chunk ? frame_chunk->next : NULL;
     if (!c || (size_t)(c->limit - c->data) < n) {
         size_t size = frame_chunk ? 2 * (size_t)(frame_chunk->limit - frame_chunk->data) : 4096;

@@ -106,7 +106,10 @@ object Backend:
     val all = versions.run()
     Analysed(all, versions.candidates, table, Memory(all, table, _ => Span.NoSpan).run(), fips, _ => Span.NoSpan)
 
-  /** Write `ir` next to `out`, then link it with the runtime into the executable `out`. With
+  /** Write `ir` next to `out`, then link it with the runtime into the executable `out`. The runtime
+    * is compiled to LLVM bitcode and linked into the program's module before it is optimised
+    * (`-mlink-bitcode-file`), so that `clang -O2` inlines its fast paths (`dup`, `drop`, reuse,
+    * allocation) into the program; only `clang` is needed. With
     * `checks`, the runtime verifies every unconditional reuse and poisons every frame cell its
     * scope releases and every heap cell it frees (test builds). With `stats`, it keeps the counters `FIXED_RT_STATS` prints
     * (test builds, `fixed ship --stats`); without, it reports only time and memory.
@@ -118,13 +121,18 @@ object Backend:
     val rt = dir.resolve("fixed_rt.c")
     val _ = Files.writeString(ll, ir)
     val _ = Files.write(rt, runtimeSource)
+    val bc = dir.resolve(s"${out.getFileName}.rt.bc")
     val log = new StringBuilder
-    val cmd = Seq("clang", "-O2", "-std=c11") ++
+    val runtime = Seq("clang", "-O2", "-std=c11", "-c", "-emit-llvm") ++
       (if checks then Seq("-DFX_CHECK_EXCL", "-DFX_CHECK_FRAME", "-DFX_CHECK_FREE") else Nil) ++
-      (if stats then Seq("-DFX_STATS") else Nil) ++
-      Seq("-o", out.toString, ll.toString, rt.toString, "-lm")
+      (if stats then Seq("-DFX_STATS") else Nil) ++ Seq("-o", bc.toString, rt.toString)
+    val program = Seq("clang", "-O2", "-Wno-override-module", "-o", out.toString, ll.toString) ++
+      Seq("-Xclang", "-mlink-bitcode-file", "-Xclang", bc.toString, "-lm")
+    val run = (cmd: Seq[String]) => Process(cmd).!(ProcessLogger(l => { val _ = log.append(l).append('\n') }))
     val code =
-      try Process(cmd).!(ProcessLogger(l => { val _ = log.append(l).append('\n') }))
+      try
+        val compiled = run(runtime)
+        if compiled != 0 then compiled else run(program)
       catch case _: java.io.IOException => -1
     if code == 0 then Right(out)
     else

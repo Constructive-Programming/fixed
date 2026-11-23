@@ -27,14 +27,18 @@ class EmitSuite extends munit.FunSuite:
   private def ir(name: String, source: String, mode: Mode): String =
     lowered(name, source, mode).fold(ds => fail(s"lowering failed: $ds"), identity)
 
-  /** Exit code, standard output, standard error. */
-  private def run(name: String, source: String, stdin: String, mode: Mode): (Int, String, String) =
-    val exe = Backend.ship(ir(name, source, mode), dir.resolve(s"$name-$mode"), checks = true, stats = true)
-      .fold(d => fail(d.message), identity)
+  /** Exit code, standard output, standard error of a test build (checks and counters), or with
+    * `plain` of the build `fixed ship` makes.
+    */
+  private def run(name: String, source: String, stdin: String, mode: Mode, plain: Boolean = false) =
+    val exe =
+      Backend.ship(ir(name, source, mode), dir.resolve(s"$name-$mode${if plain then "-plain" else ""}"), !plain, !plain)
+        .fold(d => fail(d.message), identity)
     Native.run(exe, stdin)
 
   /** Run `source` in every build mode (Rule CM5.7), expect exit 0, `expected` on stdout and no leak;
-    * the runtime's counters per mode.
+    * the runtime's counters per mode. The plain build (no checks, no counters, the runtime inlined
+    * differently) must print the same.
     */
   private def check(name: String, source: String, expected: String, stdin: String = ""): Map[Mode, Map[String, Long]] =
     modes.map { mode =>
@@ -45,6 +49,7 @@ class EmitSuite extends munit.FunSuite:
       assert(counts.contains("allocs") && counts.contains("frees"), s"$mode: no runtime counters: $err")
       assertEquals(counts.get("allocs"), counts.get("frees"), s"$mode: leak: $err")
       assertEquals(counts.get("frame_allocs"), counts.get("frame_frees"), s"$mode: a frame cell never reset: $err")
+      assertEquals(run(name, source, stdin, mode, plain = true).take(2), (0, expected), s"$mode, plain build")
       mode -> counts
     }.toMap
 
