@@ -265,6 +265,7 @@ Quine's five predicate functor operations map directly onto Fixed's capability c
 examples/           11 example programs exercising the language design
 docs/plans/         Implementation plan and per-phase plans
 docs/decisions/     Design decision records
+docs/diagrams/      Mermaid diagrams of memory layouts and value flow
 spec/               Specification (drafts)
 compiler/           Compiler implementation in Scala 3, with its C runtime and prelude
 bench/              JMH front-end benchmarks and runtime benchmark programs

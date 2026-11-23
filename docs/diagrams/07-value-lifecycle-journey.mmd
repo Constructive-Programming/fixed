@@ -1,0 +1,10 @@
+flowchart TD
+    S1["1. Programmer writes Capability Code\nnumbers.fold(0, (acc, x) -> acc + x)"]
+    S2["2. Compiler Representation Selection (M11)\nSelects unboxed scalar, contiguous array, or linked chunk"]
+    S3["3. QTT Analysis (M10)\nComputes demands: accumulator is Given/Taken, x is Lent/Peekable"]
+    S4["4. Lifetime Class Assignment (Rule MM5.3)\n- Step temporaries -> Frame(step)\n- Accumulator -> Reused In-Place (FBIP)\n- Result -> Dest(caller)"]
+    S5["5. Execution on Data Stacks\nValues written directly to bump-allocated scratch or growable stack"]
+    S6["6. End of Step\nScratch stack mark restored (O(1) pop); zero destructor overhead"]
+    S7["7. Final Value Returned\nZero copies: sits directly in caller's destination slot"]
+
+    S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7

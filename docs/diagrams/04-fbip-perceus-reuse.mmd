@@ -1,0 +1,17 @@
+flowchart TD
+    Op["Operation on data cell: Cons(x, xs)"]
+    DemandCheck{"Is value exclusively owned?\n(Compile-time Demand Analysis)"}
+
+    Unconditional["Unconditional In-Place Reuse\nNo runtime checks needed!"]
+    RuntimeTest{"Runtime Check:\nis rc == 1?"}
+
+    InPlace["Mutate Cell In-Place (FBIP)\nOld memory cell recycled into new cell\nZERO malloc / ZERO free"]
+    FreshAlloc["Allocate fresh cell\nDecrement RC on old cell (Perceus drop)"]
+
+    Op --> DemandCheck
+    DemandCheck -- "Taken (Demand 'one' / Give)" --> Unconditional
+    DemandCheck -- "Held (Demand 'many' / Hold)" --> RuntimeTest
+
+    Unconditional --> InPlace
+    RuntimeTest -- "Yes (rc == 1)" --> InPlace
+    RuntimeTest -- "No (rc > 1)" --> FreshAlloc
