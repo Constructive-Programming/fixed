@@ -3,7 +3,7 @@ package fixed.typer
 import fixed.ast.Tree
 import fixed.core.SymbolTable
 import fixed.parsing.Parser
-import fixed.util.SourceFile
+import fixed.util.{DiagCode, SourceFile}
 
 /** Shared helpers for the typer suites. */
 trait TyperTestSupport:
@@ -21,3 +21,5 @@ trait TyperTestSupport:
   protected def typedUnit(code: String): TyperState =
     val (tree, table) = indexed(code)
     TyperPhase.typeBodies(tree, table)
+
+  protected def codes(s: TyperState): List[DiagCode] = s.diags.map(_.code)
