@@ -6,7 +6,11 @@
  * passed to it.
  *
  * Heap object layout (spec/memory_management.md Rule PR3.1): a 16-byte header, then the payload,
- * one 64-bit slot per field in declaration order. The header's reference map `refs` has bit i set
+ * one 64-bit slot per field in declaration order. The header is the count, a 16-bit tag, the
+ * 16-bit size of the cell's block (the free lists below) and the reference map; emitted code reads
+ * the tag as an i16 8 bytes before the payload, and emits static cells and bare frame cells with
+ * the same 16-bit tag.
+ * The header's reference map `refs` has bit i set
  * when payload slot i holds a counted reference, so one generic routine can drop any object
  * whatever type instance built it. Only slots 0 to 31 can hold references; the compiler rejects a
  * cell with a reference beyond them. A negative count marks a static object (string constants),
@@ -26,7 +30,8 @@
 
 typedef struct fx_header {
     int64_t rc;
-    uint32_t tag;
+    uint16_t tag;
+    uint16_t words; /* a heap cell's block in 8-byte words if it is from a free list, else 0 */
     uint32_t refs;
 } fx_header;
 
@@ -68,25 +73,120 @@ static void fx_die(const char *msg, int code) {
 static bool on_frame_stack(const void *p);
 #endif
 
-/* Stop on a count operation that reaches a frame cell whose scope was reset, or one without a
-   count word (checked builds). Any other frame cell holds a negative count, which the caller
-   leaves alone. */
-static inline void frame_live(const fx_header *h) {
-#ifdef FX_CHECK_FRAME
-    if (!on_frame_stack(h)) return;
-    int64_t check = ((const int64_t *)h)[-1];
-    if (check <= FRAME_BARE) fx_die("internal error: a count operation on a frame cell without a count word", 103);
-    if (check <= FRAME_DEAD) fx_die("internal error: a frame cell used after its scope ended", 103);
+/* ---- heap cells: a free list per size ----
+
+   A heap cell is a block of `words` 8-byte words, header included. A block of up to LIST_WORDS
+   words comes from the free list of its size: a freed block goes on the list of its size and the
+   next allocation of that size takes it; an empty list is served by bumping through a chunk of
+   CHUNK_BYTES from `malloc`. A larger block (a long string) comes from `malloc` and goes back to
+   `free`; its header says `words` 0. Every kind of cell (constructors, closures, strings) takes
+   the same path by its size. Memory on the lists is returned to the system only at exit, so a
+   program that frees many cells of one size and then allocates another keeps both.
+
+   The reference map does not give the size (it marks reference slots only; a scalar slot, or a
+   slot past 31, leaves no bit), so the header stores it: the 32-bit tag word is a 16-bit tag and
+   the 16-bit size, at no cost but tags below 2^16.
+
+   A listed block is linked through its first payload slot (every block has one: MIN_WORDS), not
+   through its count word, which a checked build poisons. `pending` (free_cell) links cells through
+   the count word, between their count reaching zero and free_cell taking them; free_cell lists a
+   block only after reading its children, so no cell is on both.
+
+   FX_CHECK_FREE (test builds): a listed block's count is FREED, which no live count (>= 1), the
+   immortal sentinel (-1), a `pending` link (a pointer or 0) or the frame poison (0xA5 bytes) can
+   be; a count operation or reuse that reaches it stops the program, and allocation checks that a
+   block it takes still holds it. A block taken again is live, so a reference that outlives it is
+   caught only until then, and a write into a listed block's link or payload is not caught;
+   FX_MALLOC builds for AddressSanitizer catch the rest.
+
+   FX_MALLOC: every cell from `malloc` and back to `free`, so that AddressSanitizer sees each one.
+
+   ponytail: one set of lists for the one thread. Parallel lanes (spec/memory_management.md §17)
+   need a set per lane, and a rule for a cell that one lane frees and another allocated. */
+
+#ifdef FX_MALLOC
+#define LIST_WORDS 0
 #else
-    (void)h;
+#define LIST_WORDS 16
 #endif
+#define MIN_WORDS 3
+#define CHUNK_BYTES ((size_t)256 << 10)
+#define FREED (-((int64_t)1 << 60))
+
+static fx_header *free_list[LIST_WORDS + 1];
+static char *heap_top, *heap_limit;
+static void *heap_chunks; /* each chunk's first word holds the chunk before it: reachable for leak checkers */
+
+/* Stop on a count operation that reaches a frame cell whose scope was reset, or one without a
+   count word, or a freed heap cell (checked builds). Any other frame cell holds a negative count,
+   which the caller leaves alone. */
+static inline void check_live(const fx_header *h) {
+#ifdef FX_CHECK_FRAME
+    if (on_frame_stack(h)) {
+        int64_t check = ((const int64_t *)h)[-1];
+        if (check <= FRAME_BARE) fx_die("internal error: a count operation on a frame cell without a count word", 103);
+        if (check <= FRAME_DEAD) fx_die("internal error: a frame cell used after its scope ended", 103);
+        return;
+    }
+#endif
+#ifdef FX_CHECK_FREE
+    if (h->rc == FREED) fx_die("internal error: a count operation on a freed cell", 103);
+#endif
+    (void)h;
+}
+
+/* A new block of `words` words: from the current chunk or a new one, or from `malloc` beyond LIST_WORDS. */
+static __attribute__((noinline)) fx_header *block_new(size_t words) {
+    fx_header *h;
+    if (words > LIST_WORDS) {
+        h = malloc(8 * words);
+        if (!h) fx_die("out of memory", 102);
+        h->words = 0;
+        return h;
+    }
+    if ((size_t)(heap_limit - heap_top) < 8 * words) {
+        char *c = malloc(CHUNK_BYTES);
+        if (!c) fx_die("out of memory", 102);
+        *(void **)c = heap_chunks;
+        heap_chunks = c;
+        heap_top = c + 8;
+        heap_limit = c + CHUNK_BYTES;
+    }
+    h = (fx_header *)heap_top;
+    heap_top += 8 * words;
+    h->words = (uint16_t)words;
+    return h;
+}
+
+/* Give back the block of the dead cell `h`: onto the list of its size, or to `free`. */
+static void block_free(fx_header *h) {
+    size_t words = h->words;
+    if (!words) {
+        free(h);
+        return;
+    }
+#ifdef FX_CHECK_FREE
+    if (words > LIST_WORDS) fx_die("internal error: freed a cell that no allocation made", 103);
+    h->rc = FREED;
+#endif
+    *(fx_header **)(h + 1) = free_list[words];
+    free_list[words] = h;
 }
 
 void *fx_alloc(uint32_t tag, uint32_t refs, size_t payload) {
-    fx_header *h = malloc(sizeof(fx_header) + payload);
-    if (!h) fx_die("out of memory", 102);
+    size_t words = (sizeof(fx_header) + payload + 7) / 8;
+    if (words < MIN_WORDS) words = MIN_WORDS;
+    fx_header *h = words <= LIST_WORDS ? free_list[words] : NULL;
+    if (h) {
+#ifdef FX_CHECK_FREE
+        if (h->rc != FREED) fx_die("internal error: a freed cell was counted or written", 103);
+#endif
+        free_list[words] = *(fx_header **)(h + 1);
+    } else {
+        h = block_new(words);
+    }
     h->rc = 1;
-    h->tag = tag;
+    h->tag = (uint16_t)tag;
     h->refs = refs;
     STAT(n_alloc++);
     return h;
@@ -112,7 +212,7 @@ static fx_header *reclaim(fx_header *h) {
 
 /* Exclusively owned: no test. FX_CHECK_EXCL (test builds) verifies the claim. */
 void *fx_reuse_excl(fx_header *h) {
-    frame_live(h);
+    check_live(h);
 #ifdef FX_CHECK_EXCL
     if (h->rc != 1) fx_die("internal error: reused a cell that is not exclusively owned", 103);
 #endif
@@ -122,7 +222,7 @@ void *fx_reuse_excl(fx_header *h) {
 
 /* Shared: Koka's path. Reuse when the count says no one else holds it; else release our share. */
 void *fx_reuse(fx_header *h) {
-    frame_live(h);
+    check_live(h);
     if (h->rc == 1) {
         STAT(n_test_pass++);
         return reclaim(h);
@@ -137,14 +237,14 @@ void *fx_alloc_at(void *token, uint32_t tag, uint32_t refs, size_t payload) {
     if (!token) return fx_alloc(tag, refs, payload);
     fx_header *h = token;
     h->rc = 1;
-    h->tag = tag;
+    h->tag = (uint16_t)tag; /* the block keeps its size */
     h->refs = refs;
     return h;
 }
 
 void fx_dup(fx_header *h) {
     if (!h) return; /* the zero result of an aborted call */
-    frame_live(h);
+    check_live(h);
     STAT(n_dup++);
     if (h->rc > 0) h->rc++;
 }
@@ -152,7 +252,7 @@ void fx_dup(fx_header *h) {
 /* Free a cell whose count reached zero, and its children, in constant native stack (Rule PR7.3).
    Continues on the highest marked slot, so a list is freed in a loop; another child whose count
    reaches zero waits on `pending`, linked through its dead count field. `pending` is empty on return
-   and free_cell never re-enters, so it can be static (saves a register across `free`). Out of line:
+   and free_cell never re-enters, so it can be static (saves a register across `block_free`). Out of line:
    inlined into fx_drop it cost 6-8% (docs/baselines/runtime-2026-11-20-phase-4.1.md). */
 static fx_header *pending;
 static __attribute__((noinline)) void free_cell(fx_header *h) {
@@ -166,17 +266,17 @@ static __attribute__((noinline)) void free_cell(fx_header *h) {
             for (refs &= ~(1u << hi); refs; refs &= refs - 1) {
                 fx_header *c = slots[__builtin_ctz(refs)];
                 if (!c) continue;
-                frame_live(c);
+                check_live(c);
                 STAT(n_drop++);
                 if (c->rc < 0 || --c->rc != 0) continue;
                 c->rc = (int64_t)(intptr_t)pending;
                 pending = c;
             }
         }
-        free(h);
+        block_free(h);
         STAT(n_free++);
         if (last) {
-            frame_live(last);
+            check_live(last);
             STAT(n_drop++);
             if (last->rc >= 0 && --last->rc == 0) {
                 h = last;
@@ -191,7 +291,7 @@ static __attribute__((noinline)) void free_cell(fx_header *h) {
 
 void fx_drop(fx_header *h) {
     if (!h) return;
-    frame_live(h);
+    check_live(h);
     STAT(n_drop++);
     if (h->rc < 0 || --h->rc != 0) return;
     free_cell(h);
@@ -280,16 +380,18 @@ static char *frame_bump(size_t n, int64_t check) {
 void *fx_frame_alloc(uint32_t tag, uint32_t refs, size_t payload) {
     fx_header *h = (fx_header *)frame_bump(sizeof(fx_header) + payload, 0);
     h->rc = -1;
-    h->tag = tag;
+    h->tag = (uint16_t)tag;
+    h->words = 0; /* not a block: frame cells are never freed */
     h->refs = refs;
     return h;
 }
 
-/* A frame cell without a count word: its descriptor (`tag`, `refs`), then the payload. */
+/* A frame cell without a count word: its descriptor (`tag`, size 0, `refs`), then the payload. */
 void *fx_frame_alloc_bare(uint32_t tag, uint32_t refs, size_t payload) {
-    uint32_t *d = (uint32_t *)frame_bump(2 * sizeof(uint32_t) + payload, FRAME_BARE);
-    d[0] = tag;
-    d[1] = refs;
+    uint16_t *d = (uint16_t *)frame_bump(8 + payload, FRAME_BARE);
+    d[0] = (uint16_t)tag;
+    d[1] = 0;
+    *(uint32_t *)(d + 2) = refs;
     return d;
 }
 

@@ -145,9 +145,9 @@ class FrameSuite extends munit.FunSuite:
         |  %c = call ptr @fx_frame_alloc(i32 7, i32 0, i64 24)
         |  %p = getelementptr inbounds i8, ptr %b, i64 8
         |  store i64 42, ptr %p
-        |  %t = load i32, ptr %b
+        |  %t = load i16, ptr %b
         |  %v = load i64, ptr %p
-        |  %tag = icmp ne i32 %t, 7
+        |  %tag = icmp ne i16 %t, 7
         |  %val = icmp ne i64 %v, 42
         |  %bad = or i1 %tag, %val
         |  br i1 %bad, label %fail, label %ok

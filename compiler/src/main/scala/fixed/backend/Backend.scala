@@ -108,7 +108,7 @@ object Backend:
 
   /** Write `ir` next to `out`, then link it with the runtime into the executable `out`. With
     * `checks`, the runtime verifies every unconditional reuse and poisons every frame cell its
-    * scope releases (test builds). With `stats`, it keeps the counters `FIXED_RT_STATS` prints
+    * scope releases and every heap cell it frees (test builds). With `stats`, it keeps the counters `FIXED_RT_STATS` prints
     * (test builds, `fixed ship --stats`); without, it reports only time and memory.
     */
   def ship(ir: String, out: Path, checks: Boolean = false, stats: Boolean = false): Either[Diagnostic, Path] =
@@ -119,7 +119,8 @@ object Backend:
     val _ = Files.writeString(ll, ir)
     val _ = Files.write(rt, runtimeSource)
     val log = new StringBuilder
-    val cmd = Seq("clang", "-O2", "-std=c11") ++ (if checks then Seq("-DFX_CHECK_EXCL", "-DFX_CHECK_FRAME") else Nil) ++
+    val cmd = Seq("clang", "-O2", "-std=c11") ++
+      (if checks then Seq("-DFX_CHECK_EXCL", "-DFX_CHECK_FRAME", "-DFX_CHECK_FREE") else Nil) ++
       (if stats then Seq("-DFX_STATS") else Nil) ++
       Seq("-o", out.toString, ll.toString, rt.toString, "-lm")
     val code =

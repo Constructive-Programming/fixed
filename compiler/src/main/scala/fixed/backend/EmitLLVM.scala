@@ -130,7 +130,7 @@ final class EmitLLVM(bumped: Map[String, Set[String]], scoped: Set[String], bare
         val n = ids.next()
 
         /** Pointer or immediate: the scrutinee's Core type. An immediate's tag is its low byte, or
-          * 0 with one variant (Rule CM3.5); a cell's is the `i32` after its count.
+          * 0 with one variant (Rule CM3.5); a cell's is the `i16` after its count ([[tag16]]).
           */
         val tag = v.tpe match
           case CType.Imm(_, true) =>
@@ -140,7 +140,8 @@ final class EmitLLVM(bumped: Map[String, Set[String]], scoped: Set[String], bare
           case CType.Imm(_, false) => "0"
           case _                   =>
             line(s"  %tagp.$n = getelementptr inbounds i8, ptr ${operand(v)}, i64 ${header(v) - 8}")
-            line(s"  %tag.$n = load i32, ptr %tagp.$n")
+            line(s"  %tagh.$n = load i16, ptr %tagp.$n")
+            line(s"  %tag.$n = zext i16 %tagh.$n to i32")
             s"%tag.$n"
         val labelled = cases.zipWithIndex.map { case ((tag, c), i) => (tag, s"case.$n.$i", c) }
         val branches = labelled.init.map((tag, l, _) => s"i32 $tag, label %$l").mkString(" ")
@@ -150,7 +151,7 @@ final class EmitLLVM(bumped: Map[String, Set[String]], scoped: Set[String], bare
       case Rhs.Con(tag, Nil)                         =>
         val name = s"nullary.$tag"
         statics(name) =
-          s"@$name = private unnamed_addr constant <{ i64, i32, i32 }> <{ i64 -1, i32 $tag, i32 0 }>, align 8\n"
+          s"@$name = private unnamed_addr constant <{ i64, i16, i16, i32 }> <{ i64 -1, i16 ${tag16(tag)}, i16 0, i32 0 }>, align 8\n"
         aliases(x.name) = s"@$name"
         label
       case Rhs.Con(tag, fields) =>
@@ -162,7 +163,7 @@ final class EmitLLVM(bumped: Map[String, Set[String]], scoped: Set[String], bare
         val types = fields.map(_.tpe)
         val size = 8 * fields.size
         val map = refs(types, 0)
-        line(s"  %${x.name} = call ptr @fx_alloc_at(ptr ${operand(token)}, i32 $tag, i32 $map, i64 $size)")
+        line(s"  %${x.name} = call ptr @fx_alloc_at(ptr ${operand(token)}, i32 ${tag16(tag)}, i32 $map, i64 $size)")
         store(x, fields.zip(Layout.slots(types)))
         label
       case Rhs.Field(obj, slot) =>
@@ -175,8 +176,8 @@ final class EmitLLVM(bumped: Map[String, Set[String]], scoped: Set[String], bare
         label
       case Rhs.Closure(code, Nil, exclusive) =>
         val name = s"closure.$code"
-        statics(name) = s"@\"$name\" = private unnamed_addr constant <{ i64, i32, i32, ptr, ptr }> " +
-          s"<{ i64 -1, i32 ${Layout.closureTag}, i32 0, ptr ${EmitLLVM.user(orCode(exclusive, code))}, " +
+        statics(name) = s"@\"$name\" = private unnamed_addr constant <{ i64, i16, i16, i32, ptr, ptr }> " +
+          s"<{ i64 -1, i16 ${tag16(Layout.closureTag)}, i16 0, i32 0, ptr ${EmitLLVM.user(orCode(exclusive, code))}, " +
           s"ptr ${EmitLLVM.user(code)} }>, align 8\n"
         aliases(x.name) = s"@\"$name\""
         label
@@ -329,8 +330,15 @@ final class EmitLLVM(bumped: Map[String, Set[String]], scoped: Set[String], bare
       if !bumped.get(emitting.value).exists(_(x.name)) then "fx_alloc"
       else if header(x) == 8 then "fx_frame_alloc_bare"
       else "fx_frame_alloc"
-    line(s"  %${x.name} = call ptr @$on(i32 $tag, i32 $refs, i64 ${8 * slots})")
+    line(s"  %${x.name} = call ptr @$on(i32 ${tag16(tag)}, i32 $refs, i64 ${8 * slots})")
     line(s"  %${x.name}.0 = getelementptr inbounds i8, ptr %${x.name}, i64 ${header(x)}")
+
+  /** A cell's tag, which its header holds in 16 bits, beside the size of its block (`fixed_rt.c`):
+    * a variant index, or the closure tag -1.
+    */
+  private def tag16(tag: Int): Int =
+    require(tag >= -1 && tag < 0x10000, s"the tag $tag does not fit a cell's 16 bits")
+    tag
 
   private def store(x: Var, fields: List[(Atom, Int)]): Unit =
     fields.foreach { (a, slot) =>
@@ -524,8 +532,8 @@ final class EmitLLVM(bumped: Map[String, Set[String]], scoped: Set[String], bare
     val bytes = s.getBytes("UTF-8")
     val body =
       bytes.map(b => if b >= 0x20 && b < 0x7f && b != '"' && b != '\\' then b.toChar.toString else f"\\$b%02X").mkString
-    s"@$name = private unnamed_addr constant <{ i64, i32, i32, i64, [${bytes.length + 1} x i8] }> " +
-      s"<{ i64 -1, i32 0, i32 0, i64 ${bytes.length}, [${bytes.length + 1} x i8] c\"$body\\00\" }>, align 8\n"
+    s"@$name = private unnamed_addr constant <{ i64, i16, i16, i32, i64, [${bytes.length + 1} x i8] }> " +
+      s"<{ i64 -1, i16 0, i16 0, i32 0, i64 ${bytes.length}, [${bytes.length + 1} x i8] c\"$body\\00\" }>, align 8\n"
 
   private def line(s: String): Unit =
     val _ = out.append(s).append('\n')
