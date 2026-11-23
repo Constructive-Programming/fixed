@@ -17,12 +17,13 @@ import fixed.backend.Expr.{Drop, Dup, Let, Ret}
   * node if large functions make this show up.
   *
   * @param borrowed the indices of each function's borrowed parameters
+  * @param frame the variables that hold frame cells ([[Frames]]): never counted (Rule PR3.2)
   */
 object Rc:
 
-  def apply(fn: Fn, borrowed: String => Set[Int] = _ => Set.empty): Fn =
+  def apply(fn: Fn, borrowed: String => Set[Int] = _ => Set.empty, frame: Set[String] = Set.empty): Fn =
     val lent = fn.params.zipWithIndex.collect { case (p, i) if p.ctype.counted && borrowed(fn.name)(i) => p }.toSet
-    val counted = Walk(borrowed, lent).go(fn.body, fn.params.filter(_.ctype.counted).toSet -- lent)
+    val counted = Walk(borrowed, lent, frame).go(fn.body, fn.params.filter(_.ctype.counted).toSet -- lent)
     fn.copy(body = tokens(counted, Iterator.from(1)))
 
   /** Drop-guided reuse (Rule MM11.5): where a cell that a later `Reuse` names is dropped, take a
@@ -68,18 +69,21 @@ object Rc:
       case Drop(x, b)        => Drop(x, rename(b, v, tok))
       case Ret(_)            => e
 
-  final private class Walk(borrowed: String => Set[Int], lent: Set[Var]):
+  final private class Walk(borrowed: String => Set[Int], lent: Set[Var], frame: Set[String]):
+
+    /** The variable `a` is, if reference counting tracks it: counted and not holding a frame cell. */
+    private def tracked(a: Atom): Option[Var] = Core.countedVar(a).filterNot(v => frame(v.name))
 
     def go(e: Expr, owned: Set[Var]): Expr =
       e match
         case Ret(a) =>
-          val out = drops(owned -- Core.countedVar(a), e)
-          Core.countedVar(a).filter(lent).fold(out)(Dup(_, out))
+          val out = drops(owned -- tracked(a), e)
+          tracked(a).filter(lent).fold(out)(Dup(_, out))
         case Let(x, rhs @ (_: Rhs.If | _: Rhs.Switch), body) =>
           val live = free(body)
           val handed = consumed(rhs).toSet -- lent
           val (dead, waiting) = ready(owned -- live -- handed, e)
-          val rest = Let(x, rhs.mapBranches(go(_, handed)), go(body, (owned & live) ++ waiting ++ Core.countedVar(x)))
+          val rest = Let(x, rhs.mapBranches(go(_, handed)), go(body, (owned & live) ++ waiting ++ tracked(x)))
           drops(dead, handed.filter(live).foldLeft(rest: Expr)((acc, v) => Dup(v, acc)))
         case Let(x, rhs, body) =>
           val live = free(body)
@@ -87,9 +91,9 @@ object Rc:
           val read = reads(rhs)
           val (dead, waiting) = ready(owned -- live -- uses.keySet -- read, e)
           val deadAfter = (owned & read) -- live -- uses.keySet
-          val inner = drops(deadAfter, go(body, (owned & live) ++ waiting ++ Core.countedVar(x)))
+          val inner = drops(deadAfter, go(body, (owned & live) ++ waiting ++ tracked(x)))
           val owning = rhs match
-            case _: Rhs.Field => Core.countedVar(x).fold(inner)(Dup(_, inner))
+            case _: Rhs.Field => tracked(x).fold(inner)(Dup(_, inner))
             case _            => inner
           val dups = uses.toList.flatMap((v, n) => List.fill(n - 1 + (if live(v) || lent(v) then 1 else 0))(v))
           drops(dead, dups.foldLeft(Let(x, rhs, owning): Expr)((acc, v) => Dup(v, acc)))
@@ -104,7 +108,7 @@ object Rc:
 
     private def drops(vs: Set[Var], e: Expr): Expr = vs.toList.sortBy(_.name).foldRight(e)(Drop(_, _))
 
-    private def counted(as: List[Atom]) = as.flatMap(Core.countedVar)
+    private def counted(as: List[Atom]) = as.flatMap(tracked)
 
     /** The counted arguments of a call of `f`, split into consumed and borrowed. */
     private def args(f: String, as: List[Atom]): (List[Var], List[Var]) =
@@ -131,7 +135,7 @@ object Rc:
     /** Counted variables `rhs` only borrows. */
     private def reads(rhs: Rhs): Set[Var] =
       rhs match
-        case Rhs.Field(o, _)        => Core.countedVar(o).toSet
+        case Rhs.Field(o, _)        => tracked(o).toSet
         case Rhs.Call(f, as, false) => args(f, as)._2.toSet
         case Rhs.Catch(f, as)       => args(f, as)._2.toSet
         case _                      => Set.empty
@@ -139,6 +143,6 @@ object Rc:
     private def free(e: Expr): Set[Var] =
       e match
         case Let(x, rhs, body) => consumed(rhs).toSet ++ reads(rhs) ++ (free(body) - x)
-        case Ret(a)            => Core.countedVar(a).toSet
+        case Ret(a)            => tracked(a).toSet
         case Dup(x, b)         => free(b) + x
         case Drop(x, b)        => free(b) + x

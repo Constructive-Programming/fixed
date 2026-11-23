@@ -1,10 +1,13 @@
 package fixed.backend
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 
-/** The data stack of `Frame` cells (`spec/memory_management.md` Rules MM6.1, MM6.2) in the runtime,
-  * driven by hand-written LLVM IR: bump allocation over several chunks, a mark and a reset, the
-  * counters, and the checked build's poison.
+import fixed.util.SourceFile
+import fixed.{CompilationUnit, Compiler}
+
+/** Frame cells: the data stack (`spec/memory_management.md` Rules MM6.1, MM6.2) in the runtime,
+  * driven by hand-written LLVM IR (bump allocation over several chunks, a mark and a reset, the
+  * counters, the checked build's poison), and what [[Frames]] places on it, in both build modes.
   */
 class FrameSuite extends munit.FunSuite:
 
@@ -122,3 +125,36 @@ class FrameSuite extends munit.FunSuite:
          |ok:""".stripMargin
     val (code, _, err) = run("poison", program(3, read), true)
     assertEquals(code, 0, err)
+
+  /** The placement of the test program `name` in build mode `mode`. */
+  private def placed(name: String, mode: Mode): Frames =
+    val path = Path.of("compiler", "src", "test", "fixed", "modes", s"$name.fixed")
+    val unit = Compiler.compile(CompilationUnit(SourceFile.fromString(s"$name.fixed", Files.readString(path))))
+    val a = Backend.analyse(unit, mode.budget).fold(ds => fail(s"$ds"), identity)
+    Frames(Consume(a)._1, a.memory)
+
+  /** Whether `f` places anything on a frame: a constructor, or a call of a `#frame` clone. */
+  private def places(p: Frames, f: String): Boolean =
+    p.bumped.getOrElse(f, Set.empty).nonEmpty ||
+      p.fns.find(_.name == f).exists(g =>
+        Core.lets(g.body).exists { case (_, Rhs.Call(c, _, false)) => c.endsWith(Frames.suffix); case _ => false }
+      )
+
+  List(Mode.Default, Mode.NoSpecialise).foreach { mode =>
+    test(s"values that leave their scope are not placed on its frame ($mode)"):
+      val escapes = placed("frame_escapes", mode)
+      List("viaResult", "viaField", "viaClosure", "viaAbort", "caught", "collect", "pick").foreach(f =>
+        assert(!places(escapes, f), f)
+      )
+      val more = placed("frame_more", mode)
+      List("viaTable", "viaPart", "viaNested", "viaFold", "viaPara", "viaSatisfies", "wrapSum").foreach(f =>
+        assert(!places(more, f), f)
+      )
+
+    test(s"temporaries that stay in their scope are placed on its frame ($mode)"):
+      assert(places(placed("frame_escapes", mode), "main"))
+      val more = placed("frame_more", mode)
+      List("local", "spin", "main").foreach(f => assert(places(more, f) && more.scoped(f), f))
+      assertEquals(more.bumped.get("make#frame").map(_.size), Some(1))
+      assert(!more.scoped("make#frame"))
+  }

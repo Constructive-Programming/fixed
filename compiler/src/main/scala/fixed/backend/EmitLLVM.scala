@@ -7,8 +7,12 @@ import fixed.backend.Atom.Var
 /** Core to textual LLVM IR (slice §4.1). Opaque pointers only; no target triple, so `clang` uses its
   * host default. User functions are `@fx_u_<name>`; the C runtime (`runtime/fixed_rt.c`) defines
   * `main`, which calls `@fx_u_main`. A unit value is an `i8` 0.
+  *
+  * A function in `scoped` takes a mark of the data stack on entry and resets the stack to it before
+  * it returns and before it jumps back to `loop`; the constructors in `bumped` of each function are
+  * allocated on the data stack ([[Frames]]).
   */
-final class EmitLLVM:
+final class EmitLLVM(bumped: Map[String, Set[String]] = Map.empty, scoped: Set[String] = Set.empty):
   private val out = new StringBuilder
   private val ids = Iterator.from(1)
   private val aliases = mutable.Map.empty[String, String]
@@ -18,6 +22,9 @@ final class EmitLLVM:
   private val entries = mutable.Set.empty[String]
   private val signatures = mutable.Map.empty[String, Fn]
 
+  /** The function being emitted. */
+  private val emitting = scala.util.DynamicVariable("")
+
   /** The jumps back to the `loop` block of the function being emitted: each jumping block's label
     * and the arguments it passes to the `loop` block's phis.
     */
@@ -26,7 +33,7 @@ final class EmitLLVM:
   def program(fns: List[Fn]): String =
     entries ++= Core.indirectEntries(fns)
     signatures ++= fns.map(f => f.name -> f)
-    val bodies = fns.map(f => function(f, slots = entries(f.name))).mkString("\n")
+    val bodies = fns.map(f => emitting.withValue(f.name)(function(f, slots = entries(f.name)))).mkString("\n")
     val globals = strings.map((s, name) => stringGlobal(name, s)).mkString + statics.values.mkString
     val decls = (EmitLLVM.always ++ declared.values).mkString("\n")
     s"$globals\n$decls\n\n$bodies"
@@ -43,6 +50,7 @@ final class EmitLLVM:
     aliases.clear()
     jumps.clear()
     line("entry:")
+    if scoped(fn.name) then line("  %fx.mark = load ptr, ptr @fx_frame_top")
     val inSlot = fn.params.zipWithIndex.map((p, i) => p -> (slots && i > 0)).toMap
     fn.params.filter(inSlot).foreach(p => narrow(p, s"%${p.name}.s"))
     if !slots then line("  br label %loop\nloop:")
@@ -50,7 +58,9 @@ final class EmitLLVM:
     val (result, end) = value(fn.body, if slots then "entry" else "loop", Option.when(!slots)(fn))
     val ret = zeroIfUnit(result, fn.ret)
     val retType = if slots then "i64" else EmitLLVM.llType(fn.ret)
-    if end.nonEmpty then line(s"  ret ${if slots then slotted(ret, fn.ret, "ret") else s"$retType $ret"}")
+    if end.nonEmpty then
+      reset()
+      line(s"  ret ${if slots then slotted(ret, fn.ret, "ret") else s"$retType $ret"}")
     val renamed = if jumps.isEmpty then "" else ".in"
     val params = fn.params.map(p =>
       if inSlot(p) then s"i64 %${p.name}.s" else s"${EmitLLVM.llType(p.ctype)} %${p.name}$renamed"
@@ -76,6 +86,7 @@ final class EmitLLVM:
       case Expr.Let(x, Rhs.Call(f, args, false), Expr.Ret(y))
           if y == x && tail.exists(fn => fn.name == f && fn.params.map(_.ctype) == args.map(_.tpe)) =>
         jumps += label -> args.map(a => zeroIfUnit(operand(a), a.tpe))
+        reset()
         line("  br label %loop")
         ("", "")
       case Expr.Let(x, r, body) => value(body, rhs(x, r, label, tail.filter(_ => body == Expr.Ret(x))), tail)
@@ -302,8 +313,12 @@ final class EmitLLVM:
         line(s"  %${x.name} = and i64 $shifted, ${(BigInt(1) << (8 * w)) - 1}")
       case _ => narrow(x, shifted)
 
+  /** Reset the data stack to the mark taken on entry, if the function takes one. */
+  private def reset(): Unit = if scoped(emitting.value) then line("  call void @fx_frame_reset(ptr %fx.mark)")
+
   private def allocate(x: Var, tag: Int, refs: String, slots: Int): Unit =
-    line(s"  %${x.name} = call ptr @fx_alloc(i32 $tag, i32 $refs, i64 ${8 * slots})")
+    val on = if bumped.get(emitting.value).exists(_(x.name)) then "fx_frame_alloc" else "fx_alloc"
+    line(s"  %${x.name} = call ptr @$on(i32 $tag, i32 $refs, i64 ${8 * slots})")
     line(s"  %${x.name}.0 = getelementptr inbounds i8, ptr %${x.name}, i64 16")
 
   private def store(x: Var, fields: List[(Atom, Int)]): Unit =
@@ -515,7 +530,10 @@ object EmitLLVM:
     "declare void @fx_drop(ptr)",
     "declare void @fx_panic_div() noreturn",
     "declare ptr @fx_alloc(i32, i32, i64)",
-    "declare ptr @fx_alloc_at(ptr, i32, i32, i64)"
+    "declare ptr @fx_alloc_at(ptr, i32, i32, i64)",
+    "declare ptr @fx_frame_alloc(i32, i32, i64)",
+    "declare void @fx_frame_reset(ptr)",
+    "@fx_frame_top = external global ptr"
   )
 
   /** A user function's LLVM name, quoted: instance names carry type arguments. */

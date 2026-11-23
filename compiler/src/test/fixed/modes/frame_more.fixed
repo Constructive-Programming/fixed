@@ -1,0 +1,104 @@
+// More values that look like temporaries and are not (frame placement, Frames): kept through a
+// capability table call, through a `match` on a parameter that returns a part of it, through a
+// nested function, through `fold` and `para` callbacks and a `satisfies` body; a cell that would
+// hold a reference to the heap; a value passed on by a self call in tail position, which resets the
+// frame. Every value kept is printed after more allocation, so one wrongly placed on a frame prints
+// a wrong number. Then temporaries that are placed: a local list of local cells, read by recursion.
+use std.io.Console
+
+data Box3:
+    Box3(a: u64, b: u64, c: u64)
+
+data Holder:
+    Holder(first: Box3, second: Box3)
+
+data L:
+    E
+    C(h: Box3, t: L)
+
+fn sum(b: Box3) -> u64 = b.a + b.b + b.c
+
+fn make(i: u64) -> Box3 = Box3.Box3(i, i + 1, i + 2)
+
+fn total(xs: L) -> u64 =
+    match xs:
+        L.C(h, t) => sum(h) + total(t)
+        L.E => 0
+
+fn noise(n: u64) -> u64 = total(L.unfold(n, (s) -> if s == 0: L.E else: L.C(make(s), s - 1)))
+
+// Kept by a fold reached through a capability table (a call through the table in the baseline version).
+fn viaTable(xs: is Folding of u64, b: Box3) -> Box3 = xs.fold(b, (acc, x) -> acc)
+
+// A `match` on a parameter that returns a part of it.
+fn firstOf(h: Holder) -> Box3 =
+    match h:
+        Holder.Holder(a, _) => a
+
+fn viaPart(i: u64) -> Box3 =
+    let h = Holder.Holder(make(i), make(i + 1))
+    firstOf(h)
+
+// Kept by a nested function that returns its parameter.
+fn same(b: Box3) -> Box3 = b
+
+fn viaNested(i: u64) -> Box3 =
+    let b = make(i)
+    let t = make(i + 50)
+    if sum(t) > 0: same(b) else: t
+
+// Kept by a fold step that returns the accumulator, and by a `para` step.
+fn viaFold(xs: List of u64) -> Box3 = xs.fold(make(7), (acc, x) -> if x > 100: make(x) else: acc)
+
+fn viaPara(xs: List of u64) -> Box3 = xs.para((x, rest, acc) -> if x > 100: make(x) else: acc, () -> make(8))
+
+// Kept by a `satisfies` body (`Maybe.find` returns `self`).
+fn inner(m: Maybe of Box3) -> Box3 =
+    match m:
+        Maybe.Just(b) => b
+        Maybe.Nothing => make(0)
+
+fn viaSatisfies(i: u64) -> Box3 =
+    let m = Maybe.Just(make(i))
+    inner(m.find((x) -> sum(x) > 0))
+
+// A cell whose fields are a parameter, which may be on the heap: it stays on the heap.
+fn wrapSum(b: Box3) -> u64 =
+    let h = Holder.Holder(b, b)
+    sum(h.first) + sum(h.second)
+
+// Passed on by a self call in tail position, which is a jump that resets the frame; the
+// temporary of each step is reset there.
+fn spin(n: u64, b: Box3) -> u64 with Diverge =
+    let t = make(n)
+    if n == 0:
+        sum(b) + sum(t)
+    else:
+        spin(n - 1, make(sum(t)))
+
+// Placed: a list of cells built here and only read.
+fn local(i: u64) -> u64 =
+    let l = L.C(make(i), L.C(make(i + 1), L.E))
+    let n = noise(10)
+    total(l) + n
+
+fn main() -> () with Console + Diverge =
+    let a = viaTable([1, 2], make(1))
+    let b = viaTable([], make(2))
+    let n1 = noise(30)
+    Console.printLine((sum(a) * 1000 + sum(b)).show())
+    let c = viaPart(3)
+    let d = viaNested(4)
+    let n2 = noise(30)
+    Console.printLine((sum(c) * 1000 + sum(d)).show())
+    let e = viaFold([1, 2, 3])
+    let f = viaPara([1, 2, 300])
+    let n3 = noise(30)
+    Console.printLine((sum(e) * 1000 + sum(f)).show())
+    let g = viaSatisfies(5)
+    let n4 = noise(30)
+    Console.printLine(sum(g).show())
+    Console.printLine(wrapSum(make(6)).show())
+    Console.printLine(spin(5, make(9)).show())
+    Console.printLine(local(11).show())
+    Console.printLine((n1 + n2 + n3 + n4).show())

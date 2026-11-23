@@ -101,6 +101,14 @@ class EmitSuite extends munit.FunSuite:
     */
   private val allocations = Map("points" -> (200L * (2 * 5000 + 1) + (2 * 200 + 1) + 1))
 
+  /** Heap and frame allocations of the benchmarks that place frame cells ([[Frames]]), the same in
+    * both modes; every other benchmark places none. `temps` bumps the `Box3` of each of its 2,000,000
+    * fold steps in the step's frame, through `make#frame`; its heap keeps, per element of `upto`'s
+    * list, the list cell and the cell `upto`'s unfold step returns (through a closure call, which
+    * cannot call a `#frame` clone), and the 2 allocations of every run, 6,000,002 before frames.
+    */
+  private val placed = Map("temps" -> (4000002L, 2000000L))
+
   programs.foreach { (dir, name) =>
     test(s"$dir/$name prints its expected result"):
       val read = (ext: String) => java.nio.file.Files.readString(dir.resolve(s"$name.$ext"))
@@ -108,6 +116,10 @@ class EmitSuite extends munit.FunSuite:
       reuseSites.get(name).foreach { (default, plain) =>
         assertEquals(sites(counts(Mode.Default)), default, "default")
         assertEquals(sites(counts(Mode.NoSpecialise)), plain, "--no-specialise")
+        modes.foreach { m =>
+          val frames = counts(m)("frame_allocs")
+          placed.get(name).fold(assertEquals(frames, 0L, m))(p => assertEquals((counts(m)("allocs"), frames), p, m))
+        }
       }
       allocations.get(name).foreach(n => modes.foreach(m => assertEquals(counts(m)("allocs"), n, m)))
   }
