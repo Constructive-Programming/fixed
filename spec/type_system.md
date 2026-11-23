@@ -1042,9 +1042,11 @@ The compiler iterates `step` until no recursive seeds remain. The combination of
 
 **Rule 7.4.b.1 (Guaranteed fusion).** Recursion between functions is admitted only when structural or under `Diverge` (Rule 7.4.h), so a loop in a Fixed program is usually a `fold`, and a counted loop is an `unfold` followed by a `fold`. The compiler therefore **must** remove the intermediate structure, with no allocation for it, when all of these hold:
 
-1. The result of an `unfold` (or of a conversion the compiler derives from one, such as `toNat`) is consumed by exactly one `fold`.
+1. The result of an `unfold`, of a conversion the compiler derives from one, such as `toNat`, or of a call of a function declared in the same package that does not reach itself and whose body is `let`s without effects followed by such an expression (a **builder**, as `fn upto(n) = List.unfold(…)`), is consumed by exactly one `fold`. Derived `map`s of a list may stand between the two. (The builder clause and the `map`s: owner's decision, 2026-11-23.)
 2. That result is used once (quantity 1, `spec/quantities.md` §5): nothing else observes it. Exclusive ownership is not required, because the structure is never built.
 3. Both calls resolve to auto-derived `fold` / `unfold` (Rules 7.4.a, 7.4.b) of a data type that is statically known at the call site. The left fold that the prelude's `Folding` gives a list (`xs.fold(init, (acc, x) -> …)`, `spec/stdlib.md` §4.7) counts as auto-derived here (owner's decision, 2026-11-23), as does the catamorphism of Rule 7.4.a.
+
+4. The step of the `unfold`, and the function of every `map` between it and the `fold`, have an empty effect row (owner's decision, 2026-11-23). With an effect there, fusion would change the order in which effects are performed: unfused, every step runs before the fold starts; fused, they alternate. The fold's own functions may have effects. Integer arithmetic in a step therefore must be proved in range or the site is not fused, once the arithmetic effects of `spec/effects.md` §3.6 are built; an `unfold` whose termination is not established has `Diverge` in its row (Rule 7.4.i) and is likewise not fused.
 
 Outside this class the compiler is permitted, but not required, to fuse.
 
