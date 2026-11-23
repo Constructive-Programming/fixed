@@ -34,10 +34,6 @@ final case class Need(root: Demand, parts: Map[Need.Part, Demand]):
 
 object Demands:
 
-  /** Demands of every function instance `lower` built. */
-  def of(lower: Lower, fns: List[Fn], render: fixed.core.Type => String): DemandTable =
-    analyse(lower, fns, render)._2
-
   /** The analysis over `fns` and its result. */
   def analyse(lower: Lower, fns: List[Fn], render: fixed.core.Type => String): (Demands, DemandTable) =
     val keyed = typesByKey(lower, render).get

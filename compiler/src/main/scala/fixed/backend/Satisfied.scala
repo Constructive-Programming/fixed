@@ -58,7 +58,7 @@ private[backend] trait Satisfied extends Generated:
       fromPrelude = prelude.exists(_ eq d)
       visible = symbols.scopeFor(fromPrelude)
       self <- visible.get(typeName).filter(symbols(_).kind == SymKind.Data).map(Type.TypeRef(_, Nil))
-        .orElse(Some(Type.PrimType(typeName)).filter(Lower.scalar(_).isDefined)).toList
+        .orElse(Some(Type.PrimType(typeName)).filter(Scalars.scalar(_).isDefined)).toList
       cap <- visible.get(capName).filter(symbols(_).kind == SymKind.Cap).toList
       capArgs = symbols.satisfactionsOf(self).collectFirst { case Type.CapRef(`cap`, as) => as }
       case fn: Trees.InstanceMethod <- methods if fn.body.isDefined
@@ -67,7 +67,7 @@ private[backend] trait Satisfied extends Generated:
 
   /** The type `satisfies` bodies of a value of type `t` are keyed by: its data type at no arguments, or a scalar type. */
   protected def satisfier(t: Type): Option[Type] =
-    dataOf(t).map((d, _) => Type.TypeRef(d, Nil)).orElse(Option.when(Lower.scalar(t).isDefined)(t))
+    dataOf(t).map((d, _) => Type.TypeRef(d, Nil)).orElse(Option.when(Scalars.scalar(t).isDefined)(t))
 
   /** Whether `t` has a `satisfies` body for `member` that is the prelude's exactly when `fromPrelude`
     * and that the compiler does not provide in its place on a scalar (`Tables.builtIn`).
@@ -120,7 +120,7 @@ private[backend] trait Satisfied extends Generated:
   protected def showValue(t: Type, v: Atom)(k: K): Expr =
     val s = fresh("s", CType.Boxed)
     def call(f: String, a: Atom) = Expr.Let(s, Rhs.Call(f, List(a), runtime = true), k(s))
-    Lower.formatter(v.tpe, t == Type.PrimType("char")) match
+    Scalars.formatter(v.tpe, t == Type.PrimType("char")) match
       case Some((f, to)) if to == v.tpe => call(f, v)
       case Some((f, to))                =>
         val w = fresh("w", to)

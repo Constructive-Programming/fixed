@@ -50,7 +50,7 @@ private[backend] trait Tables extends Satisfied:
 
   /** The table of `cap` at `t` with an entry per member, or why there is none. */
   private def entries(t: Type, cap: SymbolId): Either[String, Atom.StaticTable] =
-    val known = Lower.scalar(t).isDefined || dataOf(t).isDefined || isStringType(t) || productFields(t).isDefined
+    val known = Scalars.scalar(t).isDefined || dataOf(t).isDefined || isStringType(t) || productFields(t).isDefined
     val name = symbols(cap).name
     Option.when(known)(ctype(t, Span.NoSpan)) match
       case Some(c) =>
@@ -343,7 +343,7 @@ private[backend] trait Tables extends Satisfied:
     * compiler provided one (whether a program may do so is open).
     */
   protected def builtIn(t: Type, member: SymbolId): Boolean =
-    Lower.scalar(t).exists(c =>
+    Scalars.scalar(t).exists(c =>
       symbols.preludeName(symbols(member).owner).nonEmpty && symbols(member).name != "compare" &&
         primitiveBody(symbols.render(t), c, symbols(member).name).isDefined
     )
@@ -386,7 +386,7 @@ private[backend] trait Tables extends Satisfied:
       case ("show", CType.Boxed)   => Some((List(self), c, Expr.Ret(self)))
       case ("clone", _)            => Some((List(self), c, Expr.Ret(self)))
       case ("show", _)             =>
-        Lower.formatter(c, t == "char").map { (f, to) =>
+        Scalars.formatter(c, t == "char").map { (f, to) =>
           if to == c then runtime(f, List(self))
           else
             val w: Atom.Var = Atom.Var("w", to)

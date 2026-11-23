@@ -63,7 +63,7 @@ private[backend] trait Immediates:
     def width(name: String, declared: Type, t: Type): Either[String, Int] =
       if mentions(declared, _ == d) || dataOf(t).exists((e, _) => classifying(e)) then Left("recursive")
       else if mentions(declared, own) then Left(s"field `$name` takes its layout from a type argument (not built)")
-      else Lower.scalar(t).orElse(immediate(t)).flatMap(Layout.width).toRight(s"field `$name` holds a reference")
+      else Scalars.scalar(t).orElse(immediate(t)).flatMap(Layout.width).toRight(s"field `$name` holds a reference")
     if variants.isEmpty then (None, "no variants")
     else if variants.size > 256 then (None, "more than 256 variants: the tag is one byte")
     else

@@ -660,25 +660,20 @@ private[backend] trait Generated:
     typed(fresh("xs", CType.Boxed), Type.TypeRef(data, args), span)
 
   /** A copy of a value of `data` at `args` (`spec/quantities.md` Rule Q9.3): the cell is copied,
-    * and so is every field at a part key in `parts` (keyed by `key` of the owning type); the other
+    * and so is every field at a part key in `parts` (keyed by the rendered owning type); the other
     * fields are shared. Recursive fields share the copy function.
     */
-  protected def copyOf(
-      data: SymbolId,
-      args: List[Type],
-      parts: Set[(String, Int)],
-      key: Type => String,
-      span: Span
-  ): String =
+  protected def copyOf(data: SymbolId, args: List[Type], parts: Set[(String, Int)]): String =
     val t = Type.TypeRef(data, args)
     val name = generatedName(data, args, "copy", parts.toList.sorted.map((k, s) => s"$k#$s").mkString(";"))
+    val span = Span.NoSpan
     instance(name) {
       val x = typed(fresh("x", CType.Boxed), t, span)
       val branches = perVariant(data, args, x, span) { (tag, loaded) =>
         val slots = Layout.slots(loaded.map((ft, _) => ctype(ft, span)))
         val copyField = (ft: Type, v: Var) =>
-          dataOf(ft).filter(_ => parts((key(t), slots(loaded.indexWhere(_._2 == v))))).map((d, a) =>
-            bound(Rhs.Call(copyOf(d, a, parts, key, span), List(v), runtime = false), CType.Boxed)
+          dataOf(ft).filter(_ => parts((symbols.render(t), slots(loaded.indexWhere(_._2 == v))))).map((d, a) =>
+            bound(Rhs.Call(copyOf(d, a, parts), List(v), runtime = false), CType.Boxed)
           )
         construction(tag, loaded, copyField, t)
       }

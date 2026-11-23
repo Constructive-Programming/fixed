@@ -25,12 +25,23 @@ private[backend] trait Cases extends Tables:
           case Some((data, dargs)) =>
             val branches = symbols.variantsOf(data).toList.zipWithIndex.map { (v, tag) =>
               val variant = fieldTypes(data, dargs, v.id)
-              tag -> tryCases(m.cases.filter(c => Lower.covers(c.pattern, v.name)), s, t, variant, rt, sc)
+              tag -> tryCases(m.cases.filter(c => covers(c.pattern, v.name)), s, t, variant, rt, sc)
             }
             bind(Rhs.Switch(s, branches), m, sc)(k)
           case None =>
             bind(Rhs.If(Atom.BoolC(true), tryCases(m.cases, s, t, Nil, rt, sc), Expr.Ret(Atom.UnitC)), m, sc)(k)
       }
+
+  /** Whether case pattern `p` covers variant `variant`. A tuple pattern meets only a tuple (the
+    * typer reports any other scrutinee), so it covers the tuple's one variant. Like a variant
+    * pattern, it may still be refutable: [[tryCases]] tests the literals inside it.
+    */
+  private def covers(p: Tree, variant: String): Boolean =
+    p match
+      case Trees.DataVariantPat(_, v, _, _)                              => v == variant
+      case _: Trees.TuplePat | _: Trees.WildcardPat | _: Trees.BinderPat => true
+      case Trees.OrPat(l, r, _)                                          => covers(l, variant) || covers(r, variant)
+      case _                                                             => false
 
   /** Take the first of `cases` whose pattern matches `s`, of type `t`; `variant` holds the field
     * types of the variant a variant pattern meets. The `Nil` arm follows the last case, which the

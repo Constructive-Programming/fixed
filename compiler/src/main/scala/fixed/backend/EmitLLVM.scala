@@ -12,7 +12,7 @@ import fixed.backend.Atom.Var
   * it returns and before it jumps back to `loop`; the constructors in `bumped` of each function are
   * allocated on the data stack ([[Frames]]).
   */
-final class EmitLLVM(bumped: Map[String, Set[String]] = Map.empty, scoped: Set[String] = Set.empty):
+final class EmitLLVM(bumped: Map[String, Set[String]], scoped: Set[String]):
   private val out = new StringBuilder
   private val ids = Iterator.from(1)
   private val aliases = mutable.Map.empty[String, String]

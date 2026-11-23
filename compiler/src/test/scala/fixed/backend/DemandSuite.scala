@@ -20,7 +20,7 @@ class DemandSuite extends munit.FunSuite:
     assert(!unit.hasErrors, unit.diagnostics)
     val lower = Lower(unit)
     val fns = lower.program.fold(ds => fail(s"lowering failed: $ds"), identity)
-    Demands.of(lower, fns, unit.symbols.render(_))
+    Demands.analyse(lower, fns, unit.symbols.render(_))._2
 
   private def roots(t: DemandTable, fn: String): List[String] =
     t.params.find(_._1.startsWith(fn)).fold(fail(s"no $fn in ${t.params.keys}"))(_._2.map(_.root.show))
@@ -83,6 +83,6 @@ class DemandSuite extends munit.FunSuite:
       val unit = Compiler.compile(CompilationUnit(SourceFile.fromString(f, src)))
       val lower = Lower(unit)
       val fns = lower.program.fold(ds => fail(s"$f: $ds"), identity)
-      val t = Demands.of(lower, fns, unit.symbols.render(_))
+      val t = Demands.analyse(lower, fns, unit.symbols.render(_))._2
       assertEquals(t.params.keySet, fns.map(_.name).toSet, f)
     }

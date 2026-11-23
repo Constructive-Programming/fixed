@@ -28,7 +28,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   private type Sigma = Map[SymbolId, Type]
 
   /** Lexical bindings and the type substitution of the instance being lowered. */
-  final private[backend] case class Scope(env: Env, sigma: Sigma, bounds: Map[Type, Type] = Map.empty):
+  final private[backend] case class Scope(env: Env, sigma: Sigma, bounds: Map[Type, Type]):
     def bind(name: String, v: Var): Scope = copy(env = env.updated(name, v))
 
   private val ids = Iterator.from(1)
@@ -94,7 +94,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
 
   /** A function copying a value of type `t`: cells at part keys `parts` copied, the rest shared. */
   def copy(t: Type, parts: Set[(String, Int)]): Option[String] =
-    cellData(t).map((d, args) => copyOf(d, args, parts, symbols.render(_), Span.NoSpan))
+    cellData(t).map((d, args) => copyOf(d, args, parts))
 
   /** Whether `t` mentions no type parameter: the part keys of its values are the same everywhere. */
   def known(t: Type): Boolean = typeParamsIn(t).isEmpty
@@ -580,7 +580,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     lazy val listLike = dataOf(recvType).exists((d, _) => listShaped(d))
 
     /** Whether the receiver is a scalar, a `String` or a data value, whose `show` and `compare` the backend builds. */
-    lazy val known = Lower.scalar(recvType).isDefined || isStringType(recvType) || dataOf(recvType).isDefined
+    lazy val known = Scalars.scalar(recvType).isDefined || isStringType(recvType) || dataOf(recvType).isDefined
     resolution match
       case Some(Resolution.Field(variant, index)) =>
         dataOf(recvType) match
@@ -612,9 +612,9 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
                 ).fold(unsupported(m.span, s"`eq` on ${symbols.render(recvType)}", k))(bind(_, m, sc)(k))
               )
             )
-          case ("Numeric", "negate", Nil) if Lower.scalar(recvType).isDefined =>
+          case ("Numeric", "negate", Nil) if Scalars.scalar(recvType).isDefined =>
             expr(m.receiver, sc)(r => bind(Rhs.Prim(PrimOp.Neg, List(r)), m, sc)(k))
-          case (c, name, List(arg)) if Lower.scalar(recvType).isDefined && Tables.scalarBinary.contains((c, name)) =>
+          case (c, name, List(arg)) if Scalars.scalar(recvType).isDefined && Tables.scalarBinary.contains((c, name)) =>
             val op = Tables.scalarBinary((c, name))
             expr(m.receiver, sc)(r => expr(arg, sc)(a => bind(Rhs.Prim(op, List(r, a)), m, sc)(k)))
           case ("Folding", "fold", List(_, _)) if listLike =>
@@ -956,7 +956,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   private def fnNamed(name: String): Option[SymbolId] = globals.get(name).filter(symbols(_).kind == SymKind.Fn)
 
   protected def ctype(t: Type, span: Span): CType =
-    Lower.scalar(t).getOrElse(t match
+    Scalars.scalar(t).getOrElse(t match
       /** Pointer or immediate: Rule CM3.5 as [[Immediates]] applies it to the data type. */
       case _ if isStringType(t) || dataOf(t).isDefined             => immediate(t).getOrElse(CType.Boxed)
       case _ if isTypeParam(t)                                     => CType.Slot(witnessVar(t).name)
@@ -980,18 +980,3 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   private def problem(code: DiagCode, span: Span, message: String): Diagnostic =
     val where = if inPrelude.value && span == Span.NoSpan then "in the prelude: " else ""
     Diagnostic(Severity.Error, code, span, where + message)
-
-object Lower:
-
-  export Scalars.{formatter, scalar}
-
-  /** Whether case pattern `p` covers variant `variant`. A tuple pattern meets only a tuple (the
-    * typer reports any other scrutinee), so it covers the tuple's one variant. Like a variant
-    * pattern, it may still be refutable: `Cases` tests the literals inside it.
-    */
-  def covers(p: Tree, variant: String): Boolean =
-    p match
-      case Trees.DataVariantPat(_, v, _, _)                              => v == variant
-      case _: Trees.TuplePat | _: Trees.WildcardPat | _: Trees.BinderPat => true
-      case Trees.OrPat(l, r, _)                                          => covers(l, variant) || covers(r, variant)
-      case _                                                             => false
