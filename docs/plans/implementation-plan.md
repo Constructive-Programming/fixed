@@ -639,7 +639,7 @@ The **more capabilities** you request, the **fewer representations** qualify. Th
 | 4.0 Naive backend slice | done |
 | 4.1 Polymorphic baseline and specialiser | 4.1.M0–M8 done, 4.1.M9 (cleanup) open; parts of it superseded by P6 (`docs/plans/phase-4.1-baseline-specialiser.md`) |
 | 4.2 Resolution round P6 | in progress: items 10, 12, 17, 20, 25–27 done, 5, 13, 16, 23, 24 in part, the rest not started |
-| 4 Code generation | partial: LLVM IR emission and Perceus-style counting exist; frame allocation is built for the scope of a function activation (`backend/Frames.scala`, `docs/baselines/runtime-2026-11-23-frames.md`); fusion, the rest of region lowering and evidence passing do not |
+| 4 Code generation | partial: LLVM IR emission and Perceus-style counting exist; frame allocation is built for the scope of a function activation (`backend/Frames.scala`, `docs/baselines/runtime-2026-11-23-frames.md`); fusion of an `unfold` with a `fold` is built at one site or through a builder function (`backend/Fusion.scala`, `docs/baselines/runtime-2026-11-23-fusion.md`); the rest of region lowering and evidence passing are not |
 | 5 Standard library, 6 PGO | not started |
 
 ## Phase 0: Example Programs — COMPLETE
@@ -920,7 +920,7 @@ The slice is deliberately naive, and does not conform to the spec's guarantees:
 | Placement | Every boxed value is `Heap` with a header | M10 lifetime classes, Phase 4 region lowering |
 | Reference counting | `dup` at every additional use, `drop` at last use. No reuse, no borrowing | Phase 4 Perceus inserter |
 | Representation | One fixed default per capability classification (the rule table in `phase-3-typer.md` §5.8). No scoring, no packed layouts | M11 |
-| Folds | Closure call per step, intermediate structures allocated. Rules 7.4.b.1 and 7.4.b.2 not implemented | Phase 4 fold specializer |
+| Folds | Fused sites (Rule 7.4.b.1): no intermediate structure, lambdas inlined (Rule 7.4.b.2). Elsewhere a closure call per step; not fused: a right fold of a list, a fold of a parameter, effectful steps | Phase 4 fold specializer (`backend/Fusion.scala`) |
 | Effects | Runtime effects as direct calls, abortive operations by checked abort. No capturing handlers | Phase 4 evidence passer |
 | Parallelism | None | Phase 4 |
 

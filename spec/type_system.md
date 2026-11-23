@@ -1048,7 +1048,11 @@ The compiler iterates `step` until no recursive seeds remain. The combination of
 
 Outside this class the compiler is permitted, but not required, to fuse.
 
+Built (`backend/Fusion.scala`, `docs/baselines/runtime-2026-11-23-fusion.md`): a derived `unfold`, or a call of a monomorphic, non-recursive function whose body is `let`s without effects and calls, then one such `unfold` (inlined first), whose result, used once in the same function, a derived `fold` or the left fold of a list consumes (the left fold possibly through derived `map`s of a list), when the step and the `map` functions are lambdas with an empty effect row or function values whose type has none. Not built: a right `fold` of linear data whose recursive variant holds more than `Self` (a list's), which has no fused form within Rule 7.4.b.3 without an allocation per element; a `fold` of data that mentions itself other than as `Self`; `map`s before a derived `fold`; a nested `fn` as step or `map` function; an effectful step (pending the owner's answer); and the technical conditions of the report's condition 5, which no benchmark or test program meets. `--no-fusion` turns fusion off, against the rule, for measurement. Open questions on effects, panics and the wording of condition 1: the report, "Open questions for the owner".
+
 **Rule 7.4.b.2 (Guaranteed specialisation).** When an argument of an auto-derived `fold` or `unfold` of a statically known data type is a lambda or a statically known function, the compiler **must** compile the call with that argument inlined: no closure allocation and no indirect call per step.
+
+Built at a fused site (Rule 7.4.b.1): a lambda built in the same function (or in the inlined function) as step, `map` function or fold function is inlined into the loop, and a layer the step returns as a constructor is never a cell; the closure is not allocated where the call was its only use. Another function value (a parameter, a nested `fn`) is called through its closure, and a step's layer is then a cell, read and dropped each step. A named top-level function is not a value the backend lowers today, so that case of the rule does not arise. Not built at an `unfold` or `fold` that is not fused: each step is still a closure call.
 
 These two guarantees are **mandatory specialisations** (`spec/compilation_model.md` Rule CM5.5). They are part of code generation, not of profile-guided optimisation: they are not charged to the clone budget and hold in every build mode, including `--no-specialise`. In a baseline version whose data type is a type parameter, the data type is not statically known and neither guarantee applies; in a clone of it for a known type both apply again.
 
@@ -1056,7 +1060,7 @@ These two guarantees are **mandatory specialisations** (`spec/compilation_model.
 
 The derived members of other recursive data (trees, rose trees, snoc lists; a mutually recursive group derives none, Rule 7.5.a) take one native frame per level of the value. Bounded native stack for them is not specified yet (`spec/memory_management.md` OQ-PR5).
 
-Built: `fold`, `para`, `unfold` and `map` of linear data, and the generated `length` of list-shaped data (`docs/plans/implementation-plan.md`, Phase 4.2, items 16, 20 and 25). The loop form of `fold`, adopted by the owner (P6, fourth round, decision 3), measured +8.1% instructions and −23% best cycles on `nat_loop` (`docs/decisions/P0-spec-review-2026-11-20.md` §4).
+Built: `fold`, `para`, `unfold` and `map` of linear data, and the generated `length` of list-shaped data (`docs/plans/implementation-plan.md`, Phase 4.2, items 16, 20 and 25); a fused `unfold` and `fold` of linear data (Rule 7.4.b.1) run as one or two loops, and of a tree as a recursive function, one native frame per level. The loop form of `fold`, adopted by the owner (P6, fourth round, decision 3), measured +8.1% instructions and −23% best cycles on `nat_loop` (`docs/decisions/P0-spec-review-2026-11-20.md` §4).
 
 **Rule 7.4.c (Functor over the rightmost type parameter).** A *named* `data T of (X1, ..., Xn)` declaration is auto-derived as `Functor of Xn` (the **rightmost type parameter** — right-bias convention) iff:
 
