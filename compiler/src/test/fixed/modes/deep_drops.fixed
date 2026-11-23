@@ -1,0 +1,28 @@
+// Drop in bounded native stack (spec/memory_management.md Rule PR7.3): a tree of depth 1,000,000
+// that leans left (the deep child is not the cell's last reference), one that leans right, and a
+// list of 1,000,000 cells each holding a cell of its own, all dropped through the runtime's generic
+// drop. The left tree overflowed an 8 MiB stack under the recursive drop; the right tree and the list
+// check the loop and a long work list.
+use std.io.Console
+
+data T:
+    Leaf
+    Node(l: T, r: T)
+
+fn upto(n: u64) -> List of u64 = List.unfold(0, (i) -> if i >= n: List.Nil else: List.Cons(i, i + 1))
+
+fn lean_left(n: u64) -> T = upto(n).fold(T.Leaf, (t, _) -> T.Node(t, T.Leaf))
+
+fn lean_right(n: u64) -> T = upto(n).fold(T.Leaf, (t, _) -> T.Node(T.Leaf, t))
+
+fn top(t: T) -> u64 =
+    match t:
+        T.Node(_, _) => 1
+        T.Leaf => 0
+
+fn boxes(n: u64) -> List of T = List.unfold(0, (i) -> if i >= n: List.Nil else: List.Cons(T.Node(T.Leaf, T.Leaf), i + 1))
+
+fn main() -> () with Console =
+    Console.printLine(top(lean_left(1000000)).show())
+    Console.printLine(top(lean_right(1000000)).show())
+    Console.printLine(boxes(1000000).length().show())

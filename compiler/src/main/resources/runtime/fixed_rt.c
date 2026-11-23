@@ -111,11 +111,12 @@ void fx_dup(fx_header *h) {
     if (h->rc > 0) h->rc++;
 }
 
-/* Free a cell whose count reached zero, and its children. Loops on the highest marked slot, so a list
-   (tail declared last) is freed without recursion. Kept out of line: with the walk inlined into fx_drop
-   list-heavy programs ran 6-8% slower (docs/baselines/runtime-2026-11-20-phase-4.1.md).
-   ponytail: still recursive on the other children; a deep left-leaning tree can exhaust the native
-   stack. Rule PR7.3 wants an explicit work list. */
+/* Free a cell whose count reached zero, and its children, in constant native stack (Rule PR7.3).
+   Continues on the highest marked slot, so a list is freed in a loop; another child whose count
+   reaches zero waits on `pending`, linked through its dead count field. `pending` is empty on return
+   and free_cell never re-enters, so it can be static (saves a register across `free`). Out of line:
+   inlined into fx_drop it cost 6-8% (docs/baselines/runtime-2026-11-20-phase-4.1.md). */
+static fx_header *pending;
 static __attribute__((noinline)) void free_cell(fx_header *h) {
     for (;;) {
         fx_header **slots = (fx_header **)(h + 1);
@@ -124,14 +125,27 @@ static __attribute__((noinline)) void free_cell(fx_header *h) {
         if (refs) {
             uint32_t hi = 31 - (uint32_t)__builtin_clz(refs);
             last = slots[hi];
-            for (refs &= ~(1u << hi); refs; refs &= refs - 1) fx_drop(slots[__builtin_ctz(refs)]);
+            for (refs &= ~(1u << hi); refs; refs &= refs - 1) {
+                fx_header *c = slots[__builtin_ctz(refs)];
+                if (!c) continue;
+                n_drop++;
+                if (c->rc < 0 || --c->rc != 0) continue;
+                c->rc = (int64_t)(intptr_t)pending;
+                pending = c;
+            }
         }
         free(h);
         n_free++;
-        if (!last) return;
-        n_drop++;
-        if (last->rc < 0 || --last->rc != 0) return;
-        h = last;
+        if (last) {
+            n_drop++;
+            if (last->rc >= 0 && --last->rc == 0) {
+                h = last;
+                continue;
+            }
+        }
+        if (!pending) return;
+        h = pending;
+        pending = (fx_header *)(intptr_t)h->rc;
     }
 }
 
