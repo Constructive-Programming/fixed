@@ -20,22 +20,24 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
   * parameters to them), if the key is in `chosen` ([[Specialise]]), and else the baseline version
   * with static witnesses and tables (Rule CM5.6). A function whose baseline version cannot be
   * built is lowered per instance. Constructs beyond the current milestone are `B005`, and so is a
-  * cell with a reference beyond its header's reference map (`refMapLimit`).
+  * cell with a reference beyond its header's reference map (`refMapLimit`). Calls with a receiver
+  * or a qualifier are in [[Methods]], abortive operations and `handle` in [[Handlers]], `match` in
+  * [[Cases]].
   */
 final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(String, String)] = Set.empty)
-    extends Cases, Immediates:
-  private type Env = Map[String, Var]
-  private type Sigma = Map[SymbolId, Type]
+    extends Cases, Immediates, Methods, Handlers:
+  private[backend] type Env = Map[String, Var]
+  private[backend] type Sigma = Map[SymbolId, Type]
 
   /** Lexical bindings and the type substitution of the instance being lowered. */
   final private[backend] case class Scope(env: Env, sigma: Sigma, bounds: Map[Type, Type]):
     def bind(name: String, v: Var): Scope = copy(env = env.updated(name, v))
 
-  private val ids = Iterator.from(1)
-  private val problems = mutable.ArrayBuffer.empty[Diagnostic]
+  private[backend] val ids = Iterator.from(1)
+  private[backend] val problems = mutable.ArrayBuffer.empty[Diagnostic]
   private[backend] val symbols: SymbolTable = unit.symbols
-  private val fns = mutable.LinkedHashMap.empty[String, Fn]
-  private val represent = Representation(unit)
+  private[backend] val fns = mutable.LinkedHashMap.empty[String, Fn]
+  private[backend] val represent = Representation(unit)
 
   /** Concrete typer type of each Core variable lowering could type (by variable name), and the
     * source span of each variable and function. Read by `Demands` (3.4.M2).
@@ -82,7 +84,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   val typeClones: mutable.Map[String, (String, String)] = mutable.LinkedHashMap.empty
 
   /** The function whose code is being lowered, which owns the requests its call sites make. */
-  private val owner = scala.util.DynamicVariable("")
+  private[backend] val owner = scala.util.DynamicVariable("")
 
   /** Each type parameter of the clones and instances being lowered, as what it derives from ([[TypeOps.derived]]). */
   private val frame = scala.util.DynamicVariable(Map.empty[SymbolId, Type])
@@ -355,7 +357,14 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     * bound as the value of `tree`. A table that holds another capability's member under this name
     * (Optional's `fold` shadows Folding's) does not serve the call.
     */
-  private def tableCall(t: Type, cap: SymbolId, member: String, args: List[Atom], tree: Tree, sc: Scope)(k: K): Expr =
+  private[backend] def tableCall(
+      t: Type,
+      cap: SymbolId,
+      member: String,
+      args: List[Atom],
+      tree: Tree,
+      sc: Scope
+  )(k: K): Expr =
     val found =
       if isTypeParam(t) then
         boundCaps(t).find(c => Tables.reached(symbols, c).contains(cap) && declared(c, member).forall(_.owner == cap))
@@ -560,307 +569,11 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     val x = fresh("closure", CType.Boxed)
     Expr.Let(x, Rhs.Closure(code, captures), k(x))
 
-  private def method(m: Trees.MethodCall, sc: Scope)(k: K): Expr =
-    val recvType = typeOf(m.receiver, sc)
-    val args = m.args.getOrElse(Nil)
-    (m.receiver, unit.resolutionOf(m)) match
-      case (Trees.Ident("builtin", _), _) if !sc.env.contains("builtin") => intrinsic(m, sc)(k)
-      case (_, None) if productField(recvType, m.method).isDefined       => fieldRead(recvType, m, sc)(k)
-      case (_, resolution) => resolved(m, recvType, args, resolution, sc)(k)
-
-  private def resolved(
-      m: Trees.MethodCall,
-      recvType: Type,
-      args: List[Tree],
-      resolution: Option[Resolution],
-      sc: Scope
-  )(
-      k: K
-  ): Expr =
-    lazy val listLike = dataOf(recvType).exists((d, _) => listShaped(d))
-
-    /** Whether the receiver is a scalar, a `String` or a data value, whose `show` and `compare` the backend builds. */
-    lazy val known = Scalars.scalar(recvType).isDefined || isStringType(recvType) || dataOf(recvType).isDefined
-    resolution match
-      case Some(Resolution.Field(variant, index)) =>
-        dataOf(recvType) match
-          case Some((data, dargs)) =>
-            val at = Layout.fieldsOf(ctype(recvType, m.span), fieldTypes(data, dargs, variant).map(ctype(_, m.span)))
-            expr(m.receiver, sc)(r => bind(Rhs.Field(r, at(index)), m, sc)(k))
-          case None => unsupported(m.span, s"field `${m.method}` of ${symbols.render(recvType)}", k)
-      case Some(Resolution.DerivedFold(_, para)) =>
-        generatedCall(recvType, m, sc, Some(typeOf(m, sc)))(derivedFold(_, _, _, m.span, para))(k)
-      case Some(Resolution.CapMember(_, member)) if isTypeParam(recvType) =>
-        tableMethod(m, member, recvType, args, sc)(k)
-      case Some(Resolution.CapMember(_, member)) if hasBody(recvType, member, fromPrelude = false) =>
-        bodyCall(m, member, recvType, sc)(k)
-      case Some(Resolution.CapMember(cap, member)) =>
-        (symbols.preludeName(cap), m.method, args) match
-          case ("Concat", "concat", List(arg)) =>
-            expr(m.receiver, sc)(r => expr(arg, sc)(a => runtime("fx_str_concat", List(r, a), m, sc)(k)))
-          case ("Show", "show", Nil) if known         => expr(m.receiver, sc)(r => showValue(recvType, r)(k))
-          case ("Clone", "clone", Nil) if known       => expr(m.receiver, sc)(k)
-          case ("Ord", "compare", List(arg)) if known =>
-            expr(m.receiver, sc)(r => expr(arg, sc)(a => compareValues(recvType, r, a)(k)))
-          case ("Eq", "eq", List(arg)) if dataOf(recvType).isDefined || isStringType(recvType) =>
-            expr(m.receiver, sc)(r =>
-              expr(arg, sc)(a =>
-                equality(
-                  recvType,
-                  r,
-                  a
-                ).fold(unsupported(m.span, s"`eq` on ${symbols.render(recvType)}", k))(bind(_, m, sc)(k))
-              )
-            )
-          case ("Numeric", "negate", Nil) if Scalars.scalar(recvType).isDefined =>
-            expr(m.receiver, sc)(r => bind(Rhs.Prim(PrimOp.Neg, List(r)), m, sc)(k))
-          case (c, name, List(arg)) if Scalars.scalar(recvType).isDefined && Tables.scalarBinary.contains((c, name)) =>
-            val op = Tables.scalarBinary((c, name))
-            expr(m.receiver, sc)(r => expr(arg, sc)(a => bind(Rhs.Prim(op, List(r, a)), m, sc)(k)))
-          case ("Folding", "fold", List(_, _)) if listLike =>
-            generatedCall(recvType, m, sc, Some(typeOf(m, sc)))(foldLeft(_, _, _, m.span))(k)
-          case (_, "fold", _) if mappedFold(cap, recvType, args.size).isDefined =>
-            val order = mappedFold(cap, recvType, args.size)
-            generatedCall(recvType, m, sc, Some(typeOf(m, sc)), order)(derivedFold(_, _, _, m.span))(k)
-          case ("Functor", "map", List(_)) if dataOf(recvType).isDefined =>
-            val newElem = dataOf(typeOf(m, sc)).flatMap(_._2.lastOption).getOrElse(Type.UnitType)
-            generatedCall(recvType, m, sc, Some(newElem))(derivedMap(_, _, _, m.span))(k)
-          case ("Sequencing", "length", Nil) if listLike =>
-            generatedCall(recvType, m, sc)((d, a, _) => length(d, a, typeOf(m, sc), m.span))(k)
-          case ("Folding", "find", List(_)) if listLike =>
-            capOf(m) match
-              case Some(opt) =>
-                val dargs = dataOf(recvType).fold(Nil)(_._2)
-                generatedCall(recvType, m, sc)((d, a, _) =>
-                  find(d, a, opt, TypeOps.replaceAll(typeOf(m, sc), dargs.zip(a).toMap), m.span)
-                )(k)
-              case None =>
-                unsupported(m.span, s"`find` returning ${symbols.render(unit.typeOf(m).getOrElse(Type.NeverType))}", k)
-          case (_, name, Nil) if productField(recvType, name).isDefined => fieldRead(recvType, m, sc)(k)
-          case _ if hasBody(recvType, member, fromPrelude = true)       => bodyCall(m, member, recvType, sc)(k)
-          case (c, name, _)                                             =>
-            unsupported(m.span, s"member $c.$name on ${symbols.render(recvType)} (arrives in 4.0.M4)", k)
-      case None | Some(_: Resolution.NestedFn) => unsupported(m.span, s"member `${m.method}`", k)
-
-  /** `m`, resolved to capability member `member`, on a receiver of type parameter `t`, through the
-    * table of its bound set that holds the member: the witness of each of the member's own type
-    * parameters, solved from the argument and result types, then the receiver and the arguments
-    * (Rule CM4.3). A member type parameter the types do not solve is `B005`.
-    */
-  private def tableMethod(m: Trees.MethodCall, member: SymbolId, t: Type, args: List[Tree], sc: Scope)(k: K): Expr =
-    val d = symbols(member)
-    val own = symbols.typeParamsOf(member)
-    val solved = ownTypeArgs(member, args.map(typeOf(_, sc)), typeOf(m, sc))
-    own.find(!solved.contains(_)) match
-      case Some(q) => unsupported(m.span, s"`${m.method}` whose `${symbols(q).name}` the call does not determine", k)
-      case None    =>
-        val witnesses = own.map(solved andThen witnessAtom)
-        expr(m.receiver, sc)(r =>
-          all(args, sc)(as => tableCall(t, d.owner, m.method, witnesses ++ (r :: as), m, sc)(k))
-        )
-
-  /** `m`, a call of capability `member` on `recvType`, through its `satisfies` body. */
-  private def bodyCall(m: Trees.MethodCall, member: SymbolId, recvType: Type, sc: Scope)(k: K): Expr =
-    val (argTypes, args) = (m.args.getOrElse(Nil).map(typeOf(_, sc)), m.args.getOrElse(Nil))
-    directBody(recvType, member, argTypes, typeOf(m, sc)) match
-      case Some((f, ws)) =>
-        expr(m.receiver, sc)(rv => all(args, sc)(as => bind(Rhs.Call(f, ws ++ (rv :: as), runtime = false), m, sc)(k)))
-      case None =>
-        generatedCall(recvType, m, sc, ownTypeArg(member, argTypes, typeOf(m, sc)))(dataBody(member))(k)
-
-  private def fieldRead(recvType: Type, m: Trees.MethodCall, sc: Scope)(k: K): Expr =
-    expr(m.receiver, sc)(r => bind(Rhs.Field(r, productField(recvType, m.method).get), m, sc)(k))
-
-  /** The slot of field `name` of an auto-flat-struct or single-variant data value. */
-  private def productField(t: Type, name: String): Option[Int] =
-    t match
-      case Type.CapRef(_, _) => productFields(t).map(_._2.indexWhere(_._1 == name)).filter(_ >= 0)
-      case _                 =>
-        dataOf(t).flatMap { (data, args) =>
-          symbols.variantsOf(data).toList match
-            case List(v) =>
-              val names = symbols.fieldsOf(v.id).map(_.name).toList
-              val types = fieldTypes(data, args, v.id)
-              val at = Layout.fieldsOf(ctype(t, Span.NoSpan), types.map(ctype(_, Span.NoSpan)))
-              Option(names.indexOf(name)).filter(_ >= 0).map(at)
-            case _ => None
-        }
-
-  /** `builtin.parseU64(s)`: the C side parses; the result is built with the constructors that
-    * `ok` and `err` of the result's capability (a `Result`) map to on the representing data type.
-    */
-  private def intrinsic(m: Trees.MethodCall, sc: Scope)(k: K): Expr =
-    val result = typeOf(m, sc)
-    (m.method, m.args.getOrElse(Nil), dataOf(result), capOf(m)) match
-      case ("parseU64", List(arg), Some(_), Some(cap)) =>
-        val tagOf = (ctor: String) => capVariant(cap, ctor, result).getOrElse(0)
-        expr(arg, sc) { a =>
-          val (v, ok) = (fresh("n", CType.Int(64, signed = false)), fresh("ok", CType.Bool))
-          val (yes, no) = (fresh("yes", ctype(result, m.span)), fresh("no", ctype(result, m.span)))
-          Expr.Let(
-            v,
-            Rhs.Call("fx_parse_u64", List(a), runtime = true),
-            Expr.Let(
-              ok,
-              Rhs.Call("fx_parse_ok", Nil, runtime = true),
-              bind(
-                Rhs.If(
-                  ok,
-                  Expr.Let(yes, Rhs.Con(tagOf("ok"), List(v)), Expr.Ret(yes)),
-                  Expr.Let(no, Rhs.Con(tagOf("err"), List(Atom.StrC("not a number"))), Expr.Ret(no))
-                ),
-                m,
-                sc
-              )(k)
-            )
-          )
-        }
-      case _ => unsupported(m.span, s"`builtin.${m.method}`", k)
-
-  /** Call the member `gen` generates for the receiver's data type ([[member]]), whose own type
-    * argument is `r` if it has one: its witnesses, the receiver, then the arguments, in the order
-    * `order` gives (the argument handling each variant) if any.
-    */
-  private def generatedCall(
-      recvType: Type,
-      m: Trees.MethodCall,
-      sc: Scope,
-      r: Option[Type] = None,
-      order: Option[List[Int]] = None
-  )(gen: (SymbolId, List[Type], Type) => String)(k: K): Expr =
-    dataOf(recvType) match
-      case Some((data, dargs)) =>
-        val (f, ws) = member(data, dargs, r)(gen(data, _, _))
-        expr(m.receiver, sc)(rv =>
-          all(m.args.getOrElse(Nil), sc)(as =>
-            bind(Rhs.Call(f, ws ++ (rv :: order.fold(as)(_.map(as(_)))), runtime = false), m, sc)(k)
-          )
-        )
-      case None => unsupported(m.span, s"`${m.method}` on ${symbols.render(recvType)}", k)
-
-  /** Data constructors, derived `unfold`, capability constructors resolved by the typer (through the
-    * table of a type parameter when the value is one, Rule CM4.5), and `std.io`'s `Console`.
-    */
-  private def static(s: Trees.StaticCall, sc: Scope)(k: K): Expr =
-    val args = s.args.getOrElse(Nil)
-    lazy val result = typeOf(s, sc)
-    val owner = globals.get(s.qualifier)
-    val resolved = unit.typing.flatMap(_.constructors.find(_._1 eq s)).map((_, d, v) => (d, v))
-    (owner.exists(symbols.stdIo("Console").contains), s.method, args) match
-      case (true, "printLine", List(arg)) => expr(arg, sc)(a => runtime("fx_print_line", List(a), s, sc)(k))
-      case (true, "readLine", Nil)        => runtime("fx_read_line", Nil, s, sc)(k)
-      case _                              =>
-        owner.filter(symbols(_).kind == SymKind.Data).map(d => d -> s.method).orElse(resolved) match
-          case Some((data, "unfold")) if !hasVariant(data, "unfold") =>
-            val seed = args.headOption.fold(Type.UnitType)(typeOf(_, sc))
-            all(args, sc) { as =>
-              val (f, ws) = member(data, dataOf(typeOf(s, sc)).fold(Nil)(_._2), Some(seed))(
-                derivedUnfold(data, _, _, s.span)
-              )
-              bind(Rhs.Call(f, ws ++ as, runtime = false), s, sc)(k)
-            }
-          case Some((data, variant)) if hasVariant(data, variant) =>
-            val tag = symbols.variantsOf(data).indexWhere(_.name == variant)
-            construct(tag, args, s, sc)(k)
-          case _ =>
-            owner.map(symbols(_)) match
-              case Some(cap) if cap.kind == SymKind.Cap && isTypeParam(result) =>
-                all(args, sc)(as => tableCall(result, cap.id, s.method, as, s, sc)(k))
-              case Some(cap) if cap.kind == SymKind.Cap && capVariant(cap.id, s.method, result).isDefined =>
-                construct(capVariant(cap.id, s.method, result).getOrElse(0), args, s, sc)(k)
-              case Some(cap) if represent.constructor(cap.id).exists(_.name == s.method) =>
-                construct(0, args, s, sc)(k)
-              case Some(effect) if effect.kind == SymKind.Effect => operation(s, effect.id, args, sc)(k)
-
-              /** `N.fromI64(n)`, `N is Numeric`: a new scalar (a `u64` is unsigned), a conversion, or its table. */
-              case None if s.method == "fromI64" && unit.typeOf(s).exists(numericParam) =>
-                expr(args.head, sc)(n =>
-                  ctype(result, s.span) match
-                    case CType.Int(64, _)              => bind(Rhs.Move(n), s, sc)(k)
-                    case _: CType.Int | _: CType.Float => bind(Rhs.Prim(PrimOp.Convert, List(n)), s, sc)(k)
-                    case _ => tableCall(result, symbols.prelude("Numeric"), "fromI64", List(n), s, sc)(k)
-                )
-              case _ => unsupported(s.span, s"`${s.qualifier}.${s.method}`", k)
-
-  private def construct(tag: Int, args: List[Tree], t: Tree, sc: Scope)(k: K): Expr =
-    all(args, sc)(as => bind(Rhs.Con(tag, as), t, sc)(k))
-
-  private def effectId(effect: SymbolId): Atom = Atom.IntC(BigInt(effect.toInt), CType.Int(64, signed = true))
-
-  /** An abortive effect operation (`-> !`): record the effect and its payload, then abort (`Aborts`).
-    * The runtime keeps the payload in a pointer-sized field and never reads or drops it, so an
-    * immediate or a slot travels there as its 64 bits, and the handler clause takes it back at its
-    * type ([[handle]]).
-    */
-  private def operation(s: Trees.StaticCall, effect: SymbolId, args: List[Tree], sc: Scope)(k: K): Expr =
-    if !Members.abortive(symbols, effect, s.method) then
-      problems +=
-        problem(DiagCode.B002, s.span, s"`${s.qualifier}.${s.method}`: only abortive operations are supported")
-      k(Atom.UnitC)
-    else
-      all(args, sc) { as =>
-        val (payload, u) = (as.headOption.getOrElse(Atom.StrC("")), fresh("abort", CType.Unit))
-        def abort(p: Atom) = Expr.Let(u, Rhs.Call("fx_abort", List(effectId(effect), p), runtime = true), k(Atom.UnitC))
-        if payload.tpe.boxed then abort(payload)
-        else if payload.tpe.immediate || payload.tpe.slot then
-          val bits = fresh("payload", CType.Boxed)
-          Expr.Let(bits, Rhs.Move(payload), abort(bits))
-        else unsupported(s.span, "an abortive operation with a scalar payload", k)
-      }
-
-  /** `handle subject: clauses` for abortive operations (slice §4.6). The subject runs as its own
-    * function (a `Catch` call); each clause tests whether its effect aborted it.
-    */
-  private def handle(h: Trees.HandleExpr, sc: Scope)(k: K): Expr =
-    val subjectType = typeOf(h.subject, sc)
-    val code = s"handle.${ids.next()}"
-    val body = owner.withValue(code)(tail(h.subject, sc))
-    val captures = this.captures(body, Nil)
-    fns(code) = Fn(code, captures, ctype(subjectType, h.span), body)
-    val v = fresh("subject", ctype(subjectType, h.span))
-    val resultType = ctype(typeOf(h, sc), h.span)
-    val returned =
-      h.returnClause.fold(Expr.Ret(v): Expr)(rc => bindPattern(rc.param, v, subjectType, sc)(tail(rc.body, _)))
-    val normal = guarded("fx_aborting", Expr.Ret(Atom.UnitC), returned, resultType)
-    val dispatch = h.operationClauses.foldRight(normal) { (c, otherwise) =>
-      globals.get(c.effect) match
-        case Some(effect) =>
-          val caught = Rhs.Call(
-            "fx_abort_catch",
-            List(effectId(effect)),
-            runtime = true
-          )
-          val payload = fresh("payload", CType.Boxed)
-
-          /** The payload at its type: a cell as it is, else from its 64 bits ([[operation]]). */
-          def bound(p: Tree) =
-            val (pt, ct) = (typeOf(p, sc), ctype(typeOf(p, sc), p.span))
-            if ct.boxed then bindPattern(p, payload, pt, sc)(tail(c.body, _))
-            else
-              val v = fresh("caught", ct)
-              Expr.Let(v, Rhs.Move(payload), bindPattern(p, v, pt, sc)(tail(c.body, _)))
-          val clause = Expr.Let(
-            payload,
-            Rhs.Call("fx_abort_payload", Nil, runtime = true),
-            c.params.headOption.fold(tail(c.body, sc))(bound)
-          )
-          guardedBy(caught, clause, otherwise, resultType)
-        case None => unsupportedThen(c.span, s"effect `${c.effect}`", otherwise)
-    }
-    Expr.Let(v, Rhs.Catch(code, captures), bind(Rhs.If(Atom.BoolC(true), dispatch, Expr.Ret(Atom.UnitC)), h, sc)(k))
-
-  private def guarded(test: String, yes: Expr, no: Expr, rt: CType): Expr =
-    guardedBy(Rhs.Call(test, Nil, runtime = true), yes, no, rt)
-
-  private def guardedBy(test: Rhs, yes: Expr, no: Expr, rt: CType): Expr =
-    val (flag, out) = (fresh("flag", CType.Bool), fresh("out", rt))
-    Expr.Let(flag, test, Expr.Let(out, Rhs.If(flag, yes, no), Expr.Ret(out)))
-
   /** What a function lifted out of `body`, with parameters `params`, takes from its creator: the
     * variables `body` uses but does not bind, and the witnesses of the slots among `params` and the
     * variables `body` binds, through which reference counting may drop them.
     */
-  private def captures(body: Expr, params: List[Var]): List[Var] =
+  private[backend] def captures(body: Expr, params: List[Var]): List[Var] =
     val bound = params ++ Core.lets(body).map(_._1)
 
     /** Witnesses first: captures load in order, and copying a slot needs its witness loaded. */
@@ -881,8 +594,6 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
         closure(params, f.body.fold(Expr.Ret(Atom.UnitC))(tail(_, inner)), ctype(ret, f.span))(k)
       case None => unsupportedThen(f.span, s"nested fn `${f.name}`", k(fresh(f.name, CType.Boxed)))
 
-  private def hasVariant(data: SymbolId, name: String): Boolean = symbols.variantsOf(data).exists(_.name == name)
-
   /** The constructor and the fields of the auto-flat-struct `t` represents, if it is one. */
   protected def productFields(t: Type): Option[(String, List[(String, Type)])] =
     t match
@@ -902,10 +613,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     val sigma = symbols.typeParamsOf(data).zip(args).toMap
     symbols.fieldsOf(variant).map(f => concrete(f.info, sigma)).toList
 
-  private def runtime(name: String, args: List[Atom], t: Tree, sc: Scope)(k: K): Expr =
-    bind(Rhs.Call(name, args, runtime = true), t, sc)(k)
-
-  private def all(ts: List[Tree], sc: Scope)(k: List[Atom] => Expr): Expr =
+  private[backend] def all(ts: List[Tree], sc: Scope)(k: List[Atom] => Expr): Expr =
     ts match
       case Nil       => k(Nil)
       case t :: rest => expr(t, sc)(a => all(rest, sc)(as => k(a :: as)))
@@ -967,7 +675,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   /** Report `what` as a problem of the code being lowered (`B005`). */
   private[backend] def report(what: String): Unit = problems += problem(DiagCode.B005, Span.NoSpan, what)
 
-  private def unsupportedThen(span: Span, what: String, rest: => Expr): Expr =
+  private[backend] def unsupportedThen(span: Span, what: String, rest: => Expr): Expr =
     problems += problem(DiagCode.B005, span, s"$what is not supported by the backend slice yet")
     rest
 
@@ -976,6 +684,6 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   /** A problem in the prelude's code is at its span in the prelude's file; one with no span says
     * where it is.
     */
-  private def problem(code: DiagCode, span: Span, message: String): Diagnostic =
+  private[backend] def problem(code: DiagCode, span: Span, message: String): Diagnostic =
     val where = if inPrelude.value && span == Span.NoSpan then "in the prelude: " else ""
     Diagnostic(Severity.Error, code, span, where + message)
