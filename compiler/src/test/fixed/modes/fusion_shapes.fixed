@@ -1,0 +1,114 @@
+// More edges of unfold-fold fusion (Rule 7.4.b.1): steps and fold functions with effects, other
+// linear data (`Nat`), trees, builders with extra parameters, builders called where the list must
+// exist, a builder that reaches itself, a fold inside a closure and inside another fold's function,
+// and function values that are not lambdas. Each line printed has one right value.
+use std.io.Console
+
+data Tree:
+    Leaf
+    Node(left: Tree, right: Tree)
+
+data T:
+    Tip
+    Bin(left: T, value: u64, right: T)
+
+fn upto(n: u64) -> List of u64 =
+    List.unfold(0, (i) ->
+        if i >= n:
+            List.Nil
+        else:
+            List.Cons(i, i + 1)
+    )
+
+// A step that prints: the steps must all print before the fold's function prints.
+fn loud(n: u64) -> List of u64 with Console =
+    List.unfold(0, (i) ->
+        Console.printLine("step ".concat(i.show()))
+        if i >= n:
+            List.Nil
+        else:
+            List.Cons(i, i + 1)
+    )
+
+fn noisy() -> u64 with Console =
+    loud(2).fold(0, (acc, x) ->
+        Console.printLine("fold ".concat(x.show()))
+        acc + x
+    )
+
+// A builder with more parameters and a let before its unfold.
+fn range(lo: u64, hi: u64, by: u64) -> List of u64 =
+    let stride = by * 1
+    List.unfold(lo, (i) ->
+        if i >= hi:
+            List.Nil
+        else:
+            List.Cons(i, i + stride)
+    )
+
+// The same builder where its list is folded twice: it must be built.
+fn both(n: u64) -> u64 =
+    let xs = range(0, n, 3)
+    xs.fold(0, (acc, x) -> acc + x) * 100 + xs.fold(0, (acc, _) -> acc + 1)
+
+// A builder whose step calls the builder itself: not inlined, and not fused (its row has `Diverge`).
+fn selfish(n: u64) -> List of u64 with Diverge =
+    List.unfold(0, (i) ->
+        if i >= n:
+            List.Nil
+        else:
+            List.Cons(i + selfish(0).fold(0, (a, x) -> a + x), i + 1)
+    )
+
+// `Nat`: a derived `fold` with one callback per variant, applied from the last layer.
+fn twiceOf(n: u64) -> u64 =
+    Nat.unfold(n, (k) ->
+        if k == 0:
+            Nat.Zero
+        else:
+            Nat.Succ(k - 1)
+    ).fold(() -> 7, (r) -> r * 2 + 1)
+
+// A tree: a recursive function over the seed; the callback's order shows in the result.
+fn shape(d: u64) -> u64 =
+    Tree.unfold(d, (k) ->
+        if k == 0:
+            Tree.Leaf
+        else:
+            Tree.Node(k - 1, k - 1)
+    ).fold(() -> 1, (l, r) -> l * 3 + r)
+
+fn labelled(d: u64) -> u64 =
+    T.unfold(d, (k) ->
+        if k == 0:
+            T.Tip
+        else:
+            T.Bin(k - 1, k, k / 2)
+    ).fold(() -> 0, (l, v, r) -> l * 10 + v + r * 7)
+
+// A fold whose function is a parameter: called through its closure.
+fn total(n: u64, f: (u64, u64) -> u64) -> u64 =
+    upto(n).fold(0, f)
+
+// Two maps between the unfold and the fold.
+fn piped(n: u64) -> u64 =
+    range(1, n, 2).map((x) -> x * 3).map((x) -> x + 1).fold(0, (acc, x) -> acc * 2 + x)
+
+// A fold inside a fold's function: nested loops.
+fn nested(n: u64) -> u64 =
+    upto(n).fold(0, (acc, k) -> acc + upto(k).fold(0, (a, x) -> a + x))
+
+fn main() -> () with Console + Diverge =
+    Console.printLine(noisy().show())
+    Console.printLine(range(2, 20, 5).fold(0, (acc, x) -> acc * 10 + x).show())
+    Console.printLine(both(10).show())
+    Console.printLine(selfish(4).fold(0, (acc, x) -> acc + x).show())
+    Console.printLine(twiceOf(5).show())
+    Console.printLine(twiceOf(0).show())
+    Console.printLine(shape(3).show())
+    Console.printLine(labelled(3).show())
+    Console.printLine(total(10, (acc, x) -> acc * 2 + x).show())
+    Console.printLine(piped(8).show())
+    Console.printLine(nested(6).show())
+    let f = (n: u64) -> upto(n).fold(1, (a, x) -> a + x * x)
+    Console.printLine((f(3) + f(4)).show())

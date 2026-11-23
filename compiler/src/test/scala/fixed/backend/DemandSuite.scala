@@ -61,8 +61,11 @@ class DemandSuite extends munit.FunSuite:
       "    List.unfold(0, (i) ->\n        if i >= n:\n            List.Nil\n        else:\n" +
       "            List.Cons(i, i + 1)\n    )\n\n"
     val src = code +
-      "fn main() -> () with Console =\n    Console.printLine((upto(3).map((x) -> x + 1).fold(0, (a, x) -> a + x)).show())\n"
+      "fn sum(xs: List of u64) -> u64 = xs.fold(0, (a, x) -> a + x)\n\n" +
+      "fn main() -> () with Console =\n    Console.printLine(sum(upto(3).map((x) -> x + 1)).show())\n"
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString("<unit>", src)))
+
+    /** The mapped list goes to `sum`, not to a `fold`, so it is built ([[Fusion]]). */
     val t = Backend.analyse(unit).fold(ds => fail(s"lowering failed: $ds"), _.demands)
     val map = t.params.get("List of u64.map[u64]").map(_.head).getOrElse(fail(s"${t.params.keys}"))
     assertEquals(map.root, Demand.Excl)

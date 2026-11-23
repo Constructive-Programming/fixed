@@ -24,8 +24,11 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span}
   * or a qualifier are in [[Methods]], abortive operations and `handle` in [[Handlers]], `match` in
   * [[Cases]].
   */
-final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(String, String)] = Set.empty)
-    extends Cases, Immediates, Methods, Handlers:
+final class Lower(
+    private[backend] val unit: CompilationUnit,
+    chosen: Set[(String, String)] = Set.empty,
+    fusion: Boolean = true
+) extends Cases, Immediates, Methods, Handlers, Fusion:
   private[backend] type Env = Map[String, Var]
   private[backend] type Sigma = Map[SymbolId, Type]
 
@@ -106,6 +109,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     if !decls.contains("main") then Left(List(problem(DiagCode.B003, Span.NoSpan, "no `main` function")))
     else
       val _ = instance("main")(function(decls("main"), Map.empty, Map.empty, "main"))
+      if fusion then fuse()
       fns.values.foreach(refMapLimit)
       if problems.isEmpty then Right(fns.values.toList) else Left(problems.toList)
 
@@ -541,15 +545,15 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     Option.when(polymorphic)(building.get(name).fold(tried.getOrElseUpdate(name, version))(Right(_)))
 
   /** A lambda becomes a code function taking the closure first; its captures ([[closure]]) are
-    * loaded from the closure on entry.
+    * loaded from the closure on entry. The code of one whose row is empty is in `pureCode`.
     */
   private def lambda(l: Trees.LambdaExpr, sc: Scope)(k: K): Expr =
-    val (paramTypes, ret) = typeOf(l, sc) match
-      case Type.ArrowType(lhs, r, _) => (Members.params(lhs), r)
-      case _                         => (Nil, Type.UnitType)
+    val (paramTypes, ret, pure) = typeOf(l, sc) match
+      case Type.ArrowType(lhs, r, fx) => (Members.params(lhs), r, fx.effects.isEmpty)
+      case _                          => (Nil, Type.UnitType, false)
     val (params, inner) = withParams(l.params.map(_.name).zip(paramTypes.map(ctype(_, l.span))), sc)
     params.zip(paramTypes).foreach((p, t) => typed(p, t, l.span))
-    closure(params, tail(l.body, inner), ctype(ret, l.span))(k)
+    closure(params, tail(l.body, inner), ctype(ret, l.span), pure)(k)
 
   /** Fresh variables for parameters `named`, and `sc` with them bound. */
   private def withParams(named: List[(String, CType)], sc: Scope): (List[Var], Scope) =
@@ -557,10 +561,13 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     (params, named.map(_._1).zip(params).foldLeft(sc)((s, np) => s.bind(np._1, np._2)))
 
   /** A closure over `body`: a code function taking the closure first, then `params`. Its captures
-    * ([[captures]]) are loaded from the closure on entry.
+    * ([[captures]]) are loaded from the closure on entry. With `pure`, its code is in `pureCode`.
     */
-  private[backend] def closure(params: List[Var], body: => Expr, ret: CType)(k: Var => Expr): Expr =
+  private[backend] def closure(params: List[Var], body: => Expr, ret: CType, pure: Boolean = false)(
+      k: Var => Expr
+  ): Expr =
     val code = s"lambda.${ids.next()}"
+    if pure then pureCode += code
     val lowered = owner.withValue(code)(body)
     val captures = this.captures(lowered, params)
     val env = fresh("env", CType.Boxed)

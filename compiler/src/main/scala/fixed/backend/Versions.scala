@@ -454,7 +454,8 @@ object Versions:
 
   /** Per function of `fns`, the number of loop steps that lexically enclose its body (Rule CM5.4's
     * `d`): a closure passed to a derived loop is one step deeper than the function that builds it,
-    * any other closure is as deep. Functions that are not closures are at depth 0.
+    * any other closure is as deep, and a fused loop ([[Fusion]]) is one step deeper than its caller
+    * (the second loop of a fused `fold`, `<loop>.up`, as deep as the first). Other functions are at depth 0.
     */
   def depths(fns: List[Fn]): Map[String, Int] =
     val loops = Seq(".fold[", ".unfold[", ".foldLeft[", ".map[")
@@ -467,6 +468,11 @@ object Versions:
       lets.collect {
         case (x, Rhs.Closure(code, _, _)) if !seen(code) =>
           from(code, k + (if steps(x.name) then 1 else 0), seen + code)
+        case (_, Rhs.Call(g, _, false)) if Fusion.loop(g, f) && !seen(g) =>
+          from(g, if g.startsWith(s"$f.") then k else k + 1, seen + g)
       }.foldLeft(Map(f -> k))(_ ++ _)
-    val closures = all.collect { case (_, (_, Rhs.Closure(code, _, _))) => code }.toSet
+    val closures = all.collect {
+      case (_, (_, Rhs.Closure(code, _, _)))                    => code
+      case (f, (_, Rhs.Call(g, _, false))) if Fusion.loop(g, f) => g
+    }.toSet
     fns.map(_.name).filterNot(closures).foldLeft(Map.empty[String, Int])((m, f) => m ++ from(f, 0, Set(f)))

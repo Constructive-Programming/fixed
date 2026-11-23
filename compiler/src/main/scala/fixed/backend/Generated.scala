@@ -37,6 +37,7 @@ private[backend] trait Generated:
   protected def derivedFold(data: SymbolId, args: List[Type], r: Type, span: Span, para: Boolean = false): String =
     val name = generatedName(data, args, if para then "para" else "fold", shown(r))
     val ws = hidden(args :+ r)
+    if !para then derivedKinds(name) = (Fusion.Kind.Fold, data)
     instance(name) {
       val x = typed(fresh("x", ctype(Type.TypeRef(data, args), span)), Type.TypeRef(data, args), span)
       val callbacks = foldCallbacks(data)
@@ -145,13 +146,14 @@ private[backend] trait Generated:
 
   /** Rule 7.4.b: `D.unfold(seed, step)`. The step returns one layer whose recursive fields hold
     * seeds, also inside the last argument of a data type (`List of S` for `List of Self`); each is unfolded in turn.
-    * (The layer is a separate allocation: fusion is Phase 4.)
+    * The layer is a separate allocation; at a site [[Fusion]] fuses, neither the layers nor the result are built.
     */
   protected def derivedUnfold(data: SymbolId, args: List[Type], seed: Type, span: Span): String =
     val seedType = ctype(seed, span)
     val at = if seed == Generated.R then "R" else seedType.toString
     val name = generatedName(data, args, "unfold", at)
     val ws = hidden(args :+ seed)
+    derivedKinds(name) = (Fusion.Kind.Unfold, data)
     instance(name) {
       val s = fresh("seed", seedType)
       val step = fresh("step", CType.Boxed)
@@ -183,6 +185,7 @@ private[backend] trait Generated:
   protected def derivedMap(data: SymbolId, args: List[Type], newElem: Type, span: Span): String =
     val name = generatedName(data, args, "map", shown(newElem))
     val ws = hidden(args :+ newElem)
+    derivedKinds(name) = (Fusion.Kind.Map, data)
     instance(name) {
       val (x, f) = (typed(fresh("x", CType.Boxed), Type.TypeRef(data, args), span), fresh("f", CType.Boxed))
       val elemParam = symbols.typeParamsOf(data).lastOption.map(Type.TypeRef(_, Nil))
@@ -217,16 +220,23 @@ private[backend] trait Generated:
     * field (so the elements before it are produced first, as in the recursive form), and no other
     * field mentions `data`. A list is linear; a tree, a rose tree and a snoc list are not.
     */
-  private def linear(data: SymbolId): Boolean =
-    def mentions(t: Type): Boolean =
-      t match
-        case Type.TypeRef(`data`, _) => true
-        case _                       => t.children.exists(mentions)
-    val variants = symbols.variantsOf(data).toList.map(v => symbols.fieldsOf(v.id).map(_.info).toList)
+  protected def linear(data: SymbolId): Boolean =
+    val variants = declaredFields(data)
     variants.exists(_.isEmpty) && variants.exists(_.contains(declaredSelf(data))) &&
     variants.forall(fs =>
-      fs.dropRight(1).forall(!mentions(_)) && fs.lastOption.forall(f => f == declaredSelf(data) || !mentions(f))
+      fs.dropRight(1).forall(!mentions(data, _)) &&
+        fs.lastOption.forall(f => f == declaredSelf(data) || !mentions(data, f))
     )
+
+  /** The declared field types of each variant of `data`, in tag order. */
+  protected def declaredFields(data: SymbolId): List[List[Type]] =
+    symbols.variantsOf(data).toList.map(v => symbols.fieldsOf(v.id).map(_.info).toList)
+
+  /** Whether type `t` mentions `data`. */
+  protected def mentions(data: SymbolId, t: Type): Boolean =
+    t match
+      case Type.TypeRef(`data`, _) => true
+      case _                       => t.children.exists(mentions(data, _))
 
   /** The body of loop `go` over the variants of `obj` (of `data` at `args`) that builds data at
     * `outArgs` ([[loopStep]]), calling `go(ws, rest, closure, cell)` after each cell.
@@ -296,7 +306,7 @@ private[backend] trait Generated:
     }
 
   /** The index of variant `tag`'s field of type `Self`, or -1. */
-  private def recursiveField(data: SymbolId, tag: Int): Int =
+  protected def recursiveField(data: SymbolId, tag: Int): Int =
     symbols.fieldsOf(symbols.variantsOf(data).toList(tag).id).indexWhere(_.info == declaredSelf(data))
 
   /** `reverseOnto(acc, done)`: the cells of linear data `acc`, built in reverse by [[loopStep]], put in
@@ -471,6 +481,7 @@ private[backend] trait Generated:
   protected def foldLeft(data: SymbolId, args: List[Type], accType: Type, span: Span): String =
     val name = generatedName(data, args, "foldLeft", shown(accType))
     val ws = hidden(args :+ accType)
+    derivedKinds(name) = (Fusion.Kind.FoldLeft, data)
     instance(name) {
       val rt = ctype(accType, span)
       val (xs, init, f) = (listParam(data, args, span), fresh("init", rt), fresh("f", CType.Boxed))
@@ -671,10 +682,10 @@ private[backend] trait Generated:
     }
 
   /** Bind `rhs` and continue with the result: how a [[Part]] or a field transform rebuilds a value. */
-  private def bound(rhs: Rhs, t: CType): K => Expr =
+  protected def bound(rhs: Rhs, t: CType): K => Expr =
     k => { val y = fresh("y", t); Expr.Let(y, rhs, k(y)) }
 
-  private def result(rhs: Rhs, rt: CType): Expr =
+  protected def result(rhs: Rhs, rt: CType): Expr =
     val res = fresh("r", rt)
     Expr.Let(res, rhs, Expr.Ret(res))
 
@@ -687,7 +698,7 @@ private[backend] trait Generated:
   /** One `Switch` branch per variant of `data`: `obj`'s fields loaded, then `body(tag, fields)`.
     * Inside an unfold layer, recursive fields hold a seed of type `seed`.
     */
-  private def perVariant(data: SymbolId, args: List[Type], obj: Var, span: Span, seed: Option[CType] = None)(
+  protected def perVariant(data: SymbolId, args: List[Type], obj: Var, span: Span, seed: Option[CType] = None)(
       body: (Int, List[(Type, Var)]) => Expr
   ): List[(Int, Expr)] =
     val self = selfType(data, args)
@@ -699,7 +710,7 @@ private[backend] trait Generated:
       (tag, loads.foldRight(body(tag, types.zip(vars)))((l, acc) => Expr.Let(l._1, Rhs.Field(obj, l._2), acc)))
     }
 
-  private def switch(obj: Var, branches: List[(Int, Expr)], rt: CType): Expr =
+  protected def switch(obj: Var, branches: List[(Int, Expr)], rt: CType): Expr =
     val res = fresh("res", rt)
     Expr.Let(res, Rhs.Switch(obj, branches), Expr.Ret(res))
 
@@ -714,7 +725,7 @@ private[backend] trait Generated:
         case _                       => t.children.exists(other)
     symbols.variantsOf(data).exists(v => symbols.fieldsOf(v.id).exists(f => other(f.info)))
 
-  private def declaredSelf(data: SymbolId): Type = fixed.typer.Members.declaredSelf(symbols, data)
+  protected def declaredSelf(data: SymbolId): Type = fixed.typer.Members.declaredSelf(symbols, data)
 
   /** `Self` at `args` as the instance's field types show it: the type of a recursive field. */
   private def selfType(data: SymbolId, args: List[Type]): Type =

@@ -29,17 +29,18 @@ object Specialise:
       spent: Map[String, Int]
   )
 
-  def apply(unit: CompilationUnit, budget: Int): Either[List[Diagnostic], Result] =
-    round(unit, budget, Set.empty, Set.empty)
+  def apply(unit: CompilationUnit, budget: Int, fusion: Boolean = true): Either[List[Diagnostic], Result] =
+    round(unit, budget, Set.empty, Set.empty, fusion)
 
   /** One round, with the keys `chosen` so far, among them the mandatory ones `forced`. */
   private def round(
       unit: CompilationUnit,
       budget: Int,
       chosen: Set[(String, String)],
-      forced: Set[(String, String)]
+      forced: Set[(String, String)],
+      fusion: Boolean
   ): Either[List[Diagnostic], Result] =
-    val lower = Lower(unit, chosen)
+    val lower = Lower(unit, chosen, fusion)
     lower.program.flatMap { fns =>
       val byName = fns.map(f => f.name -> f).toMap
       val depth = Versions.depths(fns)
@@ -70,7 +71,7 @@ object Specialise:
         f -> Versions.rank(open, _ => removals(f), weights, _._2, size(f), spent(f), budget)
       }
       val next = decided.flatMap(_._2._1).toSet ++ (force -- chosen)
-      if next.nonEmpty then round(unit, budget, chosen ++ next, force)
+      if next.nonEmpty then round(unit, budget, chosen ++ next, force, fusion)
       else
         val candidates = decided.map { (f, choice) =>
           val keys = weights.keys.filter(_._1 == f).toList.sortBy(_._2)
@@ -79,9 +80,13 @@ object Specialise:
         Right(Result(lower, fns, candidates.toMap, spent))
     }
 
-  /** The closures and `handle` subjects whose code `f` builds. */
+  /** The closures, `handle` subjects and fused loops ([[Fusion]]) whose code is part of `f`'s. */
   private def built(f: Fn): List[String] =
-    Core.lets(f.body).collect { case (_, Rhs.Closure(c, _, _)) => c; case (_, Rhs.Catch(c, _)) => c }
+    Core.lets(f.body).collect {
+      case (_, Rhs.Closure(c, _, _))                            => c
+      case (_, Rhs.Catch(c, _))                                 => c
+      case (_, Rhs.Call(c, _, false)) if Fusion.loop(c, f.name) => c
+    }
 
   /** Rule CM5.4's `removed` for a key of `f`, which fixes every type argument: in `f`'s baseline
     * version and the closures it builds, the calls through a table parameter, the witness calls

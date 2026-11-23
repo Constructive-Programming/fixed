@@ -17,6 +17,11 @@ class EmitSuite extends munit.FunSuite:
   /** The build modes every program runs in (Rule CM5.7). */
   private val modes = List(Mode.Default, Mode.NoSpecialise)
 
+  /** The default mode without fusion ([[Fusion]]): the programs of `bench/runtime` and of `modes`
+    * also run in it, and must print the same.
+    */
+  private val unfused = Mode.Default.copy(fusion = false)
+
   /** The LLVM IR of `source` in build mode `mode`, or the backend's diagnostics. */
   private def lowered(name: String, source: String, mode: Mode = Mode.Default) =
     val unit = Compiler.compile(CompilationUnit(SourceFile.fromString(s"$name.fixed", source)))
@@ -40,8 +45,14 @@ class EmitSuite extends munit.FunSuite:
     * the runtime's counters per mode. The plain build (no checks, no counters, the runtime inlined
     * differently) must print the same.
     */
-  private def check(name: String, source: String, expected: String, stdin: String = ""): Map[Mode, Map[String, Long]] =
-    modes.map { mode =>
+  private def check(
+      name: String,
+      source: String,
+      expected: String,
+      stdin: String = "",
+      in: List[Mode] = modes
+  ): Map[Mode, Map[String, Long]] =
+    in.map { mode =>
       val (code, out, err) = run(name, source, stdin, mode)
       assertEquals(code, 0, s"$mode: $err")
       assertEquals(out, expected, mode)
@@ -82,42 +93,68 @@ class EmitSuite extends munit.FunSuite:
 
   /** [[sites]] of each benchmark in the default mode and with `--no-specialise`: that a clone runs,
     * not only that it is in the IR. `records` reuses its list cells without a test; its `Order` cells, results of a closure, after one.
+    *
+    * Fused sites ([[Fusion]], Rule 7.4.b.1) build no list, so they reverse nothing, and their loops
+    * are built at the site's types in every mode, so they call no witness. Against the unfused
+    * counts, a fused `upto(n).fold` in `main` removes n reuses (its reversal: without a test by
+    * default, after one with `--no-specialise`) and 4n witness calls with `--no-specialise`:
+    * `records` 100 and 400, `fail_chain`, `shared_map` 200 and 800, `scratch_tree` 20,000 and
+    * 80,000, `fresh_map` (both of `main`'s, 200 + 10,000) 10,200 and 40,800. `nat_loop`,
+    * `list_pipeline`, `points` and `temps` are fused throughout and reuse nothing. In `acc_loop`
+    * only `step`'s `Acc` is reused, 2,000,000 times: by default without a test, the loop owning its
+    * accumulator alone, and after one with `--no-specialise`. `bintrees`' fold and `records`',
+    * `fail_chain`'s, `shared_map`'s and `fresh_map`'s inner ones consume a parameter, and are not fused.
     */
   private val reuseSites = Map(
     "bintrees" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 2097150L)),
-    "nat_loop" -> (List(2000200L, 2000000L, 0L, 0L), List(0L, 4000200L, 0L, 2000800L)),
-    "list_pipeline" -> (List(6000200L, 4000000L, 0L, 0L), List(0L, 10000200L, 0L, 16000800L)),
-    "records" -> (List(2000100L, 2000000L, 0L, 0L), List(0L, 4000100L, 0L, 6000400L)),
-    "fail_chain" -> (List(2000200L, 0L, 0L, 0L), List(0L, 2000200L, 0L, 7999400L)),
-    "shared_map" -> (List(2010200L, 0L, 2000000L, 0L), List(0L, 2010200L, 2000000L, 6040800L)),
-    "fresh_map" -> (List(4010200L, 2000000L, 0L, 0L), List(0L, 6010200L, 0L, 12040800L)),
-    "acc_loop" -> (List(2000000L, 2000000L, 0L, 0L), List(0L, 4000000L, 0L, 8000000L)),
-    "points" -> (List(2000200L, 1000000L, 0L, 0L), List(0L, 3000200L, 0L, 6000800L)),
-    "temps" -> (List(2000000L, 0L, 0L, 0L), List(0L, 2000000L, 0L, 8000000L)),
-    "scratch_tree" -> (List(20000L, 0L, 0L, 0L), List(0L, 20000L, 0L, 2600000L))
+    "nat_loop" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 0L)),
+    "list_pipeline" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 0L)),
+    "records" -> (List(2000000L, 2000000L, 0L, 0L), List(0L, 4000000L, 0L, 6000000L)),
+    "fail_chain" -> (List(2000000L, 0L, 0L, 0L), List(0L, 2000000L, 0L, 7998600L)),
+    "shared_map" -> (List(2010000L, 0L, 2000000L, 0L), List(0L, 2010000L, 2000000L, 6040000L)),
+    "fresh_map" -> (List(4000000L, 2000000L, 0L, 0L), List(0L, 6000000L, 0L, 12000000L)),
+    "acc_loop" -> (List(2000000L, 0L, 0L, 0L), List(0L, 2000000L, 0L, 0L)),
+    "points" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 0L)),
+    "temps" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 0L)),
+    "scratch_tree" -> (List(0L, 0L, 0L, 0L), List(0L, 0L, 0L, 2520000L))
   )
 
-  /** Allocations of a benchmark in every mode, where they are a fact the design fixes. `points`: a
-    * `P` of two `u32` is an immediate (Rule CM3.5), so only list cells, closures and the printed
-    * string are allocated: per round, per point the unfold step's `Cons` layer and the accumulator
-    * cell the unfold loop builds from it (reversed in place; `map` reuses the cells, `fold` frees
-    * them), and `points`' closure, 200 × (2 × 5000 + 1);
-    * `upto(200)` the same two cells per element and its closure, 2 × 200 + 1; the shown result, 1.
+  /** Allocations of each benchmark in every mode, a fact the design fixes; each ends with its
+    * printed string, 1. Fully fused ([[Fusion]]): `nat_loop`, `list_pipeline` and `points` (a `P` of
+    * two `u32` is an immediate, Rule CM3.5) allocate nothing else, `acc_loop` its initial `Acc`,
+    * reused by every step. A list built by `upto(n)` costs per element the `Cons` layer its step
+    * returns and the cell, and once `upto`'s closure, 2n + 1. `bintrees`: `count` folds a parameter, so
+    * the tree is built, per `Node` a layer and a cell (a `Leaf` is static), 2 × (2^20 − 1).
+    * `scratch_tree`: the same, 20,000 times at depth 6, 20,000 × 2 × 63. `records`: 100 rounds of
+    * `orders(10000)`, per element a layer, a cell and an `Order`, and the closure, 3 × 10,000 + 1
+    * (`map` reuses). `fail_chain`: 200 × (2 × 10,000 + 1). `shared_map`: `base`, 20,001, and 200 maps
+    * of it, shared so never reused, 200 × 10,000. `fresh_map`: 200 × (2 × 10,000 + 1). Unfused, each
+    * fused `upto(n)` in `main` added 2n + 1, and `shared_map` also the closure of its fold function.
     */
-  private val allocations = Map("points" -> (200L * (2 * 5000 + 1) + (2 * 200 + 1) + 1))
+  private val allocations = Map(
+    "nat_loop" -> 1L,
+    "list_pipeline" -> 1L,
+    "points" -> 1L,
+    "acc_loop" -> 2L,
+    "bintrees" -> (2L * ((1L << 20) - 1) + 1),
+    "scratch_tree" -> (20000L * 2 * 63 + 1),
+    "records" -> (100L * (3 * 10000 + 1) + 1),
+    "fail_chain" -> (200L * (2 * 10000 + 1) + 1),
+    "shared_map" -> (2L * 10000 + 1 + 200L * 10000 + 1),
+    "fresh_map" -> (200L * (2 * 10000 + 1) + 1)
+  )
 
   /** Heap and frame allocations of the benchmarks that place frame cells ([[Frames]]), the same in
     * both modes; every other benchmark places none. `temps` bumps the `Box3` of each of its 2,000,000
-    * fold steps in the step's frame, through `make#frame`; its heap keeps, per element of `upto`'s
-    * list, the list cell and the cell `upto`'s unfold step returns (through a closure call, which
-    * cannot call a `#frame` clone), and the 2 allocations of every run, 6,000,002 before frames.
+    * fold steps in the fused loop's frame, through `make#frame`; its heap holds only the printed
+    * string (the list, the layers its step returned and `upto`'s closure, 4,000,001 cells, are fused away).
     */
-  private val placed = Map("temps" -> (4000002L, 2000000L))
+  private val placed = Map("temps" -> (1L, 2000000L))
 
   programs.foreach { (dir, name) =>
     test(s"$dir/$name prints its expected result"):
       val read = (ext: String) => java.nio.file.Files.readString(dir.resolve(s"$name.$ext"))
-      val counts = check(name, read("fixed"), read("expected"))
+      val counts = check(name, read("fixed"), read("expected"), in = modes :+ unfused)
       reuseSites.get(name).foreach { (default, plain) =>
         assertEquals(sites(counts(Mode.Default)), default, "default")
         assertEquals(sites(counts(Mode.NoSpecialise)), plain, "--no-specialise")
@@ -128,6 +165,39 @@ class EmitSuite extends munit.FunSuite:
       }
       allocations.get(name).foreach(n => modes.foreach(m => assertEquals(counts(m)("allocs"), n, m)))
   }
+
+  test("a fused unfold allocates no list; a list used twice or kept is built (Rule 7.4.b.1)"):
+    val upto = "fn upto(n: u64) -> List of u64 =\n    List.unfold(0, (i) ->\n        if i >= n:\n" +
+      "            List.Nil\n        else:\n            List.Cons(i, i + 1)\n    )\n\n"
+    val src = header + upto + "fn main() -> () with Console =\n    let xs = upto(1000)\n" +
+      "    Console.printLine((xs.fold(0, (a, x) -> a + x) + xs.fold(0, (a, _) -> a + 1)).show())\n" +
+      "    let ys = upto(1000)\n    let s = ys.fold(0, (a, x) -> a + x)\n" +
+      "    Console.printLine((if s > 3: ys.length() else: 0).show())\n" +
+      "    Console.printLine(upto(1000).fold(0, (a, x) -> a + x).show())\n"
+
+    /** Each list that must exist: 1,000 `Cons` layers its step returns, 1,000 cells and `upto`'s
+      * closure, 2,001; the fused third costs nothing; 3 strings. Unfused, the third is built too.
+      */
+    val counts = check("fusion_counts", src, "500500\n1000\n499500\n", in = modes :+ unfused)
+    modes.foreach(m => assertEquals(counts(m)("allocs"), 2 * 2001L + 3, m))
+    assertEquals(counts(unfused)("allocs"), 3 * 2001L + 3)
+    modes.foreach { m =>
+      val loops =
+        ir("fusion_counts", src, m).split("\ndefine ").filter(_.takeWhile(_ != '\n').contains("@\"fx_u_fused."))
+      assert(loops.nonEmpty && loops.forall(_.contains(".in, %entry ]")), s"$m: a fused loop that does not jump back")
+    }
+
+  test("fusion_shapes: which functions call a fused loop"):
+    val src =
+      java.nio.file.Files.readString(Path.of("compiler", "src", "test", "fixed", "modes", "fusion_shapes.fixed"))
+    modes.foreach { m =>
+      val fns = ir("fusion_shapes", src, m).split("\ndefine ").map(f => f.takeWhile(_ != '(') -> f).toMap
+      val fusing = (f: String) => fns.find(_._1.endsWith(s"@\"fx_u_$f\"")).exists(_._2.contains("@\"fx_u_fused."))
+      List("main", "twiceOf", "shape", "labelled", "total", "piped", "nested").foreach(f =>
+        assert(fusing(f), s"$m: $f")
+      )
+      List("noisy", "both", "selfish").foreach(f => assert(!fusing(f), s"$m: $f"))
+    }
 
   test("every benchmark has its reuse sites pinned"):
     assertEquals(programs.collect { case (d, n) if d.endsWith("runtime") => n }.toSet, reuseSites.keySet)
@@ -382,14 +452,16 @@ class EmitSuite extends munit.FunSuite:
   test("map over a fresh list reuses its cells; with --no-specialise only after an `rc == 1` test (Rule CM5.7)"):
     val src = header + "fn upto(n: u64) -> List of u64 =\n    List.unfold(0, (i) ->\n        if i >= n:\n" +
       "            List.Nil\n        else:\n            List.Cons(i, i + 1)\n    )\n\n" +
+      "fn sum(xs: List of u64) -> u64 = xs.fold(0, (a, x) -> a + x)\n\n" +
       "fn main() -> () with Console =\n" +
-      "    Console.printLine(upto(4).map((x) -> x * 2).fold(0, (a, x) -> a + x).show())\n"
+      "    Console.printLine(sum(upto(4).map((x) -> x * 2)).show())\n"
     val (default, plain) = (ir("map_reuse", src, Mode.Default), ir("map_reuse", src, Mode.NoSpecialise))
     assert(default.contains("@\"fx_u_List of u64.mapLoop[u64]#x[") && default.contains("call ptr @fx_reuse_excl("))
     assert(!plain.contains("#x[") && !plain.contains("call ptr @fx_reuse_excl("), plain)
     assert(plain.contains("call ptr @fx_reuse("), plain)
 
-    /** Three loops of four cells each: `unfold`, `map` and the reversal of each. The default mode
+    /** The mapped list goes to `sum`, not to a `fold`, so nothing is fused ([[Fusion]]). Three
+      * loops of four cells each: `unfold`, `map` and the reversal of each. The default mode
       * reuses the cells of both reversals without a test, and those of `map` after a passing one
       * (see VersionSuite, records); the baseline tests every reuse.
       */

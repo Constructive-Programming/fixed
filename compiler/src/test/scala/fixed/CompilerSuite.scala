@@ -63,6 +63,16 @@ class CompilerSuite extends munit.FunSuite:
     )
     assertEquals(Main.modeOf(List("--no-ownership-clones", "--no-specialise"))._1, backend.Mode(0, ownership = false))
 
+  test("--no-fusion is taken from any position and combines with --no-specialise"):
+    val plain = List("ship", "f.fixed", "-o", "out")
+    List(0, 2, 4).foreach { i =>
+      assertEquals(
+        Main.modeOf(plain.patch(i, List("--no-fusion"), 0)),
+        (backend.Mode.Default.copy(fusion = false), plain)
+      )
+    }
+    assertEquals(Main.modeOf(List("--no-fusion", "--no-specialise"))._1, backend.Mode(0, fusion = false))
+
   test("4.1.M8: --budget <n> is taken from any position; a malformed one stays for the usage error"):
     val plain = List("ship", "f.fixed", "-o", "out")
     List(0, 1, 2, 4).foreach { i =>

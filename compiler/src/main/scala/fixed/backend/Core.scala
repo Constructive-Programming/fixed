@@ -82,6 +82,22 @@ extension (rhs: Rhs)
       case Rhs.Switch(s, cases) => Rhs.Switch(s, cases.map((tag, c) => (tag, f(c))))
       case other                => other
 
+  /** `rhs` with `f` applied to its own operands ([[Core.atoms]]), not to those of its branches. */
+  def mapAtoms(f: Atom => Atom): Rhs =
+    rhs match
+      case Rhs.Move(a)                    => Rhs.Move(f(a))
+      case Rhs.Prim(op, as)               => Rhs.Prim(op, as.map(f))
+      case Rhs.Call(g, as, rt)            => Rhs.Call(g, as.map(f), rt)
+      case Rhs.If(c, t, e)                => Rhs.If(f(c), t, e)
+      case Rhs.Con(tag, fs)               => Rhs.Con(tag, fs.map(f))
+      case Rhs.Field(o, slot)             => Rhs.Field(f(o), slot)
+      case Rhs.Switch(s, cases)           => Rhs.Switch(f(s), cases)
+      case Rhs.Closure(c, cs, x)          => Rhs.Closure(c, cs.map(f), x)
+      case Rhs.CallClosure(c, as, x)      => Rhs.CallClosure(f(c), as.map(f), x)
+      case Rhs.CallTable(t, entry, as, x) => Rhs.CallTable(f(t), entry, as.map(f), x)
+      case Rhs.Catch(g, as)               => Rhs.Catch(g, as.map(f))
+      case Rhs.Reuse(c, tag, fs, u)       => Rhs.Reuse(f(c), tag, fs.map(f), u)
+
 /** Scalar operations. `Widen` converts to the result variable's wider type of the same kind;
   * `Convert` converts an `i64` to the result's narrower integer or float type (`Numeric.fromI64`).
   */
@@ -258,7 +274,8 @@ object Core:
       case Rhs.Switch(_, cases) => cases.map(_._2)
       case _                    => Nil
 
-  private def operands(e: Expr): List[Atom] =
+  /** Every operand of `e`, its branches' included. */
+  def operands(e: Expr): List[Atom] =
     e match
       case Expr.Let(_, r, b) => atoms(r) ++ branches(r).flatMap(operands) ++ operands(b)
       case Expr.Ret(a)       => List(a)

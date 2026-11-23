@@ -30,9 +30,11 @@ final case class Analysed(
   * default mode adds clones chosen by score within the reference budget; `--no-specialise` has
   * budget 0, so it adds none; `--budget <n>` sets the budget for measurement;
   * `--no-ownership-clones` keeps the clones of the type axis and chooses none of the ownership
-  * axis, so that the two can be compared; `--no-frames` keeps every cell on the heap ([[Frames]]).
+  * axis, so that the two can be compared; `--no-frames` keeps every cell on the heap ([[Frames]]);
+  * `--no-fusion` builds the structure between an `unfold` and its `fold` ([[Fusion]]), against the
+  * rule, to measure what fusion removes.
   */
-final case class Mode(budget: Int, ownership: Boolean = true, frames: Boolean = true)
+final case class Mode(budget: Int, ownership: Boolean = true, frames: Boolean = true, fusion: Boolean = true)
 
 object Mode:
   val Default: Mode = Mode(Versions.budget)
@@ -45,7 +47,7 @@ object Backend:
 
   /** LLVM IR for `unit`, which must have passed the typer without errors. */
   def compile(unit: CompilationUnit, mode: Mode = Mode.Default): Either[List[Diagnostic], String] =
-    analyse(unit, mode.budget, mode.ownership).flatMap(emit(_, mode.frames))
+    analyse(unit, mode.budget, mode.ownership, mode.fusion).flatMap(emit(_, mode.frames))
 
   /** LLVM IR for analysed Core: the `fip` check, erasure and borrowing, frame placement unless
     * `frames` is off, abort tests, reference counting.
@@ -72,9 +74,10 @@ object Backend:
   def analyse(
       unit: CompilationUnit,
       budget: Int = Versions.budget,
-      ownership: Boolean = true
+      ownership: Boolean = true,
+      fusion: Boolean = true
   ): Either[List[Diagnostic], Analysed] =
-    Specialise(unit, budget).map { s =>
+    Specialise(unit, budget, fusion).map { s =>
       val (lower, fns) = (s.lower, s.fns)
       val render = (t: fixed.core.Type) => unit.symbols.render(t)
       val (demands, table) = Demands.analyse(lower, fns, render)

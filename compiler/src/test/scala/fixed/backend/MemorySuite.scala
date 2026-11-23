@@ -56,9 +56,11 @@ class MemorySuite extends munit.FunSuite:
     val code = "use std.io.Console\n\nfn upto(n: u64) -> List of u64 =\n" +
       "    List.unfold(0, (i) ->\n        if i >= n:\n            List.Nil\n        else:\n" +
       "            List.Cons(i, i + 1)\n    )\n\n" +
-      "fn grow(n: u64) -> u64 = upto(n).fold(List.Nil, (acc, x) -> List.Cons(x, acc)).length()\n\n" +
-      "fn churn(n: u64) -> u64 = upto(n).fold(List.Cons(0, List.Nil), (acc, x) -> List.Cons(x, List.Nil)).length()\n\n"
-    val a = analysed(code, "grow(3) + churn(3)")
+      "fn grow(xs: List of u64) -> u64 = xs.fold(List.Nil, (acc, x) -> List.Cons(x, acc)).length()\n\n" +
+      "fn churn(xs: List of u64) -> u64 = xs.fold(List.Cons(0, List.Nil), (acc, x) -> List.Cons(x, List.Nil)).length()\n\n"
+
+    /** Each folds a parameter, so its `foldLeft` carries the accumulator ([[Fusion]] fuses only a list built at the site). */
+    val a = analysed(code, "grow(upto(3)) + churn(upto(3))")
     val carried = (fn: String) =>
       a.memory.allocations(fn).filter(_.escapes.exists { case _: Escape.Carried => true; case _ => false })
     assert(carried("churn").forall(_.cls == LifetimeClass.Heap), carried("churn"))
@@ -207,7 +209,10 @@ class MemorySuite extends munit.FunSuite:
 
   test("an allocation in the prelude's code is shown at its position in the prelude's file"):
     val u = unit("use std.io.Console\nfn main() -> () with Console = Console.printLine(repeatStr(\"ab\", 3))\n")
-    val report = MemoryReport.text(u, Backend.analyse(u).fold(ds => fail(s"lowering failed: $ds"), identity))
+
+    /** Unfused: fused ([[Fusion]]), `repeatStr` builds no `Nat` and allocates nothing of its own. */
+    val analysed = Backend.analyse(u, fusion = false)
+    val report = MemoryReport.text(u, analysed.fold(ds => fail(s"lowering failed: $ds"), identity))
     val prelude = scala.io.Source.fromResource("stdlib/prelude.fixed").getLines().toList
     val body = prelude.indexWhere(_.startsWith("fn repeatStr(")) + 2
     assert(body > 1, "the prelude has repeatStr")

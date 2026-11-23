@@ -20,7 +20,8 @@ import fixed.util.{Diagnostic, Reporter, SourceFile}
   *     budget of Rule CM5.3 instead of the reference value, for measurement;
   *     `--no-ownership-clones`, in any position, keeps the clones of the type axis and builds
   *     none of the ownership axis but those a `fip` body needs, for measurement; `--no-frames`,
-  *     in any position, keeps every cell on the heap, for measurement.
+  *     in any position, keeps every cell on the heap, for measurement; `--no-fusion`, in any
+  *     position, builds the structure between an `unfold` and its `fold`, for measurement.
   *   - `--prover-steps=N`, in any position, sets the static prover's budget per prop (`spec/properties.md` Rule
   *     P7.1.a). A check, `compile -o` and `ship` report how many props were proved and how many are open; a malformed
   *     value stays among the arguments, as `--budget`'s does. A compile that reaches the prover writes the statuses to
@@ -48,7 +49,7 @@ object Main:
         Console.err.println(
           "usage: fixed <file.fixed>... | fixed compile|ship <file.fixed> -o <out> (ship: --stats builds in the counters)" +
             " | fixed compile <file.fixed> --explain-memory [--format json];" +
-            " --no-specialise, --budget <n>, --no-ownership-clones, --no-frames or --prover-steps=<n> anywhere"
+            " --no-specialise, --budget <n>, --no-ownership-clones, --no-frames, --no-fusion or --prover-steps=<n> anywhere"
         )
         sys.exit(2)
       case paths =>
@@ -65,12 +66,19 @@ object Main:
   /** The build mode `args` ask for, and the other arguments. */
   private[fixed] def modeOf(args: List[String]): (Mode, List[String]) =
     val (flags, others) =
-      args.partition(a => a == "--no-specialise" || a == "--no-ownership-clones" || a == "--no-frames")
+      args.partition(a => Set("--no-specialise", "--no-ownership-clones", "--no-frames", "--no-fusion")(a))
     val at = others.indexOf("--budget")
     val budget = if at < 0 then None else others.lift(at + 1).flatMap(_.toIntOption).filter(_ >= 0)
     val rest = if budget.isDefined then others.patch(at, Nil, 2) else others
     val mode = if flags.contains("--no-specialise") then Mode.NoSpecialise else budget.fold(Mode.Default)(Mode(_))
-    (mode.copy(ownership = !flags.contains("--no-ownership-clones"), frames = !flags.contains("--no-frames")), rest)
+    (
+      mode.copy(
+        ownership = !flags.contains("--no-ownership-clones"),
+        frames = !flags.contains("--no-frames"),
+        fusion = !flags.contains("--no-fusion")
+      ),
+      rest
+    )
 
   /** The static prover's budget `args` ask for (`--prover-steps=N`, the default otherwise), and the other arguments. */
   private[fixed] def proverSteps(args: List[String]): (Long, List[String]) =
@@ -100,7 +108,7 @@ object Main:
 
   /** Print the memory report of the checked `unit`; on an error, its [[exitCode]]. */
   private def explain(unit: CompilationUnit, json: Boolean, mode: Mode): Int =
-    Option.when(!unit.hasErrors)(Backend.analyse(unit, mode.budget, mode.ownership)) match
+    Option.when(!unit.hasErrors)(Backend.analyse(unit, mode.budget, mode.ownership, mode.fusion)) match
       case Some(Right(a)) =>
         println(if json then MemoryReport.json(unit, a, mode.frames) else MemoryReport.text(unit, a, mode.frames))
         0

@@ -92,12 +92,18 @@ object Rc:
           val uses = consumed(rhs).groupMapReduce(identity)(_ => 1)(_ + _)
           val read = reads(rhs)
           val (dead, waiting) = ready(owned -- live -- uses.keySet -- read, e)
-          val deadAfter = (owned & read) -- live -- uses.keySet
+          val deadAfter = (owned & read) -- live -- (uses.keySet -- read)
           val inner = drops(deadAfter, go(body, (owned & live) ++ waiting ++ tracked(x)))
           val owning = rhs match
             case _: Rhs.Field => tracked(x).fold(inner)(Dup(_, inner))
             case _            => inner
-          val dups = uses.toList.flatMap((v, n) => List.fill(n - 1 + (if live(v) || lent(v) then 1 else 0))(v))
+
+          /** One more for a variable live after or lent by the caller, and for one this call also
+            * borrows: the callee may reuse what it owns while it reads the borrowed alias, so the
+            * caller keeps that count across the call and drops it after (`deadAfter`).
+            */
+          val dups =
+            uses.toList.flatMap((v, n) => List.fill(n - 1 + (if live(v) || lent(v) || read(v) then 1 else 0))(v))
           drops(dead, dups.foldLeft(Let(x, rhs, owning): Expr)((acc, v) => Dup(v, acc)))
         case Dup(_, _) | Drop(_, _) => e
 

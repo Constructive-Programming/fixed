@@ -38,17 +38,21 @@ class BaselineSuite extends munit.FunSuite:
 
   /** For each example and benchmark: how many baseline versions `--no-specialise` reaches. None of
     * them lowers a function per instance any more. A change in either is a change in what is
-    * measured.
+    * measured. A fused site ([[Fusion]]) calls none of its `unfold`, `map` and `fold`: `01_basics`
+    * reaches only `fibIter` (its `Nat` pair and `printFibs`' list pair are fused), `04_json` not the
+    * `Nat` pair of the prelude's `repeatStr`, `nat_loop` and `list_pipeline` nothing. In `bintrees`,
+    * `records` and `fail_chain` a function folds its parameter, which is not fused, and reaches the
+    * same baselines that `main`'s fused site no longer calls.
     */
   private val programs = List(
-    "examples/01_basics" -> 5,
+    "examples/01_basics" -> 1,
     "examples/03_option_result" -> 1,
     /** `04_json` declares its own `Json`; the prelude's `satisfies` bodies fill its list tables. */
-    "examples/04_json" -> 12,
+    "examples/04_json" -> 10,
     "examples/05_phantom_types" -> 14,
     "bench/runtime/bintrees" -> 2,
-    "bench/runtime/nat_loop" -> 4,
-    "bench/runtime/list_pipeline" -> 3,
+    "bench/runtime/nat_loop" -> 0,
+    "bench/runtime/list_pipeline" -> 0,
     "bench/runtime/records" -> 3,
     "bench/runtime/fail_chain" -> 2
   )
@@ -60,10 +64,12 @@ class BaselineSuite extends munit.FunSuite:
       assertEquals(lower.instances.toMap, Map.empty[String, String], path)
     }
 
-  test("records folds a List of u64 and a List of Order through one foldLeft, its accumulator a slot"):
+  test("records folds a List of Order through the baseline foldLeft, its accumulator a slot"):
     val src = file("bench/runtime/records")
     val folds = (fns: List[Fn]) => fns.map(_.name).filter(_.contains(".foldLeft["))
-    assertEquals(folds(specialised("records", src)).size, 3)
+
+    /** The baseline and the clone at `Order`; `main`'s fold of `upto(100)` is fused ([[Fusion]]). */
+    assertEquals(folds(specialised("records", src)).size, 2)
     val (_, fns) = lowered("records", src)
     assertEquals(folds(fns), List("List of A.foldLeft[R]"))
     val f = named(fns, "List of A.foldLeft[R]")
@@ -102,8 +108,14 @@ class BaselineSuite extends munit.FunSuite:
     val (w, t) = (fib.params(0), fib.params(1))
     assertEquals(fib.params.map(_.ctype), List(CType.Witness, CType.Table, CType.Slot(w.name)))
     assertEquals(fib.ret, CType.Slot(w.name))
-    val rhss = withClosures(fns, "fibIter").flatMap(f => Core.lets(f.body).map(_._2))
-    assert(!rhss.exists { case _: Rhs.Prim => true; case _ => false }, rhss)
+
+    /** The `Nat` unfold and fold of `fibIter` are fused into loops ([[Fusion]]) that take its table:
+      * their arithmetic on `N` goes through it too; the loops' own counter is a `u64`.
+      */
+    val loops = Core.reach(Set("fibIter"), fns.map(f => f.name -> f).toMap).filter(_.startsWith("fused."))
+    assert(loops.nonEmpty, fns.map(_.name))
+    val rhss = (withClosures(fns, "fibIter") ++ loops.map(named(fns, _))).flatMap(f => Core.lets(f.body).map(_._2))
+    assert(!rhss.exists { case Rhs.Prim(_, as) => as.exists(_.tpe.slot); case _ => false }, rhss)
     val entries = Tables.members(u.symbols, u.symbols.scope("Numeric"))
     val called = rhss.collect { case Rhs.CallTable(`t`, i, _, _) => entries(i) }
     assertEquals(called.toSet, Set("fromI64", "eq", "sub", "add"))
