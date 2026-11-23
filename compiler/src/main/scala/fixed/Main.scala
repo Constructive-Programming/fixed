@@ -11,7 +11,8 @@ import fixed.util.{Diagnostic, Reporter, SourceFile}
   *
   *   - `fixed <file.fixed>...` checks each file, prints its diagnostics and a one-line summary.
   *   - `fixed compile <file.fixed> -o <out.ll>` writes LLVM IR.
-  *   - `fixed ship <file.fixed> -o <exe>` builds a native executable with `clang`.
+  *   - `fixed ship <file.fixed> -o <exe>` builds a native executable with `clang`; `--stats`, in
+  *     any position, builds the runtime's counters into it (`FIXED_RT_STATS=1` prints them).
   *   - `fixed compile <file.fixed> --explain-memory [--format json]` prints the memory report
   *     (`spec/memory_management.md` §19).
   *   - `--no-specialise`, in any position, builds only mandatory versions
@@ -31,7 +32,8 @@ import fixed.util.{Diagnostic, Reporter, SourceFile}
 object Main:
   def main(args: Array[String]): Unit =
     val (steps, others) = proverSteps(args.toList.filterNot(_ == "--"))
-    val (mode, rest) = modeOf(others)
+    val (mode, flagged) = modeOf(others)
+    val (stats, rest) = (flagged.contains("--stats"), flagged.filterNot(_ == "--stats"))
     def load(src: SourceFile) = PropsLock.record(Compiler.compile(CompilationUnit(src, proverSteps = steps)))
     def compiled(file: String) = load(read(file))
     rest match
@@ -40,11 +42,11 @@ object Main:
         sys.exit(explain(compiled(file), json = format.nonEmpty, mode))
       case "ship" :: file :: "-o" :: out :: Nil =>
         sys.exit(backend(compiled(file), mode)(ir =>
-          Backend.ship(ir, Path.of(out)).fold(d => { print(file, d); exitCode(List(d)) }, _ => 0)
+          Backend.ship(ir, Path.of(out), stats = stats).fold(d => { print(file, d); exitCode(List(d)) }, _ => 0)
         ))
       case Nil | ("compile" | "ship") :: _ =>
         Console.err.println(
-          "usage: fixed <file.fixed>... | fixed compile|ship <file.fixed> -o <out>" +
+          "usage: fixed <file.fixed>... | fixed compile|ship <file.fixed> -o <out> (ship: --stats builds in the counters)" +
             " | fixed compile <file.fixed> --explain-memory [--format json];" +
             " --no-specialise, --budget <n>, --no-ownership-clones, --no-frames or --prover-steps=<n> anywhere"
         )

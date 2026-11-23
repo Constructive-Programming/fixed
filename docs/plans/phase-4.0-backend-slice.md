@@ -181,6 +181,9 @@ state, and the counters.
 
 The runtime keeps four counters and prints them as one JSON line on standard error at exit when
 `FIXED_RT_STATS=1`: allocations, frees, `dup`s, `drop`s, plus peak resident memory and wall time.
+(Since 2026-11-23 the counters are built in only by `fixed ship --stats` and in test builds; another
+build prints peak memory and wall time and says it has no counters,
+`docs/baselines/runtime-2026-11-23-runtime.md` §1.)
 Writing the runtime in C does not make C a compilation target: the compiler emits LLVM IR only
 (decided, open question 1).
 

@@ -29,7 +29,7 @@ class EmitSuite extends munit.FunSuite:
 
   /** Exit code, standard output, standard error. */
   private def run(name: String, source: String, stdin: String, mode: Mode): (Int, String, String) =
-    val exe = Backend.ship(ir(name, source, mode), dir.resolve(s"$name-$mode"), checks = true)
+    val exe = Backend.ship(ir(name, source, mode), dir.resolve(s"$name-$mode"), checks = true, stats = true)
       .fold(d => fail(d.message), identity)
     Native.run(exe, stdin)
 

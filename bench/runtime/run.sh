@@ -26,7 +26,7 @@ if [ -n "${B:-}" ]; then
 fi
 
 cmds=()
-for p in "${progs[@]}"; do cmds+=("compiler/run ship $flag bench/runtime/$p.fixed -o $out/$p-$mode"); done
+for p in "${progs[@]}"; do cmds+=("compiler/run ship --stats $flag bench/runtime/$p.fixed -o $out/$p-$mode"); done
 sbt -warn "${cmds[@]}"
 
 field() { sed -n "s/.*\"$1\":\([0-9]*\).*/\1/p"; }

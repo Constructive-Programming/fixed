@@ -43,7 +43,7 @@ class FrameSuite extends munit.FunSuite:
         |""".stripMargin
 
   private def run(name: String, ir: String, checks: Boolean): (Int, String, String) =
-    val exe = Backend.ship(ir, dir.resolve(s"$name-$checks"), checks).fold(d => fail(d.message), identity)
+    val exe = Backend.ship(ir, dir.resolve(s"$name-$checks"), checks, stats = true).fold(d => fail(d.message), identity)
     Native.run(exe)
 
   /** A second activation after the first one's reset, as large again in bigger cells: it reuses

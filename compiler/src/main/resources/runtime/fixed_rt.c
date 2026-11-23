@@ -36,9 +36,19 @@ typedef struct fx_string {
     char bytes[];
 } fx_string;
 
+/* The counters behind the baselines and the tests' leak checks (docs/plans/phase-4.0-backend-slice.md
+   §4.7, docs/baselines/runtime-2026-11-23-runtime.md §1), compiled in only
+   with FX_STATS (`fixed ship --stats`, test builds): STAT(e) evaluates `e` only then. Without them a
+   run with FIXED_RT_STATS set reports time and memory and says the counters are missing. */
+#ifdef FX_STATS
+#define STAT(e) (e)
 static uint64_t n_alloc, n_free, n_dup, n_drop, n_wop; /* n_wop: dup and drop calls through a value witness */
 /* Reuse sites: taken without a test (exclusive), and `rc == 1` tests passed (reused) or failed (dropped). */
 static uint64_t n_reuse_excl, n_test_pass, n_test_fail;
+static uint64_t n_frame_alloc, n_frame_free, n_frame_bytes; /* frame cell bytes, check words excluded */
+#else
+#define STAT(e) ((void)0)
+#endif
 static struct timespec t_start;
 
 static void fx_die(const char *msg, int code) {
@@ -78,7 +88,7 @@ void *fx_alloc(uint32_t tag, uint32_t refs, size_t payload) {
     h->rc = 1;
     h->tag = tag;
     h->refs = refs;
-    n_alloc++;
+    STAT(n_alloc++);
     return h;
 }
 
@@ -106,7 +116,7 @@ void *fx_reuse_excl(fx_header *h) {
 #ifdef FX_CHECK_EXCL
     if (h->rc != 1) fx_die("internal error: reused a cell that is not exclusively owned", 103);
 #endif
-    n_reuse_excl++;
+    STAT(n_reuse_excl++);
     return reclaim(h);
 }
 
@@ -114,10 +124,10 @@ void *fx_reuse_excl(fx_header *h) {
 void *fx_reuse(fx_header *h) {
     frame_live(h);
     if (h->rc == 1) {
-        n_test_pass++;
+        STAT(n_test_pass++);
         return reclaim(h);
     }
-    n_test_fail++;
+    STAT(n_test_fail++);
     fx_drop(h);
     return NULL;
 }
@@ -135,7 +145,7 @@ void *fx_alloc_at(void *token, uint32_t tag, uint32_t refs, size_t payload) {
 void fx_dup(fx_header *h) {
     if (!h) return; /* the zero result of an aborted call */
     frame_live(h);
-    n_dup++;
+    STAT(n_dup++);
     if (h->rc > 0) h->rc++;
 }
 
@@ -157,17 +167,17 @@ static __attribute__((noinline)) void free_cell(fx_header *h) {
                 fx_header *c = slots[__builtin_ctz(refs)];
                 if (!c) continue;
                 frame_live(c);
-                n_drop++;
+                STAT(n_drop++);
                 if (c->rc < 0 || --c->rc != 0) continue;
                 c->rc = (int64_t)(intptr_t)pending;
                 pending = c;
             }
         }
         free(h);
-        n_free++;
+        STAT(n_free++);
         if (last) {
             frame_live(last);
-            n_drop++;
+            STAT(n_drop++);
             if (last->rc >= 0 && --last->rc == 0) {
                 h = last;
                 continue;
@@ -182,7 +192,7 @@ static __attribute__((noinline)) void free_cell(fx_header *h) {
 void fx_drop(fx_header *h) {
     if (!h) return;
     frame_live(h);
-    n_drop++;
+    STAT(n_drop++);
     if (h->rc < 0 || --h->rc != 0) return;
     free_cell(h);
 }
@@ -222,7 +232,6 @@ typedef struct fx_chunk {
 char *fx_frame_top;
 static char *frame_limit;
 static fx_chunk *frame_chunk;
-static uint64_t n_frame_alloc, n_frame_free, n_frame_bytes; /* cell bytes, check words excluded */
 
 /* Continue in the next chunk, one that holds at least `n` bytes. */
 static void frame_next(size_t n) {
@@ -263,8 +272,8 @@ static char *frame_bump(size_t n, int64_t check) {
     (void)check;
 #endif
     fx_frame_top += taken;
-    n_frame_alloc++;
-    n_frame_bytes += n;
+    STAT(n_frame_alloc++);
+    STAT(n_frame_bytes += n);
     return p;
 }
 
@@ -305,7 +314,7 @@ static void frame_poison(char *from, char *end) {
         int64_t base = dead ? FRAME_DEAD : *check <= FRAME_BARE ? FRAME_BARE : 0;
         int64_t size = base - *check;
         if (!dead) {
-            n_frame_free++;
+            STAT(n_frame_free++);
             memset(check + 1, 0xA5, (size_t)size - CHECK_WORD);
             *check = FRAME_DEAD - size;
         }
@@ -346,10 +355,10 @@ typedef struct fx_witness {
     int64_t (*copy)(int64_t);
 } fx_witness;
 
-static void imm_keep(int64_t v) { (void)v; n_wop++; }
+static void imm_keep(int64_t v) { (void)v; STAT(n_wop++); }
 static int64_t imm_copy(int64_t v) { return v; }
-static void ref_dup(int64_t v) { n_wop++; fx_dup((fx_header *)(intptr_t)v); }
-static void ref_drop(int64_t v) { n_wop++; fx_drop((fx_header *)(intptr_t)v); }
+static void ref_dup(int64_t v) { STAT(n_wop++); fx_dup((fx_header *)(intptr_t)v); }
+static void ref_drop(int64_t v) { STAT(n_wop++); fx_drop((fx_header *)(intptr_t)v); }
 
 /* A cell's header gives neither its size nor its field types, so one witness for every reference
    type cannot copy one. Copying needs a witness per type, whose `copy` is that type's copy
@@ -589,12 +598,12 @@ extern int8_t fx_u_main(void);
 int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &t_start);
     frame_next(0);
-#ifndef FX_CHECK_FRAME
+#if defined(FX_STATS) && !defined(FX_CHECK_FRAME)
     char *bottom = fx_frame_top;
 #endif
     fx_u_main();
     fflush(stdout);
-#ifndef FX_CHECK_FRAME
+#if defined(FX_STATS) && !defined(FX_CHECK_FRAME)
     /* Unchecked, a reset does not count cells: every one was released if the stack is back at its bottom. */
     if (frame_chunk->prev == NULL && fx_frame_top == bottom) n_frame_free = n_frame_alloc;
 #endif
@@ -604,6 +613,7 @@ int main(void) {
         clock_gettime(CLOCK_MONOTONIC, &t_end);
         getrusage(RUSAGE_SELF, &ru);
         int64_t wall_ns = (t_end.tv_sec - t_start.tv_sec) * 1000000000LL + (t_end.tv_nsec - t_start.tv_nsec);
+#ifdef FX_STATS
         fprintf(stderr,
                 "{\"allocs\":%" PRIu64 ",\"frees\":%" PRIu64 ",\"dups\":%" PRIu64 ",\"drops\":%" PRIu64
                 ",\"reuse_excl\":%" PRIu64 ",\"reuse_test_pass\":%" PRIu64 ",\"reuse_test_fail\":%" PRIu64
@@ -611,6 +621,12 @@ int main(void) {
                 ",\"frame_bytes\":%" PRIu64 ",\"peak_rss_kb\":%ld,\"wall_ns\":%" PRId64 "}\n",
                 n_alloc, n_free, n_dup, n_drop, n_reuse_excl, n_test_pass, n_test_fail, n_wop, n_frame_alloc,
                 n_frame_free, n_frame_bytes, ru.ru_maxrss, wall_ns);
+#else
+        fprintf(stderr,
+                "fixed: this binary was built without counters (`fixed ship --stats` builds them in); time and memory only\n"
+                "{\"counters\":false,\"peak_rss_kb\":%ld,\"wall_ns\":%" PRId64 "}\n",
+                ru.ru_maxrss, wall_ns);
+#endif
     }
     return 0;
 }

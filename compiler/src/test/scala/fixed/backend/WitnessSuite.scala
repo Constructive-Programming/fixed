@@ -59,7 +59,7 @@ class WitnessSuite extends munit.FunSuite:
   /** Emit, ship and run `fns`; standard output and the counters. */
   private def run(name: String, fns: List[Fn]): (String, Map[String, Long], String) =
     val ir = Backend.emit(Backend.analyseCore(fns)).fold(ds => fail(s"$ds"), identity)
-    val exe = Backend.ship(ir, dir.resolve(name), checks = true).fold(d => fail(d.message), identity)
+    val exe = Backend.ship(ir, dir.resolve(name), checks = true, stats = true).fold(d => fail(d.message), identity)
     val (code, out, err) = Native.run(exe)
     assertEquals(code, 0, err)
     (out, Native.counters(err), ir)
