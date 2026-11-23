@@ -126,6 +126,84 @@ class FrameSuite extends munit.FunSuite:
     val (code, _, err) = run("poison", program(3, read), true)
     assertEquals(code, 0, err)
 
+  /** A bare cell (`fx_frame_alloc_bare`, 24 bytes of payload) and a cell with a count word; the bare
+    * cell's tag is read at offset 0 and 42 stored and read back at offset 8, its first field; then
+    * `between`, then the reset.
+    */
+  private def bare(between: String) =
+    s"""|@fx_frame_top = external global ptr
+        |declare ptr @fx_frame_alloc(i32, i32, i64)
+        |declare ptr @fx_frame_alloc_bare(i32, i32, i64)
+        |declare void @fx_frame_reset(ptr)
+        |declare void @fx_drop(ptr)
+        |declare void @fx_panic_div()
+        |
+        |define i8 @"fx_u_main"() {
+        |entry:
+        |  %m = load ptr, ptr @fx_frame_top
+        |  %b = call ptr @fx_frame_alloc_bare(i32 7, i32 0, i64 24)
+        |  %c = call ptr @fx_frame_alloc(i32 7, i32 0, i64 24)
+        |  %p = getelementptr inbounds i8, ptr %b, i64 8
+        |  store i64 42, ptr %p
+        |  %t = load i32, ptr %b
+        |  %v = load i64, ptr %p
+        |  %tag = icmp ne i32 %t, 7
+        |  %val = icmp ne i64 %v, 42
+        |  %bad = or i1 %tag, %val
+        |  br i1 %bad, label %fail, label %ok
+        |fail:
+        |  call void @fx_panic_div()
+        |  unreachable
+        |ok:
+        |$between
+        |  call void @fx_frame_reset(ptr %m)
+        |  ret i8 0
+        |}
+        |""".stripMargin
+
+  test("a bare frame cell is its descriptor and payload, 8 bytes less, and no count operation may reach it"):
+    List(false, true).foreach { checks =>
+      val (code, _, err) = run("bare", bare(""), checks)
+      assertEquals(code, 0, err)
+      assertEquals(Native.counters(err).get("frame_bytes"), Some(32L + 40L), err)
+    }
+    val (code, _, err) = run("counted", bare("  call void @fx_drop(ptr %b)"), true)
+    assertEquals(code, 103, err)
+    assert(err.contains("a count operation on a frame cell without a count word"), err)
+
+  /** Output, runtime counters and LLVM IR of the test program `name` built in `mode`, checked or not. */
+  private def ran(name: String, mode: Mode, checks: Boolean, dir: String = "compiler/src/test/fixed/modes") =
+    val ir = Backend.compile(unit(Path.of(dir, s"$name.fixed")), mode).fold(ds => fail(s"$ds"), identity)
+    val (code, out, err) = run(s"$name-$mode", ir, checks)
+    assertEquals(code, 0, err)
+    (out, Native.counters(err), ir)
+
+  List(Mode.Default, Mode.NoSpecialise).foreach { mode =>
+    test(s"frame cells that only code compiled for them reaches have no count word ($mode)"):
+      /** Every cell of `frame_bare` is bare: 8 bytes of descriptor and 8 per field, 8 bytes less
+        * than with the count word: 6,015 cells, 128,400 bytes.
+        */
+      List(false, true).foreach { checks =>
+        val (out, counts, ir) = ran("frame_bare", mode, checks)
+        assertEquals(out, Files.readString(Path.of("compiler/src/test/fixed/modes/frame_bare.expected")))
+        assertEquals((counts("frame_allocs"), counts("frame_bytes")), (6015L, 128400L), checks)
+        assert(!ir.contains("call ptr @fx_frame_alloc("), ir)
+      }
+
+      /** `temps`'s 2,000,000 boxes: 32 bytes each instead of 40. */
+      val (_, temps, _) = ran("temps", mode, checks = false, dir = "bench/runtime")
+      assertEquals((temps("frame_allocs"), temps("frame_bytes")), (2000000L, 64000000L))
+
+    test(s"frame cells that code not compiled for them may count keep their count word ($mode)"):
+      /** 21 cells with the count word, 16 bytes of header and 8 per field each, and one bare cell,
+        * `grow#frame`'s result, read only by `sum#bare0`: 752 + 32 bytes.
+        */
+      val (out, counts, ir) = ran("frame_counted", mode, checks = true)
+      assertEquals(out, Files.readString(Path.of("compiler/src/test/fixed/modes/frame_counted.expected")))
+      assertEquals((counts("frame_allocs"), counts("frame_bytes")), (22L, 784L))
+      assertEquals("call ptr @fx_frame_alloc_bare\\(".r.findAllIn(ir).size, 1, ir)
+  }
+
   /** The placement of the test program `name` in build mode `mode`. */
   private def placed(name: String, mode: Mode): Frames =
     val a = Backend.analyse(unit(Path.of("compiler", "src", "test", "fixed", "modes", s"$name.fixed")), mode.budget)
@@ -182,4 +260,8 @@ class FrameSuite extends munit.FunSuite:
     assert(report.contains("placed: Frame(local)"), report)
     assert(report.contains("placed: Heap; in the caller's frame through `make#frame`"), report)
     assert(report.contains("call: make#frame"), report)
+    val bare = unit(Path.of("compiler", "src", "test", "fixed", "modes", "frame_bare.fixed"))
+    val bareReport = MemoryReport.text(bare, Backend.analyse(bare).fold(ds => fail(s"$ds"), identity))
+    assert(bareReport.contains("placed: Frame(local), no count word"), bareReport)
+    assert(bareReport.contains("in the caller's frame through `make#frame`, no count word"), bareReport)
     assert(!MemoryReport.text(more, a, frames = false).contains("placed: Frame("))

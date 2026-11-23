@@ -67,6 +67,10 @@ same machine and method).
   - a callee that owns and drops its parameter;
   - a counted field read that dups a child;
   - the join variables `Aborts` adds after placement.
+
+  (Since the third round: a frame cell that only code compiled for it reaches has no count word,
+  and the count word of the others holds the immortal sentinel; the `Aborts` join variables do not
+  count frame cells.)
 - **The checked mode `-DFX_CHECK_FRAME`** is on in every test build, so the whole test directory runs
   under it.
   - A reset does not rewind. It poisons the payload of the released cells and marks their count word
@@ -74,6 +78,8 @@ same machine and method).
   - `fx_dup` and `fx_drop` of a dead cell stop the program (exit 103), and a payload read returns
     `0xA5…`. A `match` on a dead cell's tag is not caught.
   - Dead runs are coalesced, so a loop that resets at every step walks each cell once.
+  - (Since the third round: a check word in front of each frame cell holds this state instead of
+    its count word, and a reset poisons the whole cell.)
   - EmitSuite asserts `frame_allocs == frame_frees` for every program in both modes. Unchecked,
     `frame_frees` is `frame_allocs` only if the stack is back at its bottom at exit.
 
@@ -179,6 +185,8 @@ Default mode, instructions and heap allocations; frames on and off at the rebase
    - **Recommendation:** keep the sentinel until every path that reaches a cell knows its class,
      which needs class witnesses.
    - The cost is a word per frame cell. A `fx_drop` call on a frame cell returns after one test.
+   - **Since the third round below:** a frame cell that only code compiled for it reaches has no
+     count word; the others keep the sentinel.
 2. **Chunk alignment** (Rule MM6.1). **Recommendation:** defer to counted regions, the first user of
    pointer masking.
 3. **Destinations by clone, for cells built in the function only.** Rule MM7.1 says "through any
@@ -283,3 +291,155 @@ store, capture, reuse or hand to code that may, which is an ownership and contai
 
 Before the repair these mutants were caught by values that escaped; now they are caught by
 containment and reuse, the part of the check that remains.
+
+## Third round: the count word of frame cells
+
+Rule MM3.1 gives a `Frame` cell a descriptor and no count. Until now every frame cell kept the
+count word, holding minus its size, so that code that does not know a cell's class leaves it alone.
+
+### Who can touch the count word of a frame cell
+
+| Code | Reaches a frame cell today? | What decides it |
+|---|---|---|
+| A callee that owns its parameter and drops it | Yes: `temps`'s `volume` drops its parameter, 2,000,000 `fx_drop` calls that return at the sentinel | Rc drops every owned parameter at its last use |
+| A field read that dups a child | Yes, in a callee: Rc dups a counted field read of a parameter (`frame_counted`'s `firstOr`) | In the placing function Rc skips every holder of a frame cell |
+| A baseline version, through a value witness | Yes: a frame cell that a baseline version reads into a slot (`shape` reads the boxes of a `P2 of A` with `--no-specialise`: 4 witness calls before this round) | `ref_dup` and `ref_drop` call `fx_dup` and `fx_drop` |
+| Derived members, `clone` | As any callee: they are functions like any other | the same as a callee |
+| The join variables `Aborts` adds | No count operation: they hold the function's result, which Rc returns and never dups or drops; a frame cell is a result only in a `#frame` clone | `Aborts` runs after `Frames`; `exit.n` is returned |
+| `fx_drop` of a heap parent with a frame child | Cannot exist: a frame value stored into a cell needs that cell placed too (`In(x)` needs `x` a root), and a callee that stores its parameter keeps it (`kept`) | Rule MM4.1, checked in `Frames` |
+| Reuse (`fx_reuse`, `fx_reuse_excl`, `fx_alloc_at`) | Never: a reuse's cell, and a parameter a callee may reuse, keep the value on the heap | `Frames`' local check (second round) |
+| Capability tables, closures, runtime calls | Never: an argument of a table or closure call stays on the heap; the runtime takes strings only | `Use.Out` |
+| The checked mode | Yes: `frame_live` read the count word on every `fx_dup`, `fx_drop` and child drop, and a reset walked the cells by it | the runtime, `FX_CHECK_FRAME` |
+| A static cell in the same variable | Yes: a static cell (`L.E`) always has the full header, and a variable that may hold one is read at the full layout's offsets | `EmitLLVM` picks one layout per variable |
+| Diagnostics (`inspect`, `trace`) | Not built | |
+
+So a frame cell may lose its count word only where no callee, witness or static cell can meet it,
+unless the callee is compiled for it.
+
+### The condition, as built
+
+A frame cell is **bare** (descriptor, then payload: 8 bytes less) when, checked per allocation site
+by `Frames` as a greatest fixed point:
+
+1. every variable that may hold it or a part of it (an alias, a branch's result, a field read, a
+   `match` binder) holds only bare cells on every path: no join with a static cell, a heap value or
+   a frame cell with a count word;
+2. each such variable is only read, `match`ed, stored into another bare cell of the activation, or
+   passed to a parameter that **takes a bare cell**: one whose holders in the callee meet 1 and 2
+   and are never returned, of a function called directly (not a closure's code, a table entry, a
+   `handle` subject, `main`, or a function with a `#frame` clone). A call that passes bare cells goes
+   to a clone `g#bare<indices>` whose reference counting skips every holder of those parameters;
+3. its reference fields hold bare cells only;
+4. a `#frame` clone's cells are bare if they hold no reference, are only read or returned in the
+   clone, and every caller's result is bare (one clone serves every caller).
+
+Every other frame cell keeps the count word with the sentinel: there are two frame layouts.
+
+The owner's example condition had "it never enters a slot of parameter type". The code shows it is
+not needed: a slot is counted only by a `dup` or `drop` that Rc adds, and a `#bare` clone's Rc skips
+every holder, slots included; generic code can do nothing else with a slot but hand it to a table or
+closure, which keeps the value on the heap. `frame_bare`'s `viaSlot` is bare with
+`--no-specialise`, where `shape`'s baseline version reads its boxes into slots, with no witness call
+on them.
+
+**Where Rule MM3.1 cannot be met as written.** For a frame cell that code not compiled for its
+class reaches (a callee that joins the parameter with another value, a closure's code, a table
+entry, a `handle` subject, a cell next to a static cell, a `#frame` clone with one such caller), the
+count word stays, because that code tests it. Meeting the rule there needs the class witnesses of
+Rule MM7.3 (a `Frame` `ref` witness whose `dup` and `drop` are nothing, chosen by class) or more
+clones.
+
+### What is built
+
+- `Frames`: `bareParameters`, `bareCells`, the `#bare` clones (`bareClones`), and `bare`, the
+  variables per function that hold bare cells.
+- `EmitLLVM`: a bare cell is allocated by `fx_frame_alloc_bare`; a field of a variable of `bare` is
+  at `8 + 8 * slot` instead of `16 + 8 * slot`, its tag at 0 instead of 8.
+- `Rc`: a parameter that holds a frame cell (a `#bare` clone's) is not owned.
+- Runtime: `fx_frame_alloc_bare` writes the descriptor only; the counter `frame_bytes` (bytes of
+  frame cells, without the check word below). A frame cell with a count word holds the immortal
+  sentinel, −1, there, as a static cell does. The checked mode now puts a check word in front of
+  every frame cell, holding its size and whether it is live, released or bare; the program never
+  sees it. `fx_dup`, `fx_drop`, a parent's drop and `fx_reuse` / `fx_reuse_excl` stop the program
+  (exit 103) on a frame cell that is released or bare. A reset poisons the whole cell, descriptor
+  included, and walks the cells by their check words.
+- `--explain-memory`: `placed` says `Frame(f), no count word` for a bare cell.
+
+### The tests that prove it
+
+- **Runtime (FrameSuite):** a hand-written IR program bumps a bare cell and a cell with the count
+  word, both with 24 bytes of payload, and reads the bare cell's tag at offset 0 and its first field
+  at 8: `frame_bytes` is 32 + 40, in both builds. The checked build stops on `fx_drop` of the bare
+  cell ("a count operation on a frame cell without a count word").
+- **Removal (FrameSuite, both build modes, checked and not):** `modes/frame_bare.fixed` prints its
+  expected output and allocates 6,015 frame cells in 128,400 bytes: each is 8 bytes of descriptor
+  and 8 per field, 48,120 bytes less than with count words, and its IR has no `fx_frame_alloc` call.
+  `temps` allocates its 2,000,000 boxes in 64,000,000 bytes, 32 each instead of 40.
+- **Cells that keep the word (FrameSuite and EmitSuite):** `modes/frame_counted.fixed` has a callee
+  that joins its parameter with a cell of its own (it drops it), one that joins a part of its
+  parameter with one (it dups the part), a box in a list ending in the static `E`, `make#frame` with
+  one caller whose result goes to such a callee, the parameter of a function with a `#frame` clone
+  and of a `handle` subject (both dropped), a cell joined with the static `None`, a `#frame` clone's
+  cell that holds the static `Z`, and one that the clone hands to `sum` before returning it. Of its
+  22 frame cells, 21 keep the count word and one is bare (`grow#frame`'s result, which only
+  `sum#bare0` reads): 752 + 32 bytes.
+- **Mutants**, each a condition of `Frames` taken out, run on the test programs (EmitSuite, checked
+  builds):
+
+  | Condition taken out | Caught by |
+  |---|---|
+  | all of them: every placed cell bare, no `#bare` clones | `temps`, `frame_bare`, `frame_counted`, `frame_more`: "a count operation on a frame cell without a count word"; `frame_escapes` prints wrong numbers |
+  | a parameter's holders hold nothing else | `frame_counted` prints wrong numbers (a heap cell read at the bare layout) |
+  | a root's holders hold only bare cells | `frame_counted` prints 50 for 51 (the static `None` read at the bare layout) |
+  | a root's reference fields hold bare cells | `frame_counted`, `frame_more`: segmentation fault (a static `E` matched at the bare layout) |
+  | a `#frame` clone's every caller has a bare result | `frame_counted`, `frame_more`: "a count operation on a frame cell without a count word" |
+  | a `#frame` clone's cells hold no reference | `frame_counted`: segmentation fault (`single`'s static `Z`) |
+  | a `#frame` clone's cells are passed to no call | `frame_counted` prints 9 for 12 (`mk#frame` calls `sum`, not `sum#bare0`) |
+  | no `#bare` clone of a function with a `#frame` clone | `frame_counted`: "a count operation…" (`grow#frame` drops its parameter) |
+  | no `#bare` clone of a `handle` subject | `frame_counted`: "a count operation…" (`peek` drops its parameter) |
+
+  Two mutants survive because another check implies what they take out: a bare parameter's holders
+  never returned, stored or passed to unknown code (a parameter that is, is kept, so no frame cell
+  reaches it), and a `#frame` clone's cells only read or returned (`results` allows nothing else).
+  A first version also required every holder to be a reference, not a slot; its mutant survived
+  too, which is how the slot condition was found unnecessary and removed.
+
+### Measurement
+
+Default and `--no-specialise`, against the commit before this work (`fin`, the binaries in
+`/var/tmp/fixed-bench/fin*`), measured in one session. Cycles: minimum of 5. Heap allocations,
+frame allocations, frame bytes and peak RSS: `FIXED_RT_STATS=1` (`fin`'s runtime has no
+`frame_bytes`; its allocations are the same).
+
+| Program | Mode | Instructions `fin` | now | Cycles `fin` | now | Heap allocations | Frame allocations | Frame bytes | Peak RSS KiB `fin` / now |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `bintrees` | default | 831,691,529 | 831,691,534 | 235.3 M | 234.9 M | 2,097,151 | 0 | 0 | 50540 / 51028 |
+| `bintrees` | `--no-specialise` | 867,343,109 | 867,343,104 | 242.3 M | 240.5 M | 2,097,151 | 0 | 0 | 51036 / 51044 |
+| `nat_loop` | default | 1,452,915,756 | 1,452,915,813 | 288.6 M | 286.2 M | 4,000,402 | 0 | 0 | 2144 / 2192 |
+| `nat_loop` | `--no-specialise` | 1,472,922,804 | 1,472,922,766 | 298.3 M | 295.5 M | 4,000,402 | 0 | 0 | 2156 / 2176 |
+| `list_pipeline` | default | 2,042,731,195 | 2,042,731,217 | 431.5 M | 432.2 M | 4,000,602 | 0 | 0 | 2164 / 2132 |
+| `list_pipeline` | `--no-specialise` | 2,172,742,719 | 2,172,742,657 | 512.5 M | 510.5 M | 4,000,602 | 0 | 0 | 2156 / 2176 |
+| `records` | default | 1,470,122,668 | 1,470,122,649 | 293.6 M | 291.2 M | 3,000,302 | 0 | 0 | 2680 / 2672 |
+| `records` | `--no-specialise` | 1,485,126,685 | 1,485,126,675 | 298.1 M | 301.0 M | 3,000,302 | 0 | 0 | 2664 / 2668 |
+| `fail_chain` | default | 1,372,614,986 | 1,372,614,986 | 286.0 M | 286.4 M | 4,000,602 | 0 | 0 | 2160 / 2392 |
+| `fail_chain` | `--no-specialise` | 1,456,596,633 | 1,456,596,650 | 328.6 M | 328.2 M | 4,000,602 | 0 | 0 | 1876 / 2176 |
+| `shared_map` | default | 1,161,462,479 | 1,161,462,402 | 233.3 M | 233.2 M | 2,020,404 | 0 | 0 | 2668 / 2676 |
+| `shared_map` | `--no-specialise` | 1,209,760,636 | 1,209,760,655 | 260.6 M | 257.2 M | 2,020,404 | 0 | 0 | 2748 / 2668 |
+| `fresh_map` | default | 1,693,361,685 | 1,693,361,725 | 354.2 M | 352.4 M | 4,020,603 | 0 | 0 | 2132 / 2160 |
+| `fresh_map` | `--no-specialise` | 1,787,662,124 | 1,787,662,115 | 401.6 M | 403.3 M | 4,020,603 | 0 | 0 | 1916 / 2160 |
+| `acc_loop` | default | 1,432,292,350 | 1,432,292,342 | 277.0 M | 273.8 M | 4,000,003 | 0 | 0 | 94592 / 95372 |
+| `acc_loop` | `--no-specialise` | 1,490,292,357 | 1,490,292,365 | 311.1 M | 309.6 M | 4,000,003 | 0 | 0 | 95092 / 95116 |
+| `points` | default | 864,654,719 | 864,654,730 | 171.6 M | 173.3 M | 2,000,602 | 0 | 0 | 2168 / 2160 |
+| `points` | `--no-specialise` | 910,664,364 | 910,664,348 | 201.1 M | 200.0 M | 2,000,602 | 0 | 0 | 2188 / 2176 |
+| `temps` | default | 1,474,292,250 | 1,452,292,283 | 285.7 M | 274.8 M | 4,000,002 | 2,000,000 | 64,000,000 | 95096 / 95096 |
+| `temps` | `--no-specialise` | 1,530,292,288 | 1,508,292,302 | 317.3 M | 309.7 M | 4,000,002 | 2,000,000 | 64,000,000 | 95352 / 95360 |
+| `scratch_tree` | default | 938,977,491 | 938,977,552 | 240.6 M | 245.4 M | 2,560,002 | 0 | 0 | 2944 / 2908 |
+| `scratch_tree` | `--no-specialise` | 982,597,511 | 982,597,518 | 252.6 M | 252.2 M | 2,560,002 | 0 | 0 | 2904 / 2904 |
+
+- **`temps`:** its 2,000,000 boxes lose the count word in both modes: 16,000,000 bytes less of data
+  stack (8 per box; its frame holds one box at a time, so peak RSS does not move). Instructions fall
+  by 22,000,000, 11 per step (−1.5% in both modes): the box is no longer written a count, and
+  `volume#bare0` does not drop its parameter (`drops` 14,000,007 → 12,000,007). Cycles −3.8%
+  (default) and −2.4% (`--no-specialise`); identical binaries move by about ±2%.
+- **The other benchmarks** place no frame cell. Their instructions are within 80 of `fin` (the
+  process environment), and their cycles move by at most 2.0% either way, which is noise.

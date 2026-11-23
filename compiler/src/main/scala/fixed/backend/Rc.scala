@@ -17,13 +17,15 @@ import fixed.backend.Expr.{Drop, Dup, Let, Ret}
   * node if large functions make this show up.
   *
   * @param borrowed the indices of each function's borrowed parameters
-  * @param frame the variables that hold frame cells ([[Frames]]): never counted (Rule PR3.2)
+  * @param frame the variables that hold frame cells ([[Frames]]), parameters of a `#bare` clone
+  *   included: never counted (Rule PR3.2)
   */
 object Rc:
 
   def apply(fn: Fn, borrowed: String => Set[Int] = _ => Set.empty, frame: Set[String] = Set.empty): Fn =
     val lent = fn.params.zipWithIndex.collect { case (p, i) if p.ctype.counted && borrowed(fn.name)(i) => p }.toSet
-    val counted = Walk(borrowed, lent, frame).go(fn.body, fn.params.filter(_.ctype.counted).toSet -- lent)
+    val owned = fn.params.filter(p => p.ctype.counted && !frame(p.name)).toSet -- lent
+    val counted = Walk(borrowed, lent, frame).go(fn.body, owned)
     fn.copy(body = tokens(counted, Iterator.from(1)))
 
   /** Drop-guided reuse (Rule MM11.5): where a cell that a later `Reuse` names is dropped, take a

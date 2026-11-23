@@ -10,9 +10,11 @@ import fixed.backend.Atom.Var
   *
   * A function in `scoped` takes a mark of the data stack on entry and resets the stack to it before
   * it returns and before it jumps back to `loop`; the constructors in `bumped` of each function are
-  * allocated on the data stack ([[Frames]]).
+  * allocated on the data stack ([[Frames]]). A variable in `bare` holds a frame cell without a count
+  * word: its descriptor is at offset 0 and its payload at 8, where a cell with a header has them at
+  * 8 and 16.
   */
-final class EmitLLVM(bumped: Map[String, Set[String]], scoped: Set[String]):
+final class EmitLLVM(bumped: Map[String, Set[String]], scoped: Set[String], bare: Map[String, Set[String]]):
   private val out = new StringBuilder
   private val ids = Iterator.from(1)
   private val aliases = mutable.Map.empty[String, String]
@@ -137,7 +139,7 @@ final class EmitLLVM(bumped: Map[String, Set[String]], scoped: Set[String]):
             s"%tag.$n"
           case CType.Imm(_, false) => "0"
           case _                   =>
-            line(s"  %tagp.$n = getelementptr inbounds i8, ptr ${operand(v)}, i64 8")
+            line(s"  %tagp.$n = getelementptr inbounds i8, ptr ${operand(v)}, i64 ${header(v) - 8}")
             line(s"  %tag.$n = load i32, ptr %tagp.$n")
             s"%tag.$n"
         val labelled = cases.zipWithIndex.map { case ((tag, c), i) => (tag, s"case.$n.$i", c) }
@@ -168,7 +170,7 @@ final class EmitLLVM(bumped: Map[String, Set[String]], scoped: Set[String]):
         obj.tpe match
           case _: CType.Imm => unpack(x, operand(obj), slot)
           case _            =>
-            line(s"  %${x.name}.p = getelementptr inbounds i8, ptr ${operand(obj)}, i64 ${16 + 8 * slot}")
+            line(s"  %${x.name}.p = getelementptr inbounds i8, ptr ${operand(obj)}, i64 ${header(obj) + 8 * slot}")
             load(x)
         label
       case Rhs.Closure(code, Nil, exclusive) =>
@@ -316,15 +318,24 @@ final class EmitLLVM(bumped: Map[String, Set[String]], scoped: Set[String]):
   /** Reset the data stack to the mark taken on entry, if the function takes one. */
   private def reset(): Unit = if scoped(emitting.value) then line("  call void @fx_frame_reset(ptr %fx.mark)")
 
+  /** The bytes before the payload of the cell `a` holds: 8 if it is bare, else 16. */
+  private def header(a: Atom): Int =
+    a match
+      case Var(n, _) if bare.get(emitting.value).exists(_(n)) => 8
+      case _                                                  => 16
+
   private def allocate(x: Var, tag: Int, refs: String, slots: Int): Unit =
-    val on = if bumped.get(emitting.value).exists(_(x.name)) then "fx_frame_alloc" else "fx_alloc"
+    val on =
+      if !bumped.get(emitting.value).exists(_(x.name)) then "fx_alloc"
+      else if header(x) == 8 then "fx_frame_alloc_bare"
+      else "fx_frame_alloc"
     line(s"  %${x.name} = call ptr @$on(i32 $tag, i32 $refs, i64 ${8 * slots})")
-    line(s"  %${x.name}.0 = getelementptr inbounds i8, ptr %${x.name}, i64 16")
+    line(s"  %${x.name}.0 = getelementptr inbounds i8, ptr %${x.name}, i64 ${header(x)}")
 
   private def store(x: Var, fields: List[(Atom, Int)]): Unit =
     fields.foreach { (a, slot) =>
       val n = ids.next()
-      line(s"  %st.$n = getelementptr inbounds i8, ptr %${x.name}, i64 ${16 + 8 * slot}")
+      line(s"  %st.$n = getelementptr inbounds i8, ptr %${x.name}, i64 ${header(x) + 8 * slot}")
       line(s"  store ${widen(operand(a), a.tpe, n.toString)}, ptr %st.$n")
     }
 
@@ -532,6 +543,7 @@ object EmitLLVM:
     "declare ptr @fx_alloc(i32, i32, i64)",
     "declare ptr @fx_alloc_at(ptr, i32, i32, i64)",
     "declare ptr @fx_frame_alloc(i32, i32, i64)",
+    "declare ptr @fx_frame_alloc_bare(i32, i32, i64)",
     "declare void @fx_frame_reset(ptr)",
     "@fx_frame_top = external global ptr"
   )

@@ -57,7 +57,7 @@ object Backend:
         val placed = if frames then Frames(fns, a.memory) else Frames.none(fns)
         val lent = (f: String) => borrowed.getOrElse(placed.clones.getOrElse(f, f), Set.empty)
         val counted = Aborts(placed.fns).map(f => Rc(f, lent, placed.frame.getOrElse(f.name, Set.empty)))
-        Right(EmitLLVM(placed.bumped, placed.scoped).program(counted))
+        Right(EmitLLVM(placed.bumped, placed.scoped, placed.bare).program(counted))
       case problems => Left(problems)
 
   /** Core for `unit`: lowered, then split into the versions demand inference calls for (3.4.M3). */

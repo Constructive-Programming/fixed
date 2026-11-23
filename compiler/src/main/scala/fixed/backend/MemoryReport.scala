@@ -35,8 +35,10 @@ object MemoryReport:
     val placed = if frames then Frames(Consume(a)._1, a.memory) else Frames.none(Nil)
     def where(f: String, x: String) =
       val clone = f + Frames.suffix
-      if placed.bumped.getOrElse(f, Set.empty)(x) then s"Frame($f)"
-      else if placed.bumped.getOrElse(clone, Set.empty)(x) then s"Heap; in the caller's frame through `$clone`"
+      val bare = (g: String) => if placed.bare.getOrElse(g, Set.empty)(x) then ", no count word" else ""
+      if placed.bumped.getOrElse(f, Set.empty)(x) then s"Frame($f)${bare(f)}"
+      else if placed.bumped.getOrElse(clone, Set.empty)(x) then
+        s"Heap; in the caller's frame through `$clone`${bare(clone)}"
       else "Heap"
     val renamed = placed.fns.map(f => f.name -> f).toMap
     val at = (sp: Span) =>

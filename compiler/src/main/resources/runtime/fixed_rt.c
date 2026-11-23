@@ -47,13 +47,26 @@ static void fx_die(const char *msg, int code) {
     exit(code);
 }
 
-/* A released frame cell's count word, checked builds: FRAME_DEAD minus the size of the dead run it starts. */
+/* Checked builds put a check word in front of every frame cell (the data stack below): minus the
+   size of a live cell with a count word, FRAME_BARE minus the size of a live cell without one, and
+   FRAME_DEAD minus the size of a released cell, or of the dead run it starts. Sizes include the
+   check word and are below 2^40, so the three ranges do not meet. */
 #define FRAME_DEAD (-((int64_t)1 << 40))
+#define FRAME_BARE (-((int64_t)1 << 50))
 
-/* Stop on a frame cell whose scope was reset (checked builds). */
+#ifdef FX_CHECK_FRAME
+static bool on_frame_stack(const void *p);
+#endif
+
+/* Stop on a count operation that reaches a frame cell whose scope was reset, or one without a
+   count word (checked builds). Any other frame cell holds a negative count, which the caller
+   leaves alone. */
 static inline void frame_live(const fx_header *h) {
 #ifdef FX_CHECK_FRAME
-    if (h->rc <= FRAME_DEAD) fx_die("internal error: a frame cell used after its scope ended", 103);
+    if (!on_frame_stack(h)) return;
+    int64_t check = ((const int64_t *)h)[-1];
+    if (check <= FRAME_BARE) fx_die("internal error: a count operation on a frame cell without a count word", 103);
+    if (check <= FRAME_DEAD) fx_die("internal error: a frame cell used after its scope ended", 103);
 #else
     (void)h;
 #endif
@@ -89,6 +102,7 @@ static fx_header *reclaim(fx_header *h) {
 
 /* Exclusively owned: no test. FX_CHECK_EXCL (test builds) verifies the claim. */
 void *fx_reuse_excl(fx_header *h) {
+    frame_live(h);
 #ifdef FX_CHECK_EXCL
     if (h->rc != 1) fx_die("internal error: reused a cell that is not exclusively owned", 103);
 #endif
@@ -98,6 +112,7 @@ void *fx_reuse_excl(fx_header *h) {
 
 /* Shared: Koka's path. Reuse when the count says no one else holds it; else release our share. */
 void *fx_reuse(fx_header *h) {
+    frame_live(h);
     if (h->rc == 1) {
         n_test_pass++;
         return reclaim(h);
@@ -182,17 +197,21 @@ void fx_panic_div(void) { fx_die("panic: integer division by zero", 101); }
    back. Chunks above the top are kept for reuse. ponytail: chunks are not aligned to their size (Rule MM6.1) because
    nothing masks a pointer to find its chunk yet; align them when a region descriptor is needed.
 
-   A frame cell has the header of every cell, its count word holding minus its size: negative, so
-   `fx_dup`, `fx_drop`, `fx_reuse` and the drop of a parent leave it alone, as they leave a static
-   cell (Rule PR3.1's immortal sentinel), and code that does not know a value's class cannot free
-   or count it. Only `fx_reuse_excl` must never see one: the compiler takes no reuse token from a
-   frame value, and FX_CHECK_EXCL stops on one. The size lets a checked build walk the cells.
+   A frame cell from `fx_frame_alloc` has the header of every cell, its count word holding Rule
+   PR3.1's immortal sentinel, as a static cell's does, so `fx_dup`, `fx_drop`, `fx_reuse` and the
+   drop of a parent leave it alone, and code that does not know a value's class cannot free or count
+   it. Only `fx_reuse_excl` must never see one: the compiler takes no reuse token from a frame
+   value, and FX_CHECK_EXCL stops on one. A cell from `fx_frame_alloc_bare` has the descriptor and
+   no count word (Rule MM3.1): 8 bytes, then the payload. The compiler asks for one only where
+   every use of the cell is code compiled for that layout, which counts nothing.
 
-   FX_CHECK_FRAME (test builds): a reset does not rewind; it counts the cells it releases and
-   poisons them (count word below FRAME_DEAD, payload 0xA5), so a frame cell reached after its
-   scope ended reads poison, and `fx_dup` or `fx_drop` of it stops the program. The first header
-   of each poisoned run holds the run's length, so a later reset over it steps across it at once:
-   a loop that resets to one mark at every step walks each cell once. */
+   FX_CHECK_FRAME (test builds): every frame cell has a check word in front of it (FRAME_DEAD
+   above), which the program never sees. A reset does not rewind; it counts the cells it releases
+   and poisons them (check word below FRAME_DEAD, the cell 0xA5), so a frame cell reached after its
+   scope ended reads poison. A count operation on a released cell, or on any cell without a count
+   word, stops the program. The first check word of each poisoned run holds the run's length, so a
+   later reset over it steps across it at once: a loop that resets to one mark at every step walks
+   each cell once. */
 
 typedef struct fx_chunk {
     struct fx_chunk *prev, *next;
@@ -203,7 +222,7 @@ typedef struct fx_chunk {
 char *fx_frame_top;
 static char *frame_limit;
 static fx_chunk *frame_chunk;
-static uint64_t n_frame_alloc, n_frame_free;
+static uint64_t n_frame_alloc, n_frame_free, n_frame_bytes; /* cell bytes, check words excluded */
 
 /* Continue in the next chunk, one that holds at least `n` bytes. */
 static void frame_next(size_t n) {
@@ -225,16 +244,44 @@ static void frame_next(size_t n) {
     frame_limit = c->limit;
 }
 
+#ifdef FX_CHECK_FRAME
+#define CHECK_WORD 8
+#else
+#define CHECK_WORD 0
+#endif
+
+/* A cell of `n` bytes, rounded up to 8, on the data stack, after the check word of a checked build,
+   which holds `check` minus the size taken. */
+static char *frame_bump(size_t n, int64_t check) {
+    n = (n + 7) & ~(size_t)7;
+    size_t taken = CHECK_WORD + n;
+    if ((size_t)(frame_limit - fx_frame_top) < taken) frame_next(taken);
+    char *p = fx_frame_top + CHECK_WORD;
+#ifdef FX_CHECK_FRAME
+    *(int64_t *)fx_frame_top = check - (int64_t)taken;
+#else
+    (void)check;
+#endif
+    fx_frame_top += taken;
+    n_frame_alloc++;
+    n_frame_bytes += n;
+    return p;
+}
+
 void *fx_frame_alloc(uint32_t tag, uint32_t refs, size_t payload) {
-    size_t n = (sizeof(fx_header) + payload + 7) & ~(size_t)7;
-    if ((size_t)(frame_limit - fx_frame_top) < n) frame_next(n);
-    fx_header *h = (fx_header *)fx_frame_top;
-    fx_frame_top += n;
-    h->rc = -(int64_t)n;
+    fx_header *h = (fx_header *)frame_bump(sizeof(fx_header) + payload, 0);
+    h->rc = -1;
     h->tag = tag;
     h->refs = refs;
-    n_frame_alloc++;
     return h;
+}
+
+/* A frame cell without a count word: its descriptor (`tag`, `refs`), then the payload. */
+void *fx_frame_alloc_bare(uint32_t tag, uint32_t refs, size_t payload) {
+    uint32_t *d = (uint32_t *)frame_bump(2 * sizeof(uint32_t) + payload, FRAME_BARE);
+    d[0] = tag;
+    d[1] = refs;
+    return d;
 }
 
 static bool in_chunk(const fx_chunk *c, const char *p) {
@@ -242,20 +289,29 @@ static bool in_chunk(const fx_chunk *c, const char *p) {
 }
 
 #ifdef FX_CHECK_FRAME
+/* A checked build never rewinds, so every chunk holding a cell is the current one or before it. */
+static bool on_frame_stack(const void *p) {
+    for (const fx_chunk *c = frame_chunk; c; c = c->prev)
+        if (in_chunk(c, p)) return true;
+    return false;
+}
+
 /* Poison the live cells from `from` to `end`, and make the whole range one dead run. */
 static void frame_poison(char *from, char *end) {
     for (char *p = from; p < end;) {
-        fx_header *h = (fx_header *)p;
-        if (h->rc >= 0) fx_die("internal error: a cell on the data stack without a frame header", 103);
-        int64_t size = h->rc > FRAME_DEAD ? -h->rc : FRAME_DEAD - h->rc;
-        if (h->rc > FRAME_DEAD) {
+        int64_t *check = (int64_t *)p;
+        if (*check >= 0) fx_die("internal error: a cell on the data stack without a check word", 103);
+        bool dead = *check <= FRAME_DEAD && *check > FRAME_BARE;
+        int64_t base = dead ? FRAME_DEAD : *check <= FRAME_BARE ? FRAME_BARE : 0;
+        int64_t size = base - *check;
+        if (!dead) {
             n_frame_free++;
-            memset(h + 1, 0xA5, (size_t)size - sizeof(fx_header));
-            h->rc = FRAME_DEAD - size;
+            memset(check + 1, 0xA5, (size_t)size - CHECK_WORD);
+            *check = FRAME_DEAD - size;
         }
         p += size;
     }
-    if (from < end) ((fx_header *)from)->rc = FRAME_DEAD - (end - from);
+    if (from < end) *(int64_t *)from = FRAME_DEAD - (end - from);
 }
 #endif
 
@@ -552,9 +608,9 @@ int main(void) {
                 "{\"allocs\":%" PRIu64 ",\"frees\":%" PRIu64 ",\"dups\":%" PRIu64 ",\"drops\":%" PRIu64
                 ",\"reuse_excl\":%" PRIu64 ",\"reuse_test_pass\":%" PRIu64 ",\"reuse_test_fail\":%" PRIu64
                 ",\"wops\":%" PRIu64 ",\"frame_allocs\":%" PRIu64 ",\"frame_frees\":%" PRIu64
-                ",\"peak_rss_kb\":%ld,\"wall_ns\":%" PRId64 "}\n",
+                ",\"frame_bytes\":%" PRIu64 ",\"peak_rss_kb\":%ld,\"wall_ns\":%" PRId64 "}\n",
                 n_alloc, n_free, n_dup, n_drop, n_reuse_excl, n_test_pass, n_test_fail, n_wop, n_frame_alloc,
-                n_frame_free, ru.ru_maxrss, wall_ns);
+                n_frame_free, n_frame_bytes, ru.ru_maxrss, wall_ns);
     }
     return 0;
 }
