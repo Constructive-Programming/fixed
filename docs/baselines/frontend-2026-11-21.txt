@@ -1,0 +1,6 @@
+# Front-end JMH baseline — bench/FrontEndBench (scan/parse/namer/typer over the examples/ corpus)
+# Date:    2026-11-21
+# Command: sbt "bench/Jmh/run -prof gc"  (JMH 1.37, 2 forks, 5x2s warmup, 5x2s measurement)
+# Commit:  d8e884a
+# Machine: Linux 7.2.15-gentoo-x86_64, AMD RYZEN AI MAX+ 395 (same machine as runtime-2026-11-20.md)
+

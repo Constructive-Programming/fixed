@@ -2,13 +2,13 @@
 // Phantom-typed state transitions and unit-safe arithmetic.
 //
 // Demonstrates:
-//   - Marker capabilities (no methods) as type-level labels
+//   - Unit data types (one zero-sized variant) as type-level labels
 //   - Phantom type parameters for compile-time state tracking
 //   - Quine's "padding" operation: adding a vacuous type parameter
 //   - Quine's "reflection": same type variable constrains two values
 //   - State transitions enforced at compile time (Door, TcpSocket)
 //   - Zero-cost unit safety (Quantity with phantom Unit tag)
-//   - The compiler knows marker capabilities are zero-sized
+//   - The compiler knows unit variants and phantom params are zero-sized
 
 use std.io.Console
 
@@ -16,11 +16,16 @@ use std.io.Console
 // Part 1: State machines via phantom types
 // =========================================================================
 
-// --- State labels (marker capabilities — zero-sized, compile-time only) ---
+// --- State labels (unit data types — zero-sized, compile-time only) ---
 
-cap Locked
-cap Unlocked
-cap Open
+data Locked:
+    Locked
+
+data Unlocked:
+    Unlocked
+
+data Open:
+    Open
 
 // --- A door that tracks its state in the type system ---
 //
@@ -56,9 +61,14 @@ fn inspect(door: is Door of S) -> String =
 
 // --- A more complex example: TCP connection states ---
 
-cap Closed
-cap Listening
-cap Established
+data Closed:
+    Closed
+
+data Listening:
+    Listening
+
+data Established:
+    Established
 
 cap TcpSocket of (State):                  // State inferred phantom (unused in fields/methods)
     Self.fn new(port: u16) -> Self
@@ -80,14 +90,25 @@ fn disconnect(socket: is TcpSocket of Established) -> is TcpSocket of Closed =
 // Part 2: Unit-safe arithmetic via phantom types
 // =========================================================================
 
-// --- Unit marker caps (zero-sized, compile-time only) ---
+// --- Unit tag types (zero-sized, compile-time only) ---
 
-cap Meters
-cap Seconds
-cap MetersPerSecond
-cap MetersPerSecondSq
-cap Kilograms
-cap Newtons
+data Meters:
+    Meters
+
+data Seconds:
+    Seconds
+
+data MetersPerSecond:
+    MetersPerSecond
+
+data MetersPerSecondSq:
+    MetersPerSecondSq
+
+data Kilograms:
+    Kilograms
+
+data Newtons:
+    Newtons
 
 // --- A quantity tagged with its unit ---
 

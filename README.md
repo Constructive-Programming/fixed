@@ -263,13 +263,13 @@ Quine's five predicate functor operations map directly onto Fixed's capability c
 
 ```
 examples/           11 example programs exercising the language design
-docs/plans/         Implementation plan and per-phase plans
-docs/decisions/     Design decision records
+spec/               Formal specification (type system, grammar, effects, memory, ...)
+docs/               Implementation plan, phase plans, decisions, baselines
 docs/diagrams/      Mermaid diagrams of memory layouts and value flow
-spec/               Specification (drafts)
-compiler/           Compiler implementation in Scala 3, with its C runtime and prelude
-bench/              JMH front-end benchmarks and runtime benchmark programs
-scalafix/           Custom lint rules
+compiler/           Compiler front end and backend (Scala 3)
+scalafix/           Custom Scalafix rules + testkit harness
+bench/              JMH benchmarks for the front end
+site/               Laika + Helium sources for fixed.constructive.dev
 ```
 
 ## Running the compiler
