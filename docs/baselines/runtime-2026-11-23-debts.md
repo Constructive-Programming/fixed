@@ -207,3 +207,74 @@ What remains is count traffic the model asks for (the `dup` of the tail read by 
 
 For `records` the order is the same: allocator 57% of instructions (glibc `free` alone 46%), runtime calls (−15% instructions, −28% cycles inlined), then reuse and count traffic (13,000,501 `dup`s and 17,001,507 `drop`s for 3,000,302 allocations).
 
+## 3. Why `acc_loop` and `temps` peak near 95 MB
+
+**Answer.** The hypothesis is right about the effect and wrong about the cause: the whole list of 2,000,000 cells is built before the fold starts, but not because fusion stops at a function boundary. Fusion (Rule 7.4.b.1) is not built at all, even at one call site. Nothing was implemented: what removes the list here is the rule itself, plus an inlining step and, depending on how the rule is read, a change to its third condition.
+
+### The evidence
+
+In `acc_loop`, `main` calls `upto` and passes its result to the fold:
+
+```
+%t.68 = call ptr @"fx_u_upto"(i64 2000000)
+%t.83 = call ptr @"fx_u_List of u64.foldLeft[Acc]"(ptr %t.68, ptr %t.69, ptr …)
+```
+
+`upto` calls the derived `unfold`, whose loop calls the step through its closure, allocates a layer per step, and then a cell (`call ptr @fx_alloc(i32 0, i32 2, i64 16)`); the list is reversed in place and only then handed to `foldLeft`. 2,000,000 cells of 32 bytes are 48-byte `malloc` chunks: 96 MB, the measured peak of 95,072 KiB. `temps` is the same loop with a different step.
+
+Two programs with nothing between `unfold` and `fold`, built at the base commit:
+
+| Program | Allocations | Peak RSS (KiB) |
+|---|---:|---:|
+| `List.unfold(0, step).fold(0, (acc, x) -> acc + x)`, 1,000,000 elements, one expression | 2,000,001 | 48,268 |
+| `Nat.unfold(1000000, step).fold(() -> 0, (r) -> r + 1)`, derived `unfold` and derived `fold` of a local `data Nat` | 2,000,001 | 32,876 |
+
+The second is the case Rule 7.4.b.1 guarantees (both calls derived, one use, type known at the call site), and it allocates the whole structure and a layer per step. There is no fusion pass in the backend (`Generated.derivedUnfold`: "The layer is a separate allocation: fusion is Phase 4"; `docs/plans/implementation-plan.md` lists fusion as not built).
+
+### What would remove the list here, checked against Rule 7.4.b.1
+
+1. **Build the rule** for the case it names: a derived `unfold` whose result, used once, is consumed by one derived `fold`, compiled to one loop that calls the step and the fold's callback per seed with no cell. This is within the rule as written; it is the "fold specializer" of the implementation plan, a pass over Core before reference counting, and with Rule 7.4.b.2 (step inlining, also not built) it also removes the layer allocated per step.
+2. **Inline `upto`.** In `acc_loop` and `temps` the `unfold` is in another function. Inlining a function whose body is a single `unfold` call at a call site is a pure inlining step: it changes no meaning, and after it condition 1 holds literally (the result of an `unfold` is consumed by exactly one `fold`), and so does condition 2 (`upto(2000000)` is used once). The rule does not require the compiler to inline, so the result would be permitted fusion, not guaranteed fusion. To guarantee it, condition 1 would read: "The result of an `unfold`, of a conversion the compiler derives from one, or of a call of a function in the same package whose body is a single such expression with the function's parameters as its only free variables, is consumed by exactly one `fold`."
+3. **Condition 3 and the left fold.** The fold in both programs is `Folding.fold(init, f)`, the left fold, which the backend generates as `foldLeft` with the comment "spec §7.4 does not derive it", while `spec/stdlib.md` says `List satisfies Folding // auto-derived from variants (Rule 7.4.a)`. Rule 7.4.a's derived `fold` is the one with a callback per variant. If condition 3 means only that one, these programs are outside the rule even after step 2, and the rule would need: "Both calls resolve to auto-derived `fold` / `unfold` (Rules 7.4.a, 7.4.b), or the `fold` is `Folding.fold` of a data type whose `Folding` satisfaction is auto-derived." For a left fold, fusion is the simpler loop (seed and accumulator, no reversal), so the extension is sound under the same conditions 1 and 2. This needs the owner's reading of condition 3; it was not implemented.
+
+Steps 1 to 3 together are a new pass in the backend (`Lower` is at 986 of its 1,000 lines), and two other agents are changing the backend and the runtime, so this report describes them instead.
+
+### What fusion would give
+
+The same programs written as a loop by hand (a self tail call under `Diverge`, which the backend compiles to a jump), as an estimate of the fused code:
+
+| Program | Instructions | Cycles (min of 5) | Allocations | Peak RSS (KiB) |
+|---|---:|---:|---:|---:|
+| `acc_loop`, as built | 1,446.29 M | 270.3 M | 4,000,003 | 95,072 |
+| `acc_loop`, by hand | 88.19 M | 16.3 M | 2 | 1,872 |
+| `temps`, as built | 1,610.29 M | 303.0 M | 6,000,002 | 95,104 |
+| `temps`, by hand | 284.19 M | 52.4 M | 2,000,001 | 1,876 |
+
+Both print the expected results. In the hand-written `acc_loop` the record is reused in place on every step (2,000,000 exclusive reuses); in `temps` the `Box3` of each step is still a heap cell (frames, the other agent's work, would remove it).
+
+## Before and after, all eleven benchmarks
+
+Base commit `d646b53` against this branch with the runtime change of §2 (the only change to generated code or runtime in this report). Median instructions, minimum cycles of 9 interleaved runs; allocations and peak RSS from `FIXED_RT_STATS=1`:
+
+| Program | Instructions before | after | Cycles before | after | Allocations (both) | Peak RSS before (KiB) | after |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `bintrees` | 833.79 M | 831.69 M | 241.9 M | 241.0 M | 2,097,151 | 51,064 | 50,824 |
+| `nat_loop` | 1,466.92 M | 1,452.92 M | 285.5 M | 285.1 M | 4,000,402 | 2,156 | 2,156 |
+| `list_pipeline` | 2,056.73 M | 2,042.73 M | 440.7 M | 434.7 M | 4,000,602 | 2,180 | 2,172 |
+| `records` | 1,477.12 M | 1,470.12 M | 298.9 M | 298.1 M | 3,000,302 | 2,672 | 2,652 |
+| `fail_chain` | 1,386.61 M | 1,372.62 M | 286.4 M | 287.5 M | 4,000,602 | 2,176 | 2,136 |
+| `shared_map` | 1,169.53 M | 1,161.46 M | 224.5 M | 234.0 M | 2,020,404 | 2,704 | 2,704 |
+| `fresh_map` | 1,707.43 M | 1,693.36 M | 349.7 M | 352.6 M | 4,020,603 | 2,268 | 2,164 |
+| `acc_loop` | 1,446.29 M | 1,432.29 M | 279.9 M | 279.1 M | 4,000,003 | 94,828 | 94,860 |
+| `points` | 1,435.31 M | 1,429.31 M | 277.4 M | 281.7 M | 3,000,602 | 2,176 | 2,564 |
+| `temps` | 1,610.29 M | 1,590.29 M | 302.9 M | 302.1 M | 6,000,002 | 95,116 | 94,808 |
+| `scratch_tree` | 941.64 M | 938.98 M | 250.9 M | 250.8 M | 2,560,002 | 2,696 | 2,944 |
+
+Peak RSS varies by a few hundred KiB between runs of the same binary. Reuses, `dup`s, `drop`s and frees are unchanged; the pinned reuse counts of `EmitSuite` did not move.
+
+## What could not be determined
+
+- **The 4% of the earlier report.** It does not reproduce at `d646b53`. The earlier report measured it in wall time with ±5% noise, so it may never have been real. Between `c7b3164` (where it was measured) and `d646b53` there are 148 commits, among them the loop form of the derived `unfold` and `map` (`6e0fff7`) and of `fold` (`0d864ba`); the 148 were not bisected, so which of them changed the comparison is not known.
+- **Exact per-function instruction counts.** `perf` sampling has skid around calls into short runtime functions; there is no `valgrind` or instruction-precise sampling on this machine. Where it matters the report computes costs from the runtime's counters and the machine code instead.
+- **Why glibc's free path costs about 225 instructions per cell here** was not traced inside glibc; the cache experiment removes about 525 M of the roughly 1,200 M allocator instructions of `list_pipeline`, so a per-size free list would remove much of it, not all.
+- **Cycles below about 1%.** The machine was shared (load average about 6); identical binaries differed by up to 3.2 M cycles between runs.
