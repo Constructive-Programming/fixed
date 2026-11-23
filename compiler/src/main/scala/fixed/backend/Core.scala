@@ -179,15 +179,10 @@ object Core:
   /** Every `let` of `e`, branches included, in order. */
   def lets(e: Expr): List[(Atom.Var, Rhs)] =
     e match
-      case Expr.Let(x, rhs, body) =>
-        val inner = rhs match
-          case Rhs.If(_, t, f)      => lets(t) ++ lets(f)
-          case Rhs.Switch(_, cases) => cases.flatMap(c => lets(c._2))
-          case _                    => Nil
-        (x, rhs) :: inner ++ lets(body)
-      case Expr.Dup(_, b)  => lets(b)
-      case Expr.Drop(_, b) => lets(b)
-      case Expr.Ret(_)     => Nil
+      case Expr.Let(x, rhs, body) => (x, rhs) :: branches(rhs).flatMap(lets) ++ lets(body)
+      case Expr.Dup(_, b)         => lets(b)
+      case Expr.Drop(_, b)        => lets(b)
+      case Expr.Ret(_)            => Nil
 
   /** `a` and `b` merged by key, `zero` standing for an absent entry. */
   def merge[V](a: Map[String, V], b: Map[String, V], zero: V)(f: (V, V) => V): Map[String, V] =
@@ -220,7 +215,6 @@ object Core:
       case Expr.Let(_, rhs, b) => Core.branches(rhs).flatMap(witnessOps) ++ witnessOps(b)
       case Expr.Ret(_)         => Nil
 
-  /** The witness variable of slot variable `v`. */
   def witnessOf(v: Atom.Var): Option[Atom.Var] =
     v.ctype match
       case CType.Slot(w) => Some(Atom.Var(w, CType.Witness))

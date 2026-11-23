@@ -60,9 +60,7 @@ object Consume:
         val here = rhs match
           case Rhs.Call(f, as, false) => kept(f, as, live)
           case Rhs.Catch(f, as)       => kept(f, as, live)
-          case Rhs.If(_, t, f)        => liveAfter(t, live) ++ liveAfter(f, live)
-          case Rhs.Switch(_, cases)   => cases.flatMap(c => liveAfter(c._2, live))
-          case _                      => Nil
+          case other                  => Core.branches(other).flatMap(liveAfter(_, live))
         here ++ liveAfter(body, after)
       case Expr.Dup(_, b)  => liveAfter(b, after)
       case Expr.Drop(_, b) => liveAfter(b, after)

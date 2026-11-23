@@ -692,10 +692,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
   private def intrinsic(m: Trees.MethodCall, sc: Scope)(k: K): Expr =
     val result = typeOf(m, sc)
     (m.method, m.args.getOrElse(Nil), dataOf(result), capOf(m)) match
-      case ("parseU64", List(arg), Some((data, _)), Some(cap)) =>
-        val tagOf = (ctor: String) =>
-          symbols.constructorsOf(cap, ctor).find(_._1 == data)
-            .map(c => symbols.variantsOf(data).indexWhere(_.name == c._2)).getOrElse(0)
+      case ("parseU64", List(arg), Some(_), Some(cap)) =>
+        val tagOf = (ctor: String) => capVariant(cap, ctor, result).getOrElse(0)
         expr(arg, sc) { a =>
           val (v, ok) = (fresh("n", CType.Int(64, signed = false)), fresh("ok", CType.Bool))
           val (yes, no) = (fresh("yes", ctype(result, m.span)), fresh("no", ctype(result, m.span)))
