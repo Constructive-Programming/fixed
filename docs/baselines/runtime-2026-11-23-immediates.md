@@ -1,7 +1,10 @@
 # Runtime baseline, 2026-11-23: immediates
 
-Immediates (`spec/compilation_model.md` Rule CM3.5) as built on branch `kryptt/s-imm`, commit
-`c5214d2`, against the baseline of commit `d646b53` (`/var/tmp/fixed-bench/base3`, `base3-ns`).
+Immediates (`spec/compilation_model.md` Rule CM3.5) as built on branch `kryptt/s-imm`, measured at
+commit `c5214d2` against the baseline of commit `d646b53`. The branch was then rebased onto `65eb1e4`
+(its commits became `8e8bcd6`, `6c3f118`), whose `fixed_rt.c` change is not in the tables below;
+after the rebase `points` runs 864,654,909 instructions by default and 910,664,493 with
+`--no-specialise`, allocations unchanged.
 
 - Machine: Linux 7.2.15-gentoo-x86_64, AMD RYZEN AI MAX+ 395; toolchain `clang -O2` (clang 22.1.8).
 - Programs: the eleven of `bench/runtime/`, each built in both modes, default (clones by score) and
