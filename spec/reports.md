@@ -299,7 +299,7 @@ Every command uses this one table: the checker `fixed <file>...`, `fixed compile
 
 | Exit code | Class | Where it arises | Diagnostic codes |
 |---|---|---|---|
-| `0` | no failure | — | none; warnings (`W…`, `T005` where the typer reports a gap, `T017`, `warning[E081]`) and notes never set an exit code, unless a flag makes one an error (`--strict-pbt`, class `11`) |
+| `0` | no failure | — | none; warnings (`W…`, `T005` where the typer reports a gap, `warning[E081]`) and notes never set an exit code, unless a flag makes one an error (`--strict-pbt`, class `11`) |
 | `1` | internal compiler error | any command | none: the compiler itself faulted (an uncaught exception, a failed assertion); it is also what the JVM returns for an uncaught exception |
 | `2` | usage error | the command line, before any phase runs | none: an unknown command or flag, a missing or extra argument, flags that exclude each other (`--no-pbt` with `--strict-pbt`, `spec/properties.md` Rule P7.6), an input file that cannot be read |
 | `3` | scan error | package compile: scanner | `E001`–`E009` |
@@ -319,7 +319,7 @@ Every command uses this one table: the checker `fixed <file>...`, `fixed compile
 | `18` | toolchain failure | `ship`, `link`: the native toolchain | `B004` (`clang` missing or failed); an output file that cannot be written |
 | `19` | no generator | test build | `E101`, `E101a` |
 | `20` | prop not proved | after the verifiers, under `--require-proved` | `E106` |
-| `99` | not supported yet | package compile: a limit of the compiler, found by the namer, the typer or lowering | `T005` where the namer reports it as an error; `T026`; `B001`, `B002`, `B003`, `B005` |
+| `99` | not supported yet | package compile: a limit of the compiler, found by the namer, the typer or lowering | `T005` where the namer reports it as an error; `T026`; `B002`, `B003`, `B005` |
 
 **Several classes in one run.** The exit code is the smallest class number among the errors the run reported. The rule is deterministic and does not depend on the order in which diagnostics are printed. A phase that fails stops the phases after it, so the errors of one run come from the first phase that failed, or from the front end (scanner, parser, typer), which keeps going on partial input; the classes of errors in the program that the front end finds (`3` to `10`) come first and in front-end order, so the code names the first phase that failed. A limit of the compiler that the namer finds (`T005`, class `99`) ranks below them: an error in the program is fixed first. The application link and the test build run only after a package compile that succeeded, and among their own classes the number decides. An internal compiler error outranks everything the run reported; a usage error stops the run before any phase.
 
