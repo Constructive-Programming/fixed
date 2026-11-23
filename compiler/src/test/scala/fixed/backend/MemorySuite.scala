@@ -120,7 +120,12 @@ class MemorySuite extends munit.FunSuite:
       "Inner" -> ("imm8", "8 bytes: tag 0, fields 8"),
       "Choice" -> ("imm4", "3 bytes: tag 1, fields 2"),
       "Cell" -> ("cell", "field `v` takes its layout from a type argument (not built)"),
-      "List" -> ("cell", "recursive")
+      "List" -> ("cell", "recursive"),
+      "Temp" -> ("imm8", "5 bytes: tag 0, fields 5"),
+      "Digit" -> ("imm4", "3 bytes: tag 1, fields 2"),
+      "Level" -> ("imm2", "2 bytes: tag 1, fields 1"),
+      "Boxy" -> ("imm8", "5 bytes: tag 0, fields 5"),
+      "Full" -> ("imm8", "8 bytes: tag 1, fields 7")
     )
     val edges = "use std.io.Console\n\ndata Named:\n    Named(s: String, n: u8)\n\n" +
       "data Wide:\n    Wide(x: u64, y: u8)\n\ndata Holder:\n    Holder(w: Wide)\n\n" +

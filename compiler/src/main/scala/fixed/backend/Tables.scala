@@ -239,7 +239,7 @@ private[backend] trait Tables extends Satisfied:
     body(fromPrelude = false).orElse((decl.map(d => symbols.preludeName(d.owner)), member, r) match
       case (_, ctor, _) if decl.exists(_.kind == SymKind.StaticMethod) =>
         capVariant(cap, ctor, t).map(tag =>
-          constructor(name, tag, fieldTypes(data, args, symbols.variantsOf(data).toList(tag).id))
+          constructor(name, tag, fieldTypes(data, args, symbols.variantsOf(data).toList(tag).id), ctype(t, Span.NoSpan))
         )
       case (_, "fold", Some(r)) if mappedFold(cap, t, arity).isDefined =>
         mappedFold(cap, t, arity).map(order => adapter(name, derivedFold(data, own, r, Span.NoSpan), args, own, order))
@@ -256,8 +256,8 @@ private[backend] trait Tables extends Satisfied:
       /** Every cell is a heap cell, so the derived `clone` shares the receiver (`spec/stdlib.md` §4.11). */
       case (Some("Clone"), "clone", _) =>
         Some(instance(name) {
-          val self: Atom.Var = Atom.Var("self", CType.Boxed)
-          Fn(name, List(table, self), CType.Boxed, Expr.Ret(self))
+          val self: Atom.Var = Atom.Var("self", ctype(t, Span.NoSpan))
+          Fn(name, List(table, self), self.ctype, Expr.Ret(self))
         })
       case (None, "lt" | "le", _) => comparison(t, member).map((g, _) => adapter(name, g, args, own))
       case (Some(c), m, _) if derivers.contains((c, m)) =>
@@ -276,7 +276,7 @@ private[backend] trait Tables extends Satisfied:
     * the struct from `fields`, and a member named like a field reads it.
     */
   private def productEntry(ctor: String, fields: List[(String, Type)], member: String, name: String): Option[String] =
-    if member == ctor then Some(constructor(name, 0, fields.map(_._2)))
+    if member == ctor then Some(constructor(name, 0, fields.map(_._2), CType.Boxed))
     else
       Option(fields.indexWhere(_._1 == member)).filter(_ >= 0).map { i =>
         instance(name) {
@@ -320,13 +320,13 @@ private[backend] trait Tables extends Satisfied:
     }
 
   /** A constructor requirement mapped to variant `tag`, whose fields have types `fields`: the
-    * variant built from the arguments.
+    * variant built from the arguments, a value of Core type `rt`.
     */
-  private def constructor(name: String, tag: Int, fields: List[Type]): String =
+  private def constructor(name: String, tag: Int, fields: List[Type], rt: CType): String =
     instance(name) {
       val vs = fields.zipWithIndex.map((ft, i) => Atom.Var(s"a$i", ctype(ft, Span.NoSpan)): Atom.Var)
-      val result: Atom.Var = Atom.Var("r", CType.Boxed)
-      Fn(name, table :: vs, CType.Boxed, Expr.Let(result, Rhs.Con(tag, vs), Expr.Ret(result)))
+      val result: Atom.Var = Atom.Var("r", rt)
+      Fn(name, table :: vs, rt, Expr.Let(result, Rhs.Con(tag, vs), Expr.Ret(result)))
     }
 
   private def table: Atom.Var = Atom.Var("table", CType.Table)
@@ -381,7 +381,7 @@ private[backend] trait Tables extends Satisfied:
         ))
       case ("compare", _) if numeric || t == "char" || t == "String" =>
         val at = if t == "String" then Type.TypeRef(symbols.prelude("String"), Nil) else Type.PrimType(t)
-        Some((List(self, other), CType.Boxed, compareValues(at, self, other)(Expr.Ret(_))))
+        Some((List(self, other), orderType, compareValues(at, self, other)(Expr.Ret(_))))
       case ("concat", CType.Boxed) => Some(runtime("fx_str_concat", List(self, other)))
       case ("show", CType.Boxed)   => Some((List(self), c, Expr.Ret(self)))
       case ("clone", _)            => Some((List(self), c, Expr.Ret(self)))

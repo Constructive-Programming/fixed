@@ -22,7 +22,7 @@ enum CType:
   /** An immediate data value (`spec/compilation_model.md` Rule CM3.5, `Immediates`): no cell, its
     * bits in an `i64`, zero above its `width` bytes. With `tagged`, the variant tag is the low byte
     * and the fields follow it; without, the fields start at bit 0. Each field takes its rest width
-    * ([[Layout.width]]), in declaration order, with no padding.
+    * ([[Layout.width]]), in declaration order, with no padding ([[Layout.offsets]]).
     */
   case Imm(width: scala.Int, tagged: Boolean)
 
@@ -31,6 +31,10 @@ enum CType:
   def slot: Boolean = this match
     case _: CType.Slot => true
     case _             => false
+
+  def immediate: Boolean = this match
+    case _: CType.Imm => true
+    case _            => false
 
   /** May hold a counted reference: what reference counting and the analyses track. */
   def counted: Boolean = this match
@@ -114,17 +118,21 @@ enum Rhs:
   case Call(fn: String, args: List[Atom], runtime: Boolean)
   case If(cond: Atom, thenBranch: Expr, elseBranch: Expr)
 
-  /** A data value (or tuple): variant `tag` with `fields` in declaration order. A value with no
-    * fields is a static object. Consumes the fields.
+  /** A data value (or tuple): variant `tag` with `fields` in declaration order. A cell with no
+    * fields is a static object; a value of a [[CType.Imm]] variable is its bits, no cell. Consumes
+    * the fields.
     */
   case Con(tag: Int, fields: List[Atom])
 
-  /** Read payload slot `slot` of `obj` (see [[Layout]]). Borrows: `obj` is not consumed, and a
-    * counted result is dup'ed by reference counting.
+  /** Read payload slot `slot` of `obj` (see [[Layout]]), or, where `obj` is an immediate, the field
+    * at bit offset `slot` ([[Layout.fieldsOf]]). Borrows: `obj` is not consumed, and a counted result
+    * is dup'ed by reference counting.
     */
   case Field(obj: Atom, slot: Int)
 
-  /** Branch on `scrutinee`'s tag. The last case is also the default. */
+  /** Branch on `scrutinee`'s tag: a cell's header tag, an immediate's low byte (Rule CM3.5), or
+    * variant 0 for an immediate with one variant. The last case is also the default.
+    */
   case Switch(scrutinee: Atom, cases: List[(Int, Expr)])
 
   /** A closure of code function `code`, whose first parameter is the closure itself. A closure
@@ -338,6 +346,23 @@ object Layout:
       case CType.Bool | CType.Unit => Some(1)
       case CType.Imm(w, _)         => Some(w)
       case _                       => None
+
+  /** The bit offset of each field, of Core types `fields`, inside an immediate: from bit 8 after a
+    * tag byte, else from bit 0, each at its rest width, in declaration order (Rule CM3.5).
+    */
+  def offsets(fields: List[CType], tagged: Boolean): List[Int] =
+    fields.scanLeft(if tagged then 8 else 0) { (at, t) =>
+      require(width(t).isDefined, s"a field of Core type $t inside an immediate")
+      at + 8 * width(t).getOrElse(0)
+    }.init
+
+  /** Where each field, of Core types `fields`, of a value of Core type `obj` is, as `Rhs.Field`
+    * reads it: its bit offset if `obj` is an immediate ([[offsets]]), else its payload slot ([[slots]]).
+    */
+  def fieldsOf(obj: CType, fields: List[CType]): List[Int] =
+    obj match
+      case CType.Imm(_, tagged) => offsets(fields, tagged)
+      case _                    => slots(fields)
 
   /** The reference map's static bits (a slot's comes from its witness); overflow is `Lower`'s `B005`. */
   def refs(fields: List[CType], first: Int = 0): Int =

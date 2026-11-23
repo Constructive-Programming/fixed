@@ -49,7 +49,8 @@ private[backend] trait Cases extends Tables:
       case c :: rest =>
         val (test, body) = c.pattern match
           case Trees.DataVariantPat(_, _, pats, _) =>
-            val parts = pats.getOrElse(Nil).zip(variant).zip(Layout.slots(variant.map(ctype(_, c.span))))
+            val parts =
+              pats.getOrElse(Nil).zip(variant).zip(Layout.fieldsOf(ctype(t, c.span), variant.map(ctype(_, c.span))))
             val bound = parts.map { case ((p, ft), _) => tested(p) -> ft }
             (
               allOf(parts.map { case ((p, ft), slot) => field(s, p, ft, slot, sc) }),
@@ -80,7 +81,7 @@ private[backend] trait Cases extends Tables:
       case Trees.LiteralPat(l, _)                 => expr(l, sc)(v => equalValues(t, a, v)(k))
       case Trees.TuplePat(ps, _)                  =>
         val types = dataOf(t).fold(Nil)(_._2)
-        val slots = Layout.slots(types.map(ctype(_, p.span)))
+        val slots = Layout.fieldsOf(ctype(t, p.span), types.map(ctype(_, p.span)))
         allOf(ps.zip(types).zip(slots).map { case ((q, ft), slot) => field(a, q, ft, slot, sc) })(k)
       case _ => k(Atom.BoolC(true))
 

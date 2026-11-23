@@ -3,6 +3,7 @@ package fixed.backend
 import fixed.ast.Trees
 import fixed.core.{SymKind, SymbolId, Type, render}
 import fixed.typer.{Members, TyperPhase}
+import fixed.util.Span
 
 /** The method bodies of `satisfies` declarations (`spec/type_system.md` §8.3), lowered as functions
   * of their own: a call of the member on a data or scalar type that has one, and the member's entry in that
@@ -145,13 +146,18 @@ private[backend] trait Satisfied extends Generated:
     )
     body.orElse(derived(t, gen))
 
+  /** Whether `a` is a scalar, which a primitive operation compares; an immediate data value is
+    * compared by its type's `eq` or `compare`, not by its bits (Rule CM3.5).
+    */
+  private def scalar(a: Atom): Boolean = !a.tpe.counted && !a.tpe.immediate
+
   /** Whether `a` and `b` of type `t` are equal: units always, scalars by a comparison, else by
     * [[equality]]; a type it cannot compare is a problem (`B005`).
     */
   protected def equalValues(t: Type, a: Atom, b: Atom)(k: K): Expr =
     val r = fresh("eq", CType.Bool)
     if a.tpe == CType.Unit then k(Atom.BoolC(true))
-    else if !a.tpe.counted then Expr.Let(r, Rhs.Prim(PrimOp.Eq, List(a, b)), k(r))
+    else if scalar(a) then Expr.Let(r, Rhs.Prim(PrimOp.Eq, List(a, b)), k(r))
     else
       equality(t, a, b) match
         case Some(rhs) => Expr.Let(r, rhs, k(r))
@@ -219,7 +225,11 @@ private[backend] trait Satisfied extends Generated:
     compareOf(t).map { (f, ws) =>
       val name = s"${symbols.render(t)}.$op[compare][${ws.map(_.name).mkString(", ")}]"
       instance(name) {
-        val (a, b, got) = (fresh("a", CType.Boxed), fresh("b", CType.Boxed), fresh("order", CType.Boxed))
+        val (a, b, got) = (
+          fresh("a", ctype(t, Span.NoSpan)),
+          fresh("b", ctype(t, Span.NoSpan)),
+          fresh("order", orderType)
+        )
         val (res, holds) = (fresh("holds", CType.Bool), (v: String) => v == "Less" || (op == "le" && v == "Equal"))
         val cases = orderVariants.zipWithIndex.map((v, tag) => tag -> Expr.Ret(Atom.BoolC(holds(v))))
         val body = Expr.Let(res, Rhs.Switch(got, cases), Expr.Ret(res))
@@ -236,12 +246,13 @@ private[backend] trait Satisfied extends Generated:
   protected def compareValues(t: Type, a: Atom, b: Atom)(k: K): Expr =
     def returned(v: String): Expr = order(v)(Expr.Ret(_))
     def choose(test: Rhs, yes: Expr, no: Expr)(k: K): Expr =
-      val (flag, c) = (fresh("cmp", CType.Bool), fresh("order", CType.Boxed))
+      val (flag, c) = (fresh("cmp", CType.Bool), fresh("order", orderType))
       Expr.Let(flag, test, Expr.Let(c, Rhs.If(flag, yes, no), k(c)))
     def byTests(lt: Rhs, le: Rhs): Expr =
       choose(lt, returned("Less"), choose(le, returned("Equal"), returned("Greater"))(Expr.Ret(_)))(k)
     if a.tpe == CType.Unit then order("Equal")(k)
-    else if !a.tpe.counted then byTests(Rhs.Prim(PrimOp.Lt, List(a, b)), Rhs.Prim(PrimOp.Le, List(a, b)))
+    else if scalar(a) then
+      byTests(Rhs.Prim(PrimOp.Lt, List(a, b)), Rhs.Prim(PrimOp.Le, List(a, b)))
     else if isStringType(t) then
       stringOrder(a, b)(c => byTests(Rhs.Prim(PrimOp.Lt, List(c, zeroOrder)), Rhs.Prim(PrimOp.Le, List(c, zeroOrder))))
     else
@@ -251,7 +262,7 @@ private[backend] trait Satisfied extends Generated:
         case _ =>
           compareOf(t) match
             case Some((f, ws)) =>
-              val c = fresh("order", CType.Boxed)
+              val c = fresh("order", orderType)
               Expr.Let(c, Rhs.Call(f, ws ++ List(a, b), runtime = false), k(c))
             case None =>
               report(s"`compare` on ${symbols.render(t)}")

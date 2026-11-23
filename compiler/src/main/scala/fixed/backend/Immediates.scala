@@ -33,6 +33,9 @@ private[backend] trait Immediates:
       case Type.TypeRef(d, _) if symbols(d).kind == SymKind.Data && !isStringType(t) => classify(d)._1
       case _                                                                         => None
 
+  /** `t` as a data type with its arguments if its values are cells: not an immediate. */
+  protected def cellData(t: Type): Option[(SymbolId, List[Type])] = dataOf(t).filter(_ => immediate(t).isEmpty)
+
   private def classify(d: SymbolId): (Option[CType.Imm], String) =
     if classifying(d) then (None, "recursive")
     else
@@ -71,7 +74,8 @@ private[backend] trait Immediates:
         case Some(why) => (None, why)
         case None      =>
           val size = tag + widths.map(_.map(_.getOrElse(0)).sum).max
-          if size > 8 then (None, s"$size bytes, more than 8")
+          def bytes(n: Int) = if n == 1 then "1 byte" else s"$n bytes"
+          if size > 8 then (None, s"${bytes(size)}, more than 8")
           else
             val w = List(1, 2, 4, 8).find(_ >= size).getOrElse(8)
-            (Some(CType.Imm(w, tag == 1)), s"$size bytes: tag $tag, fields ${size - tag}")
+            (Some(CType.Imm(w, tag == 1)), s"${bytes(size)}: tag $tag, fields ${size - tag}")

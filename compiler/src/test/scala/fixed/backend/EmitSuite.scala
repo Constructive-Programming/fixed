@@ -85,10 +85,19 @@ class EmitSuite extends munit.FunSuite:
     "shared_map" -> (List(2010200L, 0L, 2000000L, 0L), List(0L, 2010200L, 2000000L, 6040800L)),
     "fresh_map" -> (List(4010200L, 2000000L, 0L, 0L), List(0L, 6010200L, 0L, 12040800L)),
     "acc_loop" -> (List(2000000L, 2000000L, 0L, 0L), List(0L, 4000000L, 0L, 8000000L)),
-    "points" -> (List(2000200L, 2000000L, 0L, 0L), List(0L, 4000200L, 0L, 6000800L)),
+    "points" -> (List(2000200L, 1000000L, 0L, 0L), List(0L, 3000200L, 0L, 6000800L)),
     "temps" -> (List(2000000L, 0L, 0L, 0L), List(0L, 2000000L, 0L, 8000000L)),
     "scratch_tree" -> (List(20000L, 0L, 0L, 0L), List(0L, 20000L, 0L, 2600000L))
   )
+
+  /** Allocations of a benchmark in every mode, where they are a fact the design fixes. `points`: a
+    * `P` of two `u32` is an immediate (Rule CM3.5), so only list cells, closures and the printed
+    * string are allocated: per round, per point the unfold step's `Cons` layer and the accumulator
+    * cell the unfold loop builds from it (reversed in place; `map` reuses the cells, `fold` frees
+    * them), and `points`' closure, 200 × (2 × 5000 + 1);
+    * `upto(200)` the same two cells per element and its closure, 2 × 200 + 1; the shown result, 1.
+    */
+  private val allocations = Map("points" -> (200L * (2 * 5000 + 1) + (2 * 200 + 1) + 1))
 
   programs.foreach { (dir, name) =>
     test(s"$dir/$name prints its expected result"):
@@ -98,6 +107,7 @@ class EmitSuite extends munit.FunSuite:
         assertEquals(sites(counts(Mode.Default)), default, "default")
         assertEquals(sites(counts(Mode.NoSpecialise)), plain, "--no-specialise")
       }
+      allocations.get(name).foreach(n => modes.foreach(m => assertEquals(counts(m)("allocs"), n, m)))
   }
 
   test("every benchmark has its reuse sites pinned"):

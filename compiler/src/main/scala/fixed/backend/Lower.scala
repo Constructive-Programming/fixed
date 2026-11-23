@@ -94,7 +94,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
 
   /** A function copying a value of type `t`: cells at part keys `parts` copied, the rest shared. */
   def copy(t: Type, parts: Set[(String, Int)]): Option[String] =
-    dataOf(t).map((d, args) => copyOf(d, args, parts, symbols.render(_), Span.NoSpan))
+    cellData(t).map((d, args) => copyOf(d, args, parts, symbols.render(_), Span.NoSpan))
 
   /** Whether `t` mentions no type parameter: the part keys of its values are the same everywhere. */
   def known(t: Type): Boolean = typeParamsIn(t).isEmpty
@@ -283,7 +283,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case Trees.TuplePat(elems, _) =>
         /** `(A, B)` or `Tuple of (A, B)`; the typer has checked the arity. */
         val types = dataOf(t).fold(Nil)(_._2)
-        fields(a, elems.zip(types), Layout.slots(types.map(ctype(_, pat.span))), sc)(k)
+        fields(a, elems.zip(types), Layout.fieldsOf(ctype(t, pat.span), types.map(ctype(_, pat.span))), sc)(k)
       case other => unsupportedThen(other.span, s"pattern ${other.getClass.getSimpleName}", k(sc))
 
   /** Load the fields `pats` bind from `obj`, at `slots`. */
@@ -312,8 +312,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
         expr(b.lhs, sc)(l =>
           expr(b.rhs, sc)(r =>
             (op, l.tpe) match
-              case (_, _: CType.Slot)      => slotOp(op, l, r, typeOf(b.lhs, sc), b, sc)(k)
-              case (Eq | Neq, CType.Boxed) =>
+              case (_, _: CType.Slot)                     => slotOp(op, l, r, typeOf(b.lhs, sc), b, sc)(k)
+              case (Eq | Neq, CType.Boxed | _: CType.Imm) =>
                 val (v, t) = (fresh("eq", CType.Bool), typeOf(b.lhs, sc))
                 def result = if op == Eq then k(v) else bind(Rhs.Prim(PrimOp.Not, List(v)), b, sc)(k)
                 equality(t, l, r).fold(unsupported(b.span, s"`${op.symbol}` on ${symbols.render(t)}", k))(
@@ -321,11 +321,11 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
                 )
               case (Lt | Le | Gt | Ge, CType.Boxed) if isStringType(typeOf(b.lhs, sc)) =>
                 stringOrder(l, r)(c => bind(Rhs.Prim(PrimOp.of(op), List(c, zeroOrder)), b, sc)(k))
-              case (Lt | Le | Gt | Ge, CType.Boxed) =>
+              case (Lt | Le | Gt | Ge, CType.Boxed | _: CType.Imm) =>
                 ordered(typeOf(b.lhs, sc), op, l, r)
                   .fold(unsupported(b.span, s"`${op.symbol}` on boxed values", k))(bind(_, b, sc)(k))
-              case (_, CType.Boxed) => unsupported(b.span, s"`${op.symbol}` on boxed values", k)
-              case _                => bind(Rhs.Prim(PrimOp.of(op), List(l, r)), b, sc)(k)
+              case (_, CType.Boxed | _: CType.Imm) => unsupported(b.span, s"`${op.symbol}` on data values", k)
+              case _                               => bind(Rhs.Prim(PrimOp.of(op), List(l, r)), b, sc)(k)
           )
         )
 
@@ -585,8 +585,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       case Some(Resolution.Field(variant, index)) =>
         dataOf(recvType) match
           case Some((data, dargs)) =>
-            val slot = Layout.slots(fieldTypes(data, dargs, variant).map(ctype(_, m.span)))(index)
-            expr(m.receiver, sc)(r => bind(Rhs.Field(r, slot), m, sc)(k))
+            val at = Layout.fieldsOf(ctype(recvType, m.span), fieldTypes(data, dargs, variant).map(ctype(_, m.span)))
+            expr(m.receiver, sc)(r => bind(Rhs.Field(r, at(index)), m, sc)(k))
           case None => unsupported(m.span, s"field `${m.method}` of ${symbols.render(recvType)}", k)
       case Some(Resolution.DerivedFold(_, para)) =>
         generatedCall(recvType, m, sc, Some(typeOf(m, sc)))(derivedFold(_, _, _, m.span, para))(k)
@@ -681,7 +681,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
             case List(v) =>
               val names = symbols.fieldsOf(v.id).map(_.name).toList
               val types = fieldTypes(data, args, v.id)
-              Option(names.indexOf(name)).filter(_ >= 0).map(Layout.slots(types.map(ctype(_, Span.NoSpan)))(_))
+              val at = Layout.fieldsOf(ctype(t, Span.NoSpan), types.map(ctype(_, Span.NoSpan)))
+              Option(names.indexOf(name)).filter(_ >= 0).map(at)
             case _ => None
         }
 
@@ -697,7 +698,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
             .map(c => symbols.variantsOf(data).indexWhere(_.name == c._2)).getOrElse(0)
         expr(arg, sc) { a =>
           val (v, ok) = (fresh("n", CType.Int(64, signed = false)), fresh("ok", CType.Bool))
-          val (yes, no) = (fresh("yes", CType.Boxed), fresh("no", CType.Boxed))
+          val (yes, no) = (fresh("yes", ctype(result, m.span)), fresh("no", ctype(result, m.span)))
           Expr.Let(
             v,
             Rhs.Call("fx_parse_u64", List(a), runtime = true),
@@ -797,7 +798,7 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
     else
       all(args, sc) { as =>
         val payload = as.headOption.getOrElse(Atom.StrC(""))
-        if !payload.tpe.boxed then unsupported(s.span, "an abortive operation with a scalar payload", k)
+        if !payload.tpe.boxed then unsupported(s.span, "an abortive operation with a scalar or immediate payload", k)
         else
           val u = fresh("abort", CType.Unit)
           Expr.Let(
@@ -928,9 +929,11 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
         case _          => None
     }
 
-  /** The number of payload slots of variant `tag` of a value of type `t`. */
+  /** The number of payload slots of variant `tag` of a value of type `t`; none for an immediate,
+    * which has no cell to reuse.
+    */
   def cellSize(t: Type, tag: Int): Option[Int] =
-    dataOf(t).flatMap((data, args) =>
+    cellData(t).flatMap((data, args) =>
       symbols.variantsOf(data).toList.lift(tag).map(v => fieldTypes(data, args, v.id).size)
     )
 
@@ -948,8 +951,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
 
   protected def ctype(t: Type, span: Span): CType =
     Lower.scalar(t).getOrElse(t match
-      /** Classified for the memory report only, until code generation builds immediates. */
-      case _ if isStringType(t) || dataOf(t).isDefined             => { val _ = immediate(t); CType.Boxed }
+      /** Pointer or immediate: Rule CM3.5 as [[Immediates]] applies it to the data type. */
+      case _ if isStringType(t) || dataOf(t).isDefined             => immediate(t).getOrElse(CType.Boxed)
       case _ if isTypeParam(t)                                     => CType.Slot(witnessVar(t).name)
       case _: Type.ArrowType                                       => CType.Boxed
       case Type.CapRef(c, _) if represent.constructor(c).isDefined => CType.Boxed

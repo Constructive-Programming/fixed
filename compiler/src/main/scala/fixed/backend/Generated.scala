@@ -88,7 +88,7 @@ private[backend] trait Generated:
     val name = generatedName(data, args, if para then "para" else "fold", shown(r))
     val ws = hidden(args :+ r)
     instance(name) {
-      val x = typed(fresh("x", CType.Boxed), Type.TypeRef(data, args), span)
+      val x = typed(fresh("x", ctype(Type.TypeRef(data, args), span)), Type.TypeRef(data, args), span)
       val callbacks = foldCallbacks(data)
       val rt = ctype(r, span)
       if linear(data) then
@@ -223,12 +223,8 @@ private[backend] trait Generated:
         val branches = perVariant(data, args, layer, span, Some(seedType)) { (tag, loaded) =>
           construction(tag, loaded, fieldTransform(data, tag, loaded, recurse, span), Type.TypeRef(data, args))
         }
-        Fn(
-          name,
-          ws ++ List(s, step),
-          CType.Boxed,
-          Expr.Let(layer, Rhs.CallClosure(step, List(s)), switch(layer, branches, CType.Boxed))
-        )
+        val rt = ctype(Type.TypeRef(data, args), span)
+        Fn(name, ws ++ List(s, step), rt, Expr.Let(layer, Rhs.CallClosure(step, List(s)), switch(layer, branches, rt)))
     }
 
   /** Rule 7.4.c: `x.map(f)` over the rightmost type parameter. Elements and recursive fields are
@@ -399,7 +395,7 @@ private[backend] trait Generated:
       body: (Int, List[(Type, Var)]) => Expr
   ): String =
     derivedMember(data, args, name) { (member, ws, t) =>
-      val x = typed(fresh("x", CType.Boxed), t, Span.NoSpan)
+      val x = typed(fresh("x", ctype(t, Span.NoSpan)), t, Span.NoSpan)
       Fn(member, ws :+ x, CType.Boxed, switch(x, perVariant(data, args, x, Span.NoSpan)(body), CType.Boxed))
     }
 
@@ -437,9 +433,9 @@ private[backend] trait Generated:
         case ((ft, x), (_, y)) :: rest =>
           compareValues(ft, x, y) { c =>
             val cases = orderVariants.map(v => if v == "Equal" then fields(rest) else Expr.Ret(c)).zipWithIndex
-            result(Rhs.Switch(c, cases.map(_.swap)), CType.Boxed)
+            result(Rhs.Switch(c, cases.map(_.swap)), orderType)
           }
-    pairwise(data, args, "compare", CType.Boxed)(
+    pairwise(data, args, "compare", orderType)(
       fields,
       (tag, other) => order(if tag < other then "Less" else "Greater")(Expr.Ret(_))
     )
@@ -455,7 +451,7 @@ private[backend] trait Generated:
   ): String =
     val span = Span.NoSpan
     derivedMember(data, args, name) { (member, ws, t) =>
-      val (a, b) = (typed(fresh("a", CType.Boxed), t, span), typed(fresh("b", CType.Boxed), t, span))
+      val (a, b) = (typed(fresh("a", ctype(t, span)), t, span), typed(fresh("b", ctype(t, span)), t, span))
       val branches = perVariant(data, args, a, span) { (tag, as) =>
         val inner = perVariant(data, args, b, span) { (other, bs) =>
           if other == tag then same(as.zip(bs)) else differ(tag, other)
@@ -467,8 +463,12 @@ private[backend] trait Generated:
 
   /** `k` given the prelude's `Order` variant `v`. */
   protected def order(v: String)(k: K): Expr =
-    val o = fresh("o", CType.Boxed)
+    val o = fresh("o", orderType)
     Expr.Let(o, Rhs.Con(orderVariants.indexOf(v), Nil), k(o))
+
+  /** The Core type of the prelude's `Order`: an immediate (P6 D17, Rule CM3.5). */
+  protected def orderType: CType =
+    symbols.prelude.get("Order").fold(CType.Boxed)(o => ctype(Type.TypeRef(o, Nil), Span.NoSpan))
 
   /** The names of the prelude's `Order` variants, in tag order. */
   protected def orderVariants: List[String] =
@@ -569,21 +569,22 @@ private[backend] trait Generated:
     instance(name) {
       val (xs, p) = (listParam(data, args, span), fresh("p", CType.Boxed))
       val tag = (ctor: String) => capVariant(optional, ctor, resultType).getOrElse(0)
-      val none = fresh("none", CType.Boxed)
+      val rt = ctype(resultType, span)
+      val none = fresh("none", rt)
       val branches = listBranches(data, args, xs, span, Expr.Let(none, Rhs.Con(tag("none"), Nil), Expr.Ret(none))) {
         (elem, rest) =>
-          val (ok, some) = (fresh("ok", CType.Bool), fresh("some", CType.Boxed))
+          val (ok, some) = (fresh("ok", CType.Bool), fresh("some", rt))
           val found = Expr.Let(some, Rhs.Con(tag("some"), List(elem)), Expr.Ret(some))
           Expr.Let(
             ok,
             Rhs.CallClosure(p, List(elem)),
             result(
-              Rhs.If(ok, found, result(Rhs.Call(name, ws ++ List(rest, p), runtime = false), CType.Boxed)),
-              CType.Boxed
+              Rhs.If(ok, found, result(Rhs.Call(name, ws ++ List(rest, p), runtime = false), rt)),
+              rt
             )
           )
       }
-      Fn(name, ws ++ List(xs, p), CType.Boxed, switch(xs, branches, CType.Boxed))
+      Fn(name, ws ++ List(xs, p), rt, switch(xs, branches, rt))
     }
 
   /** The witness parameter of type parameter `p` (`spec/compilation_model.md` Rule CM4.3). */
@@ -599,7 +600,9 @@ private[backend] trait Generated:
 
   /** The witness of type `t` where the code being lowered runs: the witness parameter of a type
     * parameter, else the static witness of a known type (every value that is not an immediate is on
-    * the heap).
+    * the heap). Pointer or immediate: `t`'s Core type. A scalar and an immediate data value
+    * ([[CType.Imm]]) are not counted and get `imm`, whose `dup` and `drop` do nothing and whose
+    * reference-map bit is 0, so baseline code copies the slot's 64 bits; a cell gets `ref`.
     */
   protected def witnessAtom(t: Type): Atom =
     if isTypeParam(t) then witnessVar(t)
@@ -718,7 +721,7 @@ private[backend] trait Generated:
     */
   private def construction(tag: Int, loaded: List[(Type, Var)], transform: Transform, t: Type): Expr =
     rebuild(loaded, transform) { as =>
-      val res = typed(fresh("r", CType.Boxed), t, Span.NoSpan)
+      val res = typed(fresh("r", ctype(t, Span.NoSpan)), t, Span.NoSpan)
       Expr.Let(res, Rhs.Con(tag, as), Expr.Ret(res))
     }
 
@@ -747,7 +750,7 @@ private[backend] trait Generated:
       val types = fieldTypes(data, args, v.id)
       val cts = types.map(t => seed.filter(_ => t == self).getOrElse(ctype(t, span)))
       val vars = cts.map(fresh("f", _))
-      val loads = vars.zip(Layout.slots(cts))
+      val loads = vars.zip(Layout.fieldsOf(obj.ctype, cts))
       (tag, loads.foldRight(body(tag, types.zip(vars)))((l, acc) => Expr.Let(l._1, Rhs.Field(obj, l._2), acc)))
     }
 

@@ -1,7 +1,10 @@
 // Data that holds no reference and fits 64 bits, at the edges where a value kept inside a slot goes
 // wrong: exactly 64 bits, one bit more, signed fields that are negative (sign extension), a bool and
 // a char beside numbers, a small value inside another, inside a list, behind a type parameter, in a
-// capability table, as a fold accumulator, compared and printed.
+// capability table, as a fold accumulator, compared and printed. Then: an f32 field (equality by
+// the field's `==`, not by bits: -0.0 equals 0.0, a NaN equals nothing), a tag above 7, a small
+// value captured by a closure, built by a handler's return clause, read by a `satisfies` body, matched
+// with literal patterns, ordered by its derived `compare` with negative fields, and through `T is Ord`.
 use std.io.Console
 
 data Pair32:
@@ -26,6 +29,72 @@ data Choice:
 
 data Cell of T:
     Cell(v: T)
+
+data Temp:
+    Temp(celsius: f32, valid: bool)
+
+data Digit:
+    D0
+    D1
+    D2
+    D3
+    D4
+    D5
+    D6
+    D7
+    D8
+    D9(neg: i16)
+
+data Boxy:
+    Boxy(c: Choice, n: u8)
+
+data Full:
+    Seven(a: u32, b: u16, c: u8)
+    Other
+
+data Level:
+    Low
+    High(v: u8)
+
+Level satisfies Show:
+    fn show = match self:
+        Level.Low => "low"
+        Level.High(v) => "high ".concat(v.show())
+
+effect Fail of E:
+    fn fail(error: E) -> !
+
+fn check(n: u8) -> u8 with Fail of String =
+    if n > 100:
+        Fail.fail("too big")
+    else:
+        n + 1
+
+fn guarded(n: u8) -> Level =
+    handle check(n):
+        Fail.fail(_) => Level.Low
+        return(v) => Level.High(v)
+
+fn adder(p: Pair32) -> (u32 -> u32) = (n) -> p.x + p.y + n
+
+fn classify(p: Pair32) -> u32 =
+    match p:
+        Pair32.Pair32(0, y) => y
+        Pair32.Pair32(x, 4294967295) => x + 1
+        Pair32.Pair32(x, y) => x * y
+
+fn lowest(f: Full) -> u8 =
+    match f:
+        Full.Seven(_, _, c) => c
+        Full.Other => 0
+
+fn biggest(a: T is Ord, b: T) -> T = if a > b: a else: b
+
+fn digit(d: Digit) -> i16 =
+    match d:
+        Digit.D9(n) => n
+        Digit.D8 => 8
+        _ => 0
 
 fn id(x: T) -> T = x
 
@@ -75,3 +144,33 @@ fn main() -> () with Console =
     Console.printLine(pairs(3).map((p) -> bump(Pair32.Pair32(p.x, 9))).show())
     Console.printLine((edge == Pair32.Pair32(4294967295, 0)).show())
     Console.printLine((edge == Pair32.Pair32(0, 4294967295)).show())
+    let warm = Temp.Temp(-0.5, true)
+    Console.printLine(warm.show())
+    Console.printLine(shown(Temp.Temp(21.25, false)))
+    Console.printLine((Temp.Temp(0.0, true) == Temp.Temp(-0.0, true)).show())
+    let nan = Temp.Temp(0.0 / 0.0, true)
+    Console.printLine((nan == nan).show())
+    Console.printLine(same(warm, Temp.Temp(-0.5, true)).show())
+    Console.printLine((digit(Digit.D9(-300)) + digit(id(Digit.D8)) + digit(Digit.D3)).show())
+    Console.printLine(shown(Digit.D9(-32768)))
+    Console.printLine(same(Digit.D9(5), Digit.D9(5)).show())
+    let add = adder(Pair32.Pair32(10, 20))
+    Console.printLine(add(3).show())
+    Console.printLine(add(4).show())
+    Console.printLine(guarded(7).show())
+    Console.printLine(guarded(200).show())
+    Console.printLine(shown(guarded(41)))
+    Console.printLine((classify(Pair32.Pair32(0, 9)) + classify(edge) + classify(Pair32.Pair32(3, 5))).show())
+    Console.printLine((Signed.Signed(-1, 0, 0) < Signed.Signed(0, 0, 0)).show())
+    Console.printLine((Signed.Signed(0, -1, 0) > Signed.Signed(0, 0, -5)).show())
+    Console.printLine(biggest(Signed.Signed(-128, 5, 5), Signed.Signed(-127, 0, 0)).show())
+    Console.printLine(biggest(Choice.Two(1, 1), Choice.One(255)).show())
+    let b = Boxy.Boxy(Choice.Two(1, 2), 5)
+    Console.printLine(Boxy.Boxy(b.c, 0).show())
+    Console.printLine(id(b).show())
+    let full = Full.Seven(4294967295, 65535, 255)
+    Console.printLine(full.show())
+    Console.printLine(lowest(full).show())
+    Console.printLine((full > Full.Other).show())
+    Console.printLine(same(full, Full.Seven(4294967295, 65535, 254)).show())
+    Console.printLine(Pair32.unfold(7, (s) -> Pair32.Pair32(s, s + 1)).show())

@@ -115,13 +115,26 @@ final class EmitLLVM:
         s"dead.$n"
       case Rhs.Switch(v, cases) =>
         val n = ids.next()
-        line(s"  %tagp.$n = getelementptr inbounds i8, ptr ${operand(v)}, i64 8")
-        line(s"  %tag.$n = load i32, ptr %tagp.$n")
+
+        /** Pointer or immediate: the scrutinee's Core type. An immediate's tag is its low byte, or
+          * 0 with one variant (Rule CM3.5); a cell's is the `i32` after its count.
+          */
+        val tag = v.tpe match
+          case CType.Imm(_, true) =>
+            line(s"  %tagb.$n = trunc i64 ${operand(v)} to i8")
+            line(s"  %tag.$n = zext i8 %tagb.$n to i32")
+            s"%tag.$n"
+          case CType.Imm(_, false) => "0"
+          case _                   =>
+            line(s"  %tagp.$n = getelementptr inbounds i8, ptr ${operand(v)}, i64 8")
+            line(s"  %tag.$n = load i32, ptr %tagp.$n")
+            s"%tag.$n"
         val labelled = cases.zipWithIndex.map { case ((tag, c), i) => (tag, s"case.$n.$i", c) }
         val branches = labelled.init.map((tag, l, _) => s"i32 $tag, label %$l").mkString(" ")
-        line(s"  switch i32 %tag.$n, label %${labelled.last._2} [ $branches ]")
+        line(s"  switch i32 $tag, label %${labelled.last._2} [ $branches ]")
         join(x, n, labelled.map((_, l, c) => l -> c), tail)
-      case Rhs.Con(tag, Nil) =>
+      case Rhs.Con(tag, fields) if x.ctype.immediate => pack(x, tag, fields); label
+      case Rhs.Con(tag, Nil)                         =>
         val name = s"nullary.$tag"
         statics(name) =
           s"@$name = private unnamed_addr constant <{ i64, i32, i32 }> <{ i64 -1, i32 $tag, i32 0 }>, align 8\n"
@@ -140,8 +153,12 @@ final class EmitLLVM:
         store(x, fields.zip(Layout.slots(types)))
         label
       case Rhs.Field(obj, slot) =>
-        line(s"  %${x.name}.p = getelementptr inbounds i8, ptr ${operand(obj)}, i64 ${16 + 8 * slot}")
-        load(x)
+        /** Pointer or immediate: `obj`'s Core type. An immediate's field is at bit offset `slot`. */
+        obj.tpe match
+          case _: CType.Imm => unpack(x, operand(obj), slot)
+          case _            =>
+            line(s"  %${x.name}.p = getelementptr inbounds i8, ptr ${operand(obj)}, i64 ${16 + 8 * slot}")
+            load(x)
         label
       case Rhs.Closure(code, Nil, exclusive) =>
         val name = s"closure.$code"
@@ -230,6 +247,57 @@ final class EmitLLVM:
       line(s"  %${x.name} = phi ${EmitLLVM.llType(x.ctype)} ${results.mkString(", ")}")
       s"join.$n"
 
+  /** `x`, an immediate, built from variant `tag`'s `fields` (Rule CM3.5): the tag in the low byte if
+    * `x`'s type is tagged, then each field zero-extended from its own type (an immediate field is
+    * already zero above its width) and shifted to its offset ([[Layout.offsets]]), all or'ed. Every
+    * bit above the fields stays zero.
+    */
+  private def pack(x: Var, tag: Int, fields: List[Atom]): Unit =
+    val tagged = x.ctype match
+      case CType.Imm(_, t) => t
+      case _               => false
+    val placed = fields.zip(Layout.offsets(fields.map(_.tpe), tagged)).filter(_._1.tpe != CType.Unit)
+    val parts = placed.map { (a, at) =>
+      val n = ids.next()
+      val bits = a.tpe match
+        case CType.Int(64, _) | _: CType.Imm => operand(a)
+        case CType.Float(64)                 =>
+          line(s"  %pk.$n.b = bitcast double ${operand(a)} to i64")
+          s"%pk.$n.b"
+        case CType.Float(_) =>
+          line(s"  %pk.$n.b = bitcast float ${operand(a)} to i32")
+          line(s"  %pk.$n.z = zext i32 %pk.$n.b to i64")
+          s"%pk.$n.z"
+        case t =>
+          line(s"  %pk.$n.z = zext ${EmitLLVM.llType(t)} ${operand(a)} to i64")
+          s"%pk.$n.z"
+      if at == 0 then bits
+      else
+        line(s"  %pk.$n = shl i64 $bits, $at")
+        s"%pk.$n"
+    }
+    val all = Option.when(tagged && tag != 0)(tag.toString).toList ++ parts
+    aliases(x.name) = all.reduceOption { (a, b) =>
+      val n = ids.next()
+      line(s"  %pk.$n = or i64 $a, $b")
+      s"%pk.$n"
+    }.getOrElse("0")
+
+  /** `x`, the field at bit offset `at` of the immediate `v` (Rule CM3.5): shifted down, then narrowed
+    * to `x`'s type, a narrower immediate masked to its width.
+    */
+  private def unpack(x: Var, v: String, at: Int): Unit =
+    val n = ids.next()
+    val shifted =
+      if at == 0 then v
+      else
+        line(s"  %up.$n = lshr i64 $v, $at")
+        s"%up.$n"
+    x.ctype match
+      case CType.Imm(w, _) if w < 8 =>
+        line(s"  %${x.name} = and i64 $shifted, ${(BigInt(1) << (8 * w)) - 1}")
+      case _ => narrow(x, shifted)
+
   private def allocate(x: Var, tag: Int, refs: String, slots: Int): Unit =
     line(s"  %${x.name} = call ptr @fx_alloc(i32 $tag, i32 $refs, i64 ${8 * slots})")
     line(s"  %${x.name}.0 = getelementptr inbounds i8, ptr %${x.name}, i64 16")
@@ -276,10 +344,10 @@ final class EmitLLVM:
   private def narrow(x: Var, slot: String): Unit =
     val v = s"%${x.name}"
     x.ctype match
-      case CType.Int(64, _) | _: CType.Slot          => aliases(x.name) = slot
-      case CType.Boxed | CType.Witness | CType.Table => line(s"  $v = inttoptr i64 $slot to ptr")
-      case CType.Float(64)                           => line(s"  $v = bitcast i64 $slot to double")
-      case CType.Float(_)                            =>
+      case CType.Int(64, _) | _: CType.Slot | _: CType.Imm => aliases(x.name) = slot
+      case CType.Boxed | CType.Witness | CType.Table       => line(s"  $v = inttoptr i64 $slot to ptr")
+      case CType.Float(64)                                 => line(s"  $v = bitcast i64 $slot to double")
+      case CType.Float(_)                                  =>
         line(s"  $v.b = trunc i64 $slot to i32")
         line(s"  $v = bitcast i32 $v.b to float")
       case t => line(s"  $v = trunc i64 $slot to ${EmitLLVM.llType(t)}")
@@ -289,8 +357,8 @@ final class EmitLLVM:
     */
   private def fillsSlot(t: CType): Boolean =
     t match
-      case CType.Boxed | CType.Int(64, _) | _: CType.Slot | CType.Witness | CType.Table => true
-      case _                                                                            => false
+      case CType.Boxed | CType.Int(64, _) | _: CType.Slot | _: CType.Imm | CType.Witness | CType.Table => true
+      case _                                                                                           => false
 
   private def call(x: Var, f: String, args: List[Atom], runtime: Boolean): Unit =
     require(runtime || !entries(f), s"$f takes slots and must be called through its closure or table")
@@ -299,7 +367,7 @@ final class EmitLLVM:
       val params = runtimeParams(f)
       val argList = args.zip(params).map(argument).mkString(", ")
       val ret = if x.ctype == CType.Unit then "void" else EmitLLVM.llType(x.ctype)
-      declared(f) = s"declare $ret @$f(${params.map(EmitLLVM.llType).mkString(", ")})"
+      declared(f) = s"declare $ret @$f(${params.map(parameter).mkString(", ")})"
       if ret == "void" then
         line(s"  call void @$f($argList)")
         aliases(x.name) = "0"
@@ -372,7 +440,14 @@ final class EmitLLVM:
     * for a join or a return (whose unit operand is `0`, where an argument's is a variable).
     */
   private def argument(a: Atom, t: CType): String =
-    s"${EmitLLVM.llType(t)} ${if a.tpe == CType.Unit then zeroIfUnit("0", t) else operand(a)}"
+    s"${parameter(t)} ${if a.tpe == CType.Unit then zeroIfUnit("0", t) else operand(a)}"
+
+  /** A parameter of type `t` as a runtime function declares it. The C ABI has the caller extend a
+    * `bool` argument (`zeroext`); without it the callee may read the register's other bits, which
+    * an `i1` narrowed from an immediate's bits ([[unpack]]) leaves holding its other fields.
+    */
+  private def parameter(t: CType): String =
+    if t == CType.Bool then "i1 zeroext" else EmitLLVM.llType(t)
 
   /** The parameter types of each runtime function: at each position, the first type that is not a
     * unit among its calls' arguments there. Read once `program` has filled `signatures`.

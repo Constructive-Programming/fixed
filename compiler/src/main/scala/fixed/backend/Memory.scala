@@ -161,9 +161,9 @@ final class Memory(fns: List[Fn], demands: DemandTable, spans: String => Span):
     val all = Core.lets(f.body)
     val esc = escapeOf.getOrElse(f.name, Map.empty)
     val sites = all.collect {
-      case (x, Rhs.Con(_, fs)) if fs.nonEmpty        => x.name
-      case (x, _: Rhs.Reuse)                         => x.name
-      case (x, Rhs.Closure(_, cs, _)) if cs.nonEmpty => x.name
+      case (x, Rhs.Con(_, fs)) if fs.nonEmpty && x.ctype.boxed => x.name
+      case (x, _: Rhs.Reuse)                                   => x.name
+      case (x, Rhs.Closure(_, cs, _)) if cs.nonEmpty           => x.name
     }
     val longLived = sites.flatMap(x => long(x, esc.getOrElse(x, Set.empty), f.name).map(x -> _)).toMap
     val group = groups(longLived.keySet, esc)

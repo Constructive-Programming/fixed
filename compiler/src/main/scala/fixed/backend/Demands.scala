@@ -216,7 +216,10 @@ final class Demands(
     */
   private def reuse(x: Atom.Var, rhs: Rhs, live: Set[String], ctx: Ctx, fn: String): Option[String] =
     rhs match
-      case Rhs.Con(_, fields) if fields.nonEmpty =>
+      /** Pointer or immediate: `x`'s Core type. An immediate is no cell, so it reuses none; nor is
+        * an immediate variable a candidate (`cellSize` has none for its type).
+        */
+      case Rhs.Con(_, fields) if fields.nonEmpty && x.ctype.boxed =>
         val inFields = fields.flatMap(Core.countedVar).map(_.name).toSet
         val products = ctx.keys.collect { case (v, k) if cellSize(k, 1).isEmpty && cellSize(k, 0).isDefined => v -> 0 }
         (products ++ ctx.tags).toList.sortBy(_._1).collectFirst {

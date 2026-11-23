@@ -20,3 +20,28 @@ Pair32(499500, 4294967295)
 Cons(Pair32(1, 10), Cons(Pair32(2, 10), Cons(Pair32(3, 10), Nil)))
 true
 false
+Temp(-0.5, true)
+Temp(21.25, false)
+true
+false
+true
+-292
+D9(-32768)
+true
+33
+34
+high 8
+low
+high 42
+24
+true
+false
+Signed(-127, 0, 0)
+Two(1, 1)
+Boxy(Two(1, 2), 0)
+Boxy(Two(1, 2), 5)
+Seven(4294967295, 65535, 255)
+255
+false
+false
+Pair32(7, 8)
