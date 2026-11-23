@@ -75,6 +75,44 @@ fn guarded(n: u8) -> Level =
         Fail.fail(_) => Level.Low
         return(v) => Level.High(v)
 
+fn refuse(n: i8) -> u8 with Fail of Signed =
+    if n < 0:
+        Fail.fail(Signed.Signed(n, -300, -70000))
+    else:
+        1
+
+fn caughtSigned(n: i8) -> Signed =
+    handle refuse(n):
+        Fail.fail(s) => s
+        return(v) => Signed.Signed(0, 0, 0)
+
+fn failWith(x: T) -> u64 with Fail of T = Fail.fail(x)
+
+fn caughtChoice(c: Choice) -> u8 =
+    handle failWith(c):
+        Fail.fail(got) => size(got)
+        return(_) => 0
+
+fn caughtText(t: String) -> String =
+    handle failWith(t):
+        Fail.fail(got) => got
+        return(_) => ""
+
+fn ignored(n: i8) -> u8 =
+    handle refuse(n):
+        Fail.fail(_) => 9
+        return(v) => v
+
+fn caughtByte(b: u8) -> u8 =
+    handle failWith(b):
+        Fail.fail(got) => got + 1
+        return(_) => 0
+
+fn droppedByte(b: u8) -> u8 =
+    handle failWith(b):
+        Fail.fail(_) => 2
+        return(_) => 0
+
 fn adder(p: Pair32) -> (u32 -> u32) = (n) -> p.x + p.y + n
 
 fn classify(p: Pair32) -> u32 =
@@ -174,3 +212,8 @@ fn main() -> () with Console =
     Console.printLine((full > Full.Other).show())
     Console.printLine(same(full, Full.Seven(4294967295, 65535, 254)).show())
     Console.printLine(Pair32.unfold(7, (s) -> Pair32.Pair32(s, s + 1)).show())
+    Console.printLine(caughtSigned(-5).show())
+    Console.printLine(caughtSigned(5).show())
+    Console.printLine((caughtChoice(Choice.Two(40, 2)) + caughtChoice(Choice.One(7))).show())
+    Console.printLine(caughtText("text"))
+    Console.printLine((ignored(-1) + ignored(1) + caughtByte(0) + droppedByte(5)).show())

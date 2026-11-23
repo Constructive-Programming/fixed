@@ -194,13 +194,17 @@ final class EmitLLVM:
     line(s"  %${x.name}.s = call i64 %code.$n($argList)")
     narrow(x, s"%${x.name}.s")
 
-  /** `x = a`: an alias, or a conversion where exactly one of them is a slot (Rule CM3.3). */
+  /** `x = a`: an alias, or a conversion where exactly one of them is a slot (Rule CM3.3), or
+    * where a value travels as an abort payload's pointer-sized field and back (`Lower.operation`).
+    */
   private def move(x: Var, a: Atom): Unit =
     (x.ctype, a.tpe) match
       case (_: CType.Slot, _: CType.Slot) => aliases(x.name) = operand(a)
       case (_: CType.Slot, from) => aliases(x.name) = slotted(operand(a), from, s"mv.${ids.next()}").stripPrefix("i64 ")
-      case (_, _: CType.Slot)    => narrow(x, operand(a))
-      case _                     => aliases(x.name) = operand(a)
+      case (_, _: CType.Slot) | (CType.Boxed, _: CType.Imm) => narrow(x, operand(a))
+      case (to, CType.Boxed) if to != CType.Boxed           =>
+        narrow(x, slotted(operand(a), CType.Boxed, s"mv.${ids.next()}").stripPrefix("i64 "))
+      case _ => aliases(x.name) = operand(a)
 
   /** `v` of type `t` as an `i64` operand in slot form: a pointer as its address, else [[widen]]. */
   private def slotted(v: String, t: CType, n: String): String =

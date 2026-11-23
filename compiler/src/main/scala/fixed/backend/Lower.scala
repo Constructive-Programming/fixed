@@ -789,7 +789,11 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
 
   private def effectId(effect: SymbolId): Atom = Atom.IntC(BigInt(effect.toInt), CType.Int(64, signed = true))
 
-  /** An abortive effect operation (`-> !`): record the effect and its payload, then abort (`Aborts`). */
+  /** An abortive effect operation (`-> !`): record the effect and its payload, then abort (`Aborts`).
+    * The runtime keeps the payload in a pointer-sized field and never reads or drops it, so an
+    * immediate or a slot travels there as its 64 bits, and the handler clause takes it back at its
+    * type ([[handle]]).
+    */
   private def operation(s: Trees.StaticCall, effect: SymbolId, args: List[Tree], sc: Scope)(k: K): Expr =
     if !Members.abortive(symbols, effect, s.method) then
       problems +=
@@ -797,19 +801,13 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
       k(Atom.UnitC)
     else
       all(args, sc) { as =>
-        val payload = as.headOption.getOrElse(Atom.StrC(""))
-        if !payload.tpe.boxed then unsupported(s.span, "an abortive operation with a scalar or immediate payload", k)
-        else
-          val u = fresh("abort", CType.Unit)
-          Expr.Let(
-            u,
-            Rhs.Call(
-              "fx_abort",
-              List(effectId(effect), payload),
-              runtime = true
-            ),
-            k(Atom.UnitC)
-          )
+        val (payload, u) = (as.headOption.getOrElse(Atom.StrC("")), fresh("abort", CType.Unit))
+        def abort(p: Atom) = Expr.Let(u, Rhs.Call("fx_abort", List(effectId(effect), p), runtime = true), k(Atom.UnitC))
+        if payload.tpe.boxed then abort(payload)
+        else if payload.tpe.immediate || payload.tpe.slot then
+          val bits = fresh("payload", CType.Boxed)
+          Expr.Let(bits, Rhs.Move(payload), abort(bits))
+        else unsupported(s.span, "an abortive operation with a scalar payload", k)
       }
 
   /** `handle subject: clauses` for abortive operations (slice §4.6). The subject runs as its own
@@ -835,10 +833,18 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
             runtime = true
           )
           val payload = fresh("payload", CType.Boxed)
+
+          /** The payload at its type: a cell as it is, else from its 64 bits ([[operation]]). */
+          def bound(p: Tree) =
+            val (pt, ct) = (typeOf(p, sc), ctype(typeOf(p, sc), p.span))
+            if ct.boxed then bindPattern(p, payload, pt, sc)(tail(c.body, _))
+            else
+              val v = fresh("caught", ct)
+              Expr.Let(v, Rhs.Move(payload), bindPattern(p, v, pt, sc)(tail(c.body, _)))
           val clause = Expr.Let(
             payload,
             Rhs.Call("fx_abort_payload", Nil, runtime = true),
-            c.params.headOption.fold(tail(c.body, sc))(p => bindPattern(p, payload, Type.UnitType, sc)(tail(c.body, _)))
+            c.params.headOption.fold(tail(c.body, sc))(bound)
           )
           guardedBy(caught, clause, otherwise, resultType)
         case None => unsupportedThen(c.span, s"effect `${c.effect}`", otherwise)
