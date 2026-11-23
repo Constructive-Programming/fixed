@@ -1,0 +1,13 @@
+// A program's own `data Order` shadows the prelude's name, not its satisfactions: `Ordering`
+// values are still the prelude's `Order`, and the two types' generated members do not meet.
+use std.io.Console
+
+data Order:
+    Pending(id: u64)
+    Shipped(id: u64)
+
+fn name(o: T is Ordering) -> String = o.fold(() -> "lt", () -> "eq", () -> "gt")
+
+fn main() -> () with Console =
+    Console.printLine(name(Ordering.gt))
+    Console.printLine(Order.Shipped(7).fold((i) -> i, (i) -> i + 100).show())

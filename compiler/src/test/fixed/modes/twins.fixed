@@ -1,0 +1,50 @@
+// Structural recursion (Rule 7.4.h) and the derived members that replace it give the same results:
+// each line prints a function written with `match` and its twin written with `fold` or `para`.
+// A structurally recursive function takes one native frame per level, so the lists are short.
+use std.io.Console
+
+data L:
+    E
+    C(h: u64, t: L)
+
+data T:
+    Leaf
+    N(l: T, v: u64, r: T)
+
+fn total(xs: L) -> u64 =
+    match xs:
+        L.C(h, t) => h + total(t)
+        L.E => 0
+
+fn totalFold(xs: L) -> u64 = xs.fold(() -> 0, (h, t) -> h + t)
+
+fn insert(x: u64, xs: L) -> L =
+    match xs:
+        L.C(h, t) => if x <= h: L.C(x, L.C(h, t)) else: L.C(h, insert(x, t))
+        L.E => L.C(x, L.E)
+
+fn insertPara(x: u64, xs: L) -> L =
+    xs.para(() -> L.C(x, L.E), (h, t, rest) -> if x <= h: L.C(x, L.C(h, t)) else: L.C(h, rest))
+
+fn place(x: u64, t: T) -> T =
+    match t:
+        T.N(l, v, r) => if x < v: T.N(place(x, l), v, r) else: T.N(l, v, place(x, r))
+        T.Leaf => T.N(T.Leaf, x, T.Leaf)
+
+fn placePara(x: u64, t: T) -> T =
+    t.para(() -> T.N(T.Leaf, x, T.Leaf), (l, lr, v, r, rr) -> if x < v: T.N(lr, v, r) else: T.N(l, v, rr))
+
+fn sum(t: T) -> u64 =
+    match t:
+        T.N(l, v, r) => sum(l) + v + sum(r)
+        T.Leaf => 0
+
+fn sumFold(t: T) -> u64 = t.fold(() -> 0, (l, v, r) -> l + v + r)
+
+fn main() -> () with Console =
+    let xs = L.C(1, L.C(3, L.C(5, L.E)))
+    Console.printLine(total(xs).show().concat(" ").concat(totalFold(xs).show()))
+    Console.printLine(insert(4, xs).show().concat(" ").concat(insertPara(4, xs).show()))
+    let t = place(2, place(9, place(5, T.Leaf)))
+    Console.printLine(place(7, t).show().concat(" ").concat(placePara(7, t).show()))
+    Console.printLine(sum(t).show().concat(" ").concat(sumFold(t).show()))

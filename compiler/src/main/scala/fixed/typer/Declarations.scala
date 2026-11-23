@@ -47,14 +47,49 @@ object Declarations:
           case _ => si
         (si1, seen + name)
     }
-    val missing = requirements.keySet -- mapped.map(_.capCtor)
+    val written = d.mappings.collect { case fn: Trees.StaticMethod if fn.body.isDefined => fn.name }
+    val unmapped = requirements.values.filterNot(m =>
+      mapped.exists(_.capCtor == m.name) || written.contains(m.name) || s.symbols.hasDefault(m.id)
+    )
+    val missing = unmapped.map(_.name).toList.sorted ++ undefined(s1, d, cap)
     if missing.isEmpty then s1
     else
       s1.error(
         DiagCode.T010,
         d.span,
-        s"${d.typeName} does not satisfy $capName: missing ${missing.toList.sorted.mkString(", ")}"
+        s"${d.typeName} does not satisfy $capName: missing ${missing.mkString(", ")}",
+        s.symbols.dataNamed(d.typeName).flatMap(id => Members.notFunctor(s.symbols, Type.TypeRef(id, Nil), cap))
       )
+
+  /** Whether the compiler provides capability `cap` for the primitive type or `String` named `t`
+    * (`spec/stdlib.md` §4): `Show`, `Eq`, `Ord` and `Clone` for all of them, `Numeric` for the
+    * numeric types, `Concat` for `String`, `Boolean` for `bool`.
+    */
+  private def provided(t: String, cap: String): Boolean =
+    cap match
+      case "Show" | "Eq" | "Ord" | "Clone" => true
+      case "Numeric"                       => !Set("String", "bool", "char")(t)
+      case "Concat"                        => t == "String"
+      case "Boolean"                       => t == "bool"
+      case _                               => false
+
+  /** Members of `cap` and of what it `extends`, but not its own constructor requirements (mapped
+    * instead), that `d` leaves without a body, a default or a derivation (P6 D17). A member a
+    * nearer capability redeclares (`Optional.fold` over `Folding.fold`) is that one. A capability
+    * the type satisfies in a declaration of its own is checked there.
+    */
+  private def undefined(s: TyperState, d: Trees.SatisfiesDecl, cap: SymbolId): List[String] =
+    val data = s.symbols.dataNamed(d.typeName)
+    val bodies = d.mappings.collect { case fn: Trees.FnLike if fn.body.isDefined => fn.name }.toSet
+    val self = data.fold(Type.PrimType(d.typeName))(Type.TypeRef(_, Nil))
+    val own = s.symbols.satisfactionsOf(self).collect { case Type.CapRef(c, _) => c }.toSet
+    val builtin = data.isEmpty || data == s.symbols.prelude.get("String")
+    def needed(k: SymbolId) = (k == cap || !own(k)) && !(builtin && provided(d.typeName, s.symbols.preludeName(k)))
+    def defined(m: Denotation) = bodies(m.name) || s.symbols.hasDefault(m.id) ||
+      data.exists(Satisfaction.derives(s, _, m))
+    MemberTables.table(s.symbols, cap).values.flatMap(_.values.map(_.head)).toList
+      .filter(e => needed(e.cap) && (e.member.kind == SymKind.Method || e.cap != cap))
+      .map(_.member).filterNot(defined).map(_.name).distinct.sorted
 
   /** `Variant as req`: the variant's fields unify with the requirement's parameters, `Self` being
     * the satisfying data type and `Part` its element type.
@@ -81,9 +116,7 @@ object Declarations:
                 )
               )
             val (s3, fields) = Members.fieldTypes(s2, data, args, v.id)
-            val params = sig match
-              case Type.ArrowType(lhs, _, _) => Members.params(lhs)
-              case _                         => Nil
+            val params = Members.paramTypes(sig)
 
             /** Rule 8.1.a: trailing fields with a default may be absent from the requirement. */
             val omitted = s3.symbols.fieldsOf(v.id).drop(params.size).toList
@@ -120,9 +153,7 @@ object Declarations:
     withBodies(s, d.body) { (si, fn, kind) =>
       si.symbols.membersOf(cap).find(m => m.kind == kind && m.name == fn.name).fold(si) { m =>
         val sub = Members.Subst(Members.Subst.of(Nil, Nil), Set.empty, Some(self), None)
-        val (si1, sig) = Members.instantiate(si, m.info, sub)
-        val scoped = (params ++ si1.symbols.typeParamsOf(m.id)).map(p => si1.symbols(p).name -> p)
-        method(si1, fn, sig, cap, scoped, Option.when(kind == SymKind.Method)(self))
+        memberBody(si, fn, m, sub, cap, params, Option.when(kind == SymKind.Method)(self), satisfying = false)
       }
     }
 
@@ -134,23 +165,109 @@ object Declarations:
       case Trees.CapRef(name, _, _) => s.symbols.scope.get(name).filter(s.symbols(_).kind == SymKind.Cap)
       case _                        => None
     target.fold(s) { cap =>
-      val (s0, self) = s.symbols.dataNamed(d.typeName) match
-        case Some(data) =>
-          val (si, args) = Members.freshArgs(s, data)
-          (si, Type.TypeRef(data, args))
-        case None => (s, Type.PrimType(d.typeName))
+      /** Rigid, like a capability's default body: the body is compiled once for every argument. */
+      val self = s.symbols.dataNamed(d.typeName) match
+        case Some(data) => Type.TypeRef(data, s.symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil)))
+        case None       => Type.PrimType(d.typeName)
       val part = self match
         case Type.TypeRef(_, args) => args.lastOption
         case _                     => None
-      withBodies(s0, d.mappings) { (si, fn, kind) =>
+      withBodies(s, d.mappings) { (si, fn, kind) =>
         si.members.lookup(cap, kind, fn.name).headOption match
           case None    => si.error(DiagCode.T014, fn.span, s"${si.symbols(cap).name} has no member ${fn.name}")
           case Some(e) =>
-            val sub = Members.Subst(Members.Subst.of(Nil, Nil), Set(e.member.id, e.cap), Some(self), part)
-            val (si1, sig) = Members.instantiate(si, e.member.info, sub)
-            method(si1, fn, sig, cap, Nil, Option.when(kind == SymKind.Method)(self))
+            val sub = Members.Subst(Members.Subst.of(Nil, Nil), Set(e.cap), Some(self), part)
+            val si1 = fn.params.foldLeft(si)((sj, p) => sj.reservedName(p.name, p.span))
+            memberBody(si1, fn, e.member, sub, cap, Nil, Option.when(kind == SymKind.Method)(self), satisfying = true)
       }
     }
+
+  /** Rule 6.1.1, phase 2: the types a `satisfies` body writes on its parameters and its result,
+    * resolved like a signature's with the satisfying type's parameters in scope and read at the
+    * satisfying type, must fit the requirement's signature `sig` (`T002`). A type variable written
+    * there stands for one of the requirement's type variables, under any name and with the bounds
+    * it restates (`T010`), never for another type (`o: Strng` where `Self` is required); an
+    * anonymous bound `is C` is checked as a bound. The applied types written there are checked at
+    * what their variables stand for. A wrong number of parameters is [[method]]'s to report.
+    */
+  private def conform(s: TyperState, fn: Trees.FnLike, sub: Members.Subst, sig: Type): TyperState =
+    /** One arrow, so that a name written twice is one variable; its result is `()` when none is written. */
+    val params = fn.params.map(_.typeAnn)
+    val tree = Trees.ArrowType(
+      Trees.TupleArrowLhs(params, fn.span),
+      fn.returnType.getOrElse(Trees.UnitType(fn.span)),
+      None,
+      fn.span
+    )
+    val own = sub.self match
+      case Some(Type.TypeRef(_, args)) => args.collect { case Type.TypeRef(id, Nil) => s.symbols(id).name -> id }.toMap
+      case _                           => Map.empty
+    val (table, written, diags) = Namer.translate(s.symbols, List(own, s.symbols.scope), SymbolId.Root, tree)
+    val introduced = (s.symbols.nextId until table.nextId).map(SymbolId(_)).filter(table(_).kind ==
+      SymKind.TypeParam).toList
+    val applied = table.written.take(table.written.size - s.symbols.written.size)
+
+    /** One instantiation, so that the written types, their variables and the applied types share fresh variables. */
+    val (s1, Type.TupleType(List(at, Type.TupleType(vars), Type.TupleType(wrote)))) = Members.instantiate(
+      s.copy(symbols = table.copy(written = s.symbols.written)).report(diags),
+      Type.TupleType(List(
+        written,
+        Type.TupleType(introduced.map(Type.TypeRef(_, Nil))),
+        Type.TupleType(applied.map(_._1))
+      )),
+      sub.copy(freshOwners = Set(SymbolId.Root))
+    ): @unchecked
+    val s3 = (at, sig) match
+      case (Type.ArrowType(wl, wr, _), Type.ArrowType(rl, rr, _)) if Members.params(rl).sizeIs == params.size =>
+        val pairs = (params ++ fn.returnType).zip(Members.params(wl).zip(Members.params(rl)) :+ (wr, rr))
+        val s2 = pairs.foldLeft(s1) { case (si, (t, (w, req))) => Typer.unify(si, t.span, req, w) }
+
+        /** A variable that stands for a type which is not a variable, where it is first written. */
+        def standsFor(si: TyperState, id: SymbolId, v: Type): TyperState =
+          si.unifier.zonk(v) match
+            case Type.TypeVar(_)                                                 => si
+            case Type.TypeRef(p, Nil) if si.symbols(p).kind == SymKind.TypeParam => si
+            case other                                                           =>
+              pairs.find((_, types) => Members.mentions(types._1, v)).fold(si) { (t, _) =>
+                si.error(DiagCode.T002, t.span, s"expected ${si.symbols.render(other)}, got ${si.symbols(id).name}")
+              }
+        if s2.diags.sizeIs > s1.diags.size then s2
+        else introduced.zip(vars).foldLeft(s2) { case (si, (id, v)) => standsFor(si, id, v) }
+      case _ => s1
+    applied.zip(wrote).foldLeft(s3) { case (si, ((_, span), w)) =>
+      Satisfaction.checkWritten(si, si.unifier.zonk(w), span)
+    }
+
+  /** A body of capability member `m`, typed against its signature under `sub`. The member's own
+    * type parameters stay rigid; their bounds, instantiated under the same `sub` (`Self`, `Part`,
+    * the capability's arguments), hold while the body is typed: for member lookup and satisfaction
+    * (`TyperState.rigidBounds`) and for unification (`Unifier.paramBounds`). The signature and the
+    * bounds are instantiated as one tuple so that both get the same fresh variables. A
+    * `satisfying` body's written types must fit the signature ([[conform]]).
+    */
+  private def memberBody(
+      s: TyperState,
+      fn: Trees.FnLike,
+      m: Denotation,
+      sub: Members.Subst,
+      cap: SymbolId,
+      scoped: List[SymbolId],
+      self: Option[Type],
+      satisfying: Boolean
+  ): TyperState =
+    val params = s.symbols.typeParamsOf(m.id)
+    val bounds = params.map(p => Type.IsBound(Members.boundsOf(s.symbols, p)))
+    val (s1, Type.TupleType(sig :: instantiated)) =
+      Members.instantiate(s, Type.TupleType(m.info :: bounds), sub): @unchecked
+    val rigid = scala.collection.immutable.IntMap.from(params.zip(instantiated).collect { case (p, Type.IsBound(bs)) =>
+      p.toInt -> bs
+    })
+    val declared = s1.unifier.paramBounds
+    val inBody = s1.unifier.copy(paramBounds = p => rigid.getOrElse(p.toInt, declared(p)))
+    val inRigid = s1.copy(rigidBounds = rigid, unifier = inBody)
+    val typed =
+      method(if satisfying then conform(inRigid, fn, sub, sig) else inRigid, fn, sig, cap, scoped ++ params, self)
+    typed.copy(rigidBounds = rigid.empty, unifier = typed.unifier.copy(paramBounds = declared))
 
   /** Fold `f` over the methods in `items` that have a body, with their member kind. */
   private def withBodies(s: TyperState, items: List[Tree])(f: (TyperState, Trees.FnLike, SymKind) => TyperState)
@@ -167,7 +284,7 @@ object Declarations:
       fn: Trees.FnLike,
       sig: Type,
       owner: SymbolId,
-      scoped: List[(String, SymbolId)],
+      scoped: List[SymbolId],
       self: Option[Type]
   ): TyperState =
     sig match
@@ -181,7 +298,16 @@ object Declarations:
           )
         else
           val locals = fn.params.map(_.name).zip(params) ++ self.map("self" -> _)
-          fn.body.fold(s)(Typer.typedMethodBody(s, _, owner, locals, scoped, ret, fx, fn.name))
+          fn.body.fold(s)(Typer.typedMethodBody(
+            s,
+            _,
+            owner,
+            locals,
+            scoped.map(p => s.symbols(p).name -> p),
+            ret,
+            fx,
+            fn.name
+          ))
       case _ => s
 
   /** Rule 6.2: a member name a capability inherits from two parents, without declaring it itself,

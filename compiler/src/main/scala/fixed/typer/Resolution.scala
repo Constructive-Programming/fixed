@@ -2,8 +2,11 @@ package fixed.typer
 
 import fixed.core.SymbolId
 
-/** Which candidate a method call resolved to, recorded for the backend (slice plan §4.3). */
+/** What the typer records for the backend about a tree (slice plan §4.3): the candidate a method
+  * call resolved to, or a nested `fn`'s symbol.
+  */
 enum Resolution:
   case Field(variant: SymbolId, index: Int)
   case CapMember(cap: SymbolId, member: SymbolId)
-  case DerivedFold(data: SymbolId)
+  case DerivedFold(data: SymbolId, para: Boolean)
+  case NestedFn(fn: SymbolId)

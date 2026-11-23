@@ -40,7 +40,7 @@ cap Sequencing:
 // --- Folding: structural reduction ---
 cap Folding:
     fn fold(init: R, f: (R, Part) -> R) -> R
-    fn fold_right(init: R, f: (Part, R) -> R) -> R
+    fn foldRight(init: R, f: (Part, R) -> R) -> R
 
 // --- Filtering: selection by predicate ---
 cap Filtering:
@@ -56,7 +56,7 @@ cap Empty:
 cap Optional extends Functor + Folding:
     Self.fn some(value: Part) -> Self
     Self.fn none -> Self
-    fn fold(on_some: Part -> R, on_none: () -> R) -> R
+    fn fold(onSome: Part -> R, onNone: () -> R) -> R
     fn isDefined -> Boolean
     fn orElse(e: Self) -> Self
 
@@ -110,12 +110,13 @@ data Direction:
     West
 
 // GADT with mixed variants — some carry data, some don't.
-// `N is Numeric` constrains all three fields to the same numeric type.
+// `N is Numeric` constrains all three fields to the same numeric type;
+// Color derives Show only if every field type has it, hence `Show` on N.
 data Color:
     Red
     Green
     Blue
-    RGB(red: N is Numeric, green: N, blue: N)
+    RGB(red: N is Numeric + Show, green: N, blue: N)
 
 // Phantom-typed data — the Tag parameter exists only at compile time.
 // (The typer infers Tag is phantom because it doesn't appear in any field;
@@ -139,7 +140,7 @@ fn count(collection: is Folding) -> u64 =
     collection.fold(0, (acc, _) -> acc + 1)
 
 // --- Needs Functor: transform elements ---
-fn double(numbers: is Functor of (N is Numeric)) -> is Functor =
+fn double(numbers: is Functor of (N is Numeric) + Show) -> is Functor + Show =
     numbers.map((x) -> x * 2)
 
 // --- Needs Functor: transform elements ---
@@ -150,7 +151,7 @@ fn double(numbers: is Functor of (N is Numeric)) -> is Functor =
 
 // --- Needs Filtering + Functor: transform and select ---
 // notice N is reused in the Functor part specification and is known to be Numeric for the map call
-fn even_doubled(numbers: C is Filtering of (N is Numeric) + Functor of N) -> C =
+fn evenDoubled(numbers: C is Filtering of (N is Numeric) + Functor of N) -> C =
     numbers.filter((x) -> x % 2 == 0).map((x) -> x * 2)
 
 // --- Needs Sequencing + Folding: build and reduce ---
@@ -158,17 +159,20 @@ fn reverse(collection: C is Sequencing + Folding + Empty) -> C =
     collection.fold(C.empty, (acc, x) -> C.cons(x, acc))
 
 fn concat(left: C is Sequencing + Folding, right: C) -> C =
-    // fold_right preserves order: [1,2,3] ++ [4,5] → cons each from right
-    left.fold_right(right, (x, acc) -> C.cons(x, acc))
+    // foldRight preserves order: [1,2,3] ++ [4,5] → cons each from right
+    left.foldRight(right, (x, acc) -> C.cons(x, acc))
 
 // --- Uses type alias: ArrayLike bundles the capabilities ---
 //
 // Functions in Fixed are total — bisection cannot self-recurse. We
 // fold a Nat of depth `sorted.size` (a loose but sound upper bound; log2
-// would suffice but is harder to compute portably). State is the
-// (result, low, high) triple; once `result` is set or `low >= high`,
+// would suffice but is harder to compute portably). State is a `Search`
+// (result, low, high); once `result` is set or `low >= high`,
 // further steps are idempotent no-ops.
-fn binary_search(
+data Search of R:
+    Search(result: R, low: u64, high: u64)
+
+fn binarySearch(
     sorted: C is ArrayLike of (A is Ord),
     target: A,
 ) -> R is Optional of u64 + Empty =
@@ -176,30 +180,29 @@ fn binary_search(
         if k == 0: Nat.Zero
         else: Nat.Succ(k - 1)
     ).fold(
-        () -> (R.empty, 0, sorted.size),                       // (result, low, high)
+        () -> Search.Search(R.empty, 0, sorted.size),
         (acc) ->
-            let (result, low, high) = acc
-            if result.isDefined || low >= high:
+            if acc.result.isDefined || acc.low >= acc.high:
                 acc
             else:
-                let mid = low + (high - low) / 2
+                let mid = acc.low + (acc.high - acc.low) / 2
                 sorted.get(mid).fold(
                     (value) ->
                         target.compare(value).fold(
-                            () -> (result, low, mid),           // lt
-                            () -> (R.some(mid), low, high),     // eq — found
-                            () -> (result, mid + 1, high),      // gt
+                            () -> Search.Search(acc.result, acc.low, mid),         // lt
+                            () -> Search.Search(R.some(mid), acc.low, acc.high),   // eq — found
+                            () -> Search.Search(acc.result, mid + 1, acc.high),    // gt
                         ),
                     () -> acc,                                   // out of bounds
                 )
-    ).first
+    ).result
 
 // --- Uses type alias for cleaner signatures ---
 //
 // Build a sub-collection of the first n elements by left-folding the
 // index list [0, 1, ..., n-1] and consing successful lookups.
 fn take(collection: C is ArrayLike, n: u64) -> C =
-    range(0, n).fold_right(C.empty, (i, acc) ->
+    range(0, n).foldRight(C.empty, (i, acc) ->
         collection.get(i).fold(
             (value) -> C.cons(value, acc),
             () -> acc,
@@ -210,22 +213,22 @@ fn take(collection: C is ArrayLike, n: u64) -> C =
 //
 // Anamorphism on List: unfold the index counter into a List of u64,
 // then fold-right into the target representation R.
-fn range(start: u64, end: u64) -> R is Sequencing + Folding + Empty =
+fn range(start: u64, end: u64) -> R is Sequencing + Folding + Empty + Show =
     List.unfold(start, (i) ->
         if i >= end: List.Nil
         else: List.Cons(i, i + 1)
-    ).fold_right(R.empty, (x, acc) -> R.cons(x, acc))
+    ).foldRight(R.empty, (x, acc) -> R.cons(x, acc))
 
 // --- Using data types: pattern matching on concrete variants ---
 
-fn direction_name(d: Direction) -> String =
+fn directionName(d: Direction) -> String =
     match d:
         Direction.North => "North"
         Direction.South => "South"
         Direction.East  => "East"
         Direction.West  => "West"
 
-fn color_to_rgb(c: Color) -> Color =
+fn colorToRgb(c: Color) -> Color =
     match c:
         Color.Red   => Color.RGB(255, 0, 0)
         Color.Green => Color.RGB(0, 255, 0)
@@ -235,7 +238,7 @@ fn color_to_rgb(c: Color) -> Color =
 fn main() -> () with Console =
     // `numbers` satisfies Sequencing + Functor + Folding + Filtering + Sized
     // The compiler chooses a representation based on how `numbers` is used
-    // below. Since we call binary_search (which needs RandomAccess), the
+    // below. Since we call binarySearch (which needs RandomAccess), the
     // compiler must select a contiguous array.
     let numbers = range(1, 11)  // [1, 2, ..., 10]
 
@@ -243,7 +246,7 @@ fn main() -> () with Console =
     let doubled = double(numbers)
 
     // Uses Filtering + Functor
-    let even_d = even_doubled(numbers)
+    let evenD = evenDoubled(numbers)
 
     // Uses Folding only — the compiler could back this with anything
     let total = sum(numbers)
@@ -251,32 +254,34 @@ fn main() -> () with Console =
     // Uses Sequencing + Folding
     let rev = reverse(numbers)
 
-    Console.print_line("Numbers: ".concat(numbers.show()))
-    Console.print_line("Doubled: ".concat(doubled.show()))
-    Console.print_line("Even×2:  ".concat(even_d.show()))
-    Console.print_line("Sum:     ".concat(total.show()))
-    Console.print_line("Reverse: ".concat(rev.show()))
+    Console.printLine("Numbers: ".concat(numbers.show()))
+    Console.printLine("Doubled: ".concat(doubled.show()))
+    Console.printLine("Even×2:  ".concat(evenD.show()))
+    Console.printLine("Sum:     ".concat(total.show()))
+    Console.printLine("Reverse: ".concat(rev.show()))
 
-    // Uses ArrayLike (type alias) — forces contiguous representation
-    let sorted = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
-    let search_msg = binary_search(sorted, 7).fold(
+    // Uses ArrayLike (type alias) — forces contiguous representation.
+    // A list literal is a List, which is neither RandomAccess nor Sized, so
+    // the collection comes from `range`, whose representation the caller picks.
+    let sorted = range(0, 20)
+    let searchMsg = binarySearch(sorted, 7).fold(
         "7 not found",
         (_, idx) -> "Found 7 at index ".concat(idx.show()),
     )
-    Console.print_line(search_msg)
+    Console.printLine(searchMsg)
 
     // Uses ArrayLike via take
-    let first_three = take(sorted, 3)
-    Console.print_line("First 3: ".concat(first_three.show()))
+    let firstThree = take(sorted, 3)
+    Console.printLine("First 3: ".concat(firstThree.show()))
 
     // --- Data type usage ---
 
-    Console.print_line("Direction: ".concat(direction_name(Direction.North)))
+    Console.printLine("Direction: ".concat(directionName(Direction.North)))
 
     let c = Color.RGB(128, 64, 255)
     match c:
         Color.RGB(r, g, b) =>
-            Console.print_line("RGB: ".concat(r.show()).concat(", ")
+            Console.printLine("RGB: ".concat(r.show()).concat(", ")
                 .concat(g.show()).concat(", ").concat(b.show()))
         _ =>
-            Console.print_line("Named color: ".concat(color_to_rgb(c).show()))
+            Console.printLine("Named color: ".concat(colorToRgb(c).show()))

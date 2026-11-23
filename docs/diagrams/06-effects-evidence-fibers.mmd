@@ -1,0 +1,19 @@
+flowchart LR
+    subgraph Call["Function with Effect 'with Console, State'"]
+        HiddenArg["Hidden Argument: evidence_vector"]
+    end
+
+    subgraph EvVec["Evidence Vector (Stack-Allocated Array)"]
+        E0["Slot 0: Console -> [ Handler VTable* | Env* ]"]
+        E1["Slot 1: State   -> [ Handler VTable* | Env* ]"]
+    end
+
+    subgraph Dispatch["Execution Path"]
+        TailRes["Tail-Resume / Abort:\nExecutes in-place on current scratch stack"]
+        FiberStack["Escaping Continuation:\nAllocates small 4 KiB chunked Fiber Stack"]
+    end
+
+    Call --> HiddenArg
+    HiddenArg --> EvVec
+    EvVec --> TailRes
+    EvVec --> FiberStack

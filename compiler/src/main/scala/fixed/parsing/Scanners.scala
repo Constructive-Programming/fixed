@@ -6,8 +6,8 @@ import scala.collection.immutable.Queue
 import fixed.util.{DiagCode, Reporter, SourceFile, Span}
 
 /** Single-pass lexer. The `Scanner` object holds the pure-functional
-  * state and `step`; the `class Scanner` wrapper below adapts it to the
-  * parser's pull `nextToken()` API. The only impurity is error emission
+  * state and `step`; the `class Scanner` wrapper below materialises the
+  * token array the parser indexes. The only impurity is error emission
   * via the supplied `Reporter`. Indentation, line-continuation, and
   * bracket-suppression rules are normative in `spec/syntax_grammar.ebnf`.
   */
@@ -44,7 +44,6 @@ object Scanner:
     def currentIndent: Int = indentStack.head
 
     def enqueue(t: Token): ScannerState = copy(pending = pending.enqueue(t))
-    def withLast(t: Token): ScannerState = copy(lastKind = t.kind)
 
   end ScannerState
 
@@ -83,16 +82,12 @@ object Scanner:
         /** Field reads, not `val Skipped(a, b) = …`: that pattern desugars through
           * a Tuple2 and would box the Boolean again.
           */
-        val skipped = skipTrivia(state, source, crossedNewline = false, reporter)
+        val skipped = skipTrivia(state, source, reporter)
         val st1 = skipped.state
         val crossedNewline = skipped.crossedNewline
         if st1.pos >= source.length then
-          st1.pending.dequeueOption match
-            case Some((tok, rest)) =>
-              (st1.copy(pending = rest, lastKind = tok.kind), tok)
-            case None =>
-              if !st1.eofEmitted then step(closeIndentsAndQueueEof(st1), source, reporter)
-              else (st1.copy(lastKind = TokenKind.Eof), Token.Eof(Span(st1.pos, st1.pos)))
+          if !st1.eofEmitted then step(closeIndentsAndQueueEof(st1), source, reporter)
+          else (st1.copy(lastKind = TokenKind.Eof), Token.Eof(Span(st1.pos, st1.pos)))
         else
           val st2 = if crossedNewline then handleNewline(st1, source, reporter) else st1
           val (st3, tok) = scanToken(st2, source, reporter)
@@ -123,10 +118,9 @@ object Scanner:
   private def skipTrivia(
       state: ScannerState,
       source: SourceFile,
-      crossedNewline: Boolean,
       reporter: Reporter
   ): Skipped =
-    val packed = advanceTrivia(state.pos, source, reporter, if crossedNewline then 1 else 0)
+    val packed = advanceTrivia(state.pos, source, reporter, crossed = 0)
     val newPos = (packed & 0xffffffffL).toInt
     val crossed = (packed >>> 32) != 0
     if newPos == state.pos then Skipped(state, crossed)
@@ -558,18 +552,10 @@ object Scanner:
 
 end Scanner
 
-/** Pull-style adapter over the pure functional core. The token stream
-  * is produced once at construction by `Iterator.unfold` over
-  * `ScannerState`, materialised eagerly into an immutable
-  * `Vector[Token]`; an `Iterator[Token]` over that Vector serves the
-  * parser's pull API. The iterator is the one documented boundary
-  * mutation — it owns Scala's internal cursor and is required to
-  * satisfy the `def nextToken(): Token` contract without redesigning
-  * the Parser. Trivia extraction is a pure fold over the same Vector.
-  *
-  * Eager materialisation keeps reporter side effects firing exactly
-  * once and gives `tokenize` and `triviaTable` a shared source of
-  * truth.
+/** The token stream of one source, produced once at construction by
+  * `Iterator.unfold` over `ScannerState`. Eager materialisation keeps
+  * reporter side effects firing exactly once and gives `tokenize` and
+  * `triviaTable` a shared source of truth.
   */
 final class Scanner(
     val source: SourceFile,
@@ -600,17 +586,13 @@ final class Scanner(
           Some((tok, next))
       }
       .foreach(buf.addOne)
-    buf.result()
+    val scanned = buf.result()
 
-  /** The single boundary mutation: Scala's `Iterator` owns an internal
-    * cursor over `tokens`. Past the materialised end we synthesise
-    * further EOFs so `nextToken` is idempotent at EOF.
-    */
-  private val iter: Iterator[Token] = tokens.iterator
-
-  def nextToken(): Token =
-    if iter.hasNext then iter.next()
-    else Token.Eof(Span(source.length, source.length))
+    /** A library file's tokens carry it in their spans, so its diagnostics are placed in it. */
+    if source.library then
+      val file = Some(source)
+      scanned.mapInPlace(t => Token.of(t.kind, t.span.copy(file = file), t.lexeme))
+    else scanned
 
   def tokenize(): Seq[Token] = scala.collection.immutable.ArraySeq.unsafeWrapArray(tokens)
 

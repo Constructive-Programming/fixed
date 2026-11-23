@@ -1,0 +1,9 @@
+// A program that declares a function the prelude declares (`join`) keeps the prelude's
+// `satisfies` bodies: `foldRight` on a list is the prelude's body for `List`.
+use std.io.Console
+
+fn join(a: u64) -> u64 = a + 1
+
+fn main() -> () with Console =
+    Console.printLine([3, 1, 2].foldRight(0, (x, acc) -> acc * 10 + x).show())
+    Console.printLine(join(4).show())

@@ -1,0 +1,5 @@
+Node(Leaf, Box(2.5), Node(Leaf, Box(1.0), Leaf)) Node(Leaf, Box(2.5), Node(Leaf, Box(1.0), Leaf))
+3 s Box(7) Cons(1, Cons(2, Nil))
+Box(x) Wrap(Own(1), w) Own(2)
+5 s Cons(1, Cons(2, Nil))
+Box(3) Box(Cons(1, Cons(2, Nil))) Own(6)

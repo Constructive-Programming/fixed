@@ -15,6 +15,13 @@ import fixed.util.{DiagCode, Diagnostic, Severity, Span, mapAccum}
   */
 object Namer:
 
+  /** `T031` (Rule 5.12): a tuple expression, pattern or type with more than two elements. */
+  private[typer] val tupleSize = "a tuple has two elements; declare a data type with named fields"
+
+  /** `T032` (`spec/stdlib.md` §4.9): the names of the 128-bit integer types are reserved. */
+  private[typer] def reserved(name: String): Option[String] =
+    Option.when(name == "i128" || name == "u128")(s"$name is reserved; the widest integer type is i64")
+
   /** Index a compilation unit against the stdlib: its symbol table (with the final top-level
     * scope) and the Namer's diagnostics, in source order. The prelude's declarations are in scope
     * everywhere; a stdlib module's (`std.io`) only through `use`.
@@ -23,9 +30,22 @@ object Namer:
     val items = unit match
       case Trees.CompilationUnit(items, _) => items
       case other                           => List(other)
-    val (entered, decls) = mapAccum(stdlib.copy(owner = SymbolId.Root), items)(enterTopLevel)
+
+    /** The prelude's written types are not checked again with each program's. */
+    val program = stdlib.copy(owner = SymbolId.Root, table = stdlib.table.copy(written = Nil))
+    val (entered, decls) = mapAccum(program, items)(enterTopLevel)
     val typed = typeAll(entered, decls.flatten)
-    (typed.table.copy(scope = typed.global), typed.diags.reverse)
+    val table = unshadowed(typed.table, typed.global)
+    (table.copy(scope = typed.global, prelude = stdlib.global, modules = stdlib.modules), typed.diags.reverse)
+
+  /** A prelude declaration whose name a top-level declaration of the program takes is renamed
+    * `prelude.<name>`: the backend names functions, generated code and tables after it, and the two
+    * must not meet under one name. Diagnostics of the later phases show the qualified name.
+    */
+  private def unshadowed(table: SymbolTable, scope: Map[String, SymbolId]): SymbolTable =
+    stdlib.global.foldLeft(table) { case (t, (name, id)) =>
+      if scope.get(name).exists(_ != id) then t.rename(id, s"prelude.$name") else t
+    }
 
   /** The stdlib, indexed once: prelude names bound, modules recorded for `use`. Pure, so shared. */
   private lazy val stdlib: Ctx =
@@ -71,7 +91,7 @@ object Namer:
   ):
     def enter(name: String, kind: SymKind, info: Type, span: Span): (Ctx, SymbolId) =
       val (t, id) = table.enter(name, owner, kind, info, span)
-      (copy(table = t), id)
+      (copy(table = t).reservedName(name, span), id)
 
     def bind(name: String, id: SymbolId): Ctx = copy(frames = frames.head.updated(name, id) :: frames.tail)
 
@@ -87,8 +107,13 @@ object Namer:
     /** The outermost frame: the top-level scope. */
     def global: Map[String, SymbolId] = frames.last
 
+    /** `t` as written at `span`, recorded for the bound check when it applies a type to arguments. */
+    def wrote(t: Type, span: Span): Ctx = copy(table = table.recordWritten(t, span))
+
     def error(code: DiagCode, span: Span, message: String): Ctx =
       copy(diags = Diagnostic(Severity.Error, code, span, message) :: diags)
+
+    def reservedName(name: String, span: Span): Ctx = reserved(name).fold(this)(error(DiagCode.T032, span, _))
 
     /** Run `f` in a fresh lexical frame owned by `owner`; keep its symbols and diagnostics, drop its bindings. */
     def nested[A](owner: SymbolId)(f: Ctx => (Ctx, A)): (Ctx, A) =
@@ -137,23 +162,28 @@ object Namer:
   private def typeDecl(c: Ctx, tree: Tree, id: SymbolId): Ctx =
     val (c1, info) = c.nested(id) { ci =>
       tree match
-        case Trees.SatisfiesDecl(typeName, capRef, mappings, _) =>
-          val (ci1, cap) = capBound(ci, capRef)
+        case Trees.SatisfiesDecl(typeName, capRef, mappings, span) =>
+          val (ci1, cap) = capBound(ci.reservedName(typeName, span), capRef)
+
+          /** The satisfying type as this scope resolves it: a program's own `data Order` is not the prelude's. */
+          val data = ci1.lookup(typeName).filter(ci1.table(_).kind == SymKind.Data)
+          val self = data.fold(Type.PrimType(typeName))(Type.TypeRef(_, Nil))
           val withCtors = cap match
             case Some(Type.CapRef(c, _)) =>
-              mappings.foldLeft(ci1.table.satisfy(typeName, cap.get)) {
-                case (t, Trees.ConstructorMapping(variant, ctor, _)) => t.mapConstructor(c, ctor, typeName, variant)
-                case (t, _)                                          => t
+              mappings.foldLeft(ci1.table.satisfy(self, cap.get)) {
+                case (t, Trees.ConstructorMapping(variant, ctor, _)) =>
+                  data.fold(t)(t.mapConstructor(c, ctor, _, variant))
+                case (t, _) => t
               }
-            case Some(other) => ci1.table.satisfy(typeName, other)
+            case Some(other) => ci1.table.satisfy(self, other)
             case None        => ci1.table
           (ci1.copy(table = withCtors), Type.UnitType)
-        case t: Trees.FnDecl                         => fnSignature(ci, t)
+        case t: Trees.FnDecl                         => fnSignature(ci, t, anonymousBounds = true)
         case t: Trees.CapDecl                        => capSignature(ci, t)
         case t: Trees.DataDecl                       => dataSignature(ci, t, id)
         case t: Trees.EffectDecl                     => effectSignature(ci, t, id)
         case Trees.TypeAlias(_, valueParams, rhs, _) =>
-          val (ci1, _) = mapAccum(ci, valueParams)(valueParam)
+          val (ci1, _) = mapAccum(ci, valueParams)(valueParam(_, _))
           typeOf(ci1, rhs)
         case _ => (ci, Type.UnitType)
     }
@@ -162,34 +192,59 @@ object Namer:
   /** `(params) -> ret with fx`. Parameters become `ValueParam` symbols in scope for the rest of the
     * signature (refinement calls such as `between(lo, hi)` refer to them).
     */
-  private def fnSignature(c: Ctx, fn: Trees.FnLike): (Ctx, Type) =
+  private def fnSignature(c: Ctx, fn: Trees.FnLike, anonymousBounds: Boolean): (Ctx, Type) =
     val c0 = fn.typeParamsHint.foldLeft(c)((ci, name) => introduce(ci, name, Nil, fn.span)._1)
-    val (c1, params) = mapAccum(c0, fn.params)(valueParam)
+    val (c1, params) = mapAccum(c0, fn.params)(valueParam(_, _, anonymousBounds))
     val (c2, ret) = fn.returnType.fold((c1, Type.UnitType))(typeOf(c1, _))
     arrow(c2, Type.TupleType(params), ret, fn.withClause)
+
+  /** Each anonymous bound `is C` in a parameter type of a top-level `fn`, a capability method, a
+    * static method or an effect operation becomes a type parameter of its own, named as written
+    * (`spec/type_system.md` §5.1). Two places keep the bound as written for now. A nested `fn`
+    * would become generic, and the backend cannot compile a generic nested function. A bound
+    * inside a function-typed parameter (`f: (is C) -> u64`, not matched below) would be a type the
+    * caller picks, and when a lambda without annotations leaves it unsolved, nothing reports it.
+    */
+  private def anonymous(c: Ctx, t: Type, span: Span): (Ctx, Type) =
+    t match
+      case Type.IsBound(bs) =>
+        val (c1, inner) = mapAccum(c, bs)(anonymous(_, _, span))
+        val (c2, id) = c1.enter(c1.table.render(Type.IsBound(inner)), SymKind.TypeParam, Type.IsBound(inner), span)
+        (c2, Type.TypeRef(id, Nil))
+      case _: Type.TypeRef | _: Type.CapRef | _: Type.TupleType =>
+        val (c1, parts) = mapAccum(c, t.children)(anonymous(_, _, span))
+        val it = parts.iterator
+        (c1, t.mapChildren(_ => it.next()))
+      case other => (c, other)
 
   /** `lhs -> rhs [with row]`. */
   private def arrow(c: Ctx, lhs: Type, rhs: Type, withClause: Option[Tree]): (Ctx, Type) =
     val (c1, fx) = withClause.fold((c, EffectRow.empty))(effects(c, _))
     (c1, Type.ArrowType(lhs, rhs, fx))
 
-  private def valueParam(c: Ctx, p: Trees.FnParam): (Ctx, Type) =
-    val (c1, t) = typeOf(c, p.typeAnn)
+  private def valueParam(c: Ctx, p: Trees.FnParam, anonymousBounds: Boolean = false): (Ctx, Type) =
+    val (c0, written) = typeOf(c, p.typeAnn)
+    val (c1, t) = if anonymousBounds then anonymous(c0, written, p.span) else (c0, written)
     val (c2, id) = c1.enter(p.name, SymKind.ValueParam, t, p.span)
     (c2.bind(p.name, id), t)
 
   /** A cap's info is its `extends` chain; its methods are entered as members. */
   private def capSignature(c: Ctx, cap: Trees.CapDecl): (Ctx, Type) =
     val (c1, _) = ofParams(c, cap.ofParams)
-    val (c2, _) = mapAccum(c1, cap.valueParams)(valueParam)
+    val (c2, _) = mapAccum(c1, cap.valueParams)(valueParam(_, _))
     val (c3, supers) = mapAccum(c2, cap.extendsList)(capBound)
     val c4 = cap.body.foldLeft(c3) { (ci, item) =>
       item match
-        case m: Trees.InstanceMethod => member(ci, m, SymKind.Method)._1
-        case m: Trees.StaticMethod   => member(ci, m, SymKind.StaticMethod)._1
+        case m: Trees.InstanceMethod => withDefault(member(ci, m, SymKind.Method), m)
+        case m: Trees.StaticMethod   => withDefault(member(ci, m, SymKind.StaticMethod), m)
         case _                       => ci
     }
     (c4, Type.IsBound(supers.flatten))
+
+  /** A capability member with a body is a default: a satisfaction need not define it (Rule 6.1). */
+  private def withDefault(entered: (Ctx, SymbolId), m: Trees.FnLike): Ctx =
+    val (c, id) = entered
+    if m.body.isDefined then c.copy(table = c.table.markDefaulted(id)) else c
 
   /** A data type's info is `TypeRef(self, typeParams)`; each variant is a constructor. */
   private def dataSignature(c: Ctx, data: Trees.DataDecl, id: SymbolId): (Ctx, Type) =
@@ -218,10 +273,10 @@ object Namer:
     }
     (c2, Type.TypeRef(id, params))
 
-  /** Enter a method or operation and type its signature in its own frame. */
+  /** Enter a method, operation or nested `fn` and type its signature in its own frame. */
   private def member(c: Ctx, fn: Trees.FnLike, kind: SymKind): (Ctx, SymbolId) =
     val (c1, id) = c.enter(fn.name, kind, Type.UnitType, fn.span)
-    val (c2, info) = c1.nested(id)(fnSignature(_, fn))
+    val (c2, info) = c1.nested(id)(fnSignature(_, fn, anonymousBounds = kind != SymKind.Fn))
     (c2.copy(table = c2.table.refine(id, info)), id)
 
   /** An `of (...)` declaration list: bare names and `N is C` introduce type variables, value
@@ -238,20 +293,34 @@ object Namer:
           val (ci1, t) = typeOf(ci, other)
           (ci1, Some(t))
     }
-    (c1, ts.flatten)
+
+    /** Rule 7.3.a: trailing value parameters with a default may be left out where the type is applied. */
+    val least = params.lastIndexWhere {
+      case fp: Trees.FnParam => fp.default.isEmpty
+      case _                 => true
+    } + 1
+    (c1.copy(table = c1.table.recordArity(c.owner, least, params.size)), ts.flatten)
 
   private def typeOf(c: Ctx, tree: Tree): (Ctx, Type) =
     tree match
-      case Trees.PrimitiveType(name, _) => (c, Type.PrimType(name))
-      case Trees.UnitType(_)            => (c, Type.UnitType)
-      case Trees.NeverType(_)           => (c, Type.NeverType)
-      case Trees.SelfType(of, _)        =>
+      /** A lower-case name is a primitive, or a value parameter forwarded as an argument (`Range of (lo, N)`). */
+      case Trees.PrimitiveType(name, span) if reserved(name).isDefined =>
+        (c.reservedName(name, span), Type.NeverType)
+      case Trees.PrimitiveType(name, _) =>
+        val param =
+          c.lookup(name).filter(id => c.table(id).kind == SymKind.ValueParam && !Satisfaction.primitives(name))
+        (c, param.fold(Type.PrimType(name))(id => Type.ValueArg(SymbolicTerm.BoundVar(id))))
+      case Trees.UnitType(_)     => (c, Type.UnitType)
+      case Trees.NeverType(_)    => (c, Type.NeverType)
+      case Trees.SelfType(of, _) =>
         val (c1, args) = typeArgs(c, of)
         (c1, Type.SelfType(args.headOption))
       case Trees.TypeRef(name, ofArg, span) =>
         val (c1, args) = typeArgs(c, ofArg)
         c1.lookup(name) match
-          case Some(id)               => (c1, reference(c1, id, args))
+          case Some(id) =>
+            val t = reference(c1, id, args)
+            (c1.wrote(t, span), t)
           case None if name == "Part" => (c1, Type.PartType)
           case None                   =>
             val (c2, id) = introduce(c1, name, Nil, span)
@@ -263,40 +332,49 @@ object Namer:
       case Trees.IsBound(caps, _) =>
         val (c1, bounds) = mapAccum(c, caps)(capBound)
         (c1, Type.IsBound(bounds.flatten))
+
+      /** A parameter list is a list, not a tuple: no limit on its size (Rule 5.12). */
       case Trees.ArrowType(lhs, rhs, withClause, _) =>
-        val (c1, l) = typeOf(c, lhs)
+        val (c1, params) = lhs match
+          case Trees.TupleArrowLhs(types, _) => mapAccum(c, types)(typeOf)
+          case _: Trees.UnitType             => (c, Nil)
+          case single                        =>
+            val (ci, t) = typeOf(c, single)
+            (ci, List(t))
         val (c2, r) = typeOf(c1, rhs)
-        val params = (lhs, l) match
-          case (_: Trees.TupleArrowLhs, Type.TupleType(ts)) => ts
-          case (_: Trees.UnitType, _)                       => Nil
-          case (_, single)                                  => List(single)
         arrow(c2, Type.TupleType(params), r, withClause)
-      case Trees.TupleArrowLhs(types, _) =>
+      case Trees.TupleArrowLhs(types, span) =>
         val (c1, ts) = mapAccum(c, types)(typeOf)
-        (c1, Type.TupleType(ts))
+        if ts.sizeIs > 2 then (c1.error(DiagCode.T031, span, tupleSize), Type.NeverType)
+        else (c1, Type.TupleType(ts))
       case Trees.CapType(spec, _) =>
         spec match
           case None                               => (c, Type.CapType(None))
           case Some(Trees.CapReturnSpec.OfArg(a)) =>
-            val (c1, t) = typeOf(c, a)
-            (c1, Type.CapType(Some(t)))
+            val (c1, ts) = typeArgs(c, Some(a))
+            (c1, Type.CapType(Some(ts match { case List(t) => t; case _ => Type.TupleType(ts) })))
           case Some(Trees.CapReturnSpec.Extends(caps)) =>
             val (c1, bounds) = mapAccum(c, caps)(capBound)
             (c1, Type.CapType(Some(Type.IsBound(bounds.flatten))))
       case Trees.ParenTypeApp(inner, ofArg, span) =>
-        val (c1, t) = typeOf(c, inner)
+        val (c0, t) = typeOf(c, inner)
+
+        /** The name is recorded applied below, not bare. */
+        val c1 = c0.table.written match
+          case (_, at) :: rest if at == inner.span => c0.copy(table = c0.table.copy(written = rest))
+          case _                                   => c0
         val (c2, args) = typeArgs(c1, Some(ofArg))
         t match
-          case Type.TypeRef(id, Nil) => (c2, Type.TypeRef(id, args))
-          case Type.CapRef(id, Nil)  => (c2, Type.CapRef(id, args))
+          case Type.TypeRef(id, Nil) => (c2.wrote(Type.TypeRef(id, args), span), Type.TypeRef(id, args))
+          case Type.CapRef(id, Nil)  => (c2.wrote(Type.CapRef(id, args), span), Type.CapRef(id, args))
           case _                     => (c2.error(DiagCode.T005, span, "type application to a non-name type"), t)
       case _: Trees.IntLit | _: Trees.FloatLit | _: Trees.StringLit | _: Trees.CharLit | _: Trees.BoolLit =>
         val (c1, term) = symbolicTerm(c, tree)
         (c1, term.fold(Type.NeverType)(Type.ValueArg(_)))
 
       /** Gap nodes were already reported by the parser. */
-      case _: Trees.Error | _: Trees.Missing => (c, Type.NeverType)
-      case other                             =>
+      case _: Trees.Error => (c, Type.NeverType)
+      case other          =>
         (c.error(DiagCode.T005, other.span, "not supported in type position yet"), Type.NeverType)
 
   /** `of A` / `of (A, B)` / `of ()` as an argument list. */
@@ -319,12 +397,13 @@ object Namer:
     tree match
       case Trees.CapRef(name, ofArg, span) =>
         val (c1, args) = typeArgs(c, ofArg)
-        resolve(c1, name, span, "capability")(reference(c1, _, args))
+        val (c2, cap) = resolve(c1, name, span, "capability")(reference(c1, _, args))
+        (cap.fold(c2)(c2.wrote(_, span)), cap)
       case Trees.RefinementCall(name, args, span) =>
         val (c1, terms) = mapAccum(c, args)(symbolicTerm)
         resolve(c1, name, span, "capability generator")(Type.RefinementType(_, terms.flatten))
-      case Trees.PrimitiveType(name, _) => (c, Some(Type.PrimType(name)))
-      case other                        =>
+      case Trees.PrimitiveType(name, span) => (c.reservedName(name, span), Some(Type.PrimType(name)))
+      case other                           =>
         (c.error(DiagCode.T005, other.span, "not a capability bound"), None)
 
   /** A refinement-call argument as a symbolic term. */
@@ -350,7 +429,8 @@ object Namer:
         ci.lookup(name).filter(ci.table(_).kind != SymKind.TypeParam) match
           case Some(_) =>
             val (ci1, args) = typeArgs(ci, ofArg)
-            resolve(ci1, name, span, "effect")(EffectBound(_, args))
+            val (ci2, effect) = resolve(ci1, name, span, "effect")(EffectBound(_, args))
+            (effect.fold(ci2)(e => ci2.wrote(Type.TypeRef(e.sym, args), span)), effect)
           case None =>
             /** A row variable (`spec/effects.md` §8.1), introduced at first use like a type variable. */
             val (ci1, id) = ci.lookup(name).fold(introduce(ci, name, Nil, span))((ci, _))

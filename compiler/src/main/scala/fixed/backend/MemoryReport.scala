@@ -6,7 +6,14 @@ import fixed.util.Span
 
 /** `fixed compile --explain-memory [--format json]` (`spec/memory_management.md` §19): per function,
   * its `fip` contract, each parameter's demand and escape, each allocation's class with its escapes
-  * and reasons, fork facts and copy sites; then each `handle`'s kind. Positions are `line:column`.
+  * and reasons and where the generated code places it ([[Frames]]; on the heap with `frames` off),
+  * the calls whose result the callee's `#frame` clone builds in this function's frame, fork facts
+  * and copy sites; then each `handle`'s kind. Positions are `line:column`,
+  * after `path:` in a library file (the prelude's code).
+  * Every function except a clone and a `fip` shared entry also gives its baseline size and its
+  * clone candidates on both axes, built or not (`spec/compilation_model.md` Rule CM5.8). Last,
+  * each data type lowered: `imm1` to `imm8` if it is an immediate of that width, else `cell`, and
+  * why (Rule CM3.5).
   */
 object MemoryReport:
 
@@ -15,23 +22,32 @@ object MemoryReport:
 
   private enum Value:
     case Str(s: String)
-    case Num(n: Int)
+    case Num(n: BigDecimal)
     case Bool(b: Boolean)
     case Arr(vs: List[Value])
     case Obj(fs: Fields)
 
-  def text(unit: CompilationUnit, a: Analysed): String = render(model(unit, a), 0)
+  def text(unit: CompilationUnit, a: Analysed, frames: Boolean = true): String = render(model(unit, a, frames), 0)
 
-  def json(unit: CompilationUnit, a: Analysed): String = toJson(model(unit, a))
+  def json(unit: CompilationUnit, a: Analysed, frames: Boolean = true): String = toJson(model(unit, a, frames))
 
-  private def model(unit: CompilationUnit, a: Analysed): Value =
+  private def model(unit: CompilationUnit, a: Analysed, frames: Boolean): Value =
+    val placed = if frames then Frames(Consume(a)._1, a.memory) else Frames.none(Nil)
+    def where(f: String, x: String) =
+      val clone = f + Frames.suffix
+      val bare = (g: String) => if placed.bare.getOrElse(g, Set.empty)(x) then ", no count word" else ""
+      if placed.bumped.getOrElse(f, Set.empty)(x) then s"Frame($f)${bare(f)}"
+      else if placed.bumped.getOrElse(clone, Set.empty)(x) then
+        s"Heap; in the caller's frame through `$clone`${bare(clone)}"
+      else "Heap"
+    val renamed = placed.fns.map(f => f.name -> f).toMap
     val at = (sp: Span) =>
       if sp == Span.NoSpan then Value.Str("-")
       else
-        val (l, c) = unit.source.lineColumn(sp.start)
-        Value.Str(s"$l:$c")
+        val (l, c) = sp.file.getOrElse(unit.source).lineColumn(sp.start)
+        Value.Str(sp.file.fold("")(_.path + ":") + s"$l:$c")
     val fns = a.fns.map { f =>
-      val demands = a.demands.params.getOrElse(Memory.base(f.name), Nil)
+      val demands = a.demands.params.getOrElse(f.instance, Nil)
       val escapes = a.memory.escapes.getOrElse(f.name, Nil)
       val params = f.params.zipWithIndex.map { (p, i) =>
         val n = demands.lift(i).getOrElse(Need.zero)
@@ -50,6 +66,7 @@ object MemoryReport:
             "name" -> Value.Str(x.name),
             "at" -> at(x.span),
             "class" -> Value.Str(x.cls.show),
+            "placed" -> Value.Str(where(f.name, x.name)),
             "escapes" -> Value.Arr(x.escapes.toList.map(show).sorted.map(Value.Str(_))),
             "reasons" -> Value.Arr(x.reasons.map(Value.Str(_)))
           )
@@ -65,6 +82,10 @@ object MemoryReport:
           )
         )
       }
+      val frameCalls = renamed.get(f.name).toList.flatMap(g => Core.lets(g.body)).collect {
+        case (x, Rhs.Call(g, _, false)) if g.endsWith(Frames.suffix) =>
+          Value.Obj(List("call" -> Value.Str(g), "into" -> Value.Str(x.name)))
+      }
       val copies = Core.lets(f.body).collect {
         case (x, Rhs.Call(g, _, false)) if g.contains(".copy[") =>
           Value.Obj(List("copy" -> Value.Str(g), "into" -> Value.Str(x.name)))
@@ -76,15 +97,47 @@ object MemoryReport:
             Value.Str(a.fips.get(f.name).fold("none")(l => if l == Trees.Fip.Strict then "fip(strict)" else "fip")),
           "params" -> Value.Arr(params),
           "allocations" -> Value.Arr(allocations),
+          "frame_calls" -> Value.Arr(frameCalls),
           "forks" -> Value.Arr(forks),
           "copies" -> Value.Arr(copies)
-        )
+        ) ++
+          (if f.name == f.instance && !a.typeClones.contains(f.name) then
+             specialisation(f, a.candidates.getOrElse(f.name, Nil))
+           else Nil)
       )
     }
     val handlers = unit.tree.toList.flatMap(Trees.subtrees).collect { case h: Trees.HandleExpr =>
       unit.quantities.flatMap(_.handler(h)).map(k => Value.Obj(List("at" -> at(h.span), "kind" -> Value.Str(kind(k)))))
     }.flatten
-    Value.Obj(List("functions" -> Value.Arr(fns), "handlers" -> Value.Arr(handlers)))
+    val data = a.immediates.map { (name, imm, why) =>
+      val layout = imm.fold("cell")(i => s"imm${i.width}")
+      Value.Obj(List("type" -> Value.Str(name), "layout" -> Value.Str(layout), "why" -> Value.Str(why)))
+    }
+    Value.Obj(List("functions" -> Value.Arr(fns), "handlers" -> Value.Arr(handlers), "data" -> Value.Arr(data)))
+
+  /** Rule CM5.8: the baseline size, the clones built and the candidates not built. A version has
+    * as many `let`s as the baseline it was walked from, so `f`'s own body gives the size. A body
+    * with no `let` (its only site a witness `drop`) has its score divided by 1 instead of 0.
+    */
+  private def specialisation(f: Fn, candidates: List[Candidate]): Fields =
+    val size = Core.lets(f.body).size
+    def item(c: Candidate, last: (String, Value)) =
+      val score = BigDecimal(c.removed * c.weight) / size.max(1)
+      Value.Obj(
+        List(
+          "key" -> Value.Str(c.key),
+          "removed" -> Value.Num(c.removed),
+          "weight" -> Value.Num(c.weight),
+          "score" -> Value.Num(score.setScale(4, BigDecimal.RoundingMode.HALF_UP)),
+          last
+        )
+      )
+    val (built, rejected) = candidates.partition(_.reason.isEmpty)
+    List(
+      "baseline_size" -> Value.Num(size),
+      "clones" -> Value.Arr(built.map(c => item(c, "charge" -> Value.Num(if c.charged then size else 0)))),
+      "candidates" -> Value.Arr(rejected.map(c => item(c, "reason" -> Value.Str(c.reason))))
+    )
 
   private def kind(k: fixed.qtt.HandlerKind): String =
     k match
@@ -121,7 +174,7 @@ object MemoryReport:
         }.mkString("\n")
       case Value.Arr(vs) => vs.map(x => s"$pad-\n${render(x, depth + 1)}").mkString("\n")
       case Value.Str(s)  => s
-      case Value.Num(n)  => n.toString
+      case Value.Num(n)  => n.bigDecimal.stripTrailingZeros.toPlainString
       case Value.Bool(b) => if b then "yes" else "no"
 
   private def toJson(v: Value): String =
@@ -129,7 +182,7 @@ object MemoryReport:
       case Value.Obj(fs) => fs.map((k, x) => s"${quote(k)}:${toJson(x)}").mkString("{", ",", "}")
       case Value.Arr(vs) => vs.map(toJson).mkString("[", ",", "]")
       case Value.Str(s)  => quote(s)
-      case Value.Num(n)  => n.toString
+      case Value.Num(n)  => n.bigDecimal.stripTrailingZeros.toPlainString
       case Value.Bool(b) => b.toString
 
   private def quote(s: String): String =

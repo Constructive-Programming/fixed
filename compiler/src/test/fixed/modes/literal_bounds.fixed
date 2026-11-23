@@ -1,0 +1,17 @@
+// Integer literals at the bounds of their types, the most negative signed values included: none
+// is refused, and each prints as written.
+use std.io.Console
+
+fn byte(x: u8) -> u8 = x
+fn small(x: i8) -> i8 = x
+fn word(x: i16) -> i16 = x
+fn wide(x: u64) -> u64 = x
+fn long(x: i64) -> i64 = x
+
+fn main() -> () with Console =
+    Console.printLine(byte(255).show())
+    Console.printLine(small(-128).show())
+    Console.printLine(small(127).show())
+    Console.printLine(word(-32768).show())
+    Console.printLine(wide(18446744073709551615).show())
+    Console.printLine(long(-9223372036854775808).show())

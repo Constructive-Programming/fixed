@@ -1,0 +1,74 @@
+// Frame cells without a count word (Frames, bare cells): cells that only code compiled for them
+// reaches. A box read in place; a holder of two boxes taken apart by a `match`; a tree of two
+// variants that both have fields (so no static cell meets a bare one), weighed by a recursive callee
+// through its `#bare` clone; a box bumped in the caller's frame by a `#frame` clone and read by a
+// callee's `#bare` clone, around a `handle` whose abort tests add join variables; boxes that a
+// baseline version (`--no-specialise`) reads into slots of parameter type, which its `#bare` clone
+// does not count either. Each result is
+// printed after more frame work, so a cell read with the wrong layout prints a wrong number, and
+// every test build is checked, so a count operation on a bare cell stops the program.
+use std.io.Console
+
+data Box3:
+    Box3(a: u64, b: u64, c: u64)
+
+data Holder:
+    Holder(first: Box3, second: Box3)
+
+data T:
+    Leaf(v: u64)
+    Node(l: T, r: T)
+
+data P2 of A:
+    P2(x: A, y: A)
+
+fn make(i: u64) -> Box3 = Box3.Box3(i, i + 1, i + 2)
+
+fn volume(b: Box3) -> u64 = b.a + b.b * 2 + b.c
+
+fn local(i: u64) -> u64 =
+    let b = Box3.Box3(i, i * 10, i * 100)
+    b.a + b.b + b.c
+
+fn apart(i: u64) -> u64 =
+    let h = Holder.Holder(Box3.Box3(i, 1, 2), Box3.Box3(3, i, 4))
+    match h:
+        Holder.Holder(x, y) => x.a * 1000 + y.b
+
+fn weight(t: T) -> u64 =
+    match t:
+        T.Leaf(v) => v
+        T.Node(l, r) => weight(l) * 2 + weight(r)
+
+fn tree(i: u64) -> u64 =
+    let t = T.Node(T.Node(T.Leaf(i), T.Leaf(i + 1)), T.Leaf(i + 2))
+    weight(t)
+
+fn viaClone(i: u64) -> u64 = volume(make(i))
+
+fn guard(n: u64) -> u64 with Fail of Box3 = if n > 100: Fail.fail(Box3.Box3(n, 0, 0)) else: n
+
+fn guarded(i: u64) -> u64 =
+    let b = make(i)
+    let n = volume(b)
+    handle guard(n):
+        Fail.fail(e) => e.a * 1000 + b.c
+        return(v) => v + b.a
+
+fn shape(p: P2 of A, n: u64) -> u64 =
+    match p:
+        P2.P2(x, y) => n
+
+fn viaSlot(i: u64) -> u64 =
+    let p = P2.P2(Box3.Box3(i, i, i), Box3.Box3(1, 1, 1))
+    shape(p, i)
+
+fn main() -> () with Console =
+    Console.printLine(local(3).show())
+    Console.printLine(apart(5).show())
+    Console.printLine(tree(1).show())
+    Console.printLine(viaClone(7).show())
+    Console.printLine((guarded(2) * 1000000 + guarded(50)).show())
+    Console.printLine(viaSlot(9).show())
+    let steps = List.unfold(0, (k) -> if k >= 1000: List.Nil else: List.Cons(k, k + 1))
+    Console.printLine(steps.fold(0, (acc, k) -> acc + viaClone(k) + tree(k)).show())

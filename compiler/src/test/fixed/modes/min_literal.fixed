@@ -1,0 +1,16 @@
+// A negative integer literal at a type parameter reaches `fromI64` with its sign: with
+// `--no-specialise`, `x + -9223372036854775808` at `f64` converted 9223372036854775808, which
+// wrapped to the most negative `i64`, then negated it, and added +9.2e18 instead of -9.2e18. `-0`
+// is still a negation, so at a float it is -0.0.
+use std.io.Console
+
+fn low(x: N is Numeric) -> N = x + -9223372036854775808
+
+fn minusTwo(x: N is Numeric) -> N = x * -2
+
+fn negZero(x: N is Numeric) -> N = x * -0
+
+fn main() -> () with Console =
+    Console.printLine(low(1.0).show().concat(" ").concat(low(1).show()))
+    Console.printLine(minusTwo(2.5).show().concat(" ").concat(minusTwo(7).show()))
+    Console.printLine((1.0 / -0).show().concat(" ").concat((1.0 / negZero(1.0)).show()))

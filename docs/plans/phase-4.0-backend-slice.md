@@ -8,6 +8,8 @@
 document), `spec/type_system.md` Rules 7.4.a–7.4.d (derived members), `spec/effects.md` §3.3
 (abortive operations), `spec/stdlib.md` §4.10 (`Show`)
 
+**Superseded in part (2026-11-20).** This plan is a record of what the slice built, and some of its statements no longer describe the target. Monomorphic Core with one instance per type is replaced by a polymorphic baseline version per function (`spec/compilation_model.md` §3). The worklist from `main` is replaced by the roots of Rule CM3.2, and the one representation rule by a representation that travels by witness (Rule CM3.4). Separate compilation, deferred in §2, is now specified by packages and the interface tier (§6, Rule CM7.1). The plan that changes the code is `docs/plans/phase-4.1-baseline-specialiser.md`.
+
 ## 1. Goal
 
 Produce running native code and a recorded baseline as cheaply as possible, so that M10, M11 and
@@ -179,6 +181,9 @@ state, and the counters.
 
 The runtime keeps four counters and prints them as one JSON line on standard error at exit when
 `FIXED_RT_STATS=1`: allocations, frees, `dup`s, `drop`s, plus peak resident memory and wall time.
+(Since 2026-11-23 the counters are built in only by `fixed ship --stats` and in test builds; another
+build prints peak memory and wall time and says it has no counters,
+`docs/baselines/runtime-2026-11-23-runtime.md` §1.)
 Writing the runtime in C does not make C a compilation target: the compiler emits LLVM IR only
 (decided, open question 1).
 
@@ -289,6 +294,8 @@ Calibrated against Phase 3 milestones, which took one to two weeks each.
 6. ~~**Integer overflow and division by zero.**~~ **Decided:** integer division by zero panics.
    Overflow wraps, as proposed. The spec states neither yet; both rules are written into
    `spec/stdlib.md` §4.9 at 4.0.M2, before any golden output depends on them.
+   *Superseded* by the owner's decision of 2026-11-21 (P6, fourth round): overflow and division by
+   zero are the effects `Overflow` and `DivideByZero` (`spec/effects.md` §3.6); not built.
 7. **Derived `show` format.** Stdlib §4.10 gives one sentence. The golden files will fix the exact
    format (separators, nullary variants, strings quoted or not); it should be written into the
    spec at 4.0.M3.
@@ -383,7 +390,8 @@ Not reached from `main`: `Maybe`'s `satisfies` bodies, `unwrap_or`, `map_optiona
   scientific otherwise (`1e+300`), and `inf`, `-inf`, `NaN`. Still to go into `spec/stdlib.md`.
 - **Wrapping and panics** (§7.6): `+`, `-`, `*` wrap; integer `/` and `%` by zero exit with code 101
   and `fixed: panic: integer division by zero`. `ponytail:` signed `MIN / -1` is undefined in LLVM
-  and traps on x86; it needs an explicit check if wrapping is to hold there too.
+  and traps on x86; it needs an explicit check if wrapping is to hold there too. *Superseded*: the spec now makes
+  overflow and `MIN / -1` the effect `Overflow` (`spec/effects.md` §3.6); this describes the slice as built.
 - **Built-ins matched by name** (`concat`, `show`, `Console.*`) until the resolution table of
   4.0.M3; `ponytail:` comments in `Lower` mark both places.
 - **Tests:** `EmitSuite`, five programs, each run with the leak check. CI runs `clang --version`

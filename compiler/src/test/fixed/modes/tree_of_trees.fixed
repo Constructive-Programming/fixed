@@ -1,0 +1,24 @@
+// Derived fold and unfold of a tree whose element is a tree, generic and at known arguments.
+use std.io.Console
+
+data Tree of A:
+    Leaf
+    Node(left: Tree of A, value: A, right: Tree of A)
+
+fn size(t: Tree of A) -> u64 = t.fold(() -> 0, (l, v, r) -> l + 1 + r)
+
+fn leaf1(x: u64) -> Tree of u64 = Tree.Node(Tree.Leaf, x, Tree.Leaf)
+
+fn inner(t: Tree of u64) -> u64 = t.fold(() -> 0, (l, v, r) -> l + v + r)
+
+fn sum(t: Tree of Tree of u64) -> u64 = t.fold(() -> 0, (l, v, r) -> l + inner(v) + r)
+
+fn spine(n: u64) -> Tree of Tree of u64 =
+    Tree.unfold(n, (i) -> if i == 0: Tree.Leaf else: Tree.Node(i - 1, leaf1(i), i - 1))
+
+fn main() -> () with Console =
+    let t = Tree.Node(Tree.Leaf, leaf1(2), Tree.Node(Tree.Leaf, leaf1(3), Tree.Leaf))
+    Console.printLine(size(t).show())
+    Console.printLine(size(leaf1(4)).show())
+    Console.printLine(sum(t).show())
+    Console.printLine(spine(2).fold(() -> 0, (l, v, r) -> l + inner(v) + r).show())

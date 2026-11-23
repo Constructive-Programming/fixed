@@ -1,0 +1,67 @@
+// Exclusivity of an `if` or `match` result (Versions.walk, Ret): a branch that returns a value
+// live after the join, or one a part of which is live or kept after it, hands out a second reference.
+// Each result is rebuilt in place where exclusive; the value or part kept is printed after.
+use std.io.Console
+
+data L:
+    E
+    C(h: u64, t: L)
+
+data P:
+    P(a: L, b: L)
+
+fn total(xs: L) -> u64 =
+    match xs:
+        L.C(h, t) => h + total(t)
+        L.E => 0
+
+fn incl(xs: L) -> L =
+    match xs:
+        L.C(h, t) => L.C(h + 1, incl(t))
+        L.E => L.E
+
+fn incb(p: P) -> P =
+    match p:
+        P.P(a, b) => P.P(incl(a), incl(b))
+
+fn sum(p: P) -> u64 =
+    match p:
+        P.P(a, b) => total(a) * 1000 + total(b)
+
+fn build(n: u64) -> L = L.C(n, L.C(n + 1, L.C(n + 2, L.E)))
+
+fn one() -> u64 = 1
+
+fn main() -> () with Console =
+    Console.printLine(total(incl(if one() > 0: build(1) else: build(9))).show())
+    let xs = build(1)
+    let y = if one() > 0: xs else: build(9)
+    Console.printLine(total(incl(y)).show())
+    Console.printLine(total(xs).show())
+    let zs = build(1)
+    let w = match zs:
+        L.C(_, _) => zs
+        L.E => L.E
+    Console.printLine(total(incl(w)).show())
+    Console.printLine(total(zs).show())
+    let us = build(1)
+    match us:
+        L.C(_, t) =>
+            let v = if one() > 0: us else: build(9)
+            Console.printLine(total(incl(v)).show())
+            Console.printLine(total(t).show())
+        L.E => Console.printLine("none")
+    let ks = build(1)
+    match ks:
+        L.C(_, t) =>
+            let k = P.P(t, L.E)
+            let v = if one() > 0: ks else: build(9)
+            Console.printLine(total(incl(v)).show())
+            Console.printLine(sum(k).show())
+        L.E => Console.printLine("none")
+    let ps = P.P(build(1), build(10))
+    match ps:
+        P.P(a, _) =>
+            let r = if one() > 0: ps else: P.P(L.E, L.E)
+            Console.printLine(sum(incb(r)).show())
+            Console.printLine(total(a).show())

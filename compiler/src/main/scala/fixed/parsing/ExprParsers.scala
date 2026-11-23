@@ -2,8 +2,6 @@ package fixed.parsing
 
 import scala.annotation.tailrec
 
-import cats.Monoid
-
 import Parser.*
 
 /** Expressions and patterns: operators, application, `if` / `match` / `do` / `handle`, lambdas, literals. */
@@ -58,8 +56,8 @@ private[parsing] object ExprParsers:
     }(Trees.BinOp.apply)
 
   /** Non-chaining: at most one comparison operator per expression.
-    * `a < b < c` parses as `(a < b) < c`'s LHS rejected by the typer
-    * (no `<` at boolean type), not as `a < b && b < c`. The grammar
+    * `a < b < c` is a parse error (the second `<` is left unconsumed),
+    * not `a < b && b < c`. The grammar
     * marks CmpExpr non-associative; that's why this production has no
     * outer loop, unlike its peers `parseAddExpr` / `parseMulExpr`.
     */
@@ -233,7 +231,7 @@ private[parsing] object ExprParsers:
       (s7, Trees.IfExpr(cond, thenBranch, elseBranch, span(startTok.span, elseBranch.span)))
     }
 
-  /** MatchExpr ::= "match" Expr ":" INDENT MatchCase+ DEDENT
+  /** MatchExpr ::= "match" Expr ":" (MatchCase | INDENT MatchCase+ DEDENT)
     * MatchCase ::= OrPattern ("if" Expr)? "=>" InlineOrBlockExpr
     */
   private[parsing] def parseMatchExpr(s0: ParserState)(using Reporter): Parsed[Tree] =
@@ -245,7 +243,7 @@ private[parsing] object ExprParsers:
     }
 
   private[parsing] def parseMatchCases(s0: ParserState)(using Reporter): Parsed[List[Trees.MatchCase]] =
-    val (s1, cases) = parseIndentedBody(s0, List.empty[Trees.MatchCase]) { (st, acc) =>
+    val (s1, cases) = parseMemberList(s0, List.empty[Trees.MatchCase], "case") { (st, acc) =>
       val (st1, matchCase) = parseMatchCase(st)
       (st1, matchCase :: acc)
     }
@@ -341,7 +339,7 @@ private[parsing] object ExprParsers:
       (s5, Trees.ForallExpr(binders, suchThat, body, span(startTok.span, body.span)))
     }
 
-  /** HandleExpr ::= "handle" Expr ":" INDENT HandlerClause+ DEDENT
+  /** HandleExpr ::= "handle" Expr ":" (HandlerClause | INDENT HandlerClause+ DEDENT)
     * HandlerClause ::= OperationClause | ReturnClause
     *   OperationClause ::= UPPER_IDENT "." LOWER_IDENT ("(" PatternList ")")? "=>" Body
     *   ReturnClause ::= "return" "(" Pattern ")" "=>" Body
@@ -359,7 +357,7 @@ private[parsing] object ExprParsers:
 
   /** Internal accumulator for handler-clause parsing: we collect normal
     * operation clauses and (possibly) a single return clause in lockstep so the body
-    * loop stays a single fold over `parseIndentedBody`.
+    * loop stays a single fold over `parseMemberList`.
     */
   final private case class HandlerAcc(
       operationClauses: List[Trees.OperationClause],
@@ -369,15 +367,14 @@ private[parsing] object ExprParsers:
   private[parsing] def parseHandlerClauses(
       s0: ParserState
   )(using Reporter): (ParserState, List[Trees.OperationClause], Option[Trees.ReturnClause]) =
-    val (s1, acc) = parseIndentedBody(s0, HandlerAcc(Nil, None)) { (st, acc) =>
+    val (s1, acc) = parseMemberList(s0, HandlerAcc(Nil, None), "clause") { (st, acc) =>
       val (st1, parsed) = parseHandlerClause(st)
       val acc1 = parsed match
         case ra: Trees.ReturnClause    => acc.copy(returnClause = Some(ra))
         case ha: Trees.OperationClause => acc.copy(operationClauses = ha :: acc.operationClauses)
 
         /** recovery; diagnostic already emitted */
-        case _: Trees.Error => acc
-        case _              => acc
+        case _ => acc
       (st1, acc1)
     }
     (s1, acc.operationClauses.reverse, acc.returnClause)
@@ -514,7 +511,7 @@ private[parsing] object ExprParsers:
         *   `T.Variant`           qualified unit-variant pattern
         *   `T(p1, ...)`          single-ctor sugar pattern (typical for
         *                         `data Point(x: N, y: N)`-style decls)
-        *   `T`                   no-qualifier variant pattern (Rule 3.4.a)
+        *   `T`                   no-qualifier variant pattern (`spec/pattern_matching.md` Rule M3.4.a)
         */
       val (s1, nameTok) = consume(s)
       accept(s1, TokenKind.Dot) match

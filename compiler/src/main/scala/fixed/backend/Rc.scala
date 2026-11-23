@@ -3,12 +3,13 @@ package fixed.backend
 import fixed.backend.Atom.Var
 import fixed.backend.Expr.{Drop, Dup, Let, Ret}
 
-/** Reference-count insertion (`spec/memory_management.md` §10). A function owns its boxed
-  * parameters, except the borrowed ones (`read` demand, Rule PR8.2), and every boxed `Let` result.
+/** Reference-count insertion (`spec/memory_management.md` §10). A function owns its counted
+  * parameters (references and slots, [[CType.counted]]), except the borrowed ones (`read` demand,
+  * Rule PR8.2), and every counted `Let` result; a slot's `Dup` and `Drop` go through its witness.
   * A consuming use of a variable that is still live afterwards is preceded by a `Dup`, and so is
   * any consuming use of a borrowed parameter, which this function does not own; an owned variable
   * that is dead is dropped at the earliest point. A `Field` read and an argument passed to a
-  * borrowed parameter borrow: the variable is dropped only after the use, and a boxed `Field`
+  * borrowed parameter borrow: the variable is dropped only after the use, and a counted `Field`
   * result is dup'ed to own it. A `Reuse` does not use its cell: the cell dies at its last other
   * use, and its drop there becomes the reuse token.
   *
@@ -16,18 +17,22 @@ import fixed.backend.Expr.{Drop, Dup, Let, Ret}
   * node if large functions make this show up.
   *
   * @param borrowed the indices of each function's borrowed parameters
+  * @param frame the variables that hold frame cells ([[Frames]]), parameters of a `#bare` clone
+  *   included: never counted (Rule PR3.2)
   */
 object Rc:
 
-  def apply(fn: Fn, borrowed: String => Set[Int] = _ => Set.empty): Fn =
-    val lent = fn.params.zipWithIndex.collect { case (p, i) if p.ctype.boxed && borrowed(fn.name)(i) => p }.toSet
-    val counted = Walk(borrowed, lent).go(fn.body, fn.params.filter(_.ctype.boxed).toSet -- lent)
+  def apply(fn: Fn, borrowed: String => Set[Int] = _ => Set.empty, frame: Set[String] = Set.empty): Fn =
+    val lent = fn.params.zipWithIndex.collect { case (p, i) if p.ctype.counted && borrowed(fn.name)(i) => p }.toSet
+    val owned = fn.params.filter(p => p.ctype.counted && !frame(p.name)).toSet -- lent
+    val counted = Walk(borrowed, lent, frame).go(fn.body, owned)
     fn.copy(body = tokens(counted, Iterator.from(1)))
 
   /** Drop-guided reuse (Rule MM11.5): where a cell that a later `Reuse` names is dropped, take a
     * token from it instead (`fx_reuse_excl` if every such `Reuse` is unconditional, else Koka's
     * `fx_reuse`), and let the `Reuse` consume the token. Taking the token releases the cell's
-    * children, so a field moved on to an exclusive call is exclusive there.
+    * children, so a field moved on to an exclusive call is exclusive there. A path on which no
+    * `Reuse` consumes the token drops it ([[release]]).
     */
   private def tokens(e: Expr, ids: Iterator[Int]): Expr =
     e match
@@ -37,7 +42,7 @@ object Rc:
           case flags =>
             val tok: Var = Var(s"${v.name}.tok${ids.next()}", CType.Boxed)
             val take = if flags.forall(identity) then "fx_reuse_excl" else "fx_reuse"
-            Let(tok, Rhs.Call(take, List(v), runtime = true), tokens(rename(rest, v, tok), ids))
+            Let(tok, Rhs.Call(take, List(v), runtime = true), tokens(release(rename(rest, v, tok), tok), ids))
       case Dup(v, rest)      => Dup(v, tokens(rest, ids))
       case Let(x, rhs, body) => Let(x, rhs.mapBranches(tokens(_, ids)), tokens(body, ids))
       case Ret(_)            => e
@@ -45,6 +50,18 @@ object Rc:
   /** The `unconditional` flags of the `Reuse`s of cell `v` in `e`. */
   private def reuses(e: Expr, v: Var): List[Boolean] =
     Core.lets(e).collect { case (_, Rhs.Reuse(c, _, _, u)) if c == v => u }
+
+  /** `e` with token `tok` dropped as soon as no `Reuse` ahead on the path consumes it: in a branch
+    * of an `If` or `Switch` that does not reuse it, where another branch does.
+    */
+  private def release(e: Expr, tok: Var): Expr =
+    e match
+      case _ if reuses(e, tok).isEmpty                     => Drop(tok, e)
+      case Let(x, rhs, body) if reuses(body, tok).nonEmpty => Let(x, rhs, release(body, tok))
+      case Let(x, rhs, body)                               => Let(x, rhs.mapBranches(release(_, tok)), body)
+      case Dup(y, b)                                       => Dup(y, release(b, tok))
+      case Drop(y, b)                                      => Drop(y, release(b, tok))
+      case Ret(_)                                          => e
 
   private def rename(e: Expr, v: Var, tok: Var): Expr =
     e match
@@ -54,62 +71,79 @@ object Rc:
       case Drop(x, b)        => Drop(x, rename(b, v, tok))
       case Ret(_)            => e
 
-  final private class Walk(borrowed: String => Set[Int], lent: Set[Var]):
+  final private class Walk(borrowed: String => Set[Int], lent: Set[Var], frame: Set[String]):
+
+    /** The variable `a` is, if reference counting tracks it: counted and not holding a frame cell. */
+    private def tracked(a: Atom): Option[Var] = Core.countedVar(a).filterNot(v => frame(v.name))
 
     def go(e: Expr, owned: Set[Var]): Expr =
       e match
         case Ret(a) =>
-          val out = drops(owned -- Core.boxedVar(a), e)
-          Core.boxedVar(a).filter(lent).fold(out)(Dup(_, out))
+          val out = drops(owned -- tracked(a), e)
+          tracked(a).filter(lent).fold(out)(Dup(_, out))
         case Let(x, rhs @ (_: Rhs.If | _: Rhs.Switch), body) =>
           val live = free(body)
           val handed = consumed(rhs).toSet -- lent
-          val dead = owned -- live -- handed
-          val rest = Let(x, rhs.mapBranches(go(_, handed)), go(body, (owned & live) ++ Core.boxedVar(x)))
+          val (dead, waiting) = ready(owned -- live -- handed, e)
+          val rest = Let(x, rhs.mapBranches(go(_, handed)), go(body, (owned & live) ++ waiting ++ tracked(x)))
           drops(dead, handed.filter(live).foldLeft(rest: Expr)((acc, v) => Dup(v, acc)))
         case Let(x, rhs, body) =>
           val live = free(body)
           val uses = consumed(rhs).groupMapReduce(identity)(_ => 1)(_ + _)
           val read = reads(rhs)
-          val dead = owned -- live -- uses.keySet -- read
-          val deadAfter = (owned & read) -- live -- uses.keySet
-          val inner = drops(deadAfter, go(body, (owned & live) ++ Core.boxedVar(x)))
+          val (dead, waiting) = ready(owned -- live -- uses.keySet -- read, e)
+          val deadAfter = (owned & read) -- live -- (uses.keySet -- read)
+          val inner = drops(deadAfter, go(body, (owned & live) ++ waiting ++ tracked(x)))
           val owning = rhs match
-            case _: Rhs.Field => Core.boxedVar(x).fold(inner)(Dup(_, inner))
+            case _: Rhs.Field => tracked(x).fold(inner)(Dup(_, inner))
             case _            => inner
-          val dups = uses.toList.flatMap((v, n) => List.fill(n - 1 + (if live(v) || lent(v) then 1 else 0))(v))
+
+          /** One more for a variable live after or lent by the caller, and for one this call also
+            * borrows: the callee may reuse what it owns while it reads the borrowed alias, so the
+            * caller keeps that count across the call and drops it after (`deadAfter`).
+            */
+          val dups =
+            uses.toList.flatMap((v, n) => List.fill(n - 1 + (if live(v) || lent(v) || read(v) then 1 else 0))(v))
           drops(dead, dups.foldLeft(Let(x, rhs, owning): Expr)((acc, v) => Dup(v, acc)))
         case Dup(_, _) | Drop(_, _) => e
 
+    /** The dead variables `vs` split into those dropped before `e` and those that wait: a slot whose
+      * witness `e` binds (a closure's capture, loaded on entry) is dropped once the witness is bound.
+      */
+    private def ready(vs: Set[Var], e: Expr): (Set[Var], Set[Var]) =
+      lazy val bound = Core.lets(e).map(_._1).toSet
+      vs.partition(v => !Core.witnessOf(v).exists(bound))
+
     private def drops(vs: Set[Var], e: Expr): Expr = vs.toList.sortBy(_.name).foldRight(e)(Drop(_, _))
 
-    private def boxed(as: List[Atom]) = as.flatMap(Core.boxedVar)
+    private def counted(as: List[Atom]) = as.flatMap(tracked)
 
-    /** The boxed arguments of a call of `f`, split into consumed and borrowed. */
+    /** The counted arguments of a call of `f`, split into consumed and borrowed. */
     private def args(f: String, as: List[Atom]): (List[Var], List[Var]) =
       val (lentArgs, owned) = as.zipWithIndex.partition((_, i) => borrowed(f)(i))
-      (boxed(owned.map(_._1)), boxed(lentArgs.map(_._1)))
+      (counted(owned.map(_._1)), counted(lentArgs.map(_._1)))
 
-    /** Boxed variables `rhs` consumes, with multiplicity. A branch consumes what its branches use. */
+    /** Counted variables `rhs` consumes, with multiplicity. A branch consumes what its branches use. */
     private def consumed(rhs: Rhs): List[Var] =
       rhs match
-        case Rhs.Move(a)               => boxed(List(a))
-        case Rhs.Prim(_, as)           => boxed(as)
-        case Rhs.Call(f, as, false)    => args(f, as)._1
-        case Rhs.Call(_, as, true)     => boxed(as)
-        case Rhs.Con(_, fs)            => boxed(fs)
-        case Rhs.Closure(_, cs, _)     => boxed(cs)
-        case Rhs.CallClosure(c, as, _) => boxed(c :: as)
-        case Rhs.Catch(f, as)          => args(f, as)._1
-        case Rhs.Reuse(_, _, fs, _)    => boxed(fs)
-        case Rhs.Field(_, _)           => Nil
-        case Rhs.If(c, t, f)           => (boxed(List(c)).toSet ++ free(t) ++ free(f)).toList
-        case Rhs.Switch(s, cases)      => (boxed(List(s)).toSet ++ cases.flatMap((_, c) => free(c))).toList
+        case Rhs.Move(a)                => counted(List(a))
+        case Rhs.Prim(_, as)            => counted(as)
+        case Rhs.Call(f, as, false)     => args(f, as)._1
+        case Rhs.Call(_, as, true)      => counted(as)
+        case Rhs.Con(_, fs)             => counted(fs)
+        case Rhs.Closure(_, cs, _)      => counted(cs)
+        case Rhs.CallClosure(c, as, _)  => counted(c :: as)
+        case Rhs.CallTable(_, _, as, _) => counted(as)
+        case Rhs.Catch(f, as)           => args(f, as)._1
+        case Rhs.Reuse(_, _, fs, _)     => counted(fs)
+        case Rhs.Field(_, _)            => Nil
+        case Rhs.If(c, t, f)            => (counted(List(c)).toSet ++ free(t) ++ free(f)).toList
+        case Rhs.Switch(s, cases)       => (counted(List(s)).toSet ++ cases.flatMap((_, c) => free(c))).toList
 
-    /** Boxed variables `rhs` only borrows. */
+    /** Counted variables `rhs` only borrows. */
     private def reads(rhs: Rhs): Set[Var] =
       rhs match
-        case Rhs.Field(o, _)        => Core.boxedVar(o).toSet
+        case Rhs.Field(o, _)        => tracked(o).toSet
         case Rhs.Call(f, as, false) => args(f, as)._2.toSet
         case Rhs.Catch(f, as)       => args(f, as)._2.toSet
         case _                      => Set.empty
@@ -117,6 +151,6 @@ object Rc:
     private def free(e: Expr): Set[Var] =
       e match
         case Let(x, rhs, body) => consumed(rhs).toSet ++ reads(rhs) ++ (free(body) - x)
-        case Ret(a)            => Core.boxedVar(a).toSet
+        case Ret(a)            => tracked(a).toSet
         case Dup(x, b)         => free(b) + x
         case Drop(x, b)        => free(b) + x

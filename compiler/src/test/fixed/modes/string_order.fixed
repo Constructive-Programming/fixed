@@ -1,0 +1,50 @@
+// Comparison of strings and scalars (`spec/stdlib.md` §4.8, which fixes no order of strings): the
+// runtime's `fx_str_cmp` orders `String` bytewise, a byte above 127 after every ASCII byte, a prefix
+// before the longer string. `compare`
+// has a table entry on scalars and on `String`, and a derived `compare` goes through a `String`
+// field. Every comparison prints its own result; strings built at run time are compared and then
+// printed, so an operand the comparison consumed without a copy would show.
+use std.io.Console
+
+data Person:
+    P(name: String, age: u64)
+
+fn word(o: Order) -> String =
+    match o:
+        Order.Less => "less"
+        Order.Equal => "equal"
+        Order.Greater => "greater"
+
+fn order(a: T is Ord, b: T) -> String = word(a.compare(b))
+
+fn below(a: T is Ord, b: T) -> String =
+    if a < b: "<"
+    else:
+        if a <= b: "="
+        else: ">"
+
+fn pairs(xs: List of String, y: String) -> String =
+    match xs:
+        List.Nil => ""
+        List.Cons(x, rest) => below(x, y).concat(pairs(rest, y))
+
+fn big() -> u64 = 18446744073709551615
+
+fn twice(s: String) -> String = s.concat(s)
+
+fn main() -> () with Console =
+    Console.printLine(order("ab", "abc").concat(" ").concat(order("abc", "ab")).concat(" ").concat(order("", "")).concat(" ").concat(order("", "a")))
+    Console.printLine(order("b", "a").concat(" ").concat(order("ab", "ac")).concat(" ").concat(order("é", "z")).concat(" ").concat(order("é", "é")))
+    Console.printLine(word("abc".compare("abd")).concat(" ").concat(word("x".compare("x"))).concat(" ").concat(word("zz".compare("z"))))
+    Console.printLine(("a" < "b").show().concat(" ").concat(("b" <= "a").show()).concat(" ").concat(("é" > "z").show()).concat(" ").concat(("" >= "").show()))
+    Console.printLine(pairs(["", "a", "b", "é", "ab", "a"], "ab"))
+    Console.printLine(order(3, 4).concat(" ").concat(order(0 - 5, 0 - 7)).concat(" ").concat(order('b', 'a')).concat(" ").concat(order(2.5, 2.5)))
+    Console.printLine(word(7.compare(7)).concat(" ").concat(word('x'.compare('y'))))
+    Console.printLine(order(Person.P("ann", 30), Person.P("bob", 20)).concat(" ").concat(order(Person.P("ann", 30), Person.P("ann", 20))).concat(" ").concat(order(Person.P("ann", 3), Person.P("ann", 3))))
+    Console.printLine((Person.P("al", 1) < Person.P("alan", 1)).show().concat(" ").concat((Person.P("é", 1) < Person.P("z", 1)).show()))
+    Console.printLine(order("a", "").concat(" ").concat(order("z", "é")).concat(" ").concat(("a" >= "b").show()).concat(" ").concat(("b" >= "a").show()))
+    Console.printLine(order(big(), 1).concat(" ").concat(word(big().compare(1))).concat(" ").concat(word((0.0 / 0.0).compare(1.0))))
+    let (x, y) = (twice("ab"), twice("a"))
+    Console.printLine(order(x, y).concat(" ").concat(word(y.compare(x))).concat(" ").concat((x < y).show()).concat(" ").concat(x).concat(" ").concat(y))
+    let (p, q) = (Person.P(twice("bo"), 1), Person.P(twice("b"), 2))
+    Console.printLine(order(p, q).concat(" ").concat((q < p).show()).concat(" ").concat(p.name).concat(" ").concat(q.name))

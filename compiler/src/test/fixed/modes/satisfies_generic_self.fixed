@@ -1,0 +1,21 @@
+// A `satisfies` body that calls a generic function at its own data type, so a table entry over the
+// body (`Tables.adapter`) is built while the body is lowered. The entry read the body's parameters
+// from the placeholder `Lower.instance` enters, before `Lower.code` had made them, and the compiler
+// crashed: with `--no-specialise` for `tagOf(Box.Box(1))`, in both modes for `tagOf(self)`.
+use std.io.Console
+
+cap Named:
+    fn name() -> String
+    fn tag() -> String
+
+data Box of A:
+    Box(v: A)
+
+fn tagOf(x: T is Named) -> String = x.tag()
+
+Box satisfies Named:
+    fn tag() = "box"
+    fn name() = tagOf(Box.Box(1)).concat(" ").concat(tagOf(self))
+
+fn main() -> () with Console =
+    Console.printLine(Box.Box("s").name())

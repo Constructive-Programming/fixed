@@ -1,0 +1,30 @@
+// Three and four values in a data type with named fields, where they were a tuple (a tuple has two
+// elements, Rule 5.12): the derived `==`, `<` and `show` reach every field, also through a static
+// table and at type parameters.
+use std.io.Console
+
+data Three of (A, B, C):
+    Three(a: A, b: B, c: C)
+
+data Four of (A, B, C, D):
+    Four(a: A, b: B, c: C, d: D)
+
+fn same(a: T is Eq, b: T, c: T) -> bool = Three.Three(a, b, c) == Three.Three(a, b, a)
+
+fn less(a: T is Ord, b: T) -> bool = Three.Three(a, a, a) < Three.Three(a, a, b)
+
+fn say(x: T is Show) -> String = x.show()
+
+fn triple(a: A is Show) -> String = say(Three.Three(a, a, a))
+
+fn third(t: Three of (u64, String, bool)) -> String =
+    match t:
+        Three.Three(_, s, true) => s
+        Three.Three(n, _, _) => n.show()
+
+fn main() -> () with Console =
+    Console.printLine((Three.Three(1, 2, 3) == Three.Three(1, 2, 4)).show().concat(" ").concat((Three.Three(1, 2, 3) == Three.Three(1, 2, 3)).show()))
+    Console.printLine((Four.Four(1, 2, 3, 4) == Four.Four(1, 2, 3, 5)).show().concat(" ").concat((Four.Four(1, 2, 3, 4) < Four.Four(1, 2, 3, 5)).show()).concat(" ").concat((Three.Three(1, 2, 4) < Three.Three(1, 2, 3)).show()))
+    Console.printLine(Three.Three(1, "a", true).show().concat(" ").concat(say(Four.Four(1, "b", 2, "c"))).concat(" ").concat(triple(5)))
+    Console.printLine(same(1, 2, 1).show().concat(" ").concat(same(1, 2, 3).show()).concat(" ").concat(less(1, 2).show()).concat(" ").concat(less(2, 1).show()))
+    Console.printLine(third(Three.Three(1, "x", true)).concat(" ").concat(third(Three.Three(2, "y", false))))

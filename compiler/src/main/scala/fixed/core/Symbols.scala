@@ -34,8 +34,17 @@ final case class Denotation(
 )
 
 /** Every symbol of a compilation, by id, plus what the Namer learns alongside: each owner's
-  * members in entry order, the top-level scope and the `satisfies` declarations by type name.
-  * Persistent: entering or refining returns a new table.
+  * members in entry order, the top-level scope, the prelude's own scope and the `satisfies`
+  * declarations by satisfying type (a data type's symbol, not its name, which a program's own
+  * declaration may shadow), and the applied types the program writes (`written`, newest first),
+  * whose arguments the typer checks against the bounds of the type's parameters. Persistent:
+  * entering or refining returns a new table.
+  *
+  * `scope` is the program's: its declarations shadow the prelude's names. `prelude` is the
+  * prelude's, in which the prelude's own code is resolved and through which the compiler finds
+  * the entities literals and built-in operations mean (`List`, `Tuple`, `Eq`), whatever the
+  * program declares. `modules` holds each stdlib module's declarations (`std.io`), through which
+  * the compiler finds the runtime's effects.
   */
 final case class SymbolTable(
     entries: Vector[Denotation],
@@ -43,9 +52,13 @@ final case class SymbolTable(
     children: IntMap[Vector[SymbolId]],
     typeParams: IntMap[List[SymbolId]],
     scope: Map[String, SymbolId],
-    satisfies: Map[String, List[Type]],
-    constructors: Map[(Int, String), List[(String, String)]],
-    defaulted: scala.collection.immutable.BitSet
+    prelude: Map[String, SymbolId],
+    private[core] val satisfies: Map[Type, List[Type]],
+    constructors: Map[(Int, String), List[(SymbolId, String)]],
+    defaulted: scala.collection.immutable.BitSet,
+    written: List[(Type, Span)] = Nil,
+    modules: Map[String, Map[String, SymbolId]] = Map.empty,
+    arities: IntMap[(Int, Int)] = IntMap.empty
 ):
 
   def apply(id: SymbolId): Denotation = entries(id.toInt - SymbolTable.firstId)
@@ -86,7 +99,16 @@ final case class SymbolTable(
   /** A variant's fields, in declaration order. */
   def fieldsOf(variant: SymbolId): Iterator[Denotation] = membersOf(variant).filter(_.kind == SymKind.Field)
 
-  /** Record `typeName satisfies cap`. */
+  /** Record applied type `t`, written at `span`. */
+  def recordWritten(t: Type, span: Span): SymbolTable = copy(written = (t, span) :: written)
+
+  /** Record that declaration `id`'s `of` clause takes `least` to `most` arguments. */
+  def recordArity(id: SymbolId, least: Int, most: Int): SymbolTable =
+    copy(arities = arities.updated(id.toInt, (least, most)))
+
+  /** The fewest and most arguments declaration `id`'s `of` clause takes, if it is a data type, effect or capability. */
+  def arityOf(id: SymbolId): Option[(Int, Int)] = arities.get(id.toInt)
+
   /** Record that field (or parameter) `id` declares a default value. */
   def markDefaulted(id: SymbolId): SymbolTable = copy(defaulted = defaulted.incl(id.toInt))
 
@@ -95,21 +117,49 @@ final case class SymbolTable(
   /** The top-level data type called `name`, if any. */
   def dataNamed(name: String): Option[SymbolId] = scope.get(name).filter(apply(_).kind == SymKind.Data)
 
-  /** Record `typeName satisfies cap` mapping `variant as ctor` (for constructor resolution). */
-  def mapConstructor(cap: SymbolId, ctor: String, typeName: String, variant: String): SymbolTable =
+  /** The top-level scope of the prelude's code, or of the program's. */
+  def scopeFor(prelude: Boolean): Map[String, SymbolId] = if prelude then this.prelude else scope
+
+  /** `id`'s name if `id` is the prelude's top-level declaration of that name, else `""`: what the
+    * compiler compares where it gives a prelude entity a meaning of its own (`Show.show` on a
+    * scalar), so that a program's own `cap Show` never takes it.
+    */
+  def preludeName(id: SymbolId): String =
+    val name = apply(id).name.stripPrefix("prelude.")
+    if prelude.get(name).contains(id) then name else ""
+
+  /** Record `data satisfies cap` mapping `variant as ctor` (for constructor resolution). */
+  def mapConstructor(cap: SymbolId, ctor: String, data: SymbolId, variant: String): SymbolTable =
     val key = (cap.toInt, ctor)
-    copy(constructors = constructors.updated(key, constructors.getOrElse(key, Nil) :+ (typeName -> variant)))
+    copy(constructors = constructors.updated(key, constructors.getOrElse(key, Nil) :+ (data -> variant)))
 
   /** The data types (with the variant) that implement `cap`'s constructor requirement `ctor`. */
-  def constructorsOf(cap: SymbolId, ctor: String): List[(String, String)] =
+  def constructorsOf(cap: SymbolId, ctor: String): List[(SymbolId, String)] =
     constructors.getOrElse((cap.toInt, ctor), Nil)
 
-  def satisfy(typeName: String, cap: Type): SymbolTable =
-    copy(satisfies = satisfies.updated(typeName, satisfies.getOrElse(typeName, Nil) :+ cap))
+  /** Record `t satisfies cap`. A data type is keyed by its symbol, its arguments ignored; any other
+    * type (a primitive, or the Namer's `PrimType` for a name that resolves to no data type) by itself.
+    */
+  def satisfy(t: Type, cap: Type): SymbolTable =
+    val key = SymbolTable.satisfier(t)
+    copy(satisfies = satisfies.updated(key, satisfies.getOrElse(key, Nil) :+ cap))
+
+  /** The capabilities `t`'s `satisfies` declarations name, in declaration order. */
+  def satisfactionsOf(t: Type): List[Type] = satisfies.getOrElse(SymbolTable.satisfier(t), Nil)
+
+  /** The symbol `std.io` declares as `name`, if any; a program's own declaration of that name is
+    * another symbol.
+    */
+  def stdIo(name: String): Option[SymbolId] = modules.get("std.io").flatMap(_.get(name))
+
+  /** Replace a symbol's name. */
+  def rename(id: SymbolId, name: String): SymbolTable = update(id, _.copy(name = name))
 
   /** Replace a symbol's signature type. */
-  def refine(id: SymbolId, info: Type): SymbolTable =
-    copy(entries = entries.updated(id.toInt - SymbolTable.firstId, apply(id).copy(info = info)))
+  def refine(id: SymbolId, info: Type): SymbolTable = update(id, _.copy(info = info))
+
+  private def update(id: SymbolId, f: Denotation => Denotation): SymbolTable =
+    copy(entries = entries.updated(id.toInt - SymbolTable.firstId, f(apply(id))))
 
   /** All denotations in entry order. */
   def denotations: List[Denotation] = entries.toList
@@ -120,8 +170,24 @@ object SymbolTable:
     */
   val firstId: Int = 2
 
+  /** The key of [[SymbolTable.satisfies]]: a data type without its arguments. */
+  private def satisfier(t: Type): Type =
+    t match
+      case Type.TypeRef(id, _) => Type.TypeRef(id, Nil)
+      case other               => other
+
   val empty: SymbolTable =
-    SymbolTable(Vector.empty, firstId, IntMap.empty, IntMap.empty, Map.empty, Map.empty, Map.empty, BitSet.empty)
+    SymbolTable(
+      Vector.empty,
+      firstId,
+      IntMap.empty,
+      IntMap.empty,
+      Map.empty,
+      Map.empty,
+      Map.empty,
+      Map.empty,
+      BitSet.empty
+    )
 
 extension (table: SymbolTable)
   /** Source-like rendering of `t`, with symbol names resolved through `table`. */

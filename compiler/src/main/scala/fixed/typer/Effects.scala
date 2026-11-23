@@ -22,10 +22,6 @@ final case class RowCheck(
   */
 object Effects:
 
-  /** The effects the runtime installs handlers for: those `std.io` declares (Rule E5.4). */
-  private lazy val runtimeNames: Set[String] =
-    Stdlib.modules.values.flatten.collect { case e: fixed.ast.Trees.EffectDecl => e.name }.toSet
-
   /** Calling something of row `fx` at `span` performs it. */
   def perform(s: TyperState, fx: EffectRow, span: Span): TyperState =
     if fx.effects.isEmpty then s else s.copy(row = fx.effects.map(_ -> span) ++ s.row)
@@ -100,7 +96,7 @@ object Effects:
     }
 
   /** Rule E5.2: every performed effect is declared (`T015`); a declared one never performed is a
-    * warning (`T017`); `main` declares only runtime effects (`T016`, Rule E5.4).
+    * warning (`E081`, Rule E3.6.e.3); `main` declares only runtime effects (`T016`, Rule E5.4).
     */
   def discharge(s: TyperState, c: RowCheck): TyperState =
     val declared = expand(s, c.declared.effects)
@@ -113,9 +109,9 @@ object Effects:
     }
     val unused = if c.unused then declared.filterNot(d => performed.exists(_._1.sym == d.sym)) else Nil
     val warned = unused.foldLeft(checked) { (si, d) =>
-      si.warn(DiagCode.T017, c.span, s"${c.owner} declares effect ${show(si, d)} but never performs it")
+      si.warn(DiagCode.E081, c.span, s"unused declared effect ${show(si, d)}")
     }
-    val foreign = if c.runtime then declared.filterNot(d => isRuntime(s, d.sym)) else Nil
+    val foreign = if c.runtime then declared.filterNot(d => mainMayLeave(s, d.sym)) else Nil
     foreign.foldLeft(warned) { (si, d) =>
       si.error(DiagCode.T016, c.span, s"main performs ${show(si, d)}, which the runtime does not handle")
     }
@@ -123,9 +119,11 @@ object Effects:
   private def unifyArgs(s: TyperState, d: EffectBound, e: EffectBound): Option[TyperState] =
     s.tryUnify(Type.TupleType(d.args), Type.TupleType(e.args))
 
-  private def isRuntime(s: TyperState, effect: SymbolId): Boolean =
-    val d = s.symbols(effect)
-    d.owner == SymbolId.Prelude && d.kind == SymKind.Effect && runtimeNames(d.name)
+  /** The effects `main` may leave unhandled: those `std.io` declares, for which the runtime installs
+    * handlers (Rule E5.4), and the prelude's `Diverge`, which has no operation (Rule 7.4.h).
+    */
+  private def mainMayLeave(s: TyperState, effect: SymbolId): Boolean =
+    s.symbols.stdIo(s.symbols(effect).name).contains(effect) || s.symbols.prelude.get("Diverge").contains(effect)
 
   def show(s: TyperState, e: EffectBound): String = s.symbols.render(s.unifier.zonk(asType(s, e)))
 

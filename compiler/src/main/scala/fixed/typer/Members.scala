@@ -2,7 +2,7 @@ package fixed.typer
 
 import scala.collection.immutable.IntMap
 
-import fixed.core.{EffectBound, EffectRow, SymKind, SymbolId, SymbolTable, Type}
+import fixed.core.{Denotation, EffectBound, EffectRow, SymKind, SymbolId, SymbolTable, Type, render}
 import fixed.util.mapAccum
 
 /** Signature lookup for the typer: instantiation of generic signatures, instance members (data
@@ -35,7 +35,7 @@ object Members:
     t match
       case Type.PrimType(n)                                               => numericPrims(n)
       case Type.TypeRef(id, _) if s.symbols(id).kind == SymKind.TypeParam =>
-        s.symbols.scope.get("Numeric").exists(numeric => Satisfaction.boundsReach(s, boundsOf(s, id), numeric))
+        s.symbols.prelude.get("Numeric").exists(numeric => Satisfaction.boundsReach(s, boundsOf(s, id), numeric))
       case _ => false
 
   /** How to rewrite a signature: explicit replacements, owners whose type variables become fresh,
@@ -58,12 +58,17 @@ object Members:
     val (s1, _, out) = go(s, t, sub, sub.mapping)
     (s1, out)
 
+  private def rebuildAll(s: TyperState, ts: List[Type], sub: Subst, m: IntMap[Type])
+      : (TyperState, IntMap[Type], List[Type]) =
+    val ((s1, m1), out) = mapAccum((s, m), ts) { case ((si, mi), ti) =>
+      val (si1, mi1, ti1) = go(si, ti, sub, mi)
+      ((si1, mi1), ti1)
+    }
+    (s1, m1, out)
+
   private def go(s: TyperState, t: Type, sub: Subst, m: IntMap[Type]): (TyperState, IntMap[Type], Type) =
     def rebuild(parts: List[Type])(mk: List[Type] => Type) =
-      val ((s1, m1), out) = mapAccum((s, m), parts) { case ((si, mi), ti) =>
-        val (si1, mi1, ti1) = go(si, ti, sub, mi)
-        ((si1, mi1), ti1)
-      }
+      val (s1, m1, out) = rebuildAll(s, parts, sub, m)
       (s1, m1, mk(out))
     t match
       case Type.TypeRef(id, Nil) if m.contains(id.toInt)  => (s, m, m(id.toInt))
@@ -71,9 +76,17 @@ object Members:
         rebuild(args)(Unifier.applyHead(s.unifier.resolve(m(id.toInt)), _))
       case Type.TypeRef(id, args)
           if s.symbols(id).kind == SymKind.TypeParam && sub.freshOwners(s.symbols(id).owner) =>
-        val (u, v) =
-          s.unifier.fresh(numeric = isNumeric(s, Type.TypeRef(id, Nil)), default = None, bounds = boundsOf(s, id))
-        go(s.copy(unifier = u), Type.TypeRef(id, args), sub, m.updated(id.toInt, v))
+        /** The variable first, so that its bounds, instantiated under the same mapping, may name it. */
+        val numeric = isNumeric(s, Type.TypeRef(id, Nil)) && !anonymousParam(s, id)
+        val (u, v) = s.unifier.fresh(numeric = numeric, default = None)
+
+        /** The declared bounds: a member body's substituted ones (`rigidBounds`) are for its rigid uses. */
+        val (s1, m1, bounds) = rebuildAll(s.copy(unifier = u), boundsOf(s.symbols, id), sub, m.updated(id.toInt, v))
+        val withBounds = v match
+          case Type.TypeVar(n) if bounds.nonEmpty =>
+            s1.copy(unifier = s1.unifier.copy(varBounds = s1.unifier.varBounds.updated(n, bounds)))
+          case _ => s1
+        go(withBounds, Type.TypeRef(id, args), sub, m1)
       case Type.TypeRef(id, args)   => rebuild(args)(Type.TypeRef(id, _))
       case Type.CapRef(id, args)    => rebuild(args)(Type.CapRef(id, _))
       case Type.ArrowType(l, r, fx) =>
@@ -105,6 +118,9 @@ object Members:
   private def boundElement(bounds: List[Type]): Option[Type] =
     bounds.collectFirst { case Type.CapRef(_, args) if args.nonEmpty => args.last }
 
+  /** A type parameter the Namer made for an anonymous bound `is C` (named as written). */
+  def anonymousParam(s: TyperState, id: SymbolId): Boolean = s.symbols(id).name.startsWith("is ")
+
   /** Memo key for the fresh variable standing for an unknown `Part`. */
   private val PartKey: Int = -1
 
@@ -118,10 +134,35 @@ object Members:
   def typeParamsOf(s: TyperState, owner: SymbolId): List[SymbolId] =
     s.symbols.typeParamsOf(owner)
 
-  /** Capabilities every type has: auto-derived per `spec/stdlib.md` §4.7, §4.10, §4.11. Whether a
-    * representation can actually derive them is checked at representation selection (M11).
+  /** Capabilities whose members are looked up on a concrete type that does not declare them
+    * (`spec/stdlib.md` §4.7, §4.8, §4.10), and `Clone` (§4.11) except on data types and tuples,
+    * which have it only on request. A call of one requires the receiver to have the capability
+    * (`Typer.requireBound`, which for `Clone` gives the hint of `notCloned`). On an abstract receiver they are
+    * not found, and [[lackedBound]] names the bound it lacks.
     */
-  private val autoDerived = List("Show", "Eq", "Clone")
+  private val autoDerived = List("Show", "Eq", "Ord", "Clone")
+
+  /** A value of type `t` is used through a witness and its bound set only (a type parameter, or an
+    * anonymous `is ...` bound), so it has no auto-derived member (P6 D10, `spec/type_system.md` Rule 5.1.3).
+    */
+  def abstractType(s: TyperState, t: Type): Boolean =
+    t match
+      case Type.TypeRef(id, _)              => s.symbols(id).kind == SymKind.TypeParam
+      case _: Type.IsBound | _: Type.CapRef => true
+      case _                                => false
+
+  /** The capability among [[autoDerived]] that declares `member`. */
+  def autoDerivedCap(s: TyperState, member: String): Option[SymbolId] =
+    autoDerived.flatMap(s.symbols.prelude.get).find(s.symbols.membersOf(_).exists(_.name == member))
+
+  /** The bound an abstract receiver lacks when it calls `member` of prelude capability `cap`: the
+    * program's capability of the same name when it has `member`, itself or through `extends`
+    * (it shadows `cap` in the program's code), and otherwise `cap`.
+    */
+  def lackedBound(s: TyperState, cap: SymbolId, member: String): SymbolId =
+    s.symbols.scope.get(s.symbols.preludeName(cap))
+      .filter(own => s.symbols(own).kind == SymKind.Cap && s.members.lookup(own, SymKind.Method, member).nonEmpty)
+      .getOrElse(cap)
 
   /** Every instance member `name` on `recv`, best first: a data type's own field, then its
     * capabilities, then its derived `fold`. Calls with several candidates pick by argument shape.
@@ -130,28 +171,41 @@ object Members:
   def candidates(s: TyperState, resolved: Type, name: String): List[Candidate] =
     val own: List[Candidate] = resolved match
       case Type.TupleType(ts) =>
-        s.symbols.scope.get("Tuple").toList.flatMap(t => candidates(s, Type.TypeRef(t, ts), name))
+        s.symbols.prelude.get("Tuple").toList.flatMap(t => candidates(s, Type.TypeRef(t, ts), name))
       case t @ Type.TypeRef(id, args) =>
         val d = s.symbols(id)
         d.kind match
           case SymKind.Data =>
+            /** Rule 7.4.c: a data type whose shape derives `Functor` has it without a declaration. */
+            val derivedFunctor =
+              s.symbols.prelude.get("Functor").filter(_ => functor(s.symbols, id)).map(Type.CapRef(_, Nil))
             field(s, id, args, name).toList ++
-              capMember(s, s.symbols.satisfies.getOrElse(d.name, Nil), t, name) ++
-              Option.when(name == "fold" && s.symbols.variantsOf(id).nonEmpty)(
-                Candidate(Resolution.DerivedFold(id), () => derivedFold(s, id, args))
-              )
+              capMember(s, (s.symbols.satisfactionsOf(t) ++ derivedFunctor).distinct, t, name) ++
+              Option.when((name == "fold" || name == "para") && s.symbols.variantsOf(id).nonEmpty) {
+                val para = name == "para"
+                Candidate(Resolution.DerivedFold(id, para), () => derivedFold(s, id, args, para))
+              }
           case SymKind.TypeParam => capMember(s, boundsOf(s, id), t, name)
           case _                 => Nil
-      case t @ Type.PrimType(n) =>
-        val numeric = if isNumeric(s, t) then s.symbols.scope.get("Numeric").map(Type.CapRef(_, Nil)).toList else Nil
-        capMember(s, s.symbols.satisfies.getOrElse(n, Nil) ++ numeric, t, name)
-      case t @ Type.CapRef(_, _)  => capMember(s, List(t), t, name)
-      case Type.IsBound(bs)       => capMember(s, bs, resolved, name)
-      case Type.TypeVar(id)       => capMember(s, s.unifier.boundsOf(id), resolved, name)
+      case t @ Type.PrimType(_) =>
+        val numeric = if isNumeric(s, t) then s.symbols.prelude.get("Numeric").map(Type.CapRef(_, Nil)).toList else Nil
+        capMember(s, s.symbols.satisfactionsOf(t) ++ numeric, t, name)
+      case t @ Type.CapRef(_, _) => capMember(s, List(t), t, name)
+      case Type.IsBound(bs)      => capMember(s, bs, resolved, name)
+      case Type.TypeVar(id)      =>
+        /** A numeric literal not solved yet has `Numeric`'s members: `3.add(4)`. */
+        val numeric = s.symbols.prelude.get("Numeric").filter(_ => s.unifier.numericVars(id)).map(Type.CapRef(_, Nil))
+        capMember(s, s.unifier.boundsOf(id) ++ numeric, resolved, name)
       case Type.AppliedVar(id, _) => capMember(s, s.unifier.boundsOf(id), resolved, name)
       case _                      => Nil
-    if own.nonEmpty then own
-    else capMember(s, autoDerived.flatMap(s.symbols.scope.get).map(Type.CapRef(_, Nil)), resolved, name)
+    val data = resolved match
+      case Type.TypeRef(id, _) => s.symbols(id).kind == SymKind.Data
+      case _: Type.TupleType   => true
+      case _                   => false
+    val fallback =
+      autoDerived.flatMap(s.symbols.prelude.get).filterNot(c => data && Satisfaction.onRequest(s, c))
+    if own.nonEmpty || abstractType(s, resolved) then own
+    else capMember(s, fallback.map(Type.CapRef(_, Nil)), resolved, name)
 
   /** A field of a single-variant data type, as a zero-argument member. */
   private def field(s: TyperState, data: SymbolId, args: List[Type], name: String): Option[Candidate] =
@@ -166,7 +220,9 @@ object Members:
       case _ => None
 
   /** Member `name` of `kind` in `caps` or their `extends` chains, instantiated for receiver `recv`:
-    * one table lookup per capability (see [[MemberTables]]).
+    * one table lookup per capability (see [[MemberTables]]). In the prelude's own code only the
+    * prelude's capabilities count; in the program, a member of the program's capability comes
+    * before, and so is preferred over, a prelude capability's member of the same name.
     */
   private def capMember(
       s: TyperState,
@@ -179,20 +235,21 @@ object Members:
     val recvArgs = recv match
       case Type.TypeRef(_, as) => as
       case _                   => Nil
-    expandAliases(s.symbols, caps).flatMap {
-      case Type.CapRef(root, rootArgs) =>
-        s.members.lookup(root, kind, name).map { e =>
-          val capArgs = e.written.getOrElse(rootArgs)
-          val params = typeParamsOf(s, e.cap)
-          val args = if capArgs.nonEmpty then capArgs else recvArgs.takeRight(params.size)
-          val part = partOverride.orElse(capArgs.lastOption).orElse(recvArgs.lastOption)
-          Candidate(
-            Resolution.CapMember(e.cap, e.member.id),
-            () =>
-              instantiate(s, e.member.info, Subst(Subst.of(params, args), Set(e.member.id, e.cap), Some(recv), part))
-          )
-        }
-      case _ => Nil
+    val found = expandAliases(s.symbols, caps).flatMap {
+      case Type.CapRef(root, rootArgs) => s.members.lookup(root, kind, name).map(_ -> rootArgs)
+      case _                           => Nil
+    }
+    val prelude = (e: MemberEntry) => s.symbols(e.cap).owner == SymbolId.Prelude
+    val visible = if s.inPrelude then found.filter((e, _) => prelude(e)) else found.sortBy((e, _) => prelude(e))
+    visible.map { (e, rootArgs) =>
+      val capArgs = e.written.getOrElse(rootArgs)
+      val params = typeParamsOf(s, e.cap)
+      val args = if capArgs.nonEmpty then capArgs else recvArgs.takeRight(params.size)
+      val part = partOverride.orElse(capArgs.lastOption).orElse(recvArgs.lastOption)
+      Candidate(
+        Resolution.CapMember(e.cap, e.member.id),
+        () => instantiate(s, e.member.info, Subst(Subst.of(params, args), Set(e.member.id, e.cap), Some(recv), part))
+      )
     }
 
   /** Replace type-alias references in a bound chain by their constituents; arguments given to
@@ -214,20 +271,34 @@ object Members:
       case other => List(other)
     }
 
-  /** A type variable's bound chain, aliases expanded. */
+  /** A type parameter's bound chain, aliases expanded; while one of its member's bodies is typed,
+    * the bounds as substituted there (`TyperState.rigidBounds`).
+    */
   def boundsOf(s: TyperState, param: SymbolId): List[Type] =
-    s.symbols(param).info match
-      case Type.IsBound(bs) => expandAliases(s.symbols, bs)
-      case _                => Nil
+    s.rigidBounds.getOrElse(param.toInt, boundsOf(s.symbols, param))
+
+  def boundsOf(symbols: SymbolTable, param: SymbolId): List[Type] =
+    symbols(param).info match
+      case Type.IsBound(bs) if symbols(param).kind == SymKind.TypeParam => expandAliases(symbols, bs)
+      case _                                                            => Nil
 
   /** `fold` derived from a data type's variants (a catamorphism): one function per variant, its
-    * fields with each recursive occurrence of the type replaced by the result type `R`.
+    * fields with each recursive occurrence of the type (`Self` as declared) replaced by the result type `R`.
+    * `para` (Rule 7.4.g, a paramorphism) passes twice each field that `fold` would fold: first as it
+    * is, then folded.
     */
-  private def derivedFold(s: TyperState, data: SymbolId, args: List[Type]): (TyperState, Type) =
+  private def derivedFold(s: TyperState, data: SymbolId, args: List[Type], para: Boolean): (TyperState, Type) =
     val (s0, r) = s.fresh
     val (s1, cases) = mapAccum(s0, s.symbols.variantsOf(data).toList) { (si, v) =>
-      val (si1, fields) = fieldTypes(si, data, args, v.id)
-      (si1, Type.ArrowType(Type.TupleType(fields.map(replaceSelf(_, data, r))), r, EffectRow.empty))
+      val declared = s.symbols.fieldsOf(v.id).toList.flatMap { f =>
+        val folded = foldedSelf(s.symbols, data, f.info, r)
+        if para && folded != f.info then List(f.info, folded) else List(folded)
+      }
+      val sub = Subst(Subst.of(typeParamsOf(s, data), args), Set(v.id))
+
+      /** One instantiation, so the original and folded types of a field share their fresh variables. */
+      val (si1, fields) = instantiate(si, Type.TupleType(declared), sub)
+      (si1, Type.ArrowType(fields, r, EffectRow.empty))
     }
     (s1, Type.ArrowType(Type.TupleType(cases), r, EffectRow.empty))
 
@@ -248,16 +319,24 @@ object Members:
           case None                     =>
             val (s1, args) = freshArgs(s, owner)
             val self = Type.TypeRef(owner, args)
-            capMember(s1, s1.symbols.satisfies.getOrElse(d.name, Nil), self, name, SymKind.StaticMethod)
+            capMember(s1, s1.symbols.satisfactionsOf(self), self, name, SymKind.StaticMethod)
               .headOption
               .map(_())
       case SymKind.TypeParam =>
-        /** A type constructor variable: `M.pure(x)` is `M of typeof(x)`, whatever `M`'s bound says. */
+        /** A parameter bounded by a capability with a member that takes or gives a `Part` is a type
+          * constructor: `M.pure(x)` is `M of typeof(x)`, and so is `R.empty`. Otherwise a static
+          * member returns the parameter unapplied: `N.fromI64(300)` is `N`.
+          */
+        val bounds = boundsOf(s, owner)
+        val caps = bounds.collect { case Type.CapRef(c, _) => c }
+        val elementwise = caps.exists(c =>
+          MemberTables.table(s.symbols, c).values.exists(_.values.flatten.exists(e =>
+            mentions(e.member.info, Type.PartType)
+          ))
+        )
         val (s1, part) = s.fresh
-        val self = Type.TypeRef(owner, List(part))
-        capMember(s1, boundsOf(s, owner), self, name, SymKind.StaticMethod, Some(part))
-          .headOption
-          .map(_())
+        val self = Type.TypeRef(owner, if elementwise then List(part) else Nil)
+        capMember(s1, bounds, self, name, SymKind.StaticMethod, Option.when(elementwise)(part)).headOption.map(_())
       case SymKind.Cap =>
         val (s1, args) = freshArgs(s, owner) match
           case (si, Nil) =>
@@ -284,11 +363,12 @@ object Members:
       layer: Option[Type.Layer]
   ): (TyperState, Type) =
     val (s1, args) = freshArgs(s, data)
-    val (s2, fields) = fieldTypes(s1, data, args, variant)
-    val (result, fieldsOut) = layer match
-      case Some(Type.Layer(`data`, _, seed)) => (Type.Layer(data, args, seed), fields.map(replaceSelf(_, data, seed)))
-      case _                                 => (Type.TypeRef(data, args), fields)
-    (s2, if fields.isEmpty then result else Type.ArrowType(Type.TupleType(fieldsOut), result, EffectRow.empty))
+    val (result, declared) = layer match
+      case Some(Type.Layer(`data`, _, seed)) =>
+        (Type.Layer(data, args, seed), foldedSelf(s.symbols, data, _, seed))
+      case _ => (Type.TypeRef(data, args), identity[Type])
+    val (s2, fields) = fieldTypes(s1, data, args, variant, declared)
+    (s2, if fields.isEmpty then result else Type.ArrowType(Type.TupleType(fields), result, EffectRow.empty))
 
   /** `unfold(seed: S, step: S -> layer of D over S) -> D`, derived from the variants (an anamorphism). */
   private def derivedUnfold(s: TyperState, data: SymbolId): (TyperState, Type) =
@@ -307,29 +387,124 @@ object Members:
         (s2, Type.ArrowType(l, r, EffectRow(fx.effects :+ EffectBound(effect, args))))
       case other => other
 
-  def freshArgs(s: TyperState, data: SymbolId): (TyperState, List[Type]) =
-    mapAccum(s, typeParamsOf(s, data)) { (si, p) =>
-      val (u, v) = si.unifier.fresh(numeric = isNumeric(si, Type.TypeRef(p, Nil)), default = None)
-      (si.copy(unifier = u), v)
-    }
+  /** Fresh variables for the `of` parameters of `owner` (a data type, an effect or a capability),
+    * each keeping its declared bound, which every type it is later solved to must satisfy.
+    */
+  def freshArgs(s: TyperState, owner: SymbolId): (TyperState, List[Type]) =
+    val (s1, _, args) =
+      rebuildAll(s, typeParamsOf(s, owner).map(Type.TypeRef(_, Nil)), Subst(IntMap.empty, Set(owner)), IntMap.empty)
+    (s1, args)
 
-  def fieldTypes(s: TyperState, data: SymbolId, args: List[Type], variant: SymbolId): (TyperState, List[Type]) =
+  /** The field types of `variant` at `args`, each declared type first passed through `declared`. */
+  def fieldTypes(
+      s: TyperState,
+      data: SymbolId,
+      args: List[Type],
+      variant: SymbolId,
+      declared: Type => Type = identity
+  ): (TyperState, List[Type]) =
     val sub = Subst(Subst.of(typeParamsOf(s, data), args), Set(variant))
-    mapAccum(s, s.symbols.fieldsOf(variant).toList)((si, f) => instantiate(si, f.info, sub))
+    mapAccum(s, s.symbols.fieldsOf(variant).toList)((si, f) => instantiate(si, declared(f.info), sub))
 
-  private def replaceSelf(t: Type, data: SymbolId, by: Type): Type =
+  /** `Self` as declared: `data` at its own type parameters. Only a field of this type is recursive
+    * (Rule 7.4.a): at `Tree of Tree of u64` a field `value: Tree of u64` is an element, and so is a
+    * field `M of (B, A)` in `M of (A, B)`. Decided before instantiation, where they differ.
+    */
+  def declaredSelf(symbols: SymbolTable, data: SymbolId): Type =
+    Type.TypeRef(data, symbols.typeParamsOf(data).map(Type.TypeRef(_, Nil)))
+
+  /** Declared field type `t` of `data` with each recursive position replaced by `by`: `Self`, and
+    * `Self` inside the last argument of a data type a derived member maps through ([[through]]).
+    * Elsewhere `Self` stays (Rule 7.4.a.1: the field is passed unfolded).
+    */
+  def foldedSelf(symbols: SymbolTable, data: SymbolId, t: Type, by: Type): Type =
+    if t == declaredSelf(symbols, data) then by
+    else
+      through(symbols, t) match
+        case Some((f, args)) => Type.TypeRef(f, args.init :+ foldedSelf(symbols, data, args.last, by))
+        case None            => t
+
+  /** `t` as a data type and its arguments when a derived member reaches into its last argument:
+    * the data type is a derived [[functor]].
+    */
+  def through(symbols: SymbolTable, t: Type): Option[(SymbolId, List[Type])] =
+    applied(symbols, t).filter((f, _) => functor(symbols, f))
+
+  /** `t` as a data type applied to arguments, and those arguments. */
+  private def applied(symbols: SymbolTable, t: Type): Option[(SymbolId, List[Type])] =
     t match
-      case Type.TypeRef(`data`, _) => by
-      case other                   => other.mapChildren(replaceSelf(_, data, by))
+      case Type.TypeRef(f, args) if args.nonEmpty && symbols(f).kind == SymKind.Data => Some((f, args))
+      case _                                                                         => None
+
+  /** Whether `data` derives `Functor` (Rule 7.4.c, narrowed): its rightmost type parameter occurs
+    * in a field, has no bound, and a derived `map` can rebuild every occurrence ([[unmapped]]).
+    */
+  def functor(symbols: SymbolTable, data: SymbolId): Boolean =
+    symbols.typeParamsOf(data).lastOption.exists { p =>
+      symbols.variantsOf(data).exists(v => symbols.fieldsOf(v.id).exists(f => mentions(f.info, Type.TypeRef(p, Nil))))
+    } && boundedLast(symbols, data).isEmpty && unmapped(symbols, data).isEmpty
+
+  /** `data`'s rightmost type parameter, if it has a bound. A derived `map` takes any result type
+    * `B`, and would build `data` at a `B` that does not satisfy that bound.
+    */
+  private def boundedLast(symbols: SymbolTable, data: SymbolId): Option[SymbolId] =
+    symbols.typeParamsOf(data).lastOption.filter(boundsOf(symbols, _).nonEmpty)
+
+  def mentions(t: Type, part: Type): Boolean = t == part || t.children.exists(mentions(_, part))
+
+  /** The first field of `data` that holds its rightmost type parameter where a derived `map` cannot
+    * rebuild it, followed by the field of the nested data type that blocks it, if any. Each
+    * occurrence must be the parameter itself, or inside the last argument of a data type (`data`
+    * at any arguments among them) whose rightmost parameter is unbounded and rebuilt in turn, with
+    * no other argument of that type mentioning it. Each data type is checked once per search: one already
+    * visited, being checked further up or found rebuildable, is taken as rebuildable.
+    */
+  def unmapped(symbols: SymbolTable, data: SymbolId): List[Denotation] =
+    val visited = collection.mutable.Set(data)
+    def search(d: SymbolId): List[Denotation] =
+      symbols.typeParamsOf(d).lastOption.fold(Nil) { p =>
+        val param = Type.TypeRef(p, Nil)
+        def blocked(t: Type): Option[List[Denotation]] =
+          if !mentions(t, param) || t == param then None
+          else
+            applied(symbols, t) match
+              case Some((f, args)) if !args.init.exists(mentions(_, param)) && boundedLast(symbols, f).isEmpty =>
+                blocked(args.last).orElse(Option.when(visited.add(f))(search(f)).filter(_.nonEmpty))
+              case _ => Some(Nil)
+        symbols.variantsOf(d).iterator.flatMap(v => symbols.fieldsOf(v.id))
+          .flatMap(f => blocked(f.info).map(f :: _)).nextOption().getOrElse(Nil)
+      }
+    search(data)
+
+  /** When `cap` is `Functor` and `t` a data type that does not derive it, a hint saying why: its
+    * rightmost type parameter is bounded ([[boundedLast]]), or naming the field a derived `map`
+    * cannot rebuild ([[unmapped]]).
+    */
+  def notFunctor(symbols: SymbolTable, t: Type, cap: SymbolId): Option[String] =
+    t match
+      case Type.TypeRef(id, _) if symbols.preludeName(cap) == "Functor" && symbols(id).kind == SymKind.Data =>
+        (boundedLast(symbols, id), unmapped(symbols, id)) match
+          case (Some(p), _) =>
+            val bound = boundsOf(symbols, p).map(symbols.render).mkString(" + ")
+            Some(s"map is not derived: the last type parameter of ${symbols(id).name} is bounded " +
+              s"(${symbols(p).name} is $bound), and map must accept any result type")
+          case (None, Nil)    => None
+          case (None, fields) =>
+            val shown = fields.map(f => s"${symbols(f.owner).name}.${f.name}: ${symbols.render(f.info)}")
+            Some(s"a derived map cannot rebuild field ${shown.mkString(", through ")}")
+      case _ => None
 
   /** An arrow's left-hand side is always its parameter list, a `TupleType` of any arity, so a
     * single `()` parameter and no parameters stay distinct.
     */
   /** A signature's parameter count (0 for a non-function). */
-  def arity(t: Type): Int =
+  def arity(t: Type): Int = paramTypes(t).size
+
+  /** A signature's parameter types (none for a non-function). */
+  def paramTypes(t: Type): List[Type] =
     t match
-      case Type.ArrowType(lhs, _, _) => params(lhs).size
-      case _                         => 0
+      case Type.ArrowType(lhs, _, _) => params(lhs)
+      case _                         => Nil
 
   def params(lhs: Type): List[Type] =
     lhs match

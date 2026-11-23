@@ -6,14 +6,14 @@
 ## Problem
 
 ```
-let lock_token = make_token()        // quantity 1
+let lockToken = makeToken()        // quantity 1
 handle (do: ... Lock.release ...):
     Lock.release() =>
-        consume(lock_token)          // captured from outer scope
+        consume(lockToken)          // captured from outer scope
         resume(())
 ```
 
-Lock is a `linear effect` — its `release` op is at-most-once per code path. The clause body captures `lock_token`, a quantity-1 outer binding. Per Rule Q7.1, quantity-1 bindings cannot be captured by a quantity-ω closure. Is the clause body quantity 1 or quantity ω?
+Lock is a `linear effect` — its `release` op is at-most-once per code path. The clause body captures `lockToken`, a quantity-1 outer binding. Per Rule Q7.1, quantity-1 bindings cannot be captured by a quantity-ω closure. Is the clause body quantity 1 or quantity ω?
 
 ## Options
 
@@ -38,7 +38,7 @@ Clause bodies are conservatively quantity ω (closures, Rule Q5.7's multiplicati
 The clause body declares its own linearity:
 
 ```
-linear Lock.release() => consume(lock_token); resume(())
+linear Lock.release() => consume(lockToken); resume(())
 ```
 
 **Pros:** explicit, no inference needed.

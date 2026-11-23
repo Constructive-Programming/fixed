@@ -1,0 +1,43 @@
+// A `satisfies` body of a data type with a bounded parameter takes that parameter's tables
+// (`Satisfied.bodyHidden`): `self.v.show()` on `Box of (A is Show)` and `other.a.compare(self.a)`
+// on `Pair of (A is Ord, B)` call through them, in a static table, in a call of the member (its
+// baseline version or its clone) and in a table built at run time for a type that grows (`deep`,
+// `least`). The bodies reverse their order,
+// so a derived member taken in their place would print otherwise.
+// `deep` and `least` count down a `u64`, which is not structural recursion: they have `Diverge`
+// (Rule 7.4.h), and so does `main`.
+use std.io.Console
+
+data Box of (A is Show):
+    Box(v: A)
+
+Box satisfies Show:
+    fn show() = "box ".concat(self.v.show())
+
+data Pair of (A is Ord, B):
+    Pair(a: A, b: B)
+
+Pair satisfies Ord:
+    fn compare(other: Pair of (A, B)) = other.a.compare(self.a)
+
+data Rev of (A is Ord):
+    Rev(v: A)
+
+Rev satisfies Ord:
+    fn compare(other: Rev of A) = other.v.compare(self.v)
+
+fn say(x: T is Show) -> String = x.show()
+
+fn deep(x: T is Show, n: u64) -> String with Diverge =
+    if n == 0: x.show()
+    else: deep(Box.Box(x), n - 1)
+
+fn least(x: T is Ord, y: T, n: u64) -> bool with Diverge =
+    if n == 0: x < y
+    else: least(Pair.Pair(x, n), Pair.Pair(y, n), n - 1)
+
+fn main() -> () with Console + Diverge =
+    Console.printLine(Box.Box(5).show().concat(", ").concat(say(Box.Box("s"))).concat(", ").concat(deep(7, 3)))
+    Console.printLine((Pair.Pair(2, "x") < Pair.Pair(1, "y")).show().concat(" ").concat((Rev.Rev(1) < Rev.Rev(2)).show()))
+    Console.printLine(least(1, 2, 0).show().concat(" ").concat(least(1, 2, 1).show()).concat(" ").concat(least(1, 2, 2).show()))
+    Console.printLine(least(Rev.Rev(1), Rev.Rev(2), 0).show().concat(" ").concat(least(Rev.Rev(1), Rev.Rev(2), 1).show()).concat(" ").concat(least(Rev.Rev("b"), Rev.Rev("a"), 2).show()))

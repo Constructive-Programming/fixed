@@ -8,7 +8,7 @@
 After S0.2 — adding `CapType` to `TypeAtom` — cap-generators can appear in higher-order positions:
 
 ```
-fn validate_with(constraint: (N, N) -> cap of N, lo: N, hi: N) -> N is constraint(lo, hi) =
+fn validateWith(constraint: (N, N) -> cap of N, lo: N, hi: N) -> N is constraint(lo, hi) =
     ...
 ```
 
@@ -17,18 +17,18 @@ The grammar admits this; the typer must handle it.
 The remaining question is **cap identity**: when two cap-generator calls produce caps with the same prop body, are they the same cap?
 
 ```
-fn between(lo, hi) -> cap of N = prop in_range: lo <= Self && Self <= hi
-fn alt_between(lo, hi) -> cap of N = prop in_range: lo <= Self && Self <= hi
+fn between(lo, hi) -> cap of N = prop inRange: lo <= Self && Self <= hi
+fn altBetween(lo, hi) -> cap of N = prop inRange: lo <= Self && Self <= hi
 let x: N is between(0, 10) = ...
-let y: N is alt_between(0, 10) = ...
-let z: N is between(0, 10) = x   // x : alt_between, target : between — does this assign?
+let y: N is altBetween(0, 10) = ...
+let z: N is between(0, 10) = x   // x : altBetween, target : between — does this assign?
 ```
 
 ## Options
 
 ### Option 1 — Structural identity
 
-Two caps with the same prop body (after substitution of value-params) are the same cap. `between(0, 10)` and `alt_between(0, 10)` produce the same cap because their prop bodies are equivalent.
+Two caps with the same prop body (after substitution of value-params) are the same cap. `between(0, 10)` and `altBetween(0, 10)` produce the same cap because their prop bodies are equivalent.
 
 **Pros:** maximally permissive. Programmers don't need to track which generator produced a cap.
 
@@ -36,7 +36,7 @@ Two caps with the same prop body (after substitution of value-params) are the sa
 
 ### Option 2 — Nominal at generator-name + value-args
 
-Two caps are the same iff (a) they come from the same generator (`between` ≠ `alt_between`) and (b) their value-args are equal (literally, by symbolic comparison). Different generators always produce different caps even if their bodies are identical.
+Two caps are the same iff (a) they come from the same generator (`between` ≠ `altBetween`) and (b) their value-args are equal (literally, by symbolic comparison). Different generators always produce different caps even if their bodies are identical.
 
 **Pros:** decidable, predictable. Refactoring a generator's body changes the prop checks but not the cap's identity. Matches how dependent types work in Idris (named type families are nominal).
 
@@ -60,9 +60,9 @@ Rationale:
 - Refactoring a generator's body changes prop obligations but not call-site type compatibility — surprises are minimized.
 - If two generators are *meant* to be aliases, the user can declare a `type alias`:
   ```
-  type alt_between = between
+  type altBetween = between
   ```
-  Then `alt_between(0, 10)` *is* `between(0, 10)` because they desugar to the same generator name.
+  Then `altBetween(0, 10)` *is* `between(0, 10)` because they desugar to the same generator name.
 
 Spec edits if Option 2 chosen:
 - `type_system.md` §6.3 (cap-generating sugar): add "Cap identity. Two cap-generator applications are the same cap iff (a) they invoke the same generator (after `type`-alias expansion) and (b) their value-args are equal under symbolic comparison. Type-args are subject to the usual type equivalence."

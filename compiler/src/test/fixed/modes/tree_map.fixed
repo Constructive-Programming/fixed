@@ -1,0 +1,21 @@
+// The derived map of a tree whose element is a tree, at known arguments and generic, with no
+// `satisfies Functor` declaration (Rule 7.4.c).
+use std.io.Console
+
+data Tree of A:
+    Leaf
+    Node(left: Tree of A, value: A, right: Tree of A)
+
+fn leaf1(x: u64) -> Tree of u64 = Tree.Node(Tree.Leaf, x, Tree.Leaf)
+
+fn inner(t: Tree of u64) -> u64 = t.fold(() -> 0, (l, v, r) -> l + v + r)
+
+fn sums(t: Tree of Tree of u64) -> Tree of u64 = t.map((v) -> inner(v))
+
+fn gmap(t: Tree of A, f: A -> B) -> Tree of B = t.map(f)
+
+fn main() -> () with Console =
+    let t = Tree.Node(Tree.Leaf, leaf1(2), Tree.Node(Tree.Leaf, Tree.Node(leaf1(3), 4, Tree.Leaf), Tree.Leaf))
+    Console.printLine(inner(sums(t)).show())
+    Console.printLine(inner(gmap(t, (v) -> inner(v) + 1)).show())
+    Console.printLine(inner(gmap(t, (v) -> 1)).show())

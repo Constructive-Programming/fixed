@@ -1,0 +1,63 @@
+// Derived Ord (Rule 7.4, spec/stdlib.md §4.8): variants in the order declared, then fields left to
+// right. `Rev` has a program's compare that orders in reverse, which a derived compare of a type
+// holding it must use; `deep` compares growing types through tables built at run time, before
+// and after a direct `<` on the same type. A NaN is `Greater` directly and through a table. `L`
+// compares two lists of a million cells: the derived compare loops on its last field.
+// `build` and `deep` count down a `u64`, which is not structural recursion: they have `Diverge`
+// (Rule 7.4.h), and so does `main`.
+use std.io.Console
+
+data Shape:
+    Dot
+    Line(len: u64)
+    Rect(w: u64, h: u64)
+
+data Box of A:
+    Box(v: A, tag: u64)
+
+data Rev:
+    Rev(v: u64)
+
+Rev satisfies Ord:
+    fn compare(other: Rev) = match self:
+        Rev.Rev(a) => match other:
+            Rev.Rev(b) => if a < b: Order.Greater else: if a > b: Order.Less else: Order.Equal
+
+Rev satisfies Eq:
+    fn eq(other: Rev) = match self:
+        Rev.Rev(a) => match other:
+            Rev.Rev(b) => a == b
+
+data L:
+    C(h: u64, t: L)
+    N
+
+fn build(n: u64, acc: L) -> L with Diverge = if n == 0: acc else: build(n - 1, L.C(n, acc))
+
+fn max(a: T is Ord, b: T) -> T = if a > b: a else: b
+
+fn sign(a: T is Ord, b: T) -> u64 = a.compare(b).fold(() -> 0, () -> 1, () -> 2)
+
+fn deep(p: T is Ord, q: T, n: u64) -> bool with Diverge =
+    if n == 0: p < q
+    else: deep(Box.Box(p, n), Box.Box(q, n), n - 1)
+
+fn main() -> () with Console + Diverge =
+    Console.printLine((Shape.Line(3) < Shape.Rect(1, 1)).show())
+    Console.printLine((Shape.Rect(1, 2) <= Shape.Rect(1, 1)).show())
+    Console.printLine((Shape.Dot >= Shape.Dot).show())
+    Console.printLine(max(Shape.Rect(1, 2), Shape.Rect(1, 1)).show())
+    Console.printLine(max(Box.Box(Shape.Dot, 9), Box.Box(Shape.Line(0), 1)).show())
+    Console.printLine((Box.Box(Rev.Rev(1), 0) < Box.Box(Rev.Rev(2), 0)).show())
+    Console.printLine(max(Box.Box(Rev.Rev(1), 0), Box.Box(Rev.Rev(2), 0)).show())
+    Console.printLine(deep(1, 2, 3).show())
+    Console.printLine(deep(Rev.Rev(1), Rev.Rev(2), 3).show())
+    Console.printLine((Box.Box(1, 0) < Box.Box(2, 0)).show())
+    Console.printLine(sign(Shape.Dot, Shape.Line(1)).show())
+    Console.printLine(sign(Shape.Line(2), Shape.Line(1)).show())
+    Console.printLine(sign(Shape.Line(1), Shape.Line(1)).show())
+    let nan = 0.0 / 0.0
+    Console.printLine((Box.Box(1.0, 0) <= Box.Box(nan, 0)).show())
+    Console.printLine(deep(1.0, nan, 2).show())
+    Console.printLine((build(1000000, L.N) < build(1000000, L.N)).show())
+    Console.printLine((build(1000000, L.N) <= build(1000000, L.N)).show())

@@ -1,0 +1,22 @@
+// Exclusivity (Versions.construct): a list of lists that holds one inner list twice and a fresh
+// one, mapped in place where exclusive; the shared inner list is printed after.
+use std.io.Console
+
+fn total(xs: List of u64) -> u64 = xs.fold(0, (a, x) -> a + x)
+
+fn incs(xss: List of List of u64) -> List of List of u64 = xss.map((xs) -> xs.map((x) -> x + 1))
+
+fn totals(xss: List of List of u64) -> u64 = xss.fold(0, (a, xs) -> a + total(xs))
+
+fn fresh(n: u64) -> List of u64 = [n, n + 1]
+
+fn main() -> () with Console =
+    let xs = fresh(1)
+    let xss = [xs, fresh(10), xs]
+    Console.printLine(totals(incs(xss)).show())
+    Console.printLine(total(xs).show())
+    Console.printLine(totals(xss).show())
+    Console.printLine(totals(incs([fresh(5), fresh(7)])).show())
+    let tl = [fresh(5), fresh(7)]
+    Console.printLine(totals(incs(List.Cons(fresh(1), tl))).show())
+    Console.printLine(totals(tl).show())

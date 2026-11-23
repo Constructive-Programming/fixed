@@ -4,11 +4,6 @@ import fixed.util.Span
 
 /** The Fixed AST. Single hierarchy; every node carries a source span.
   *
-  * In Phase 2 every node is "untyped" — i.e. type slots aren't populated.
-  * When the typer (Phase 3) lands we'll thread types via a side table keyed
-  * on tree identity, or extend this hierarchy with a Tree[T <: Untyped]
-  * variant per dotc. For now: minimal, plain.
-  *
   * `Tree` is sealed: every AST node is defined in this file, so the
   * typer gets exhaustiveness checking and the cardinality analyzer can
   * bound every node. The Phase 2.2 concrete-syntax-tree view
@@ -46,13 +41,6 @@ object Trees:
     * See spec/syntax_grammar.ebnf Appendix A.1 and
     * docs/plans/phase-2.1-incremental-parser.md §3.2. */
   final case class Error(recovered: List[Tree], span: Span) extends Tree
-
-  /** A required production that was absent entirely (e.g. `fn` with no
-    * name). Span is zero-length, located where the missing token was
-    * expected. `expected` is a grammar-level description.
-    *
-    * See spec/syntax_grammar.ebnf Appendix A.1.1. */
-  final case class Missing(expected: String, span: Span) extends Tree
 
   final case class CompilationUnit(items: List[Tree], span: Span) extends Tree
 
@@ -151,12 +139,6 @@ object Trees:
       typeName: String,
       capRef: Tree,
       mappings: List[Tree],
-      span: Span
-  ) extends Tree
-
-  final case class ModDecl(
-      name: String,
-      items: List[Tree],
       span: Span
   ) extends Tree
 
@@ -399,7 +381,6 @@ object Trees:
   ) extends Tree
 
   final case class OrPat(left: Tree, right: Tree, span: Span) extends Tree
-  final case class GuardedPat(pat: Tree, cond: Tree, span: Span) extends Tree
 
   /** `is C + D + ...` (anonymous capability bound). */
   final case class IsBound(caps: List[Tree], span: Span) extends Tree
@@ -479,13 +460,3 @@ object Trees:
   final case class EffectRow(effects: List[Tree], span: Span) extends Tree
 
 end Trees
-
-/** Convenience type aliases that mirror dotc's untpd / tpd split. In Phase 2
-  * every produced tree is "untyped"; the typer (Phase 3) will populate type
-  * slots through a side mechanism, leaving these aliases unchanged.
-  */
-object untpd:
-  type Tree = fixed.ast.Tree
-
-object tpd:
-  type Tree = fixed.ast.Tree

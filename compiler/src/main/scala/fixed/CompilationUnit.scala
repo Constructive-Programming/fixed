@@ -6,8 +6,8 @@ import fixed.typer.TyperState
 import fixed.util.{Diagnostic, SourceFile}
 
 /** One source file moving through the phase pipeline: its tree (absent until `ParserPhase` runs), its symbols (filled by the Namer),
-  * the typer's finished state (absent until `TyperPhase` runs; the backend reads types from it) and the diagnostics every phase so
-  * far has emitted, in emission order.
+  * the typer's finished state (absent until `TyperPhase` runs; the backend reads types from it), the static prover's budget
+  * in steps and its verdicts on the unit's props, and the diagnostics every phase so far has emitted, in emission order.
   */
 final case class CompilationUnit(
     source: SourceFile,
@@ -15,7 +15,9 @@ final case class CompilationUnit(
     symbols: SymbolTable = SymbolTable.empty,
     diagnostics: List[Diagnostic] = Nil,
     typing: Option[TyperState] = None,
-    quantities: Option[fixed.qtt.QuantityTable] = None
+    quantities: Option[fixed.qtt.QuantityTable] = None,
+    proverSteps: Long = fixed.prover.Prover.defaultBudget,
+    props: List[fixed.prover.PropVerdict] = Nil
 ):
   def hasErrors: Boolean = diagnostics.exists(_.isError)
 

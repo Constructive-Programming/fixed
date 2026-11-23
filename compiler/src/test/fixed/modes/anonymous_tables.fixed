@@ -1,0 +1,19 @@
+// Table calls in baseline versions over nested anonymous Folding bounds (`Lower.tableMethod`): a
+// member type parameter is solved from the concrete argument and result types, after the caller's
+// bound substitution, which is the type the version holds such a value at.
+use std.io.Console
+
+fn n(x: u64) -> u64 = x
+
+fn sum(xs: is Folding of u64) -> u64 = xs.fold(0, (a, x) -> a + x)
+
+fn keep(xs: is Folding of u64, ys: is Folding of u64) -> u64 = sum(xs.fold(ys, (acc, x) -> acc))
+
+fn wrap(x: A) -> List of A = [x]
+
+fn outer(xss: is Folding of (A is Folding of u64)) -> u64 = xss.fold(0, (a, xs) -> a + sum(xs))
+
+fn main() -> () with Console =
+    Console.printLine(keep([n(1), n(2)], [n(3), n(4)]).show())
+    Console.printLine(outer([[n(1), n(2)], [n(3)]]).show())
+    Console.printLine(outer(wrap(wrap(n(5)))).show())

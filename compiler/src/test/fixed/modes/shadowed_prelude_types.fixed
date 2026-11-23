@@ -1,0 +1,45 @@
+// The program declares its own `List`, `Tuple`, `Nat` and `String`, of other shapes than the
+// prelude's. Within the program the names are its own; literals, tuples and the prelude's code
+// (`repeatStr`, `join`, the `satisfies` bodies) keep meaning the prelude's types.
+use std.io.Console
+
+data List:
+    Empty
+    One(n: u64)
+
+data Tuple:
+    Mine(n: u64)
+
+data Nat:
+    Zero
+    Two
+
+data String:
+    Word(n: u64)
+
+fn total(xs: is Folding of i64) -> i64 = xs.fold(0, (a, x) -> a + x)
+
+fn word(xs: List) -> String = match xs:
+    List.One(n) => String.Word(n)
+    List.Empty => String.Word(0)
+
+fn count(w: String) -> u64 = match w:
+    String.Word(n) => n
+
+fn mine(t: Tuple) -> u64 = match t:
+    Tuple.Mine(n) => n
+
+fn name(n: Nat) -> u64 = match n:
+    Nat.Zero => 0
+    Nat.Two => 2
+
+fn main() -> () with Console =
+    let (a, b) = (1, 2)
+    Console.printLine((a + b).show())
+    Console.printLine(total([1, 2, 3]).show())
+    Console.printLine([4, 5].foldRight(0, (x, acc) -> x + acc).show())
+    Console.printLine(repeatStr("ab", 3))
+    Console.printLine(join(["x", "y", "z"], "-"))
+    Console.printLine(count(word(List.One(7))).show())
+    Console.printLine(mine(Tuple.Mine(4)).show())
+    Console.printLine(name(Nat.Two).show())

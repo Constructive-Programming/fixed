@@ -1,0 +1,110 @@
+// Frame cells that keep their count word (Frames, bare cells): each reaches code that does not
+// know its layout, or counts it. A callee that joins its parameter with a cell of its own owns and
+// drops whichever it holds; one that joins a part of its parameter with a cell of its own counts the
+// part it reads; a list cell holds the static `E`, which has a full header, so neither it nor the
+// box stored in it is bare; a `#frame` clone, `make#frame`, one of whose callers hands its result
+// to such a callee, so it builds full cells for every caller; a parameter of a function that has a
+// `#frame` clone (`grow`, which drops it), and one of a `handle` subject (`peek`, which drops it):
+// calls of those are not renamed to `#bare` clones; a cell that a variable may hold, or the static
+// `None` instead, which only the full layout reads right; a `#frame` clone's result that holds the
+// static `Z` (`single`); and one that the clone also hands to a callee before returning it (`mk`,
+// whose call of `sum` the clone does not rename). Every test build is checked: a count
+// operation on a cell allocated without its count word stops the program, and a cell read with the
+// wrong layout prints a wrong number.
+use std.io.Console
+
+data Box3:
+    Box3(a: u64, b: u64, c: u64)
+
+data Two:
+    Two(a: u64, b: u64)
+
+data Opt:
+    None
+    Some(v: u64)
+
+data N:
+    Z
+    S(n: u64, rest: N)
+
+data Holder:
+    Holder(first: Box3, second: Box3)
+
+data L:
+    E
+    C(h: Box3, t: L)
+
+fn sum(b: Box3) -> u64 = b.a + b.b + b.c
+
+fn make(i: u64) -> Box3 = Box3.Box3(i, i + 1, i + 2)
+
+fn pick(b: Box3, flag: bool) -> u64 =
+    let m = if flag: b else: Box3.Box3(1, 2, 3)
+    sum(m) * 10 + b.a
+
+fn viaPick(i: u64, flag: bool) -> u64 =
+    let x = Box3.Box3(i, i, i)
+    pick(x, flag)
+
+fn firstOr(h: Holder, flag: bool) -> u64 =
+    let x = if flag: h.first else: Box3.Box3(5, 5, 5)
+    sum(x)
+
+fn viaFirst(i: u64, flag: bool) -> u64 =
+    let h = Holder.Holder(Box3.Box3(i, 1, 1), Box3.Box3(2, 2, 2))
+    firstOr(h, flag)
+
+fn viaMade(i: u64, flag: bool) -> u64 = pick(make(i), flag) * 100 + sum(make(i + 1))
+
+fn total(xs: L) -> u64 =
+    match xs:
+        L.C(h, t) => sum(h) + total(t)
+        L.E => 0
+
+fn viaList(i: u64) -> u64 =
+    let l = L.C(Box3.Box3(i, i, i), L.E)
+    total(l)
+
+fn grow(t: Two) -> Box3 = Box3.Box3(t.a + 1, t.b, 7)
+
+fn viaGrow(i: u64) -> u64 = sum(grow(Two.Two(i, i)))
+
+fn peek(t: Two) -> u64 with Fail of Box3 = if t.a > 100: Fail.fail(Box3.Box3(t.a, 0, 0)) else: t.b
+
+fn viaPeek(i: u64) -> u64 =
+    let t = Two.Two(i, i + 1)
+    handle peek(t):
+        Fail.fail(e) => e.a
+        return(v) => v
+
+fn viaStatic(i: u64, flag: bool) -> u64 =
+    let s = Opt.Some(i)
+    let y = if flag: s else: Opt.None
+    match y:
+        Opt.None => 1
+        Opt.Some(v) => v
+
+fn single(i: u64) -> N = N.S(i, N.Z)
+
+fn depth(t: N) -> u64 =
+    match t:
+        N.Z => 0
+        N.S(_, r) => 1 + depth(r)
+
+fn viaSingle(i: u64) -> u64 = depth(single(i))
+
+fn mk(i: u64) -> Box3 with Console =
+    let b = Box3.Box3(i, i + 1, i + 2)
+    Console.printLine(sum(b).show())
+    b
+
+fn viaMk(i: u64) -> u64 with Console = sum(mk(i))
+
+fn main() -> () with Console =
+    Console.printLine((viaPick(4, true) * 100 + viaPick(4, false)).show())
+    Console.printLine((viaFirst(3, true) * 100 + viaFirst(3, false)).show())
+    Console.printLine(viaList(6).show())
+    Console.printLine((viaMade(1, true) * 10000 + viaMade(1, false)).show())
+    Console.printLine((viaGrow(3) * 1000 + viaPeek(4) + viaPeek(200)).show())
+    Console.printLine((viaStatic(5, true) * 10 + viaStatic(5, false)).show())
+    Console.printLine((viaSingle(4) * 100 + viaMk(3)).show())

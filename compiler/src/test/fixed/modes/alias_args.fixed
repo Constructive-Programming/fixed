@@ -1,0 +1,32 @@
+// One value passed to a call twice, once to a parameter the callee owns and once to one it only
+// reads: the callee may reuse the owned one in place while it still reads the other, so the caller
+// must keep a count across the call. A fused loop (Rule 7.4.b.1) takes each inlined closure's
+// captures as its own parameters, so two closures that capture `k` make such a call.
+use std.io.Console
+
+data B:
+    B(a: u64, b: u64)
+
+data T:
+    Leaf
+    Node(l: T, r: T)
+
+fn h(n: u64, a: B, b: B) -> u64 with Diverge =
+    if n == 0:
+        let c = B.B(a.a, 5)
+        c.a + c.b + 100
+    else:
+        h(n - 1, a, b) + b.b
+
+fn tree(d: u64, k: B) -> u64 =
+    T.unfold(d, (x) -> if x == 0: T.Leaf else: T.Node(x - 1, x - 1)).fold(() -> B.B(k.a, 100).b, (l, r) -> l + r + k.b)
+
+fn nat(d: u64, k: B) -> u64 =
+    let r = Nat.unfold(d, (x) -> if x == 0: Nat.Zero else: Nat.Succ(x - 1)).fold(() -> B.B(k.a, 100), (r) -> B.B(r.a + k.b, r.b))
+    r.a
+
+fn main() -> () with Console + Diverge =
+    let k = B.B(1, 2)
+    Console.printLine(h(3, k, k).show())
+    Console.printLine(tree(2, B.B(1, 2)).show())
+    Console.printLine(nat(3, B.B(1, 2)).show())

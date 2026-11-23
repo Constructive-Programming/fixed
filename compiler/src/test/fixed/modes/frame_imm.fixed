@@ -1,0 +1,39 @@
+// Frames and immediates together: a frame cell with an immediate field (`Big`, bumped in the
+// caller's frame through `mkBig#frame`), and an immediate (`Small`) built from the fields of that
+// frame cell, or read from it, that leaves the function whose frame is reset. An immediate is a
+// value, so it survives the reset; code that kept a pointer into the frame instead would read the
+// checked build's poison (every test build is checked).
+use std.io.Console
+
+data Small:
+    Small(a: u32, b: u32)
+
+data Big:
+    Big(s: Small, x: u64, y: u64)
+
+data L:
+    E
+    C(h: Big, t: L)
+
+fn mkBig(i: u32, n: u64) -> Big = Big.Big(Small.Small(i, i + 1), n, n * 2)
+
+fn weigh(b: Big) -> u64 = b.x + b.y
+
+fn extract(i: u32, n: u64) -> Small =
+    let big = mkBig(i, n)
+    if weigh(big) > 0: Small.Small(big.s.b, big.s.a) else: big.s
+
+fn total(xs: L) -> u64 =
+    match xs:
+        L.C(h, t) => weigh(h) + total(t)
+        L.E => 0
+
+fn noise(n: u64) -> u64 = total(L.unfold(n, (k) -> if k == 0: L.E else: L.C(mkBig(7, k), k - 1)))
+
+fn main() -> () with Console =
+    let s = extract(10, 5)
+    let t = extract(20, 0)
+    let n = noise(30)
+    Console.printLine(s.a.show().concat(" ").concat(s.b.show()))
+    Console.printLine(t.a.show().concat(" ").concat(t.b.show()))
+    Console.printLine(n.show())

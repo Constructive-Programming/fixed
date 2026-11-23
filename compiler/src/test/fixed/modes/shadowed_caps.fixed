@@ -1,0 +1,33 @@
+// The program's own `cap Show` and `cap Eq` are not the prelude's. Its `show` takes a prefix and
+// its `eq` holds for any two boxes; `Box` satisfies both with bodies, which a call by name and a
+// generic function bounded by the program's `Show` run. `==` is the prelude's `Eq`, derived for
+// `Box`, and the prelude's `Show` still shows a `u64`.
+use std.io.Console
+
+cap Show:
+    fn show(prefix: String) -> String
+
+cap Eq:
+    fn eq(other: Self) -> bool
+
+data Box:
+    Box(n: u64)
+
+Box satisfies Show:
+    fn show(prefix: String) = prefix.concat("box")
+
+Box satisfies Eq:
+    fn eq(other: Self) = true
+
+fn describe(x: T is Show) -> String = x.show("generic ")
+
+fn verdict(same: bool) -> String = if same: "equal" else: "different"
+
+fn five() -> u64 = 5
+
+fn main() -> () with Console =
+    Console.printLine(Box.Box(5).show("direct "))
+    Console.printLine(describe(Box.Box(5)))
+    Console.printLine(five().show())
+    Console.printLine(verdict(Box.Box(1) == Box.Box(2)))
+    Console.printLine(verdict(Box.Box(1).eq(Box.Box(2))))

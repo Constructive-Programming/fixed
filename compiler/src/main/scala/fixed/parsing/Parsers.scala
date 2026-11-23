@@ -35,11 +35,6 @@ final class Parser(scanner: Scanner, reporter: Reporter):
     val (_, tree) = ExprParsers.parseExpr(initialState(tokens))(using reporter)
     tree
 
-  /** Parse a single type expression; primarily used by tests. */
-  def parseTypeExpr(): Tree =
-    val (_, tree) = TypeParsers.parseTypeExpr(initialState(tokens))(using reporter)
-    tree
-
 end Parser
 
 object Parser:
@@ -205,7 +200,7 @@ object Parser:
     if s.current.kind == kind then consume(s)
     else
       reportExpected(s, DiagCode.P001, s"$what (token $kind)", None)
-      (s, Token.of(kind, Span(s.current.span.start, s.current.span.start)))
+      (s, Token.of(kind, s.current.span.copy(end = s.current.span.start)))
 
   /** Report "expected `what`, got …" at `current`. */
   private[parsing] def reportExpected(
@@ -236,7 +231,7 @@ object Parser:
 
   /** Combine two spans. */
   private[parsing] def span(start: Span, end: Span): Span =
-    Span(start.start, end.end)
+    start.copy(end = end.end)
 
   /** Skip zero or more NEWLINEs at the current position. */
   @tailrec
@@ -261,6 +256,48 @@ object Parser:
       case Some(inner) =>
         if s.current.kind == TokenKind.Eof || inner.contains(s.current.kind) then s
         else syncToAnchors(s.advance)
+
+  /** The column (1-based) of the first token on the line of `offset`. */
+  private[parsing] def lineIndent(offset: Int)(using reporter: Reporter): Int =
+    val src = reporter.source
+    val start = src.lineOffsets(src.lineOf(offset) - 1)
+    src.content.indexWhere(_ != ' ', start) - start + 1
+
+  /** True where a construct that ends with its line, on a line indented at `indent`, has ended:
+    * at EOF, a DEDENT, a [[waited]] token, or a token at column `indent` or less, which starts a
+    * line indented no deeper: a NEWLINE (its span is the next line's first token), or a token on
+    * such a line that an open bracket kept the NEWLINE from.
+    */
+  private def atLineEnd(s: ParserState, indent: Int)(using reporter: Reporter): Boolean =
+    s.current.kind match
+      case TokenKind.Eof | TokenKind.Dedent => true
+      case _ => reporter.source.lineColumn(s.current.span.start)._2 <= indent || waited(s)
+
+  /** A `,` or closing bracket that an enclosing production waits for. */
+  private def waited(s: ParserState): Boolean = s.current.kind match
+    case k @ (TokenKind.Comma | TokenKind.RParen | TokenKind.RBracket | TokenKind.RBrace) =>
+      s.anchors.exists(_.contains(k))
+    case _ => false
+
+  /** End a construct at [[atLineEnd]]; otherwise report what follows it, on its line or on
+    * lines indented deeper, as one `code` and skip it, taking INDENT/DEDENT pairs whole. A
+    * [[waited]] token inside such a pair stops the skip too, and the DEDENTs still open are
+    * owed (as in [[parseIndentedBody]]).
+    */
+  private[parsing] def expectLineEnd(s: ParserState, indent: Int, code: DiagCode, what: String, hint: String)(using
+      Reporter
+  ): ParserState =
+    @tailrec def skip(st: ParserState, depth: Int): ParserState = st.current.kind match
+      case TokenKind.Eof                            => st
+      case TokenKind.Indent                         => skip(st.advance, depth + 1)
+      case TokenKind.Dedent if depth > 0            => skip(st.advance, depth - 1)
+      case _ if depth == 0 && atLineEnd(st, indent) => st
+      case _ if waited(st)                          => (1 to depth).foldLeft(st)((owing, _) => owing.addOwed)
+      case _                                        => skip(st.advance, depth)
+    if atLineEnd(s, indent) then s
+    else
+      reportExpected(skipNewlines(s), code, what, Some(hint))
+      skip(s, 0)
 
   /** Count of DEDENT tokens that an inner block-style parser exited
     * bracket-aware (without consuming a matching DEDENT). The scanner
@@ -342,16 +379,30 @@ object Parser:
     )
   end Anchors
 
-  def parseCompilationUnit(s0: ParserState)(using Reporter): Parsed[Tree] =
+  def parseCompilationUnit(s0: ParserState)(using reporter: Reporter): Parsed[Tree] =
     val s1 = skipNewlines(s0)
     val (s2, items) = withAnchors(s1, Anchors.topLevel) { st =>
-      /** Items at top level are separated by NEWLINE; allow blank lines. */
+      /** Items at top level are separated by NEWLINE; allow blank lines. An item that parsed
+        * without error must end with its line; after one with an error, its own recovery decides.
+        */
       @tailrec
       def loop(state: ParserState, acc: List[Tree]): Parsed[List[Tree]] =
         if state.current.kind == TokenKind.Eof then (state, acc.reverse)
         else
+          val errors = reporter.errorCount
           val (state1, item) = parseTopItem(state)
-          val state2 = skipNewlines(state1)
+          val state2 = skipNewlines(
+            if reporter.errorCount > errors then state1
+            else
+              expectLineEnd(
+                state1,
+                1,
+                DiagCode.P001,
+                "the end of the line after a declaration",
+                "a declaration ends with its line, and the next one starts in column 1; " +
+                  "an indented line belongs to a body after `:` or `=`"
+              )
+          )
           loop(state2, item :: acc)
       loop(st, Nil)
     }

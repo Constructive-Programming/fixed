@@ -2,8 +2,6 @@ package fixed.parsing
 
 import scala.annotation.tailrec
 
-import cats.Monoid
-
 import Parser.*
 
 /** Declarations: top-level items, fn-like signatures and parameters, blocks, and data / cap / effect / satisfies / type-alias bodies. */
@@ -212,16 +210,40 @@ private[parsing] object DeclParsers:
     val (s1, stmts) = parseStatementList(s0, DiagCode.P011, "statement")(parseStatement)
     (s1, Trees.Block(stmts, span(s0.current.span, s1.current.span)))
 
-  /** Indented list in source order. `step` parses one entry, or returns
+  /** [[parseMemberList]] in source order. `step` parses one entry, or returns
     * `None` after reporting and recovering from one it rejects.
     */
   extension (s: ParserState)
-    private[parsing] inline def indentedList[A](inline step: Rule[Option[A]])(using Reporter): Parsed[List[A]] =
-      val (s1, items) = parseIndentedBody(s, List.empty[A]) { (state, acc) =>
+    private[parsing] inline def memberList[A](inline step: Rule[Option[A]])(using Reporter): Parsed[List[A]] =
+      val (s1, items) = parseMemberList(s, List.empty[A]) { (state, acc) =>
         val (state1, item) = step(state)
         (state1, item.fold(acc)(_ :: acc))
       }
       (s1, items.reverse)
+
+  /** The body after a `:` that is an indented block or exactly one `member` on the same line:
+    * of a `data`, `cap`, `effect` or `satisfies` declaration (Rule 7.1.b), of a `match`
+    * (`MatchCaseList`) and of a `handle` (`HandlerClauseList`). The one member ends with its
+    * line, or before `else` or a `,` or bracket an enclosing production waits for
+    * ([[expectLineEnd]]); anything else after it, on its line or on lines indented deeper than
+    * the `:` line, is one `P001` and is skipped.
+    */
+  private[parsing] def parseMemberList[A](s0: ParserState, acc0: A, member: String = "member")(
+      step: (ParserState, A) => Parsed[A]
+  )(using Reporter): Parsed[A] =
+    if s0.current.kind == TokenKind.Indent then parseIndentedBody(s0, acc0)(step)
+    else
+      val (s1, acc) = withAnchors(s0, Anchors.blockBody)(step(_, acc0))
+      if s1.current.kind == TokenKind.KwElse then (s1, acc)
+      else
+        val end = expectLineEnd(
+          s1,
+          lineIndent(s0.peek(-1).span.start),
+          DiagCode.P001,
+          "the end of a one-line body",
+          s"a body on the `:` line holds one $member; end the line at `:` and indent each $member on its own line"
+        )
+        (end, acc)
 
   /** INDENT item (NEWLINE item)* DEDENT, in source order. Each item must end
     * its line; trailing junk is reported as `code` ("unexpected … after
@@ -263,12 +285,14 @@ private[parsing] object DeclParsers:
 
   /** DataDecl ::= "data" UPPER_IDENT OfClause? (DataBody | CtorSugar)?
     *   OfClause   ::= "of" (TypeExpr | "(" TypeExpr ("," TypeExpr)* ")")
-    *   DataBody   ::= ":" INDENT DataVariant+ DEDENT
+    *   DataBody   ::= ":" (DataBodyItem | INDENT DataBodyItem+ DEDENT)
     *   CtorSugar  ::= "(" FieldList ")"   — single-variant shorthand
     *
+    *   DataBodyItem ::= DataVariant | PropDecl
     *   DataVariant ::= UPPER_IDENT ("(" FieldList ")")?
     *   FieldList   ::= FieldDecl ("," FieldDecl)* ","?
     *   FieldDecl   ::= LOWER_IDENT ":" TypeExpr ("=" Expr)?
+    * Without a body the type is empty: no variant, no value (Rule 7.1.a).
     */
   private[parsing] def parseDataDecl(s0: ParserState)(using reporter: Reporter): Parsed[Tree] =
     val (s1, startTok) = expect(s0, TokenKind.KwData, "`data`")
@@ -279,19 +303,20 @@ private[parsing] object DeclParsers:
       val (s4, fields) = parseFieldList(s3)
       val variant = Trees.DataVariant(nameTok.lexeme, fields, span(nameTok.span, s4.current.span))
       (s4, Trees.DataDecl(nameTok.lexeme, ofParams, List(variant), Nil, span(startTok.span, s4.current.span)))
+    else if s3.current.kind == TokenKind.Eq || s3.current.kind == TokenKind.LBrace then
+      val name = nameTok.lexeme
+      val s4 = expectLineEnd(
+        s3,
+        1,
+        DiagCode.P013,
+        s"`:` or `(` after `data $name`",
+        s"variants follow a `:`, one on the line (`data $name: A`) or one per line indented below it; " +
+          s"the fields of a single constructor go in parentheses: `data $name(field: T, ...)`"
+      )
+      (s4, Trees.DataDecl(name, ofParams, Nil, Nil, span(startTok.span, s4.current.span)))
     else
-      accept(s3, TokenKind.Colon) match
-        case (s4, Some(_)) =>
-          val (s5, variants, props) = parseDataBody(s4)
-          (s5, Trees.DataDecl(nameTok.lexeme, ofParams, variants, props, span(startTok.span, s5.current.span)))
-        case (s4, None) =>
-          reporter.error(
-            DiagCode.P013,
-            s4.current.span,
-            s"`data ${nameTok.lexeme}` needs either a `(field: T, ...)` ctor sugar or a `:` block of variants",
-            Some("add `: ...` for variants or `(field: T, ...)` for a single ctor")
-          )
-          (s4, Trees.DataDecl(nameTok.lexeme, ofParams, Nil, Nil, span(startTok.span, s4.current.span)))
+      val (s4, (variants, props)) = s3.optionalOrEmpty(TokenKind.Colon)(parseDataBody)
+      (s4, Trees.DataDecl(nameTok.lexeme, ofParams, variants, props, span(startTok.span, s4.current.span)))
 
   private[parsing] def parseOptionalDataOfClause(s0: ParserState)(using Reporter): Parsed[List[Tree]] =
     accept(s0, TokenKind.KwOf) match
@@ -337,8 +362,8 @@ private[parsing] object DeclParsers:
     */
   private[parsing] def parseDataBody(
       s0: ParserState
-  )(using Reporter): (ParserState, List[Trees.DataVariant], List[Trees.PropDecl]) =
-    val (s1, acc) = parseIndentedBody(s0, DataBodyAcc(Nil, Nil)) { (state, acc) =>
+  )(using Reporter): Parsed[(List[Trees.DataVariant], List[Trees.PropDecl])] =
+    val (s1, acc) = parseMemberList(s0, DataBodyAcc(Nil, Nil)) { (state, acc) =>
       state.current.kind match
         case TokenKind.UpperIdent =>
           val (st1, v) = parseDataVariant(state)
@@ -355,7 +380,7 @@ private[parsing] object DeclParsers:
           )
           (syncToAnchors(state), acc)
     }
-    (s1, acc.variants.reverse, acc.props.reverse)
+    (s1, (acc.variants.reverse, acc.props.reverse))
 
   private[parsing] def parseDataVariant(s0: ParserState)(using Reporter): Parsed[Trees.DataVariant] =
     val (s1, nameTok) = expect(s0, TokenKind.UpperIdent, "variant name")
@@ -363,7 +388,7 @@ private[parsing] object DeclParsers:
     (s2, Trees.DataVariant(nameTok.lexeme, fields, span(nameTok.span, s2.current.span)))
 
   /** CapDecl   ::= "cap" UPPER_IDENT ValueParams? OfClause? ExtendsClause?
-    *               (":" INDENT CapBody DEDENT)?
+    *               (":" (CapMember | INDENT CapBody DEDENT))?
     *   ValueParams  ::= "(" FnParam ("," FnParam)* ","? ")"
     *   OfClause     ::= "of" (TypeExpr | "(" OfItem ("," OfItem)* ")")
     *   ExtendsClause::= "extends" CapBound ("+" CapBound)*
@@ -394,7 +419,7 @@ private[parsing] object DeclParsers:
     )
 
   private[parsing] def parseCapBody(s0: ParserState)(using Reporter): Parsed[List[Tree]] =
-    s0.indentedList { state =>
+    s0.memberList { state =>
       state.current.kind match
         case MethodMember(p) =>
           val (st1, m) = p(state); (st1, Some(m))
@@ -447,7 +472,7 @@ private[parsing] object DeclParsers:
       (s5, Trees.TypeAlias(nameTok.lexeme, valueParams, rhs, span(startTok.span, s5.current.span)))
     }
 
-  /** SatisfiesDecl ::= TypeName "satisfies" CapBound (":" INDENT SatisfiesItem+ DEDENT)?
+  /** SatisfiesDecl ::= TypeName "satisfies" CapBound (":" (SatisfiesItem | INDENT SatisfiesItem+ DEDENT))?
     *   TypeName    ::= UPPER_IDENT | LOWER_IDENT          (primitives)
     *   SatisfiesItem ::= ConstructorMapping
     *                  | ImpossibleMapping
@@ -456,24 +481,14 @@ private[parsing] object DeclParsers:
     *   ImpossibleMapping  ::= "impossible" "as" LOWER_IDENT
     */
   private[parsing] def parseSatisfiesDecl(s0: ParserState)(using Reporter): Parsed[Tree] =
-    val (s1, typeName) = s0.current.kind match
-      case TokenKind.UpperIdent | TokenKind.LowerIdent =>
-        val (st, tok) = consume(s0); (st, tok.lexeme)
-      case _ =>
-        reportExpected(
-          s0,
-          DiagCode.P015,
-          "a type name to satisfy a capability",
-          Some("`<TypeName> satisfies <CapName>: ...`")
-        )
-        val (st, tok) = consume(s0); (st, tok.lexeme)
+    val (s1, nameTok) = consume(s0)
     val (s2, _) = expect(s1, TokenKind.KwSatisfies, "`satisfies`")
     val (s3, cap) = parseCapBound(s2)
     val (s4, items) = s3.optionalOrEmpty(TokenKind.Colon)(parseSatisfiesBody)
-    (s4, Trees.SatisfiesDecl(typeName, cap, items, span(s0.current.span, s4.current.span)))
+    (s4, Trees.SatisfiesDecl(nameTok.lexeme, cap, items, span(s0.current.span, s4.current.span)))
 
   private[parsing] def parseSatisfiesBody(s0: ParserState)(using Reporter): Parsed[List[Tree]] =
-    val (s1, items) = parseIndentedBody(s0, List.empty[Tree]) { (state, acc) =>
+    val (s1, items) = parseMemberList(s0, List.empty[Tree]) { (state, acc) =>
       val (state1, item) = parseSatisfiesItem(state)
       (state1, item :: acc)
     }
@@ -519,7 +534,7 @@ private[parsing] object DeclParsers:
         Some("items are `Variant as ctor`, `impossible as ctor`, `fn ...`, `Self.fn ...`, or `prop ...`")
       )
 
-  /** EffectDecl ::= "linear"? "effect" UPPER_IDENT OfClause? (":" INDENT EffectMember+ DEDENT)?
+  /** EffectDecl ::= "linear"? "effect" UPPER_IDENT OfClause? (":" (EffectMember | INDENT EffectMember+ DEDENT))?
     *   EffectMember ::= "fn" LOWER_IDENT FnParamList? ("->" TypeExpr)? WithClause?
     * (Effect ops never have bodies; their semantics are supplied by handlers.)
     */
@@ -533,7 +548,7 @@ private[parsing] object DeclParsers:
     (s5, Trees.EffectDecl(isLinear, nameTok.lexeme, ofParams, members, span(s0.current.span, s5.current.span)))
 
   private[parsing] def parseEffectMembers(s0: ParserState)(using Reporter): Parsed[List[Tree]] =
-    s0.indentedList { state =>
+    s0.memberList { state =>
       if state.current.kind == TokenKind.KwFn then
         val (st1, m) = parseFnLike(state, FnKind.Instance); (st1, Some(m))
       else

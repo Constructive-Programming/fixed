@@ -1,0 +1,17 @@
+zero one max other 2
+ff 00 byte
+seven imax signed
+i32max three i32
+yes no
+a e-acute letter
+empty ab abc word word e-acute word word word
+first five not five
+zero x, zero y, x 3, y 3
+just zero, just 4, nothing
+one true, one false, true 2, just, nothing
+true false
+just 100, just 8, nothing
+kept 1, drop 2
+point, flat 3, tall 4, dot
+origin, one 5, box
+i8max i16max u16max u32max, i8 i16 u16 u32

@@ -1,0 +1,18 @@
+// The derived fold, through List.map, of a rose tree whose element is a rose tree.
+use std.io.Console
+
+data Rose of A:
+    Rose(value: A, kids: List of Rose of A)
+
+fn count(r: Rose of A) -> u64 = r.fold((v, ks) -> ks.fold(1, (n, k) -> n + k))
+
+fn sz(r: Rose of u64) -> u64 = r.fold((v, ks) -> ks.fold(v, (n, k) -> n + k))
+
+fn rr(r: Rose of Rose of u64) -> u64 = r.fold((v, ks) -> ks.fold(sz(v), (n, k) -> n + k))
+
+fn main() -> () with Console =
+    let leaf = Rose.Rose(1, [])
+    let r = Rose.Rose(Rose.Rose(5, [leaf]), [Rose.Rose(leaf, []), Rose.Rose(leaf, [])])
+    Console.printLine(count(r).show())
+    Console.printLine(count(leaf).show())
+    Console.printLine(rr(r).show())

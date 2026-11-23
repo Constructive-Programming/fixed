@@ -1,0 +1,103 @@
+// Values that look like temporaries of a step and are not: each one leaves the scope that built it,
+// by a result, a field, a closure, an abort payload, a handler result or a branch. A placement that
+// frees or reuses such a value at the end of its scope prints a wrong number or crashes. Every value
+// kept is printed after more allocation has happened in the scope that built it.
+use std.io.Console
+
+data Box3:
+    Box3(a: u64, b: u64, c: u64)
+
+data Holder:
+    Holder(first: Box3, second: Box3)
+
+data L:
+    E
+    C(h: Box3, t: L)
+
+fn sum(b: Box3) -> u64 = b.a + b.b + b.c
+
+fn make(i: u64) -> Box3 = Box3.Box3(i, i + 1, i + 2)
+
+// Leaves by the result, after a sibling temporary was built and dropped.
+fn viaResult(i: u64) -> Box3 =
+    let kept = make(i)
+    let temp = make(i + 100)
+    if sum(temp) > 0:
+        kept
+    else:
+        temp
+
+// Leaves inside a field of a longer-lived value.
+fn viaField(i: u64) -> Holder =
+    let a = make(i)
+    let b = make(i + 10)
+    Holder.Holder(a, b)
+
+// Leaves captured by a closure that the caller runs later.
+fn viaClosure(i: u64) -> (u64 -> u64) =
+    let kept = make(i)
+    (n) -> sum(kept) + n
+
+// Leaves as the payload of an abort, past the scope and the fold that built it.
+fn viaAbort(xs: L) -> u64 with Fail of Box3 =
+    match xs:
+        L.C(h, t) =>
+            if h.a == 3:
+                Fail.fail(h)
+            else:
+                sum(h) + viaAbort(t)
+        L.E => 0
+
+fn caught(xs: L) -> Box3 =
+    handle viaAbort(xs):
+        Fail.fail(b) => b
+        return(v) => Box3.Box3(v, 0, 0)
+
+// Leaves into a list built step by step: every element outlives the step that made it.
+fn collect(n: u64) -> L =
+    L.unfold(n, (s) ->
+        if s == 0:
+            L.E
+        else:
+            L.C(make(s), s - 1)
+    )
+
+fn total(xs: L) -> u64 =
+    match xs:
+        L.C(h, t) => sum(h) + total(t)
+        L.E => 0
+
+// One of two values leaves, chosen at run time; the other dies in the scope.
+fn pick(flag: bool, i: u64) -> Box3 =
+    let x = make(i)
+    let y = make(i * 2)
+    match flag:
+        true => x
+        false => y
+
+// The same value is both kept by the caller and passed to a callee that reads it.
+fn twice(b: Box3) -> u64 = sum(b) + sum(b)
+
+fn main() -> () with Console =
+    let r = viaResult(1)
+    let noise1 = collect(50)
+    Console.printLine(sum(r).show())
+    let h = viaField(2)
+    let noise2 = collect(50)
+    Console.printLine((sum(h.first) * 1000 + sum(h.second)).show())
+    let f = viaClosure(5)
+    let noise3 = collect(50)
+    Console.printLine(f(1).show())
+    Console.printLine(f(2).show())
+    let c = caught(L.C(make(1), L.C(make(3), L.C(make(9), L.E))))
+    let noise4 = collect(50)
+    Console.printLine(sum(c).show())
+    Console.printLine(sum(caught(L.C(make(1), L.C(make(2), L.E)))).show())
+    Console.printLine(total(collect(100)).show())
+    let p = pick(true, 7)
+    let q = pick(false, 7)
+    let noise5 = collect(50)
+    Console.printLine((sum(p) * 1000 + sum(q)).show())
+    let k = make(20)
+    Console.printLine((twice(k) + sum(k)).show())
+    Console.printLine((total(noise1) + total(noise2) + total(noise3) + total(noise4) + total(noise5)).show())

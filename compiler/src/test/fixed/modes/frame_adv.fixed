@@ -1,0 +1,148 @@
+// Adversarial programs for frame placement (Frames) found in review: joins of a frame cell and a
+// heap cell, a result cell holding a reference, a `handle` subject aborting with a part of its
+// argument, a closure that returns its argument, closures that are never called, and a `#frame`
+// clone whose join mixes its own cell with a parameter. A wrong placement prints a wrong number,
+// stops on a poisoned cell in a checked build, or leaks.
+use std.io.Console
+
+data Box3:
+    Box3(a: u64, b: u64, c: u64)
+
+data Holder:
+    Holder(first: Box3, second: Box3)
+
+data P:
+    P(x: Box3, y: Box3)
+
+data L:
+    E
+    C(h: Box3, t: L)
+
+data T:
+    Z
+    S(n: u64, rest: T)
+
+data F:
+    F(f: u64 -> u64, n: u64)
+
+fn sum(b: Box3) -> u64 = b.a + b.b + b.c
+
+fn make(i: u64) -> Box3 = Box3.Box3(i, i + 1, i + 2)
+
+fn same(b: Box3) -> Box3 = b
+
+fn total(xs: L) -> u64 =
+    match xs:
+        L.C(h, t) => sum(h) + total(t)
+        L.E => 0
+
+fn noise(n: u64) -> u64 = total(L.unfold(n, (s) -> if s == 0: L.E else: L.C(make(s), s - 1)))
+
+// A join of a local cell and a heap cell, only read.
+fn mixed(i: u64, flag: bool) -> u64 =
+    let h = same(make(i))
+    let y = if flag: Box3.Box3(i, i, i) else: h
+    sum(y) + sum(h)
+
+// A frame cell whose field is a field read of another frame cell.
+fn fieldOfFrame(i: u64) -> u64 =
+    let h = Holder.Holder(Box3.Box3(i, i, i), Box3.Box3(i + 1, i, i))
+    let h2 = P.P(h.second, h.first)
+    sum(h2.x) * 10 + sum(h2.y)
+
+// Passed to a `handle` subject that aborts with a part of it.
+fn sub(xs: L) -> u64 with Fail of Box3 =
+    match xs:
+        L.C(h, t) => Fail.fail(h)
+        L.E => 0
+
+fn viaHandle(i: u64) -> Box3 =
+    let l = L.C(make(i), L.E)
+    handle sub(l):
+        Fail.fail(b) => b
+        return(v) => make(v)
+
+// Passed to a closure that returns it.
+fn viaCall(f: Box3 -> Box3, i: u64) -> Box3 = f(Box3.Box3(i, i, i))
+
+// A join of a local cell and a heap cell owned only by the join.
+fn mixed2(i: u64, flag: bool) -> u64 =
+    let y = if flag: Box3.Box3(i, i, i) else: same(make(i))
+    sum(y)
+
+// A result cell that holds a reference.
+fn wrap(b: Box3) -> Holder = Holder.Holder(b, b)
+
+fn viaWrap(i: u64) -> u64 =
+    let h = wrap(make(i))
+    sum(h.first) + sum(h.second)
+
+// A result cell built by a recursive function.
+fn deep(n: u64) -> Box3 with Diverge =
+    if n == 0:
+        Box3.Box3(1, 1, 1)
+    else:
+        let r = deep(n - 1)
+        Box3.Box3(r.a + 1, r.b, r.c)
+
+fn viaDeep(n: u64) -> u64 with Diverge = sum(deep(n))
+
+fn mixed3(i: u64, flag: bool) -> u64 =
+    let y = if flag: Box3.Box3(i, i, i) else: same(make(i))
+    y.a + y.b + y.c
+
+fn viaWrap2(i: u64) -> u64 =
+    let h = wrap(make(i))
+    h.first.a + h.second.c
+
+fn len(t: T) -> u64 =
+    match t:
+        T.S(_, r) => 1 + len(r)
+        T.Z => 0
+
+fn build(n: u64) -> T with Diverge = if n == 0: T.Z else: T.S(n, build(n - 1))
+
+// A `#frame` clone whose join holds its own cell or a parameter on the heap.
+fn pickJoin(b: bool, p: T) -> T =
+    let c = T.S(7, T.Z)
+    let y = if b: c else: p
+    let n = match y:
+        T.S(_, r) => len(r)
+        T.Z => 0
+    if n + len(y) > 100: c else: c
+
+// Closures with captures that are never called: they stay on the heap and are freed.
+fn ignore(f: u64 -> u64, n: u64) -> u64 = n
+
+fn second(p: F) -> u64 =
+    match p:
+        F.F(_, n) => n
+
+fn useClos(k: u64) -> u64 =
+    let f = (x) -> x + k
+    ignore(f, 3)
+
+fn usePair(k: u64) -> u64 =
+    let f = (x) -> x + k
+    let p = F.F(f, k)
+    second(p)
+
+fn main() -> () with Console + Diverge =
+    Console.printLine(len(pickJoin(false, build(3))).show())
+    Console.printLine((useClos(5) * 10 + usePair(7)).show())
+    Console.printLine(mixed3(3, false).show())
+    Console.printLine(viaWrap2(2).show())
+    Console.printLine(mixed2(3, true).show())
+    Console.printLine(mixed2(3, false).show())
+    Console.printLine(viaWrap(2).show())
+    Console.printLine(viaDeep(5).show())
+    Console.printLine(mixed(3, true).show())
+    Console.printLine(mixed(3, false).show())
+    Console.printLine(fieldOfFrame(2).show())
+    let a = viaHandle(4)
+    let n1 = noise(30)
+    Console.printLine(sum(a).show())
+    let c = viaCall((b) -> b, 5)
+    let n2 = noise(30)
+    Console.printLine(sum(c).show())
+    Console.printLine((n1 + n2).show())

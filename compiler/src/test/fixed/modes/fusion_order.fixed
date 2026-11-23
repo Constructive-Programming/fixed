@@ -1,0 +1,86 @@
+// Programs where an `unfold` feeds a `fold`, at the edges where removing the list between them
+// could change what the program does: a list used twice, a list that also escapes, a fold that
+// aborts part way, a fold over an empty list, a step that keeps what it built, a builder in another
+// function, and a fold whose function is not associative. Each line printed has one right value.
+use std.io.Console
+
+data B:
+    B(a: u64, b: u64)
+
+fn upto(n: u64) -> List of u64 =
+    List.unfold(0, (i) ->
+        if i >= n:
+            List.Nil
+        else:
+            List.Cons(i, i + 1)
+    )
+
+fn boxes(n: u64) -> List of B =
+    List.unfold(0, (i) ->
+        if i >= n:
+            List.Nil
+        else:
+            List.Cons(B.B(i, i * i), i + 1)
+    )
+
+// One site, used once: the plain case.
+fn plain(n: u64) -> u64 =
+    upto(n).fold(0, (acc, x) -> acc + x)
+
+// The list is used twice: it must exist.
+fn twice(n: u64) -> u64 =
+    let xs = upto(n)
+    xs.fold(0, (acc, x) -> acc + x) * 1000 + xs.fold(0, (acc, _) -> acc + 1)
+
+// The list is folded and also returned.
+fn kept(n: u64) -> List of u64 =
+    let xs = upto(n)
+    if xs.fold(0, (acc, x) -> acc + x) > 3:
+        xs
+    else:
+        List.Nil
+
+// The fold aborts part way: elements after the abort must not matter, and the result is the handler's.
+fn check(x: u64) -> u64 with Fail of String =
+    if x == 7:
+        Fail.fail("seven")
+    else:
+        x
+
+fn guarded(n: u64) -> u64 =
+    handle upto(n).fold(0, (acc, x) -> acc + check(x)):
+        Fail.fail(_) => 999
+        return(v) => v
+
+// Not associative and not commutative: the order of the elements shows in the result.
+fn ordered(n: u64) -> u64 =
+    upto(n).fold(1, (acc, x) -> acc * 3 + x)
+
+// The fold keeps every element it sees in a new list: the elements outlive the fold.
+fn collected(n: u64) -> List of B =
+    boxes(n).fold(List.Nil, (acc, b) -> List.Cons(b, acc))
+
+fn weight(bs: List of B) -> u64 =
+    bs.fold(0, (acc, b) -> acc * 2 + b.a + b.b)
+
+// A map between the two.
+fn mapped(n: u64) -> u64 =
+    upto(n).map((x) -> x * 2).fold(0, (acc, x) -> acc + x)
+
+// A fold whose accumulator is a data value rebuilt each step.
+fn pair(n: u64) -> B =
+    upto(n).fold(B.B(0, 1), (acc, x) -> B.B(acc.a + x, acc.b + acc.a))
+
+fn main() -> () with Console =
+    Console.printLine(plain(1000).show())
+    Console.printLine(plain(0).show())
+    Console.printLine(twice(100).show())
+    Console.printLine(kept(5).show())
+    Console.printLine(kept(2).show())
+    Console.printLine(guarded(5).show())
+    Console.printLine(guarded(50).show())
+    Console.printLine(ordered(6).show())
+    Console.printLine(weight(collected(6)).show())
+    Console.printLine(mapped(100).show())
+    Console.printLine(pair(10).show())
+    Console.printLine(upto(0).fold(42, (acc, x) -> acc + x).show())

@@ -1,0 +1,30 @@
+// Exclusivity (Versions.construct): a rose tree whose children share a subtree, rebuilt in place
+// where exclusive; the shared subtree and the original are printed after.
+// `bump` and `sum` recurse on an element of a list of children, not a value bound by a pattern: they
+// have `Diverge` (Rule 7.4.h), and so does `main`.
+use std.io.Console
+
+data Rose:
+    R(v: u64, kids: List of Rose)
+
+fn bump(r: Rose) -> Rose with Diverge =
+    match r:
+        Rose.R(v, ks) => Rose.R(v + 1, ks.map((k) -> bump(k)))
+
+fn sum(r: Rose) -> u64 with Diverge =
+    match r:
+        Rose.R(v, ks) => ks.fold(v, (n, k) -> n + sum(k))
+
+fn main() -> () with Console + Diverge =
+    let s = Rose.R(10, [Rose.R(20, [])])
+    let t = Rose.R(1, [s, Rose.R(5, [s]), Rose.R(7, [])])
+    Console.printLine(sum(bump(Rose.R(0, [Rose.R(1, []), Rose.R(2, [])]))).show())
+    Console.printLine(sum(bump(t)).show())
+    Console.printLine(sum(s).show())
+    Console.printLine(sum(t).show())
+    let u = Rose.R(3, [s])
+    Console.printLine(sum(bump(Rose.R(4, [u, s]))).show())
+    Console.printLine(sum(u).show())
+    let ks = [Rose.R(20, [])]
+    Console.printLine(sum(bump(Rose.R(1, ks))).show())
+    Console.printLine(sum(Rose.R(0, ks)).show())

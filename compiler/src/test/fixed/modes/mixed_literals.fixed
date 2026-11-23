@@ -1,0 +1,12 @@
+// An integer literal that meets a float literal takes the float's type; a float literal in a
+// generic function runs at a float instance.
+use std.io.Console
+
+fn half(x: N is Numeric) -> N = x * 0.5
+
+fn main() -> () with Console =
+    let x = 3 + 2.5
+    Console.printLine(x.show())
+    Console.printLine(3.add(2.5).show())
+    Console.printLine((2.5 * 3 - 1).show())
+    Console.printLine(half(3.0).show())

@@ -1,0 +1,17 @@
+// Control for shared_map: the same work on a fresh list each round (every test passes).
+// Size: fresh list of 10,000 mapped, 200 times
+use std.io.Console
+
+fn upto(n: u64) -> List of u64 =
+    List.unfold(0, (i) ->
+        if i >= n:
+            List.Nil
+        else:
+            List.Cons(i, i + 1)
+    )
+
+fn bump_sum(xs: List of u64) -> u64 = xs.map((x) -> x + 1).fold(0, (a, x) -> a + x)
+
+fn main() -> () with Console =
+    let t = upto(200).fold(0, (acc, _) -> acc + bump_sum(upto(10000)))
+    Console.printLine((t + upto(10000).fold(0, (a, x) -> a + x)).show())

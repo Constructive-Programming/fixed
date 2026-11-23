@@ -22,7 +22,7 @@ class EffectsSuite extends munit.FunSuite:
     assertEquals(codes(ask + "fn f() -> u64 = Ask.ask(\"q\")\n"), List(DiagCode.T015))
 
   test("a declared effect never performed is a warning"):
-    assertEquals(codes(ask + "fn f() -> u64 with Ask = 1\n"), List(DiagCode.T017))
+    assertEquals(codes(ask + "fn f() -> u64 with Ask = 1\n"), List(DiagCode.E081))
 
   test("a call performs the callee's declared row"):
     val decls = ask + "fn f() -> u64 with Ask = Ask.ask(\"q\")\n"
@@ -68,7 +68,7 @@ class EffectsSuite extends munit.FunSuite:
     )
 
   test("main performs only effects the runtime handles (Rule E5.4)"):
-    assertEquals(codes("use std.io.Console\nfn main() -> () with Console = Console.print_line(\"hi\")\n"), Nil)
+    assertEquals(codes("use std.io.Console\nfn main() -> () with Console = Console.printLine(\"hi\")\n"), Nil)
     assertEquals(codes("fn main() -> () with Fail of String = Fail.fail(\"x\")\n"), List(DiagCode.T016))
 
   test("a row variable carries a callback's other effects to the receiver's row (Rule E8.2)"):
@@ -84,5 +84,5 @@ class EffectsSuite extends munit.FunSuite:
     assertEquals(codes(ask + "fn bad(f: () -> u64 with E) -> u64 = f()\n"), List(DiagCode.T015))
     assertEquals(
       codes(ask + "fn leak(f: () -> u64 with E) -> u64 with E = Ask.ask(\"q\")\n"),
-      List(DiagCode.T015, DiagCode.T017)
+      List(DiagCode.T015, DiagCode.E081)
     )

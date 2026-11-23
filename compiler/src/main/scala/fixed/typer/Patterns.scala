@@ -5,8 +5,9 @@ import fixed.core.{Context, Proto, SymKind, Type}
 import fixed.util.DiagCode
 
 /** Pattern binding and `match` typing (`spec/pattern_matching.md` §3–§6). Exhaustiveness is the v1
-  * top-level check (plan §5.5.1): every variant of a data scrutinee is named by an unguarded case,
-  * `true` and `false` both appear for `bool`, otherwise a catch-all case is required.
+  * top-level check (plan §5.5.1): every variant of a data scrutinee is named by an unguarded case
+  * without a literal (a conservative stand-in for the check of §6: `V(true)` and `V(false)` do not
+  * cover `V`), `true` and `false` both appear for `bool`, otherwise a catch-all case is required.
   */
 object Patterns:
 
@@ -16,12 +17,14 @@ object Patterns:
       case Trees.WildcardPat(_)        => (s.record(pat, t), ctx)
       case Trees.BinderPat(name, span) =>
         val (table, id) = s.symbols.enter(name, ctx.owner, SymKind.Local, t, span)
-        (s.copy(symbols = table).record(pat, t), ctx.bind(name, id))
+        (s.reservedName(name, span).copy(symbols = table).record(pat, t), ctx.bind(name, id))
       case Trees.LiteralPat(value, _)  => (Typer.typedExpr(s, value, Proto.ExpectedType(t))._1.record(pat, t), ctx)
       case Trees.TuplePat(elems, span) =>
         val (s1, vars) = s.freshVars(elems.size)
         val tuple = Type.TupleType(vars)
-        val s2 = Typer.unify(s1, span, tuple, t).record(pat, tuple)
+        val s2 =
+          if elems.sizeIs > 2 then s1.error(DiagCode.T031, span, Namer.tupleSize)
+          else Typer.unify(s1, span, tuple, t).record(pat, tuple)
         bindAll(s2, elems.zip(vars))
       case p: Trees.DataVariantPat                               => variant(s, p, t)
       case Trees.StructDestructurePat(typeName, fields, _, span) =>
@@ -41,14 +44,11 @@ object Patterns:
                 case None     => (si.error(DiagCode.T001, p.span, s"not found: field $name of $typeName"), ci)
             }
       case Trees.OrPat(left, right, _) =>
-        /** ponytail: both alternatives must bind the same names (Rule M5.5.b); not checked yet. */
+        /** ponytail: both alternatives must bind the same names (Rule M5.5.a, `E095`); not checked yet. */
         val (s1, c1) = bind(s, left, t)
         (bind(s1, right, t)._1.record(pat, t), c1)
-      case Trees.GuardedPat(p, cond, _) =>
-        val (s1, c1) = bind(s, p, t)
-        (Typer.typedExpr(s1, cond, Proto.ExpectedType(Typer.bool))(using c1)._1, c1)
-      case _: Trees.Error | _: Trees.Missing => (s, ctx)
-      case other                             => (s.unsupported(other.span, "this pattern"), ctx)
+      case _: Trees.Error => (s, ctx)
+      case other          => (s.unsupported(other.span, "this pattern"), ctx)
 
   private def bindAll(s: TyperState, pairs: List[(fixed.ast.Tree, Type)])(using ctx: Context): (TyperState, Context) =
     pairs.foldLeft((s, ctx)) { case ((si, ci), (p, ty)) => bind(si, p, ty)(using ci) }
@@ -79,7 +79,7 @@ object Patterns:
         bindAll(s5, pats.zip(fieldTypes ++ extra))
 
   /** `match scrutinee: cases` — each case binds its pattern, checks its guard, and its body meets
-    * the prototype (or the first body's type).
+    * the prototype (or the first body's type that is not `!`, which fits any and decides none).
     */
   def typedMatch(s: TyperState, m: Trees.MatchExpr, pt: Proto)(using ctx: Context): (TyperState, Type) =
     val (s1, scrutinee) = Typer.typedExpr(s, m.scrutinee, Proto.Wildcard)
@@ -88,7 +88,7 @@ object Patterns:
       val si2 = c.guard.fold(si1)(g => Typer.typedExpr(si1, g, Proto.ExpectedType(Typer.bool))(using ci)._1)
       val expect = pt.orExpect(first)
       val (si3, bodyType) = Typer.typedExpr(si2, c.body, expect)(using ci)
-      (si3.record(c, bodyType), first.orElse(Some(bodyType)))
+      (si3.record(c, bodyType), first.orElse(Some(bodyType).filter(si3.unifier.resolve(_) != Type.NeverType)))
     }
 
     /** Bodies were checked against an expected type already; report each mismatch once. */
@@ -98,21 +98,21 @@ object Patterns:
   private def exhaustive(s: TyperState, m: Trees.MatchExpr, scrutinee: Type): TyperState =
     val unguarded = m.cases.filter(_.guard.isEmpty).map(_.pattern)
     val alternatives = unguarded.flatMap(flatten)
-    val catchAll = alternatives.exists {
-      case _: Trees.WildcardPat | _: Trees.BinderPat => true
-      case _                                         => false
-    }
-    lazy val named = alternatives.collect { case Trees.DataVariantPat(_, v, _, _) => v }.toSet
+    val catchAll = alternatives.exists(irrefutable)
+    lazy val named = alternatives.collect { case p @ Trees.DataVariantPat(_, v, _, _) if !hasLiteral(p) => v }.toSet
     s.unifier.resolve(scrutinee) match
       case _ if catchAll                                           => s
       case Type.TypeRef(d, _) if s.symbols(d).kind == SymKind.Data =>
-        val missing = s.symbols.variantsOf(d).filterNot(v => named(v.name))
+        val missing = s.symbols.variantsOf(d).filterNot(v => named(v.name)).toList
         if missing.isEmpty then s
         else
           s.error(
             DiagCode.T020,
             m.span,
-            missing.map(v => s"${s.symbols(d).name}.${v.name}").mkString("missing case ", ", ", "")
+            missing.map(v => s"${s.symbols(d).name}.${v.name}").mkString("missing case ", ", ", "") +
+              (if missing.exists(v => alternatives.exists(names(_, v.name))) then
+                 " (a case with a literal does not cover its variant)"
+               else "")
           )
       case Type.PrimType("bool") =>
         val lits = alternatives.collect { case Trees.LiteralPat(Trees.BoolLit(b, _), _) => b }.toSet
@@ -120,6 +120,29 @@ object Patterns:
         else s.error(DiagCode.T020, m.span, "missing case: a bool match needs true and false")
       case _: Type.TypeVar | _: Type.IsBound | _: Type.CapRef | Type.NeverType => s
       case _ => s.error(DiagCode.T020, m.span, "missing case _: this scrutinee type needs a catch-all case")
+
+  /** The part of Rule M4.2 the exhaustiveness check uses: `_`, a binder, and a tuple pattern whose
+    * elements are all irrefutable match every value.
+    */
+  private def irrefutable(p: fixed.ast.Tree): Boolean =
+    p match
+      case _: Trees.WildcardPat | _: Trees.BinderPat => true
+      case Trees.TuplePat(elems, _)                  => elems.forall(irrefutable)
+      case _                                         => false
+
+  /** Whether `p` names variant `v`. */
+  private def names(p: fixed.ast.Tree, v: String): Boolean =
+    p match
+      case Trees.DataVariantPat(_, w, _, _) => w == v
+      case _                                => false
+
+  /** Whether `p` holds a literal: a variant pattern with one does not cover its variant. */
+  def hasLiteral(p: fixed.ast.Tree): Boolean =
+    p match
+      case _: Trees.LiteralPat               => true
+      case Trees.TuplePat(ps, _)             => ps.exists(hasLiteral)
+      case Trees.DataVariantPat(_, _, ps, _) => ps.exists(_.exists(hasLiteral))
+      case _                                 => false
 
   private def flatten(p: fixed.ast.Tree): List[fixed.ast.Tree] =
     p match
@@ -129,6 +152,6 @@ object Patterns:
   /** Type a nested `fn` declaration met in a block: signature via the Namer, then its body. */
   def nestedFn(s: TyperState, fn: Trees.FnDecl)(using ctx: Context): (TyperState, Context) =
     val (table, id, diags) = Namer.nestedFn(s.symbols, ctx.frames, ctx.owner, fn)
-    val s1 = s.copy(symbols = table).report(diags)
+    val s1 = s.copy(symbols = table, types = s.types.resolved(fn, Resolution.NestedFn(id))).report(diags)
     val inner = ctx.bind(fn.name, id)
     (Typer.typedFnBody(s1, id, fn)(using inner), inner)

@@ -1,0 +1,96 @@
+// A branch whose value is a call of a function that never returns (`-> !`): the join after it
+// takes the zero of its own type for the dead branch, for a scalar and for a reference result.
+// `count` recurses ten million times through a `-> !` self call in tail position; EmitSuite checks
+// that the IR makes it a jump. A `handle` with no `return` clause around a `-> !` subject takes its
+// type from the expected type or its clauses, not `!` (`caught`, `code`, `also`); a literal in a
+// clause, from the handle's use (`five`), as does a lambda's parameter (`echo`, `literal`); where every clause diverges too, it is `!` (`stuck`). In
+// the dead branch of `label` and `say`, the result of `spin` is an argument of a function and of
+// the runtime, which EmitSuite checks is the zero of the parameter's type.
+// `spin` and `count` do not recurse on a part of a parameter: they have `Diverge` (Rule 7.4.h),
+// and so does every function that calls them.
+use std.io.Console
+
+fn spin(n: u64) -> ! with Diverge = spin(n + 1)
+
+fn name(m: Maybe of String) -> String with Diverge =
+    match m:
+        Maybe.Just(s) => s
+        Maybe.Nothing => spin(0)
+
+fn pick(n: u64) -> u64 with Diverge =
+    if n > 5: n
+    else: spin(n)
+
+fn count(n: u64) -> ! with Fail of String + Diverge =
+    if n == 0: Fail.fail("done")
+    else: count(n - 1)
+
+fn go(n: u64) -> String with Fail of String + Diverge =
+    count(n)
+    "unreachable"
+
+fn run(n: u64) -> String with Diverge =
+    handle go(n):
+        Fail.fail(e) => e
+        return(v) => v
+
+fn caught(n: u64) -> String with Diverge =
+    handle count(n):
+        Fail.fail(e) => e.concat("!")
+
+fn code(n: u64) -> u64 with Diverge =
+    handle count(n):
+        Fail.fail(_e) => n + 1
+
+fn stuck(n: u64) -> u64 with Diverge =
+    if n > 5: n
+    else:
+        handle count(n):
+            Fail.fail(_e) => spin(n)
+        handle count(n):
+            Fail.fail(_e) => if n > 2: spin(n) else: spin(n + 1)
+        1
+
+fn five(n: u64) -> u64 with Diverge =
+    let x = handle count(n):
+        Fail.fail(_e) => 5
+    x + n
+
+fn echo(s: String) -> String with Diverge =
+    let f = (x) ->
+        handle count(2):
+            Fail.fail(_e) => x
+            return(v) => v
+    f(s)
+
+fn literal() -> String with Diverge =
+    let f = (x) ->
+        handle count(2):
+            Fail.fail(_e) => x
+    f(5).show()
+
+fn quoted(s: String) -> String = "'".concat(s).concat("'")
+
+fn label(n: u64) -> String with Diverge =
+    if n > 5: "label"
+    else: quoted(spin(n))
+
+fn say(n: u64) -> () with Console + Diverge =
+    if n > 5: Console.printLine("say")
+    else: Console.printLine(spin(n))
+
+fn main() -> () with Console + Diverge =
+    Console.printLine(pick(7).show())
+    Console.printLine(name(Maybe.Just("just")))
+    Console.printLine(run(10000000))
+    Console.printLine(caught(3))
+    let also = handle count(2):
+        Fail.fail(e) => e.concat("?")
+    Console.printLine(also)
+    Console.printLine(code(41).show())
+    Console.printLine(stuck(8).show())
+    Console.printLine(five(3).show())
+    Console.printLine(echo("echo"))
+    Console.printLine(literal())
+    Console.printLine(label(6))
+    say(6)

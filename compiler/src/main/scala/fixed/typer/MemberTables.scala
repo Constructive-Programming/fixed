@@ -49,7 +49,7 @@ object MemberTables:
       .toMap
 
   /** `cap` and what its `extends` chain reaches, depth first, with the arguments written there. */
-  private[typer] def reached(symbols: SymbolTable, cap: SymbolId, written: Option[List[Type]], seen: BitSet)
+  private[fixed] def reached(symbols: SymbolTable, cap: SymbolId, written: Option[List[Type]], seen: BitSet)
       : List[(SymbolId, Option[List[Type]])] =
     val supers = symbols(cap).info match
       case Type.IsBound(bs) => Members.expandAliases(symbols, bs)

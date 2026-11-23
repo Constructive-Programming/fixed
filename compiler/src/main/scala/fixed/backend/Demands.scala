@@ -34,10 +34,6 @@ final case class Need(root: Demand, parts: Map[Need.Part, Demand]):
 
 object Demands:
 
-  /** Demands of every function instance `lower` built. */
-  def of(lower: Lower, fns: List[Fn], render: fixed.core.Type => String): DemandTable =
-    analyse(lower, fns, render)._2
-
   /** The analysis over `fns` and its result. */
   def analyse(lower: Lower, fns: List[Fn], render: fixed.core.Type => String): (Demands, DemandTable) =
     val keyed = typesByKey(lower, render).get
@@ -140,9 +136,17 @@ final class Demands(
       case Let(x, rhs, body) =>
         val live = (names(body) - x.name) ++ ctx.after
         val reused = reuse(x, rhs, live, ctx, fn)
-        val inner = walk(body, forward(x, rhs, live, ctx).copy(paired = ctx.paired ++ reused), fn)
+
+        /** Branches first (they do not depend on what the rest demands of `x`): a cell a branch's
+          * constructor reuses is not reused again after the `If` or `Switch`.
+          */
+        val before = reuses(fn).keySet.toSet
+        val branches = Option.when(Core.branches(rhs).nonEmpty)(right(rhs, Need.zero, live, ctx, fn))
+        val inBranches = reuses(fn).collect { case (y, v) if !before(y) => v }
+        val inner = walk(body, forward(x, rhs, live, ctx).copy(paired = ctx.paired ++ reused ++ inBranches), fn)
         val xNeed = inner.getOrElse(x.name, Need.zero)
-        join(join(right(rhs, xNeed, live, ctx, fn), inner - x.name), reused.map(_ -> Need.excl).toMap)
+        val here = branches.getOrElse(right(rhs, xNeed, live, ctx, fn))
+        join(join(here, inner - x.name), reused.map(_ -> Need.excl).toMap)
       case Expr.Dup(_, b)  => walk(b, ctx, fn)
       case Expr.Drop(_, b) => walk(b, ctx, fn)
 
@@ -153,30 +157,45 @@ final class Demands(
         (ctx.path(o.name).below(slot), ctx.keys.get(o.name).flatMap(slotKey(_, slot)))
       case Rhs.Move(v: Atom.Var) => (ctx.path(v.name), ctx.keys.get(v.name))
       case _                     => (Path(x.name, Nil), typeKey(x.name))
-    val keeps = owned(rhs).filter(v => live.exists(l => ctx.path(l).overlaps(ctx.path(v)))).map(ctx.path)
+
+    /** A counted `If` or `Switch` result may be any value its branches use, or a part of one. */
+    val used = Core.branches(rhs).flatMap(names)
+    val aliased = if x.ctype.counted then used else Nil
+    val keeps = (owned(rhs) ++ aliased).filter(v => live.exists(l => ctx.path(l).overlaps(ctx.path(v)))).map(ctx.path)
+
+    /** An `If` or `Switch` hands its branches what they use; what is dead after it dies inside them (`Rc`). */
+    val inBranches =
+      if Core.branches(rhs).isEmpty then Nil
+      else (Core.atoms(rhs).flatMap(Core.countedVar).map(_.name) ++ used).filterNot(live)
     ctx.copy(
       paths = ctx.paths.updated(x.name, path),
       keys = key.fold(ctx.keys)(k => ctx.keys.updated(x.name, k)),
       kept = keeps ++ ctx.kept,
-      moved = owned(rhs).map(ctx.path) ++ ctx.moved
+      moved = (owned(rhs) ++ inBranches).map(ctx.path) ++ ctx.moved
     )
 
-  /** Boxed variables a right-hand side keeps (stores, or passes to a parameter that keeps it). */
+  /** Counted variables a right-hand side keeps (stores, or passes to a parameter that keeps it). */
   private def owned(rhs: Rhs): List[String] =
-    def vars(as: List[Atom]) = as.flatMap(Core.boxedVar).map(_.name)
+    def vars(as: List[Atom]) = as.flatMap(Core.countedVar).map(_.name)
     rhs match
-      case Rhs.Con(_, fs)            => vars(fs)
-      case Rhs.Closure(_, cs, _)     => vars(cs)
-      case Rhs.CallClosure(c, as, _) => vars(c :: as)
-      case Rhs.Call(f, as, _)        => keptBy(f, as)
-      case Rhs.Catch(f, as)          => keptBy(f, as)
-      case _                         => Nil
+      case Rhs.Con(_, fs)             => vars(fs)
+      case Rhs.Closure(_, cs, _)      => vars(cs)
+      case Rhs.CallClosure(c, as, _)  => vars(c :: as)
+      case Rhs.CallTable(_, _, as, _) => vars(as)
+      case Rhs.Call(f, as, _)         => keptBy(f, as)
+      case Rhs.Catch(f, as)           => keptBy(f, as)
+      case _                          => Nil
 
-  /** The boxed arguments of a call of `f` whose parameters keep them (`own` or `exclusive`). */
+  /** The counted arguments of a call of `f` whose parameters keep them, or a part of them ([[keeps]]). */
   private def keptBy(f: String, as: List[Atom]): List[String] =
     as.zipWithIndex.collect {
-      case (v: Atom.Var, i) if v.ctype.boxed && sig(f, i).root.ordinal >= Demand.Own.ordinal => v.name
+      case (v: Atom.Var, i) if v.ctype.counted && keeps(sig(f, i)) => v.name
     }
+
+  /** Whether a parameter of need `n` keeps (a part of) its argument: `tl(xs)` returns a part of `xs`
+    * and reads only its root, and its result's path does not show that it aliases `xs`.
+    */
+  private def keeps(n: Need): Boolean = (n.root :: n.parts.values.toList).exists(_.ordinal >= Demand.Own.ordinal)
 
   /** Whether `v`, an argument among `args`, still has no other reference at this use. */
   private[backend] def exclusive(v: String, args: List[String], live: Set[String], ctx: Ctx): Boolean =
@@ -188,13 +207,16 @@ final class Demands(
   /** A constructor reuses the cell of a variable of matching size that died on this path (drop
     * guided, Rule MM11.5): the variable is then demanded exclusive. Its children may stay live. A
     * variable moved into another value or call earlier on the path did not die here: its cell
-    * belongs to the new owner.
+    * belongs to the new owner. Nor did one that died inside an earlier branch, which dropped it.
     * The variant of a candidate is known inside a `Switch` case, or always for single-variant types.
     */
   private def reuse(x: Atom.Var, rhs: Rhs, live: Set[String], ctx: Ctx, fn: String): Option[String] =
     rhs match
-      case Rhs.Con(_, fields) if fields.nonEmpty =>
-        val inFields = fields.flatMap(Core.boxedVar).map(_.name).toSet
+      /** Pointer or immediate: `x`'s Core type. An immediate is no cell, so it reuses none; nor is
+        * an immediate variable a candidate (`cellSize` has none for its type).
+        */
+      case Rhs.Con(_, fields) if fields.nonEmpty && x.ctype.boxed =>
+        val inFields = fields.flatMap(Core.countedVar).map(_.name).toSet
         val products = ctx.keys.collect { case (v, k) if cellSize(k, 1).isEmpty && cellSize(k, 0).isDefined => v -> 0 }
         (products ++ ctx.tags).toList.sortBy(_._1).collectFirst {
           case (v, tag)
@@ -221,6 +243,7 @@ final class Demands(
       case Rhs.Reuse(c, _, fs, _)       => uses(c :: fs, Need.own)
       case Rhs.Closure(_, cs, _)        => uses(cs, Need.own)
       case Rhs.CallClosure(c, as, _)    => uses(c :: as, Need.own)
+      case Rhs.CallTable(t, _, as, _)   => join(uses(List(t), Need.read), uses(as, Need.own))
       case Rhs.Field(o: Atom.Var, slot) =>
         val key = ctx.keys.getOrElse(o.name, "?")
         Map(o.name -> Need(Demand.Read, xNeed.parts.updated((key, slot), xNeed.root join xNeed.part((key, slot)))))
@@ -230,7 +253,7 @@ final class Demands(
         join(uses(List(c), Need.read), join(walk(t, branch, fn), walk(f, branch, fn)))
       case Rhs.Switch(s, cases) =>
         val tagged = (tag: Int) =>
-          Core.boxedVar(s).fold(ctx.copy(after = live))(v =>
+          Core.countedVar(s).fold(ctx.copy(after = live))(v =>
             ctx.copy(after = live, tags = ctx.tags.updated(v.name, tag))
           )
         cases.foldLeft(uses(List(s), Need.read))((acc, c) => join(acc, walk(c._2, tagged(c._1), fn)))
@@ -239,12 +262,16 @@ final class Demands(
     * version's need where it is not exclusive at this call.
     */
   private def call(f: String, as: List[Atom], live: Set[String], ctx: Ctx): Map[String, Need] =
-    val args = as.flatMap(Core.boxedVar).map(_.name)
-    as.zipWithIndex.collect { case (v: Atom.Var, i) =>
-      val n = sig(f, i)
-      Map(v.name -> (if !v.ctype.boxed || exclusive(v.name, args, live, ctx) then n else n.shared))
+    val args = as.flatMap(Core.countedVar).map(_.name)
+    as.zipWithIndex.collect {
+      case (v: Atom.Var, i) =>
+        val n = sig(f, i)
+        Map(v.name -> (if !v.ctype.counted || exclusive(v.name, args, live, ctx) then n else n.shared))
+      case (t: Atom.DynTable, _) => uses(List(t), Need.read)
     }.foldLeft(Map.empty[String, Need])(join)
 
-  /** Every variable among `as`, scalars included (a used scalar is not erased), demanded `n`. */
+  /** Every variable among `as`, scalars and the captures of a table built at run time included (a
+    * used scalar is not erased), demanded `n`.
+    */
   private def uses(as: List[Atom], n: Need): Map[String, Need] =
-    as.collect { case v: Atom.Var => v.name -> n }.groupMapReduce(_._1)(_._2)(_ join _)
+    as.flatMap(Core.vars).map(_.name -> n).groupMapReduce(_._1)(_._2)(_ join _)

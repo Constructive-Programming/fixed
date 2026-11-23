@@ -1,0 +1,40 @@
+// A user list-shaped type of itself: generated fold, length and find at Stack of Stack of u64.
+use std.io.Console
+
+data Stack of A:
+    Push(top: A, rest: Stack of A)
+    Empty
+
+Stack satisfies Sequencing:
+    Push as cons
+    Empty as empty
+    fn length = self.fold(0, (n, x) -> n + 1)
+    fn head = match self:
+        Stack.Push(h, _) => Optional.some(h)
+        Stack.Empty => Optional.none
+    fn tail = match self:
+        Stack.Push(_, t) => t
+        Stack.Empty => Stack.Empty
+Stack satisfies Folding:
+    fn fold(init: R, f: (R, Part) -> R) = self.fold((h, rest: R -> R) -> (acc) -> rest(f(acc, h)), () -> (acc) -> acc)(init)
+    fn foldRight(init: R, f: (Part, R) -> R) = self.fold((h, acc) -> f(h, acc), () -> init)
+    fn find(pred: Part -> bool) = self.fold((x, found) -> if pred(x): Optional.some(x) else: found, () -> Optional.none)
+
+fn total(s: Stack of u64) -> u64 = s.fold(0, (a, x) -> a + x)
+
+fn tt(s: Stack of Stack of u64) -> u64 = s.fold(0, (a, x) -> a + total(x))
+
+fn len(s: Stack of Stack of u64) -> u64 = s.length()
+
+fn glen(s: Stack of A) -> u64 = s.length()
+
+fn pick(s: Stack of Stack of u64) -> u64 = s.find((x) -> x.length() == 2).fold((x) -> total(x), () -> 99)
+
+fn main() -> () with Console =
+    let a = Stack.Push(1, Stack.Push(2, Stack.Empty))
+    let b = Stack.Push(5, Stack.Empty)
+    let s = Stack.Push(b, Stack.Push(a, Stack.Push(b, Stack.Empty)))
+    Console.printLine(tt(s).show())
+    Console.printLine(len(s).show())
+    Console.printLine(glen(s).show())
+    Console.printLine(pick(s).show())

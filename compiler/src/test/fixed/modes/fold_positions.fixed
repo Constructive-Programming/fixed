@@ -1,0 +1,42 @@
+// A derived fold reaches Self only through the last argument of a data type it maps through
+// (Rule 7.4.a.1): Pair of (u64, K) is folded; Pair of (K, u64), u64 -> K and Q of K (Q is no
+// Functor: its A sits in a Tuple's first argument) are passed unfolded.
+// `total` recurses on values its fold passes unfolded and on a function's result, neither a strict
+// sub-value of `k`: it has `Diverge` (Rule 7.4.h), and so does `main`.
+use std.io.Console
+
+data Pair of (A, B):
+    P(a: A, b: B)
+
+data Q of A:
+    Q(t: Tuple of (A, u64), y: A)
+
+data K:
+    Leaf
+    Last(p: Pair of (u64, K))
+    First(p: Pair of (K, u64))
+    Later(f: u64 -> K)
+    Wrapped(q: Q of K)
+
+fn total(k: K) -> u64 with Diverge =
+    k.fold(
+        () -> 1,
+        (p) -> match p:
+            Pair.P(n, r) => n + r,
+        (p) -> match p:
+            Pair.P(inner, n) => total(inner) * n,
+        (f) -> total(f(5)) + 100,
+        (q) -> match q:
+            Q.Q(t, y) => match t:
+                Tuple.Tuple(inner, n) => total(inner) + n * 1000 + total(y) * 10000
+    )
+
+fn build(n: u64) -> K = K.unfold(n, (i) -> if i == 0: K.Leaf else: K.Last(Pair.P(i, i - 1)))
+
+fn main() -> () with Console + Diverge =
+    Console.printLine(total(K.Last(Pair.P(3, K.First(Pair.P(K.Last(Pair.P(4, K.Leaf)), 10))))).show())
+    Console.printLine(total(K.Later((x) -> K.Last(Pair.P(x, K.Leaf)))).show())
+    Console.printLine(total(build(4)).show())
+    Console.printLine(total(K.First(Pair.P(build(2), 7))).show())
+    Console.printLine(total(K.unfold(1, (i) -> K.First(Pair.P(build(i), 9)))).show())
+    Console.printLine(total(K.Wrapped(Q.Q(Tuple.Tuple(build(1), 2), build(2)))).show())

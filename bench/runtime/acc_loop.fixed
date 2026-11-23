@@ -1,0 +1,20 @@
+// A reuse site with nothing else to do: a two-scalar record rebuilt once per step.
+// Size: record rebuilt 2,000,000 times
+use std.io.Console
+
+data Acc:
+    Acc(n: u64, s: u64)
+
+fn upto(n: u64) -> List of u64 =
+    List.unfold(0, (i) ->
+        if i >= n:
+            List.Nil
+        else:
+            List.Cons(i, i + 1)
+    )
+
+fn step(a: Acc, i: u64) -> Acc = Acc.Acc(a.n + 1, a.s + i)
+
+fn main() -> () with Console =
+    let r = upto(2000000).fold(Acc.Acc(0, 0), (a, i) -> step(a, i))
+    Console.printLine((r.n + r.s).show())

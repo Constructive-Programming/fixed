@@ -1,0 +1,52 @@
+// The bodies of `satisfies` blocks run, directly and through a polymorphic function's table, and
+// each one differs from what the compiler would otherwise provide: a fixed `show`, an `eq` that
+// holds for any two values, a `fold` that visits its one element twice, a `get` of a capability
+// with arguments. The prelude's bodies run where the compiler generates nothing: `foldRight`,
+// `filter` and `tail` on a list.
+use std.io.Console
+
+data Money:
+    Money(cents: u64)
+
+Money satisfies Show:
+    fn show = "<money>"
+
+Money satisfies Eq:
+    fn eq(other: Money) = true
+
+data Box of A:
+    Box(v: A)
+
+Box satisfies Folding:
+    fn fold(init: R, f: (R, Part) -> R) = self.fold((v) -> f(f(init, v), v))
+    fn foldRight(init: R, f: (Part, R) -> R) = self.fold((v) -> f(v, init))
+    fn find(pred: Part -> bool) = self.fold((v) -> if pred(v): Optional.some(v) else: Optional.none)
+
+data Store:
+    Store(k: String, v: u64)
+
+Store satisfies Map of (String, u64):
+    fn get(key: String) = if key == self.k: Optional.some(self.v + 100) else: Optional.none
+
+fn describe(x: T is Show) -> String = x.show()
+
+fn same(a: T is Eq, b: T) -> bool = a == b
+
+fn total(xs: is Folding of i64) -> i64 = xs.fold(0, (a, x) -> a + x)
+
+fn look(m: is Map of (String, u64), k: String) -> u64 = m.get(k).fold((v) -> v, () -> 0)
+
+fn main() -> () with Console =
+    Console.printLine(Money.Money(5).show())
+    Console.printLine(describe(Money.Money(5)))
+    Console.printLine((Money.Money(1) == Money.Money(2)).show())
+    Console.printLine((Money.Money(1) != Money.Money(2)).show())
+    Console.printLine(same(Money.Money(1), Money.Money(2)).show())
+    Console.printLine(Box.Box(5).fold(0, (a, x) -> a + x).show())
+    Console.printLine(total(Box.Box(5)).show())
+    let xs = [1, 2, 3]
+    Console.printLine(xs.foldRight(0, (x, acc) -> x + acc * 10).show())
+    Console.printLine(xs.filter((x) -> x > 1).length().show())
+    Console.printLine(xs.tail().length().show())
+    Console.printLine(Store.Store("a", 7).get("a").fold((v) -> v, () -> 0).show())
+    Console.printLine(look(Store.Store("a", 7), "a").show())

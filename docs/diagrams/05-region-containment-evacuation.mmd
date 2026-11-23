@@ -1,0 +1,27 @@
+flowchart TD
+    subgraph Hierarchy["Lifetime Hierarchy (Durable -> Transient)"]
+        direction TB
+        Static["Static / Persistent Data (Infinite Lifetime)"]
+        Heap["Perceus Heap (Unbounded Lifetime)"]
+        Region["Counted Region(r) (Lifespan of Root Handle)"]
+        FrameOuter["Frame(outer_scope)"]
+        FrameInner["Frame(step / inner_scope)"]
+    end
+
+    Static -.->|Can target| Static
+    Heap -->|Valid| Static
+    Heap -->|Counted Outset Edge| Region
+    Region -->|Valid| Heap
+    Region -->|Valid| Static
+    FrameOuter -->|Valid| Region
+    FrameOuter -->|Valid| Heap
+    FrameOuter -->|Valid| Static
+    FrameInner -->|Valid| FrameOuter
+
+    subgraph Evacuation["Evacuation Mechanism (Rule MM5.5)"]
+        InnerVal["Value in Frame(inner)"]
+        EscapeAttempt["Escapes to Frame(outer) or Heap"]
+        CopiedVal["Evacuated: Compiler inserts deep copy\ninto target longer-lived region"]
+        InnerVal --> EscapeAttempt
+        EscapeAttempt --> CopiedVal
+    end

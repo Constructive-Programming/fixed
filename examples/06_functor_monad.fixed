@@ -5,37 +5,36 @@
 //   - HKT syntax: `Self of B` for type-constructor returns
 //   - Functor/Monad capability hierarchy using `extends`
 //   - `satisfies` connecting MyMaybe data type to Optional cap
-//   - `do` notation as sugar for flat_map chains
+//   - `do` notation as sugar for flatMap chains
 //   - Generic functions that work over any Monad
-//   - Auto-derived fold, map, flat_map, pure from data structure
+//   - Auto-derived fold and map; flatMap and pure written in the satisfaction
 //   - match for data types (List), fold for capabilities (Optional)
 
 use std.io.Console
 
 // --- The capability hierarchy ---
 
-// Functor: structure-preserving transformation.
-// `Part` is the current element type, `B` is the new one.
-// `Self of B` changes the container's element type.
-cap Functor:
-    fn map(f: Part -> B) -> Self of B
+// Functor comes from the prelude (a structure-preserving transformation):
+// `fn map(f: Part -> B) -> Self of B`, where `Part` is the current element
+// type and `Self of B` the container at the new one. The compiler derives
+// `map` for the prelude's Functor only, not for a program's own `cap Functor`.
 
 // Monad: sequencing computations that produce wrapped values.
-// `pure` wraps a value; `flat_map` chains computations.
+// `pure` wraps a value; `flatMap` chains computations.
 cap Monad extends Functor:
     Self.fn pure(value: Part) -> Self
-    fn flat_map(f: Part -> Self of B) -> Self of B
+    fn flatMap(f: Part -> Self of B) -> Self of B
 
 // --- Optional is a Monad ---
 //
 // Optional declares some/none/fold as constructor requirements.
-// The compiler auto-derives Functor (map via fold + some/none)
-// and Monad (flat_map via fold) from the structure.
+// The compiler auto-derives Functor (map) from the structure; Monad's
+// pure and flatMap are written in the satisfaction below.
 
 cap Optional extends Monad:
     Self.fn some(value: Part) -> Self
     Self.fn none -> Self
-    fn fold(on_some: Part -> R, on_none: () -> R) -> R
+    fn fold(onSome: Part -> R, onNone: () -> R) -> R
 
 // A concrete data type satisfies Optional (and thus Monad + Functor):
 data MyMaybe of A:
@@ -45,7 +44,11 @@ data MyMaybe of A:
 MyMaybe satisfies Optional:
     Just as some
     Nothing as none
-// fold, map, flat_map, pure are auto-derived from MyMaybe's structure
+    Self.fn pure(value: Part) -> Self = MyMaybe.Just(value)
+    fn flatMap(f: Part -> Self of B) = match self:
+        MyMaybe.Just(a) => f(a)
+        MyMaybe.Nothing => MyMaybe.Nothing
+// fold and map are auto-derived from MyMaybe's structure
 
 // --- Generic monadic functions ---
 
@@ -57,7 +60,7 @@ fn when(condition: bool, action: M is Monad of ()) -> M of () =
     else:
         M.pure(())
 
-// Functions in Fixed are total — `sequence` and `fold_m` cannot self-recurse.
+// Functions in Fixed are total — `sequence` and `foldM` cannot self-recurse.
 // Both are catamorphisms over the input List, so we use List's auto-derived
 // `fold` (catamorphism style: one callback per variant, with recursive
 // positions already folded to the result type R).
@@ -65,19 +68,19 @@ fn when(condition: bool, action: M is Monad of ()) -> M of () =
 fn sequence(list: List of (M is Monad of A)) -> M of (List of A) =
     list.fold(
         // Cons(head, tail): `tail` has already been folded to `M of (List of A)`.
-        (head, tail_m) ->
+        (head, tailM) ->
             do:
                 a <- head
-                rest <- tail_m
+                rest <- tailM
                 M.pure(List.Cons(a, rest)),
         // Nil:
         () -> M.pure(List.Nil),
     )
 
-fn map_m(list: List of A, f: A -> M of B) -> (M is Monad) of (List of B) =
+fn mapM(list: List of A, f: A -> M of B) -> (M is Monad) of (List of B) =
     sequence(list.map(f))
 
-fn fold_m(
+fn foldM(
     list: List of A,
     init: B,
     f: (B, A) -> M of B,
@@ -88,33 +91,33 @@ fn fold_m(
     // `B -> M of B` that, given the accumulator-so-far, runs `f` then chains
     // into the tail's continuation.
     let kont = list.fold(
-        (head, tail_kont: B -> M of B) ->
+        (head, tailKont: B -> M of B) ->
             (acc: B) ->
                 do:
                     next <- f(acc, head)
-                    tail_kont(next),
+                    tailKont(next),
         () -> (acc: B) -> M.pure(acc),
     )
     kont(init)
 
 // --- do notation example ---
 
-fn safe_divide(a: f64, b: f64) -> is Optional of f64 =
+fn safeDivide(a: f64, b: f64) -> is Optional of f64 =
     if b == 0.0:
         Optional.none
     else:
         Optional.some(a / b)
 
 fn compute() -> is Optional of f64 =
-    // `do` desugars to flat_map chains:
-    //   safe_divide(100.0, 3.0).flat_map((x) ->
-    //     safe_divide(x, 2.0).flat_map((y) ->
-    //       safe_divide(y, 7.0).flat_map((z) ->
+    // `do` desugars to flatMap chains:
+    //   safeDivide(100.0, 3.0).flatMap((x) ->
+    //     safeDivide(x, 2.0).flatMap((y) ->
+    //       safeDivide(y, 7.0).flatMap((z) ->
     //         Optional.pure(z))))
     do:
-        x <- safe_divide(100.0, 3.0)
-        y <- safe_divide(x, 2.0)
-        z <- safe_divide(y, 7.0)
+        x <- safeDivide(100.0, 3.0)
+        y <- safeDivide(x, 2.0)
+        z <- safeDivide(y, 7.0)
         Optional.pure(x + y + z)
 
 // --- Functor laws (expressed as properties) ---
@@ -124,13 +127,13 @@ fn compute() -> is Optional of f64 =
 
 fn main() -> () with Console =
     compute().fold(
-        (result) -> Console.print_line("Result: ".concat(result.show())),
-        () -> Console.print_line("Division by zero encountered"),
+        (result) -> Console.printLine("Result: ".concat(result.show())),
+        () -> Console.printLine("Division by zero encountered"),
     )
 
     // sequence example: all-or-nothing
     let opts = [Optional.some(1), Optional.some(2), Optional.some(3)]
     sequence(opts).fold(
-        (list) -> Console.print_line("All present: ".concat(list.show())),
-        () -> Console.print_line("At least one was none"),
+        (list) -> Console.printLine("All present: ".concat(list.show())),
+        () -> Console.printLine("At least one was none"),
     )

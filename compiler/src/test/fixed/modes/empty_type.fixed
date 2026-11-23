@@ -1,0 +1,28 @@
+// A `data` with no body is a type with no value (Rule 7.1.a): a tag in a type argument, and a
+// field no value can fill, whose derived `show` and `==` are never reached.
+use std.io.Console
+
+data Metres
+data Length of U: Length(v: u64)
+
+data Reading:
+    Ok(v: u64)
+    Bad(m: Metres)
+
+fn metres(n: u64) -> Length of Metres = Length.Length(n)
+
+fn size(l: Length of Metres) -> u64 = l.fold((v) -> v)
+
+fn absurd(m: Metres) -> u64 = match m:
+    _ => 0
+
+fn get(r: Reading) -> u64 = match r:
+    Reading.Ok(v) => v
+    Reading.Bad(m) => absurd(m) + 1
+
+fn main() -> () with Console =
+    Console.printLine(size(metres(3)).show())
+    Console.printLine(metres(4).show())
+    Console.printLine(Reading.Ok(5).show())
+    Console.printLine((Reading.Ok(5) == Reading.Ok(5)).show())
+    Console.printLine(get(Reading.Ok(6)).show())

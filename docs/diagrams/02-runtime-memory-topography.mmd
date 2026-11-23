@@ -1,0 +1,36 @@
+flowchart TB
+    subgraph ExecutionLane["Thread / Fiber / Lane Execution Context"]
+        direction TB
+
+        subgraph ScratchStack["1. Scratch Data Stack (LIFO per Scope)"]
+            OuterFrame["Frame(outer_scope)\nHeaderless values, no RC operations"]
+            ScopeMark["Mark (chunk_id, offset)"]
+            InnerFrame["Frame(step / inner_scope)\nPer-step temporaries in fold/unfold"]
+            ScopeExit["Scope Exit -> Instant Bump-Pointer Reset\n(No per-value free; drop list walked only for owned heap refs)"]
+            OuterFrame --- ScopeMark
+            ScopeMark --- InnerFrame
+            InnerFrame -.->|LIFO Reset| ScopeMark
+        end
+
+        subgraph GrowableStack["2. Growable Stacks (N Stacks)"]
+            GrowableVal["Contiguous Value Under Construction\n(Contiguous Array or Packed Blob)"]
+            NoteGrow["Separated from scratch stack!\nPrevents loop scratch from blocking contiguous growth.\nDoubles chunk and relocates if capacity exceeded."]
+        end
+
+        subgraph CountedRegion["3. Counted Regions: Region(r)"]
+            RegHeader["Region Descriptor\n[ Total Refcount | Outset Edges {q1, q2} ]"]
+            C1["Chunk 0 (4 KiB)"]
+            C2["Chunk 1 (8 KiB)"]
+            C3["Chunk 2 (16 KiB)"]
+            RegHeader --> C1
+            C1 --> C2
+            C2 --> C3
+            NoteCR["No headers on individual cells!\nInterior pointers are masked to find descriptor.\nEntire tree freed in one stroke when count reaches 0."]
+        end
+
+        subgraph PerceusHeap["4. Perceus Heap"]
+            HeapCell1["Heap Cell [Header: RC, Tag] | Payload"]
+            HeapCell2["Heap Cell [Header: RC, Tag] | Payload"]
+            ReusePool["Reused in-place via FBIP"]
+        end
+    end

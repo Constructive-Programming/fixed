@@ -1,8 +1,14 @@
 # Fixed Pattern Matching
 
-**Status:** Draft v0.2
+**Status:** Draft v0.3.2
 **Specifies:** pattern syntax, type rules, exhaustiveness/redundancy checking, and match-expression semantics for Fixed v0.4.3 source.
-**Last revised:** 2026-04-30
+**Last revised:** 2026-11-21
+
+**Changes from v0.3.1.** §8.1 no longer says that a function cannot call itself: structural recursion is admitted (`spec/type_system.md` Rule 7.4.h). Its example declares `Overflow` (`spec/effects.md` §3.6, specified and not built). §3.3 says what is built.
+
+**Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): in generic code a `match` reads the variant through the accessor `T.variant` (§8.4); examples destructure the data type `Tuple`, not the capability `Pair`.
+
+**Changes from v0.2.** §8.1's example no longer has a function call itself (functions cannot); it folds the raw subtrees. The or-pattern binder error of Rule M5.5.a is renumbered `E095`: `E093` stays the handler-coverage error of Rule M6.4.c and `spec/effects.md` §5.3. §8.4 says how a `match` reads the variant of a cell and of an immediate under decision P6 (`spec/compilation_model.md` Rules CM3.5, CM8.8). The cross-reference to `spec/memory_management.md` notes that an immediate has no cell to reuse.
 
 **Changes from v0.1.** Resolves OQ-M1 (`..` field elision in struct-destructure patterns → §3.6), OQ-M3 (or-patterns → §5.5), OQ-M4 (guards → §5.6); strengthens Rule M6.2 from "may use refinement caps" to "must use refinement caps". Closes OQ-M2 (refutable handler clause parameters), OQ-M5 (view patterns), OQ-M6 (range patterns — subsumed by guards).
 
@@ -54,7 +60,7 @@ match opt:
     Maybe.Nothing => 0
 ```
 
-A binder shadows enclosing-scope names of the same identifier inside the case body. **Rule M3.2 (Binder uniqueness):** within a single pattern, the same binder name may not appear twice (`Maybe.Pair(x, x)` is a compile error). Linearity within a single pattern forces this.
+A binder shadows enclosing-scope names of the same identifier inside the case body. **Rule M3.2 (Binder uniqueness):** within a single pattern, the same binder name may not appear twice (`Tuple.Tuple(x, x)` is a compile error). Linearity within a single pattern forces this.
 
 ### 3.3 Literal patterns
 
@@ -70,6 +76,8 @@ A binder shadows enclosing-scope names of the same identifier inside the case bo
 | `UNIT_LITERAL` | `()` — matches the unique unit value. |
 
 **Rule M3.3 (Literal type):** the literal's type must match the scrutinee's type. Numeric-literal polymorphism (per type_system.md §5.7) resolves the literal's type from the scrutinee.
+
+**Built today.** Integer, `bool`, `char` and `String` literal patterns, also nested in tuple and variant patterns (`backend/Cases.scala`). Not built: a float literal pattern, whose bitwise equality the backend cannot yet express, and a literal in a `let` pattern; both are `B005` (`docs/decisions/P0-spec-review-2026-11-20.md` §4).
 
 ### 3.4 Data-variant patterns
 
@@ -99,7 +107,7 @@ match d:
 
 ```
 let (a, b) = pair                                 // 2-tuple binding
-let (single,) = unit_tuple                         // 1-tuple binding (mandatory trailing comma)
+let (single,) = unitTuple                         // 1-tuple binding (mandatory trailing comma)
 match triple:
     (0, _, _) => "starts with 0"
     (_, _, last) => last
@@ -112,7 +120,7 @@ match triple:
 `StructDestructurePattern` destructures a value of a single-variant `data` type by field name:
 
 ```
-let Pair { first: x, second: y } = p
+let Tuple { first: x, second: y } = p
 let Config { host, port, debug: d } = cfg     // shorthand: `host` ≡ `host: host`
 ```
 
@@ -194,7 +202,7 @@ match status:
     _ => false
 ```
 
-**Rule M5.5.a (Binder agreement).** Every alternative in an or-pattern must bind exactly the same set of names at exactly the same types. Otherwise: `error[E093]: or-pattern alternatives bind different names`. Bodies may reference any of the common binders.
+**Rule M5.5.a (Binder agreement).** Every alternative in an or-pattern must bind exactly the same set of names at exactly the same types. Otherwise: `error[E095]: or-pattern alternatives bind different names`. Bodies may reference any of the common binders.
 
 ```
 // VALID — both bind `r: f64`:
@@ -203,7 +211,7 @@ match shape:
 
 // ERROR — `Just` binds `x`, `Nothing` binds nothing:
 match opt:
-    Maybe.Just(x) | Maybe.Nothing => x       // E093: x not bound by all alternatives
+    Maybe.Just(x) | Maybe.Nothing => x       // E095: x not bound by all alternatives
 ```
 
 **Rule M5.5.b (Quantity composition).** Each binder's quantity in an or-pattern is the **join** (`⊔`, per `spec/quantities.md` §3.3) over the binder's quantities in each alternative. Since alternatives are mutually exclusive (only one matches per evaluation), the join is the correct combinator — same rule as for `if`/`match` branches (Q5.9).
@@ -266,7 +274,7 @@ The typer uses a standard *pattern-matrix algorithm* (Maranget 2008): the residu
 
 **Rule M6.2 (Refinement-aided exhaustiveness, required).** The typer **must** apply in-scope refinement caps to compute the *reachable value-domain* of the scrutinee. Patterns are matched against this domain rather than the unrefined type. Exhaustiveness is satisfied iff the union of case patterns covers the reachable domain.
 
-When a refinement cap (per type_system.md §6.4 Marker class — e.g., `between(1, 3)`, `multiple_of(2)`, `between(0, 10) + multiple_of(2)`) restricts the scrutinee's domain to a finite set, exhaustiveness checks against that narrowed set. Literal patterns covering the narrowed set certify exhaustiveness without a wildcard:
+When a refinement cap (per type_system.md §6.4 Marker class — e.g., `between(1, 3)`, `multipleOf(2)`, `between(0, 10) + multipleOf(2)`) restricts the scrutinee's domain to a finite set, exhaustiveness checks against that narrowed set. Literal patterns covering the narrowed set certify exhaustiveness without a wildcard:
 
 ```
 fn name(d: u8 is between(1, 3)) -> String =
@@ -319,14 +327,16 @@ Both `match` and the auto-derived `fold` of type_system.md §7.4.a destructure a
 
 ### 8.1 Match semantics
 
-A match case receives the **raw fields** of the matched variant. For recursive types, recursive subtrees are *not* pre-folded — the user can recurse manually if they choose:
+A match case receives the **raw fields** of the matched variant. For recursive types, recursive subtrees are *not* pre-folded: the case receives them as values of the data type. A case that needs a result for a subtree folds it, as below, or calls the function on it, which is structural recursion (`spec/type_system.md` Rule 7.4.h):
 
 ```
-fn count(t: Tree of A) -> u64 =
+fn count(t: Tree of A) -> u64 with Overflow =
     match t:
         Tree.Empty => 0
         Tree.Leaf(_) => 1
-        Tree.Branch(l, _, r) => 1 + count(l) + count(r)   // l, r are raw subtrees
+        Tree.Branch(l, _, r) =>                            // l, r are raw subtrees
+            let size = (s: Tree of A) -> s.fold(() -> 0, (_) -> 1, (lc, _, rc) -> 1 + lc + rc)
+            1 + size(l) + size(r)
 ```
 
 ### 8.2 Fold semantics (recap from type_system.md §7.4.a)
@@ -334,11 +344,11 @@ fn count(t: Tree of A) -> u64 =
 A fold callback for a recursive variant receives **pre-folded** results for `Self`-typed fields and raw values for non-`Self` fields. The fold is the structural catamorphism:
 
 ```
-fn count(t: Tree of A) -> u64 =
+fn count(t: Tree of A) -> u64 with Overflow =
     t.fold(
         () -> 0,                                              // Empty
         (_) -> 1,                                             // Leaf
-        (l_count, _, r_count) -> 1 + l_count + r_count,       // Branch (subtrees pre-folded)
+        (lCount, _, rCount) -> 1 + lCount + rCount,       // Branch (subtrees pre-folded)
     )
 ```
 
@@ -368,6 +378,8 @@ For non-recursive data, the compiler is free to compile `match` via the auto-der
 
 The compiler's `MatchDesugar` pass (per `docs/plans/implementation-plan.md` Phase 4) compiles `match` via Maranget's decision-tree algorithm. For non-recursive `data`, this strategy is equivalent to a fold-based switch and the implementation may choose either lowering. For recursive data, the decision-tree compilation preserves raw subtree access (per §8.1) — `match` is **not** desugared to `fold` in that case. (The implementation plan's "match → fold" terminology is shorthand for this lowering; it does not imply catamorphic pre-folding.)
 
+Dispatch reads the variant from the value's representation. A cell's tag is unique in the link unit, so a `match` on a cell subtracts the type's base, a link-time constant, before it switches (`spec/compilation_model.md` Rule CM8.8, `spec/memory_management.md` Rule PR3.1). An immediate has no cell: its tag is the low byte of the slot, and a single-variant type has no tag (`spec/compilation_model.md` Rule CM3.5). In generic code, where an instance of a parameterised type may be an immediate or a cell depending on its argument witnesses, the `match` reads the variant through the type's accessor `T.variant(x, witnesses)` (`spec/compilation_model.md` Rule CM3.7).
+
 ## 9. Pattern bindings in `let`
 
 `let Pat = Expr` introduces the binders of `Pat` into the rest of the enclosing block.
@@ -376,19 +388,19 @@ The compiler's `MatchDesugar` pass (per `docs/plans/implementation-plan.md` Phas
 
 - Binder: `let x = expr`
 - Tuple: `let (a, b) = pair`
-- Struct destructure: `let Pair { first: key, second: value } = pair`
+- Struct destructure: `let Tuple { first: key, second: value } = pair`
 
 For refutable patterns, use `match`:
 
 ```
 // REFUTABLE — use match:
 match opt:
-    Maybe.Just(v) => use_v(v)
+    Maybe.Just(v) => useV(v)
     Maybe.Nothing => default
 
 // IRREFUTABLE — let is fine:
 let (key, value) = pair
-let Pair { first: key, second: value } = pair
+let Tuple { first: key, second: value } = pair
 ```
 
 **Rule M9.2.** A `let Pat = Expr` binding's quantities are inferred per Rule Q5.8 in `spec/quantities.md`: each binder's quantity is the sum of its usages in the rest of the block.
@@ -436,7 +448,7 @@ The `return(Pat) => ...` clause's `Pat` is similarly irrefutable, matching the S
 | `spec/type_system.md` | Rule 4.1 (typevars), §5.7 (numeric literal polymorphism in literal patterns), §7.4.a (auto-derived fold), §7.6 (GADT deferred) |
 | `spec/quantities.md` | Rule Q5.8 (pattern binder quantities), Rule Q5.9 (branching uses `⊔`) |
 | `spec/effects.md` | §6, §10 — handler clause pattern algebra |
-| `spec/properties.md` (TBD) | Match cases inside `prop` bodies are checked at quantity 0 — same rules apply |
-| `spec/memory_management.md` | Match-bound values' RC and reuse: an exclusively owned scrutinee gives exclusively owned field binders and an unconditionally reusable cell; a shared scrutinee gives shared binders (`spec/quantities.md` Rule Q4.1.b) |
+| `spec/properties.md` | Match cases inside `prop` bodies are checked at quantity 0 — same rules apply |
+| `spec/memory_management.md` | Match-bound values' RC and reuse: an exclusively owned scrutinee gives exclusively owned field binders and, if it is a cell, an unconditionally reusable cell (an immediate has no cell, Rule PR6.3); a shared scrutinee gives shared binders (`spec/quantities.md` Rule Q4.1.b) |
 | `docs/references/scala3-compiler-reference.md` | The dotc PatternMatcher transform (`transform/PatternMatcher.scala`) — Maranget's algorithm; reference implementation |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `typer/Exhaustiveness.scala`; Phase 4: `transform/MatchDesugar.scala` |

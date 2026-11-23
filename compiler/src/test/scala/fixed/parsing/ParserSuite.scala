@@ -178,7 +178,7 @@ class ParserSuite extends FunSuite with ParserTestSupport:
       "<test>",
       """fn f() -> u64 = handle task():
         |    Async.spawn(t) => resume(())
-        |    Async.yield_now() => resume(())
+        |    Async.yieldNow() => resume(())
         |""".stripMargin
     )
     val pr = Parser.parse(src)
@@ -187,9 +187,9 @@ class ParserSuite extends FunSuite with ParserTestSupport:
       case Trees.CompilationUnit(List(Trees.FnDecl(_, _, _, _, _, Some(h: Trees.HandleExpr), _)), _) =>
         assertEquals(h.operationClauses.length, 2)
         h.operationClauses.last match
-          case Trees.OperationClause("Async", "yield_now", params, _, _) =>
+          case Trees.OperationClause("Async", "yieldNow", params, _, _) =>
             assertEquals(params, Nil)
-          case other => fail(s"expected OperationClause Async.yield_now, got $other")
+          case other => fail(s"expected OperationClause Async.yieldNow, got $other")
       case other => fail(s"expected HandleExpr, got $other")
 
   test("M4.8: handle with multi-line block body for an clause"):
@@ -214,8 +214,8 @@ class ParserSuite extends FunSuite with ParserTestSupport:
     val src = SourceFile.fromString(
       "<test>",
       """fn f() -> u64 = do:
-        |    x <- safe_divide(100.0, 3.0)
-        |    y <- safe_divide(x, 2.0)
+        |    x <- safeDivide(100.0, 3.0)
+        |    y <- safeDivide(x, 2.0)
         |    Optional.pure(x + y)
         |""".stripMargin
     )
@@ -363,10 +363,10 @@ class ParserSuite extends FunSuite with ParserTestSupport:
       """data Bounded of (lo: u64, hi: u64):
         |    Bounded(value: u64)
         |
-        |    prop in_range: lo <= Self && Self <= hi
+        |    prop inRange: lo <= Self && Self <= hi
         |
         |fn between(min: u64, max: u64) -> cap of u64 =
-        |    prop in_range: min <= Self && Self <= max
+        |    prop inRange: min <= Self && Self <= max
         |""".stripMargin
     ))
     assert(!pr.hasErrors, pr.diagnostics.toString)
@@ -375,7 +375,7 @@ class ParserSuite extends FunSuite with ParserTestSupport:
     val pr = Parser.parse(SourceFile.fromString(
       "<test>",
       """cap Between(min: u64, max: u64) of u64:
-        |    prop in_range: min <= Self && Self <= max
+        |    prop inRange: min <= Self && Self <= max
         |""".stripMargin
     ))
     assert(!pr.hasErrors, pr.diagnostics.toString)
@@ -395,7 +395,7 @@ class ParserSuite extends FunSuite with ParserTestSupport:
     val pr = Parser.parse(SourceFile.fromString(
       "<test>",
       """cap Stack:
-        |    prop pop_dec: forall (s: Self) suchThat s.size > 0 ->
+        |    prop popDec: forall (s: Self) suchThat s.size > 0 ->
         |        s.pop().size == s.size - 1
         |""".stripMargin
     ))
@@ -463,3 +463,62 @@ class ParserSuite extends FunSuite with ParserTestSupport:
         |""".stripMargin
     ))
     assert(!pr.hasErrors, pr.diagnostics.toString)
+
+  test("MatchCaseList and HandlerClauseList: one case or clause on the `:` line"):
+    val (t, rep) = parse(
+      """fn f(x: u64) -> u64 =
+        |    let y = match x: _ => 0
+        |    let z = g(match y: 1 => 2, handle h(): return(v) => v)
+        |    if z == 0: match z: _ => 1 else: handle k(): Fail.fail(e) => 3
+        |    [match z: _ => 4, 5].length()
+        |fn g(x: u64) -> u64 = match x: n => n
+        |""".stripMargin
+    )
+    assert(!rep.hasErrors, rep.formatAll)
+    t match
+      case Trees.CompilationUnit(List(f: Trees.FnDecl, g: Trees.FnDecl), _) =>
+        f.body match
+          case Some(Trees.Block(List(Trees.LetExpr(_, m: Trees.MatchExpr, _), Trees.LetExpr(_, call, _), _, _), _)) =>
+            assertEquals(m.cases.length, 1)
+            call match
+              case Trees.Apply(_, List(_: Trees.MatchExpr, h: Trees.HandleExpr), _) => assert(h.returnClause.isDefined)
+              case other => fail(s"expected `g` at a match and a handle, got $other")
+          case other => fail(s"expected a block of four statements, got $other")
+        g.body match
+          case Some(m: Trees.MatchExpr) => assertEquals(m.cases.length, 1)
+          case other                    => fail(s"expected a match, got $other")
+      case other => fail(s"expected two functions, got $other")
+
+  test("MatchCaseList and HandlerClauseList: a second case or clause on the line, or below it, is one P001"):
+    List(
+      "    let y = match x: 1 => 0 _ => 2\n" -> "case",
+      "    let y = match x: 1 => 0\n        _ => 2\n" -> "case",
+      "    let y = handle h(): Fail.fail(e) => 0 return(v) => v\n" -> "clause"
+    ).foreach { (body, member) =>
+      val (t, rep) = parse("fn f(x: u64) -> u64 =\n" + body + "    y\nfn after() -> u64 = 0\n")
+      assertEquals(rep.diagnostics.map(_.code), List(fixed.util.DiagCode.P001), body)
+      assert(rep.diagnostics.head.message.contains("one-line body"), rep.formatAll)
+      assert(rep.diagnostics.head.suggestion.exists(_.contains(s"holds one $member")), rep.formatAll)
+      t match
+        case Trees.CompilationUnit(List(f: Trees.FnDecl, a: Trees.FnDecl), _) =>
+          assertEquals(a.sig.name, "after", body)
+          f.body match
+            case Some(Trees.Block(stmts, _)) => assertEquals(stmts.length, 2, body)
+            case other                       => fail(s"expected a block, got $other")
+        case other => fail(s"expected two functions, got $other")
+    }
+
+  test("MatchCaseList: the skip after a second case stops at the `,` the enclosing call waits for"):
+    val (t, rep) = parse("fn f(x: u64) -> u64 = g(match x: 1 => 0 _ =>\n    2, 3)\nfn after() -> u64 = 0\n")
+
+    /** The DEDENT owed by the skipped block is reported at top level (P002), as after a
+      * multi-line lambda argument in the same place.
+      */
+    assertEquals(rep.diagnostics.map(_.code), List(fixed.util.DiagCode.P001, fixed.util.DiagCode.P002), rep.formatAll)
+    t match
+      case Trees.CompilationUnit(
+            List(Trees.FnDecl(_, _, _, _, _, Some(Trees.Apply(_, args, _)), _), _: Trees.Error, a: Trees.FnDecl),
+            _
+          ) =>
+        assertEquals((args.length, a.sig.name), (2, "after"))
+      case other => fail(s"expected `f` calling `g` at two arguments, then `after`, got $other")

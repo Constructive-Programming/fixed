@@ -5,10 +5,15 @@ import scala.collection.immutable.{BitSet, IntMap}
 import fixed.core.{SymbolId, Type}
 
 /** A persistent substitution over [[Type.TypeVar]]s. `bindings` is indexed by variable id (ids are
-  * dense); an unbound variable's slot holds the variable itself. A variable may be required to be `Numeric`;
-  * a literal's variable carries the type it defaults to when nothing else solves it (`i64` /
-  * `f64`); a variable instantiated from a bounded type variable keeps that bound, so members
-  * resolve on it before it is solved. `tuple` is the `Tuple` data type, which a 2-tuple equals.
+  * dense); an unbound variable's slot holds the variable itself. A variable may be required to be
+  * `Numeric`; a literal's variable carries the type it defaults to when nothing else solves it
+  * (`i64` / `f64`). A float literal's variable may be solved to no primitive type except `f32` or
+  * `f64`; an integer literal that meets it takes the float literal's default: `3 + 2.5` is `f64`,
+  * and `x + 2.5` with `x: u64` is a mismatch. A variable instantiated from a bounded type
+  * parameter keeps that bound: members resolve on it before it is solved, and every type it is
+  * solved to must satisfy it (`bind`). A `diverging` variable, the type of a `handle` its clauses
+  * left unconstrained, is `!` unless solved. `tuple` is the `Tuple` data type, which a 2-tuple
+  * equals.
   *
   * `numeric` is supplied by the typer: it decides whether a solved type satisfies `Numeric`.
   */
@@ -19,17 +24,18 @@ final case class Unifier(
     varBounds: IntMap[List[Type]],
     tuple: Option[SymbolId],
     next: Int,
-    obligations: List[(Type, Type)]
+    obligations: List[(Type, Type)],
+    paramBounds: SymbolId => List[Type] = _ => Nil,
+    diverging: BitSet = BitSet.empty
 ):
 
-  def fresh(numeric: Boolean, default: Option[Type], bounds: List[Type] = Nil): (Unifier, Type) =
+  def fresh(numeric: Boolean, default: Option[Type]): (Unifier, Type) =
     val v = Type.TypeVar(next)
     (
       copy(
         bindings = bindings :+ v,
         numericVars = if numeric then numericVars.incl(next) else numericVars,
         defaults = default.fold(defaults)(defaults.updated(next, _)),
-        varBounds = if bounds.isEmpty then varBounds else varBounds.updated(next, bounds),
         next = next + 1
       ),
       v
@@ -54,13 +60,18 @@ final case class Unifier(
   /** `t` with every bound variable replaced, recursively. */
   def zonk(t: Type): Type = resolve(t).mapChildren(zonk)
 
-  /** Solve every still-unbound literal variable to its default. */
-  def applyDefaults: Unifier =
-    defaults.foldLeft(this) { case (u, (id, d)) =>
+  /** Solve every still-unbound literal variable to the default of the variable it resolves to:
+    * `bind` moves a float literal's default there, so `3 + 2.5` defaults to `f64` whichever literal
+    * comes first; a literal's own default `d` is used only if that variable has none, which `bind`
+    * never leaves. Then every still-unbound `diverging` variable (the type of a `handle` its
+    * clauses left unconstrained) is `!`.
+    */
+  def applyDefaults: Unifier = (defaults.toList ++ diverging.toList.map(_ -> Type.NeverType)).foldLeft(this) {
+    case (u, (id, d)) =>
       u.resolve(Type.TypeVar(id)) match
-        case Type.TypeVar(free) => u.copy(bindings = u.bindings.updated(free, d))
+        case Type.TypeVar(free) => u.copy(bindings = u.bindings.updated(free, defaults.getOrElse(free, d)))
         case _                  => u
-    }
+  }
 
   /** Require `t` to be `Numeric`. */
   def requireNumeric(t: Type, numeric: Type => Boolean): Solved =
@@ -71,7 +82,7 @@ final case class Unifier(
       case _                       => Left(())
 
   /** Make `a` and `b` equal. `Left` carries no message: the caller reports the mismatch with both
-    * zonked types. `is ...` bounds accept any type until capability checking lands (M6).
+    * zonked types. Unifying a type with an `is ...` bound records an obligation ([[oblige]]).
     */
   def unify(a: Type, b: Type, numeric: Type => Boolean): Either[Unit, Unifier] =
     if a eq b then Right(this) else unifyResolved(resolve(a), resolve(b), numeric)
@@ -94,7 +105,7 @@ final case class Unifier(
       case (t, Type.TypeVar(y))                                         => bind(y, t, numeric)
       case (bound @ Capabilities(xs), value @ Capabilities(ys))   => oblige(value, bound).unifyShared(xs, ys, numeric)
       case (bound: Type.IsBound, value)                           => Right(oblige(value, bound))
-      case (_, _: Type.IsBound)                                   => Right(this)
+      case (expected, value: Type.IsBound)                        => Right(oblige(expected, value))
       case (Type.ArrowType(l1, r1, _), Type.ArrowType(l2, r2, _)) =>
         unify(l1, l2, numeric).flatMap(_.unify(r1, r2, numeric))
       case (Type.TupleType(xs), Type.TupleType(ys)) if xs.size == ys.size => unifyAll(xs, ys, numeric)
@@ -107,9 +118,9 @@ final case class Unifier(
       case (Type.TypeRef(t, List(x, y)), Type.TupleType(List(a, b))) if tuple.contains(t) =>
         unifyAll(List(x, y), List(a, b), numeric)
 
-      /** A capability used as a type is an anonymous bound: checked by capability closure (M6). */
-      case (bound: Type.CapRef, value) => Right(oblige(value, bound))
-      case (_, _: Type.CapRef)         => Right(this)
+      /** A capability used as a type is an anonymous bound: an obligation, like `is C`. */
+      case (bound: Type.CapRef, value)    => Right(oblige(value, bound))
+      case (expected, value: Type.CapRef) => Right(oblige(expected, value))
       case (Type.Layer(d1, xs, s1), Type.Layer(d2, ys, s2)) if d1 == d2 && xs.size == ys.size =>
         unifyAll(xs :+ s1, ys :+ s2, numeric)
       case (x, y) if x == y => Right(this)
@@ -124,7 +135,9 @@ final case class Unifier(
 
   /** `value` must satisfy the expected `bound`: an obligation the capability-closure pass checks
     * once types are solved (`docs/plans/phase-3.1-capability-closure.md` §3.1). An abstract value
-    * met where a concrete type is expected is not yet an obligation (constructor resolution, §3.7).
+    * of `is C` or `C` met where a type `T` is expected obliges `T`, in the value position, to
+    * satisfy `C`: only such a type can represent it (`f(Ordering.gt)` where `f` takes a data type
+    * without `Ordering`).
     */
   private def oblige(value: Type, bound: Type): Unifier = copy(obligations = (value, bound) :: obligations)
 
@@ -145,15 +158,29 @@ final case class Unifier(
     if applied.size > full.size then Left(())
     else copy(bindings = bindings.updated(x, head)).unifyAll(applied, full.takeRight(applied.size), numeric)
 
-  /** Bounds are not yet checked against each other (M6), but a capability both sides name has
-    * its arguments unified: `is Optional of A` against `is Optional of u64` solves `A`.
-    */
   /** Two applications of the same constructor. A higher-kinded type variable used bare (`M`) and
     * applied (`M of A`) names the same type.
     */
   private def sameHead(xs: List[Type], ys: List[Type], numeric: Type => Boolean): Solved =
-    if xs.size == ys.size then unifyAll(xs, ys, numeric) else if xs.isEmpty || ys.isEmpty then Right(this) else Left(())
+    if xs.size == ys.size then
+      xs.zip(ys).foldLeft[Solved](Right(this)) { case (u, (x, y)) => u.flatMap(_.argument(x, y, numeric)) }
+    else if xs.isEmpty || ys.isEmpty then Right(this)
+    else Left(())
 
+  /** `!` fits every type (`spec/type_system.md` §5.6), so it fixes no variable it meets, which a
+    * later use may still solve, but as an argument of a type (`List of !`) it is written, never the
+    * type of a value that diverges: there it fixes a free variable in the same place (`[]`). A
+    * literal's variable or a bounded one keeps its constraints.
+    */
+  private def argument(x: Type, y: Type, numeric: Type => Boolean): Solved =
+    (resolve(x), resolve(y)) match
+      case (Type.NeverType, Type.TypeVar(v)) if !constrained(v) => bind(v, Type.NeverType, numeric)
+      case (Type.TypeVar(v), Type.NeverType) if !constrained(v) => bind(v, Type.NeverType, numeric)
+      case _                                                    => unify(x, y, numeric)
+
+  /** A capability both sides name has its arguments unified: `is Optional of A` against
+    * `is Optional of u64` solves `A`.
+    */
   private def unifyShared(left: List[Type], right: List[Type], numeric: Type => Boolean): Solved =
     val pairs =
       for
@@ -181,17 +208,40 @@ final case class Unifier(
       val bound = copy(bindings = bindings.updated(id, t))
       t match
         case Type.TypeVar(other) =>
+          /** A literal meeting a bounded variable is checked here against the bounds, so that a
+            * literal solved only by its default is checked too; a later solution of the literal is
+            * not checked again (below).
+            */
+          val literal = (varBounds.contains(id) && defaults.contains(other)) ||
+            (varBounds.contains(other) && defaults.contains(id))
+          val checked = if literal then bound.oblige(t, Type.IsBound(boundsOf(id) ++ boundsOf(other))) else bound
           Right(
-            bound.copy(
+            checked.copy(
               numericVars = if numericVars.contains(id) then numericVars.incl(other) else numericVars,
               varBounds =
                 if boundsOf(id).isEmpty then varBounds else varBounds.updated(other, boundsOf(other) ++ boundsOf(id)),
-              defaults =
-                defaults.get(id).filterNot(_ => defaults.contains(other)).fold(defaults)(defaults.updated(other, _))
+              /** A float literal's default wins over an integer literal's. */
+              defaults = defaults.get(id).filter(d => !defaults.contains(other) || Unifier.isFloat(d))
+                .fold(defaults)(defaults.updated(other, _))
             )
           )
         case _ if numericVars.contains(id) && !numeric(t) => Left(())
-        case _                                            => Right(bound)
+
+        /** A float literal's variable at a primitive type other than `f32` or `f64` is a mismatch. */
+        case p: Type.PrimType if defaults.get(id).exists(Unifier.isFloat) && !Unifier.isFloat(p) => Left(())
+
+        /** An instantiated bounded type parameter (named, anonymous or an `of` parameter) meets a
+          * value: the value must satisfy the bounds, and a capability both name has its arguments
+          * unified, as when the bound was a type of its own.
+          */
+        case _ if varBounds.contains(id) =>
+          val checked = if defaults.contains(id) then bound else bound.oblige(t, Type.IsBound(boundsOf(id)))
+          val written = t match
+            case Capabilities(ys)     => ys
+            case Type.TypeRef(p, Nil) => paramBounds(p)
+            case _                    => Nil
+          checked.unifyShared(boundsOf(id), written, numeric)
+        case _ => Right(bound)
 
   private def occurs(id: Int, t: Type): Boolean =
     resolve(t) match
@@ -211,6 +261,11 @@ private object Capabilities:
 type Solved = Either[Unit, Unifier]
 
 object Unifier:
+  /** A primitive type a float literal may take: `Numeric` has no `fromF64` yet (`spec/stdlib.md`
+    * §4.9). At a type parameter it is accepted, and the backend refuses an integer instance.
+    */
+  def isFloat(t: Type): Boolean = t == Type.PrimType("f32") || t == Type.PrimType("f64")
+
   /** A type constructor (a variable's solution) applied to `args`: `M := Maybe` makes `M of A` `Maybe of A`. */
   def applyHead(head: Type, args: List[Type]): Type =
     head match

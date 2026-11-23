@@ -1,16 +1,34 @@
 # Fixed Standard Library — Core Types and Capabilities
 
-**Status:** Draft v0.1
-**Specifies:** the core data types and capabilities Fixed's stdlib provides; the cap-vs-data classification each one takes; the auto-derived satisfactions.
-**Last revised:** 2026-05-01
+**Status:** Draft v0.3.5
+**Specifies:** the core data types and capabilities Fixed's stdlib provides; the cap-vs-data classification each one takes; the auto-derived satisfactions; the arithmetic effects and their handlers.
+**Last revised:** 2026-11-21
+
+**Changes from v0.3.4.** New §4.14: `cap Sequencing`, as the prelude declares it, since `spec/type_system.md` Rule 5.10 builds list literals through it. §4.9 says that `i128` and `u128` do not satisfy `Numeric` in the compiler yet. §5: the prelude gives `List satisfies Sequencing` its bodies already; `inspect` and `trace` are not built.
+
+**Changes from v0.3.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Shadowing of prelude names"). §1: the prelude is the package `std.prelude`; a program may hide a prelude name, and reaches the prelude's entity with `use std.prelude.<Name> as …` (`spec/type_system.md` §4.3). §3.5 and §5 say what hiding `Optional`, `inspect` or `trace` does, in those terms.
+
+**Changes from v0.3.2.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"). §4.9: the requirements of `Numeric` declare `Overflow` and `DivideByZero` (`spec/effects.md` Rule E3.6.c), and `Numeric` gains the members without effects (`wrapping…`, `saturating…`, `checked…`). New §4.13: the prelude's effects `Overflow` and `DivideByZero`, the alias `Arithmetic`, the data type `ArithmeticError`, the handlers `arithmeticOrNone` and `arithmeticOrError`, and the widening form `widen`. Not built.
+
+**Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). `Clone` is derived only on request (§4.11). Naming: value-level names are camelCase, type-level names PascalCase (§1); the members of this document are renamed accordingly.
+
+**Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the prelude declares the diagnostic sinks `inspect` and `trace` (§5); the reference to struct-destructure patterns names Rule M3.6.b; a cost prop binds a satisfaction, not a satisfying type (§4.12).
+
+**Changes from v0.2.** Applies decision record P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`). New §3.6: `data Order` (`Less`, `Equal`, `Greater`) satisfies `Ordering` and is an immediate (D17). §4.11: `clone` returns an equal value; the satisfier chooses whether it shares or copies, and says which in a cost prop; a type that must not be duplicated does not satisfy `Clone` (D10). The unexplained "deep copy or count increment" alternative is gone. §5: "canonical satisfaction" now means only disambiguation rule 4 of `spec/type_system.md` Rule 6.5.5. `Maybe satisfies Optional` and `Order satisfies Ordering` are canonical in that sense, and the old sentence that `Optional` and `Ordering` have none is withdrawn. Every declaration of the prelude is `pub` (§1). Malformed prelude text corrected: `bool satisfies Boolean of Self` is now a built-in satisfaction with no mapping, `!=` desugars to `!a.eq(b)`, the `Optional` member is spelled `orElse` (as in §4.1; `spec/type_system.md` §6.1 now agrees), and satisfactions list the members they need. `Json`'s fields carry `Show + Eq`, without which its derived `Show` and `Eq` would have nothing to call (`spec/type_system.md` Rule 5.1.3).
+
+**Changes from v0.1.** New §4.12: provisional cost contracts for the core capabilities (`spec/cost.md`). §4.11 no longer says a caller copies the demanded part: only the shared entry of a `fip fn` does (`spec/quantities.md` Rule Q9.3). §3 states how a `data` type's layout reaches code that does not know it.
 
 ## 1. Scope
 
-This document is the normative source for which built-in stdlib types are `data` types (closed sums or product records the programmer can match on by variant) and which are `cap`s (abstract capabilities the compiler picks a representation for). It also records the canonical `satisfies` declarations that bridge them.
+This document is the normative source for which built-in stdlib types are `data` types (closed sums or product records the programmer can match on by variant) and which are `cap`s (abstract capabilities the compiler picks a representation for). It also records the prelude's `satisfies` declarations that bridge them.
+
+The prelude is the package `std.prelude`. Every declaration this document gives is `pub` in it (`spec/type_system.md` §8.6), and the code below writes `pub` on each. Its names are in scope everywhere, after a package's own declarations and `use`s. A package may declare a name the prelude declares, which then means the package's entity there (with `warning[W060]`); the prelude's stays reachable as `std.prelude.<Name>` through `use std.prelude.List as PreludeList`. Literals, operators, the built-in `show` and the derivation rules always mean the prelude's entities (`spec/type_system.md` §4.3).
+
+**Naming (Rule S1.1).** Value-level names are written in camelCase: functions, members of capabilities and of data types, effect operations, parameters, fields, bindings and props (`fromI64`, `isEmpty`, `foldRight`, `printLine`). Type-level names are written in PascalCase: data types, variants, capabilities, effects, type variables and named satisfactions. The standard library, the examples and this specification follow the convention without exception. The grammar fixes only the case of the first letter (`spec/syntax_grammar.ebnf`); the rest is a convention, which the compiler may report as a warning and never as an error.
 
 It does **not** specify:
 - The full method surface of each cap (see `stdlib/*.fixed` source once implemented in Phase 5).
-- Effect-only stdlib items (`Console`, `FileSystem`, etc.) — see `spec/effects.md` and forthcoming `stdlib/io.fixed`.
+- Effect-only stdlib items outside the prelude (`Console`, `FileSystem`, etc.) — see `spec/effects.md` and forthcoming `stdlib/io.fixed`. The prelude's arithmetic effects are in §4.13.
 
 ## 2. Classification (normative)
 
@@ -21,28 +39,31 @@ It does **not** specify:
 | `Tuple`       | data | Single-variant product type (the concrete carrier behind `Pair`)       |
 | `Nat`         | data | Closed sum (`Zero` + `Succ`) — recursion-scheme example                |
 | `Maybe`       | data | Closed sum (`Just` + `Nothing`); the prelude's satisfier of `Optional` (§3.5) |
+| `Order`       | data | Closed sum (`Less` + `Equal` + `Greater`); the prelude's satisfier of `Ordering` (§3.6) |
+| `ArithmeticError` | data | Closed sum (`Overflowed` + `DividedByZero`); the error of `arithmeticOrError` (§4.13) |
 | `Optional`    | cap  | Abstract presence-or-absence; representation chosen per use            |
 | `Result`      | cap  | Abstract success-or-failure; representation chosen per use             |
-| `Pair`        | cap  | Abstract two-projection container; `Tuple` is the canonical satisfier |
-| `Ordering`    | cap  | Abstract `<`/`==`/`>` outcome; representation chosen per use           |
+| `Pair`        | cap  | Abstract two-projection container; `Tuple` is the prelude's satisfier |
+| `Ordering`    | cap  | Abstract `<`/`==`/`>` outcome; `Order` is the prelude's satisfier      |
 | `Boolean`     | cap  | Abstract two-state with `fold`; backed by primitive `bool`             |
 | `Empty`       | cap  | Abstract "has no inhabitants"                                          |
+| `Sequencing`  | cap  | Abstract ordered sequence built by `cons` and `empty`; what a list literal is built through (§4.14) |
 | `Eq`          | cap  | `==`/`!=` operator support (§4.7)                                       |
 | `Ord`         | cap  | `<`/`<=`/`>`/`>=` operator support, extends `Eq` (§4.8)                 |
 | `Numeric`     | cap  | `+`/`-`/`*`/`/`/`%` operator support, extends `Eq + Ord` (§4.9)         |
 | `Show`        | cap  | `.show -> String` (§4.10)                                                |
-| `Clone`       | cap  | Explicit `.clone()`; never needed for ownership (§4.11)                  |
+| `Clone`       | cap  | Explicit `.clone()`: an equal value on the heap, for a value the program knows is long-lived (§4.11) |
 
 > **Update from prior drafts.** Earlier drafts of `docs/plans/implementation-plan.md` listed `Pair` and `Ordering` as data types. The classification above supersedes that — they are caps, with `Tuple` (new) as the canonical concrete satisfier of `Pair`. See §6 for migration guidance.
 
 ## 3. Data declarations (normative shape)
 
-These are the shapes programmers may match on. The compiler still owns the representation for each (e.g., `List` may be backed by linked list or array depending on use).
+These are the shapes programmers may match on. The compiler still owns the representation for each (e.g., `List` may be backed by linked list or array depending on use). A value carries its representation by witness to code that does not know it (`spec/compilation_model.md` §4), so the choice never becomes part of a package's ABI.
 
 ### 3.1 `data List`
 
 ```
-data List of A:
+pub data List of A:
     Cons(head: A, tail: List of A)
     Nil
 ```
@@ -50,19 +71,21 @@ data List of A:
 ### 3.2 `data Json`
 
 ```
-data Json:
+pub data Json:
     Null
     Bool(value: bool)
     Number(value: f64)
     String(value: String)
-    Array(elements: is Sequencing of Json)
-    Object(fields: is Map of (String, Json))
+    Array(elements: is Sequencing of Json + Show + Eq)
+    Object(fields: is Map of (String, Json) + Show + Eq)
 ```
+
+The two anonymous bounds are choice points (`spec/type_system.md` Rule 4.1.a): one representation for the elements of every `Json` array, and one for the fields of every object, chosen when the application is linked. They carry `Show + Eq` because the derived `Json satisfies Show` and `Json satisfies Eq` (§5) call `show` and `eq` on them (`spec/type_system.md` Rule 5.1.3).
 
 ### 3.3 `data Tuple`
 
 ```
-data Tuple of (A, B):
+pub data Tuple of (A, B):
     Tuple(first: A, second: B)
 ```
 
@@ -71,7 +94,7 @@ This is the single-constructor sugar form. Construction: `Tuple(x, y)`. Destruct
 ### 3.4 `data Nat`
 
 ```
-data Nat:
+pub data Nat:
     Zero
     Succ(pred: Nat)
 ```
@@ -79,26 +102,69 @@ data Nat:
 ### 3.5 `data Maybe`
 
 ```
-data Maybe of A:
+pub data Maybe of A:
     Just(value: A)
     Nothing
 
-Maybe satisfies Optional:
+pub Maybe satisfies Optional:
     Just as some
     Nothing as none
 ```
 
-The prelude's satisfier of `Optional` (§4.1), so a program that uses `Optional` without declaring a data type for it has a representation. A program that declares its own `cap Optional` hides the prelude's, together with this satisfaction. Added for the Phase 4.0 backend slice (`docs/plans/phase-4.0-backend-slice.md` §7.3); M11's built-in representation candidates may later make it unnecessary.
+The prelude's satisfier of `Optional` (§4.1), so a program that uses `Optional` without declaring a data type for it has a representation. It is declared in `Optional`'s own package, so it is the canonical satisfaction of `Optional` in the sense of §5: it wins a tie, and nothing else. A program that declares its own `cap Optional` hides the prelude's name (`spec/type_system.md` Rule 4.3.a). This satisfaction still serves `std.prelude.Optional`, which the prelude's own code and the program's `use std.prelude.Optional as …` reach, and never the program's capability. Added for the Phase 4.0 backend slice (`docs/plans/phase-4.0-backend-slice.md` §7.3); M11's built-in representation candidates may later make it unnecessary.
+
+### 3.6 `data Order`
+
+```
+pub data Order:
+    Less
+    Equal
+    Greater
+
+pub Order satisfies Ordering:
+    Less as lt
+    Equal as eq
+    Greater as gt
+```
+
+The prelude's satisfier of `Ordering` (§4.4), so `Ord.compare -> is Ordering` has a representation (P6 D17). It holds no reference and fits in one byte, so it is an immediate: it travels inside the slot, with no cell (`spec/compilation_model.md` Rule CM3.5). A program may `match` on an `Order` value. On an `is Ordering` value it uses `fold` (§4.4). Like `Maybe`, it is the canonical satisfaction of its capability in the sense of §5 only.
+
+
+### 3.7 `String`
+
+**Rule S3.7 (Strings are UTF-8).** A `String` is a sequence of Unicode scalar values, held as valid UTF-8. No `String` holds bytes that are not valid UTF-8: every way to make one either cannot produce such bytes or checks them. (Owner's decision, fourth round of P6.)
+
+- **Order.** `String satisfies Ord` compares by Unicode code point, a shorter string before any string it is a prefix of. For valid UTF-8 this is the order of the bytes compared as unsigned values, which is how it is implemented. It is not alphabetical order in any language: `"Z" < "a"`.
+- **Equality.** `String satisfies Eq` compares code points. No Unicode normalisation is applied: a precomposed character and the same character written with a combining mark are different strings (confirmed by the owner). Canonical equivalence can come later as a library function and a named satisfaction of `Eq` (`spec/type_system.md` Rule 8.4.c).
+- **Collation and normalisation** are library matters: a named satisfaction (`String satisfies Ord named …`, `spec/type_system.md` Rule 8.4.c) selected by `using`, with the locale as an explicit value.
+- **Where bytes come in.** A string literal is checked by the scanner. Text read from outside the program (`Console.readLine`, and later files and sockets) is checked where it enters; text that is not valid UTF-8 does not become a `String`. Such an operation performs the abortive effect `Decode` (Rule S3.7.a).
+
+**Rule S3.7.a (Decoding).** (Owner's decision, fourth round of P6.)
+
+```
+pub effect Decode:
+    fn invalidUtf8(at: u64) -> !            // byte offset of the first invalid sequence
+
+Console.readLine  -> String with Console + Decode
+Console.readBytes -> Bytes  with Console    // the raw bytes; no check
+String.fromUtf8(bytes: Bytes) -> String with Decode
+```
+
+`Bytes` is a sequence of `u8` with no claim about its content. `readLine` is `readBytes` followed by `String.fromUtf8`. The handlers follow the arithmetic ones (`spec/effects.md` §3.6): one that turns `Decode` into an `Optional`, one that turns it into a `Result`. An unhandled `Decode` at `main` aborts with a message that gives the offset. Nothing substitutes replacement characters silently; a program that wants them calls a library function that says so.
+
+The effect is named `Decode` and has the one operation above; later decoders add operations to the same effect. `Bytes` is a named prelude type that satisfies `Sequencing of u8`, `Eq` and `Ord` (bytewise); the runtime may back it with a flat buffer, so `readBytes` builds no cell per byte. (Confirmed by the owner, fourth round of P6.)
+
+Built today: the comparison and the equality. Not built: the check on input, the effect `Decode`, `Bytes`, `readBytes` and `fromUtf8`; `Console.readLine` passes bytes through unchecked.
 
 ## 4. Capability declarations (normative shape)
 
 ### 4.1 `cap Optional`
 
 ```
-cap Optional extends Functor + Folding:
+pub cap Optional extends Functor + Folding:
     Self.fn some(value: Part) -> Self
     Self.fn none -> Self
-    fn fold(on_some: Part -> R, on_none: () -> R) -> R
+    fn fold(onSome: Part -> R, onNone: () -> R) -> R
     fn isDefined -> bool = self.fold((_) -> true, () -> false)
     fn orElse(other: Self) -> Self = self.fold((_) -> self, () -> other)
 ```
@@ -106,16 +172,16 @@ cap Optional extends Functor + Folding:
 ### 4.2 `cap Result`
 
 ```
-cap Result of (E, A):
+pub cap Result of (E, A):
     Self.fn ok(value: A) -> Self
     Self.fn err(error: E) -> Self
-    fn fold(on_ok: A -> R, on_err: E -> R) -> R
+    fn fold(onOk: A -> R, onErr: E -> R) -> R
 ```
 
 ### 4.3 `cap Pair`
 
 ```
-cap Pair of (A, B):
+pub cap Pair of (A, B):
     Self.fn pair(a: A, b: B) -> Self
     fn first -> A
     fn second -> B
@@ -124,11 +190,11 @@ cap Pair of (A, B):
 ### 4.4 `cap Ordering`
 
 ```
-cap Ordering:
+pub cap Ordering:
     Self.fn lt -> Self
     Self.fn eq -> Self
     Self.fn gt -> Self
-    fn fold(on_lt: () -> R, on_eq: () -> R, on_gt: () -> R) -> R
+    fn fold(onLt: () -> R, onEq: () -> R, onGt: () -> R) -> R
 ```
 
 Programmers do not `match` on an `is Ordering` value — they `.fold(...)`.
@@ -136,10 +202,10 @@ Programmers do not `match` on an `is Ordering` value — they `.fold(...)`.
 ### 4.5 `cap Boolean`
 
 ```
-cap Boolean:
+pub cap Boolean:
     Self.fn yes -> Self
     Self.fn no -> Self
-    fn fold(on_yes: () -> R, on_no: () -> R) -> R
+    fn fold(onYes: () -> R, onNo: () -> R) -> R
     fn not -> Self = self.fold(() -> Self.no, () -> Self.yes)
 ```
 
@@ -154,7 +220,7 @@ Per the v0.4.6 grammar (`UnaryExpr`), prefix `!` is single-arity: `!!a` is not a
 ### 4.6 `cap Empty`
 
 ```
-cap Empty:
+pub cap Empty:
     Self.fn empty -> Self
 ```
 
@@ -163,16 +229,23 @@ A constructor-only cap. Common base for collection caps.
 ### 4.7 `cap Eq`
 
 ```
-cap Eq:
+pub cap Eq:
     fn eq(other: Self) -> bool
 ```
 
-The `==` operator desugars to `.eq(other)`; `!=` desugars to `!.eq(other)`. Auto-derived for any `data` whose every field type satisfies `Eq` (compiler-generated component-wise equality).
+Operator desugaring:
+
+```
+a == b     ≡   a.eq(b)
+a != b     ≡   !a.eq(b)          // ≡ a.eq(b).not; `!` applies to the whole call (UnaryExpr)
+```
+
+Auto-derived for any `data` whose every field type satisfies `Eq` (compiler-generated component-wise equality).
 
 ### 4.8 `cap Ord`
 
 ```
-cap Ord extends Eq:
+pub cap Ord extends Eq:
     fn compare(other: Self) -> is Ordering
 ```
 
@@ -190,15 +263,41 @@ a >= b     ≡   a.compare(b).fold(() -> false, () -> true,  () -> true)
 ### 4.9 `cap Numeric`
 
 ```
-cap Numeric extends Eq + Ord:
-    Self.fn from_i64(n: i64) -> Self
-    fn add(other: Self) -> Self
-    fn sub(other: Self) -> Self
-    fn mul(other: Self) -> Self
-    fn div(other: Self) -> Self      // truncating for integers, IEEE for floats
-    fn rem(other: Self) -> Self      // remainder; pairs with div
-    fn negate -> Self                 // additive inverse — `-x ≡ x.negate`
+pub cap Numeric extends Eq + Ord:
+    Self.fn fromI64(n: i64) -> Self with Overflow
+    fn add(other: Self) -> Self with Overflow
+    fn sub(other: Self) -> Self with Overflow
+    fn mul(other: Self) -> Self with Overflow
+    fn div(other: Self) -> Self with Arithmetic   // truncating for integers, IEEE for floats
+    fn rem(other: Self) -> Self with Arithmetic   // remainder; pairs with div
+    fn negate -> Self with Overflow                // additive inverse — `-x ≡ x.negate`
+
+    // Members without `Overflow` (spec/effects.md Rule E3.6.i)
+    fn wrappingAdd(other: Self) -> Self
+    fn wrappingSub(other: Self) -> Self
+    fn wrappingMul(other: Self) -> Self
+    fn wrappingNegate -> Self
+    fn wrappingDiv(other: Self) -> Self with DivideByZero
+    fn wrappingRem(other: Self) -> Self with DivideByZero
+    fn saturatingAdd(other: Self) -> Self
+    fn saturatingSub(other: Self) -> Self
+    fn saturatingMul(other: Self) -> Self
+    fn saturatingNegate -> Self
+    fn saturatingDiv(other: Self) -> Self with DivideByZero
+    fn checkedAdd(other: Self) -> is Optional of Self =
+        handle self.add(other):
+            Overflow.overflow() => Optional.none
+            return(v) => Optional.some(v)
+    fn checkedSub(other: Self) -> is Optional of Self = ...
+    fn checkedMul(other: Self) -> is Optional of Self = ...
+    fn checkedNegate -> is Optional of Self = ...
+    fn checkedDiv(other: Self) -> is Optional of Self = ...
+    fn checkedRem(other: Self) -> is Optional of Self = ...
 ```
+
+Each `checked…` member has the default body shown for `checkedAdd`, around its own member; `checkedDiv` and `checkedRem` also map `DivideByZero.divideByZero()` to `Optional.none`. The body constructs the requirement's own anonymous result (`spec/type_system.md` Rule 5.1.2), which is why it does not call `arithmeticOrNone` (§4.13), whose result is another choice point.
+
+**Effects.** The rows are those of `spec/effects.md` Rule E3.6.c. A satisfaction's member may perform less than its requirement declares: the integer types perform `Overflow` and `DivideByZero` exactly where Rule E3.6.b says, `f32` and `f64` perform neither, and an operation whose range is proved performs nothing (Rule E3.6.d). A call on a value of a type parameter has the requirement's row. `wrapping…` computes modulo 2^n, `saturating…` gives the nearest value of the range, and `checked…` gives `Optional.none` where the plain member would perform an effect; on `f32` and `f64` the wrapping and saturating members are the IEEE 754 operations. The `checked…` members have default bodies (below); a program's satisfaction of `Numeric` defines the `wrapping…` and `saturating…` members, which have none, since they depend on the range of the type *(author's choice; the owner's confirmed choice puts them on `Numeric`)*.
 
 Operator desugaring:
 
@@ -213,68 +312,200 @@ a % b      ≡   a.rem(b)
 
 Per the v0.4.6 grammar (`UnaryExpr`), prefix `-` is single-arity: `--a` is not admitted; iterate via parens (`-(-a)`) or call `.negate` directly.
 
-Numeric-literal polymorphism (`type_system.md` §5.7) goes through `Self.fn from_i64`: an integer literal in a `Numeric`-bounded position is desugared to `Self.from_i64(LITERAL)`. Float literals desugar to a `from_f64` overload (forthcoming; deferred until float-spec lands).
+Numeric-literal polymorphism (`type_system.md` §5.7) goes through `Self.fn fromI64`: an integer literal in a `Numeric`-bounded position is desugared to `Self.fromI64(LITERAL)`. Float literals desugar to a `fromF64` overload (forthcoming; deferred until float-spec lands).
 
-All built-in primitive numeric types — `i8`/`i16`/`i32`/`i64`/`i128`, `u8`/`u16`/`u32`/`u64`/`u128`, `f32`/`f64` — satisfy `Numeric` (compiler-provided).
+All built-in primitive numeric types — `i8`/`i16`/`i32`/`i64`, `u8`/`u16`/`u32`/`u64`, `f32`/`f64` — satisfy `Numeric` (compiler-provided).
+
+**Built today.** The prelude's `Numeric` declares the seven arithmetic members without rows; `+`, `-`, `*` wrap, and none of the members without effects exist (`spec/effects.md` §3.6, "Built today"). The language has no 128-bit integers (owner's decision, fourth round of P6): the widest integer has 64 bits. The names `i128` and `u128` are reserved; a program that uses one, as a type or as a name it declares, gets `error[T032]: i128 is reserved; the widest integer type is i64`. They return when the layout of values wider than one slot is built and measured (`spec/compilation_model.md` OQ-CM7), unless ranges carried by types answer the need first (`spec/type_system.md` OQ-T3).
 
 ### 4.10 `cap Show`
 
 ```
-cap Show:
+pub cap Show:
     fn show -> String
 ```
 
-Convert a value to a human-readable `String`. Auto-derived for `data` types whose every field type satisfies `Show` (component-wise concat with constructor name and parens).
+Convert a value to a human-readable `String`. `Show` is a lawful capability: `show` on a value of a type parameter needs `T is Show` (`spec/type_system.md` Rule 5.1.3). It is not the diagnostic mechanism. `inspect` and `trace` print a value of any type with no bound (`spec/diagnostics.md`). Auto-derived for `data` types whose every field type satisfies `Show` (component-wise concat with constructor name and parens).
 
 All primitive types (`bool`, integer types, `f32`, `f64`, `String`, `char`, `()`) satisfy `Show` via compiler-built-in formatters.
 
 ### 4.11 `cap Clone`
 
 ```
-cap Clone:
+pub cap Clone:
     fn clone -> Self
 ```
 
-Produces a value of the same type whose lifetime is independent of the receiver. Implementations are expected to perform a deep copy when the underlying representation is heap-allocated (refcount-incremented copy is acceptable when the representation is a refcounted shared structure — see `spec/memory_management.md`).
+`clone` returns a value equal to the receiver (P6 D10): where `Self` also satisfies `Eq`, `x.clone == x`. `Clone` does not extend `Eq`, so the law is stated here and not as a `prop` of the capability.
 
-**Relationship with ownership inference.** `.clone()` is never needed to satisfy ownership. Demands (`spec/quantities.md` §4.1) decide what each call needs: a `read` parameter borrows, an `own` parameter takes a counted reference, and an `exclusive` parameter given a shared value makes the compiler call the callee's shared version, or copy the demanded part itself (Rule Q9.3). Values are immutable, so a copy is never observable and needs no `Clone`. `.clone()` remains for programs that want an independent value for their own reasons, for example to bound how long a large structure is kept alive.
+**What `clone` is for** (owner's decision, fourth round of P6). `clone` copies the value to the heap, where it is counted by reference from then on: the result has the lifetime class `Heap` (`spec/memory_management.md` Rules MM3.1, MM5.5.a). It is the program's escape hatch for a value it knows will live long. The compiler otherwise picks the class of every value by its analysis, and copies a value out of a shorter-lived class where the analysis fell short (evacuation, Rule MM5.5); `clone` is that same step asked for by the program, at a place the program chooses. Called on a value right after it is built, it is the same as having asked for the value to be allocated on the heap: the compiler builds it there and copies nothing. It is never needed for ownership or for sharing, which plain use of a value already gives.
 
-In current example code, `.clone()` was used defensively in places where borrow inference is expected to handle the duplication implicitly; the v0.4.5 sweep removed those calls. Programs that *need* an explicit duplicate continue to call `.clone()`; the typer ensures the receiver type satisfies `Clone`.
+**Derived `clone`.** `T satisfies Clone` with no body derives it. The result is a `Heap` value equal to the receiver. Parts of the receiver that are already `Heap` cells are shared, with their counts raised, and not copied; a receiver that is wholly on the heap is returned itself (confirmed by the owner: the decision says where the result lives, and a copy of a cell that is already there would change nothing the program can observe). While every cell is a heap cell the derived `clone` is therefore a plain share; this changes when frame allocation comes into use (`spec/memory_management.md` Rule MM6.2), where a receiver on a data stack is copied out. Scalars, `()` and `String` are returned as they are.
 
-**Auto-derivation.** `Clone` is auto-derived for any `data` type whose every field type satisfies `Clone`. Primitives satisfy `Clone` trivially. Capabilities do not auto-derive `Clone` because the underlying representation isn't fixed; satisfying types must opt in.
+**A written `clone`.** A satisfaction may give `clone` a body. This is how a program tunes memory management for a type: the body decides which parts are rebuilt and which are shared, for example rebuilding a compact copy of a value whose cells are scattered, or dropping a cache field. The law above still binds it. A satisfier states its cost in a cost prop, as before: `prop cloneShares: constructs(clone) <= 0` for one that only shares, `prop cloneCopies: constructs(clone) <= size(self)` for one that rebuilds (`spec/cost.md` §4).
 
-## 5. Canonical satisfactions
+A type that must not be duplicated does not satisfy `Clone`.
 
-Brought into scope via the standard prelude:
+**Built today.** Every cell of the compiler today is a counted heap cell, so `clone` has no class to change. The derived `clone` is therefore a plain share: the call yields the receiver, and ownership raises its count where the original stays live. A written `clone` body runs as written.
+
+`clone` on a value of a type parameter needs `T is Clone` (`spec/type_system.md` Rule 5.1.3).
+
+**Relationship with ownership inference.** `.clone()` is never needed to satisfy ownership. Demands (`spec/quantities.md` §4.1) decide what each call needs: a `read` parameter borrows, an `own` parameter takes a counted reference, and an `exclusive` parameter given a shared value makes the compiler call the callee's shared version (Rule Q9.3). Only the shared entry of a `fip fn` copies the demanded part. Values are immutable, so a copy is never observable and needs no `Clone`. `.clone()` remains for programs that want an independent value for their own reasons, for example a copying `clone` to bound how long a large structure is kept alive.
+
+In current example code, `.clone()` was used defensively in places where borrow inference is expected to handle the duplication implicitly; the v0.4.5 sweep removed those calls.
+
+**Derivation on request.** `Clone` is never derived silently. A `data` type whose every field type satisfies `Clone` gets the derived `clone` by declaring the satisfaction without a body (`Money satisfies Clone`). Without that declaration the type does not satisfy `Clone`, and that is how a type that must not be duplicated stays so. The prelude declares it for each of its own data types. The derived `clone` is the one described above: it builds only what is not yet on the heap, so for a receiver on the heap it states `constructs(clone) <= 0`. An immediate (`spec/compilation_model.md` Rule CM3.5) has no cell, so its derived `clone` builds nothing. Primitives satisfy `Clone` trivially. Capabilities do not auto-derive `Clone`, because the representation is not fixed. A satisfying type must opt in.
+
+### 4.12 Cost contracts (provisional)
+
+The core capabilities carry cost props (`spec/cost.md` §4). Every satisfaction must meet them (Rule CT6.3), and representation selection uses them (`spec/cost.md` §8). `n` is `size(self)` (`spec/cost.md` Rule CT5.1); `f` is the function argument, and `steps(f)` the cost of one call of it. The table is provisional until the library is written in Fixed (implementation plan, Phase 5).
+
+| Capability | Member | `steps` | `constructs` | In place when exclusively owned |
+|---|---|---|---|---|
+| `Optional`, `Result`, `Pair`, `Ordering`, `Boolean` | constructors, accessors | `O(1)` | at most 1 | — |
+| `Optional`, `Result`, `Boolean` | `fold` | `O(steps(f))` | `constructs(f)` | — |
+| `Empty` | `empty`, `isEmpty` | `O(1)` | 0 | — |
+| `Numeric` | arithmetic, `fromI64` | `O(1)` for the primitive types; no bound stated for user satisfactions | 0 for the primitive types | — |
+| `Eq`, `Ord` | `eq`, `compare` | `O(n)` | 0 | — |
+| `Show` | `show` | `O(n)` | `O(n)` | no |
+| `Clone` | `clone` | at most `O(n)` plus the cost of cloning each element | at most `O(n)` plus what cloning each element builds; a sharing satisfier states `0` | no |
+| `Folding` | `fold` | `O(n * steps(f))` | `n * constructs(f)` | — |
+| `Functor` | `map` | `O(n * steps(f))` | at most `n + n * constructs(f)` | yes: `constructs(map) − releases(map) <= n * constructs(f)` |
+| `Filtering` | `filter` | `O(n * steps(f))` | at most `n` | yes |
+| `Sized` | `size` | `O(1)` | 0 | — |
+| `RandomAccess` | `get` | `O(1)` | at most 1 | — |
+
+Consequences already visible in `spec/type_system.md` §6.6: the built-in linked list does not satisfy `Sized` or `RandomAccess`, because it cannot meet these bounds, and the contiguous array does. `Clone` states the bound of a copying satisfier. A sharing satisfier is within it and says so with `constructs(clone) <= 0` (§4.11). `Map` and `Set` have no contracts yet (OQ-S2); a hash map needs a decision between its expected and its worst case (`spec/cost.md` OQ-CT4).
+
+### 4.13 Arithmetic effects and their handlers
+
+The prelude declares the effects of `spec/effects.md` Rule E3.6, their alias, and the handlers of Rule E3.6.h. The decision is the owner's (P6, fourth round, "Integer overflow and division"); the names `Arithmetic`, `ArithmeticError`, `arithmeticOrNone`, `arithmeticOrError` and `widen` are the author's choice.
 
 ```
-List satisfies Sequencing:
+pub effect Overflow:
+    fn overflow -> !
+
+pub effect DivideByZero:
+    fn divideByZero -> !
+
+pub type Arithmetic = Overflow + DivideByZero
+
+pub data ArithmeticError:
+    Overflowed
+    DividedByZero
+
+pub ArithmeticError satisfies Eq          // derived
+pub ArithmeticError satisfies Show        // derived
+pub ArithmeticError satisfies Clone
+
+pub fn arithmeticOrNone(body: () -> A with Arithmetic + E) -> is Optional of A with E =
+    handle body():
+        Overflow.overflow() => Optional.none
+        DivideByZero.divideByZero() => Optional.none
+        return(v) => Optional.some(v)
+
+pub fn arithmeticOrError(body: () -> A with Arithmetic + E) -> is Result of (ArithmeticError, A) with E =
+    handle body():
+        Overflow.overflow() => Result.err(ArithmeticError.Overflowed)
+        DivideByZero.divideByZero() => Result.err(ArithmeticError.DividedByZero)
+        return(v) => Result.ok(v)
+
+pub fn widen(body: () -> A with E) -> A with Overflow + E = ...   // typed and compiled by the compiler
+```
+
+- **Rows.** `E` is a row variable (`spec/effects.md` Rule E8.2): the other effects of `body` pass through. A `body` that performs only one of the two arithmetic effects is accepted, since its row is a sub-row of the parameter's (Rule E4.4).
+- **To an optional value.** The result of `arithmeticOrNone` is the function's choice point (`spec/type_system.md` Rule 5.1.2); `Maybe` is the prelude's canonical satisfier of `Optional` (§3.5).
+- **To a result.** The prelude has no data type named `Either`; the result capability it names is `Result` (§4.2). `Result` has no canonical satisfier, so a program that calls `arithmeticOrError` declares a data type with a `pub` satisfaction of `Result`: the result is the choice point of a prelude function, for which a private satisfaction is no candidate (`spec/type_system.md` Rule 8.6.a).
+- **`widen`** is a form, not a handler: it computes the arithmetic of `body` at the next wider integer type and narrows the result once (`spec/effects.md` Rule E3.6.h). Its body is supplied by the compiler, as `inspect`'s is (§5); at `i64` and `u64` it waits for OQ-CM7 (`T026`).
+- **At `main`** both effects are handled by the runtime, which ends the program with the position of the operation (`spec/effects.md` Rule E3.6.j).
+
+Not built: the prelude declares none of these (`docs/plans/implementation-plan.md`, Phase 4.2, item 22).
+
+### 4.14 `cap Sequencing`
+
+```
+pub cap Sequencing:
+    fn length -> u64 with Overflow      // counting adds 1 per element (owner's decision, P6 fourth round)
+    fn head -> is Optional of Part
+    fn tail -> Self
+    Self.fn cons(h: Part, t: is Sequencing of Part) -> Self
+    Self.fn empty -> Self
+```
+
+An ordered sequence of `Part`s. `cons` and `empty` are its constructor requirements, so `Sequencing` is the least prelude capability that can build a sequence: a list literal `[e1, …, en]` is `S.cons(e1, … S.cons(en, S.empty))` through it (`spec/type_system.md` Rule 5.10), and its choice point is bounded by `Sequencing of E` at least. `head` of an empty sequence is `Optional.none`, and `tail` of an empty sequence is the empty sequence, as the prelude's `List` satisfaction gives them (§5). `Empty` (§4.6) declares only `empty`. The shape is the one in `compiler/src/main/resources/stdlib/prelude.fixed`; cost contracts for it are not stated yet (§4.12). The requirement `length` declares `Overflow` (owner's decision of 2026-11-21), because the prelude's body counts with `n + 1` on `u64` in a `fold`; the prover removes the effect at a call where it shows the count fits (`spec/effects.md` Rule E3.6.e.1). The other requirements declare no row.
+
+## 5. Prelude satisfactions
+
+The prelude declares these satisfactions, all `pub`. A satisfaction must define every member of its capability that has no default body, by a mapping, a method, auto-derivation (`spec/type_system.md` §7.4) or a built-in. The typer rejects one that leaves a member out (`spec/type_system.md` Rule 6.1.1, P6 D17). The comments say where each member comes from.
+
+```
+pub List satisfies Sequencing:
     Cons as cons
     Nil as empty
-List satisfies Folding              // auto-derived from variants
-List satisfies Functor              // auto-derived per Rule 7.4.c; the active type
-                                    // parameter is `A` (List has only one)
-List satisfies Filtering            // auto-derived
+    fn length -> u64 = ...                  // members of `cap Sequencing` (§4.14) without a
+    fn head -> is Optional of Part = ...    // default; the prelude gives them bodies (by `fold`
+    fn tail -> Self = ...                   // and by `match`)
+pub List satisfies Folding              // auto-derived from variants (Rule 7.4.a)
+pub List satisfies Functor              // auto-derived per Rule 7.4.c; the active type
+                                        // parameter is `A` (List has only one)
+pub List satisfies Filtering:           // not auto-derived: §7.4 derives no `Filtering`
+    fn filter(pred: Part -> bool) -> Self = ...
 
-Json satisfies Show
-Json satisfies Eq
+pub Json satisfies Show                 // auto-derived (§4.10): every field satisfies Show (§3.2)
+pub Json satisfies Eq                   // auto-derived (§4.7): every field satisfies Eq (§3.2)
 
-Tuple satisfies Pair:
-    Tuple as pair
-Tuple satisfies Functor             // auto-derived per Rule 7.4.c with right-bias:
-                                    // the active type parameter is `B` (the second
-                                    // projection). `tuple.map(f: B -> B') -> Tuple of (A, B')`.
+pub Tuple satisfies Pair:
+    Tuple as pair                       // `first` and `second` are the accessors of Rule 7.4.d
+pub Tuple satisfies Functor             // auto-derived per Rule 7.4.c with right-bias:
+                                        // the active type parameter is `B` (the second
+                                        // projection). `tuple.map(f: B -> B') -> Tuple of (A, B')`.
 
-bool satisfies Boolean of Self:
-    Self as yes        // when bool is true
-    Self as no         // when bool is false   (compiler auto-bridges via primitive)
+pub Maybe satisfies Optional:           // §3.5
+    Just as some
+    Nothing as none                     // `fold` auto-derived (Rule 7.4.a); `map` (Rule 7.4.c)
 
-Nat satisfies Folding               // auto-derived from Zero + Succ
+pub Order satisfies Ordering:           // §3.6
+    Less as lt
+    Equal as eq
+    Greater as gt                       // `fold` auto-derived (Rule 7.4.a)
+
+pub bool satisfies Boolean              // built in: `yes` is `true`, `no` is `false`,
+                                        // `fold` branches on the value
+
+pub Nat satisfies Folding               // auto-derived from Zero + Succ
+
+pub String satisfies Eq                 // built in, like the `Eq` and `Ord` that the primitive
+pub String satisfies Ord                // numeric types have through `Numeric` (§4.9)
+pub bool satisfies Eq
+pub char satisfies Eq
+pub char satisfies Ord
+
+pub String satisfies Clone              // Clone is derived only on request (§4.11):
+pub List satisfies Clone                // each declaration, without a body, asks for the
+pub Maybe satisfies Clone               // derived `clone`. `Json` declares none until its
+pub Tuple satisfies Clone               // fields carry `+ Clone`.
+pub Order satisfies Clone
+pub Nat satisfies Clone
 ```
+
+`bool` has no variants, so no mapping can implement `Boolean`'s constructor requirements, and a `satisfies` block admits no `Self.fn` definition (`spec/syntax_grammar.ebnf` §9). The satisfaction is therefore built in, like the `Numeric` satisfactions of the primitive numeric types (§4.9). (Earlier drafts wrote `bool satisfies Boolean of Self` with `Self` mapped to both `yes` and `no`. `Boolean` has no `of` parameter, and one subject cannot implement two requirements.)
 
 The right-bias commitment for `Tuple satisfies Functor` is **normative** (not commentary): per Rule 7.4.c, the active type parameter for auto-derived Functor on a multi-parameter `data` is the rightmost non-phantom one. Combined with Rule 5.4.a/b (right-aligned positional substitution for `Self of B`), this means `tuple.map(f)` consistently maps over the second projection across the spec, the example corpus, and the typer.
 
-`Optional`, `Result`, `Ordering` are abstract caps with no canonical built-in satisfaction. Programs that want a default backing data type write their own (`data Maybe satisfies Optional`, etc.) — example 03 shows the pattern.
+**Canonical satisfaction.** A satisfaction is *canonical* when it is declared in its capability's own package. The term means exactly rule 4 of the disambiguation in `spec/type_system.md` Rule 6.5.5: when representation selection finds two candidates of different data types with equal scores, the canonical one wins. It gives no other preference. A program that declares its own satisfying type competes with the canonical one on score. In the prelude, `Maybe` is canonical for `Optional`, `Order` for `Ordering` and `Tuple` for `Pair`. `Result` has no canonical satisfaction: a program that constructs a `Result` through the capability must declare a satisfying data type (`examples/03_option_result.fixed` shows the pattern), or the choice point has no viable candidate (`spec/type_system.md` §6.5.3).
+
+Canonicity never chooses between two satisfactions of the same type and capability. Those differ in results, and only `using` and the scope decide between them (`spec/type_system.md` Rule 8.4). The prelude's satisfactions are always in scope (Rule 8.4).
+
+**Diagnostic sinks.** The prelude also declares the two diagnostic sinks:
+
+```
+pub fn inspect(x: T) -> T = ...           // body supplied by the compiler
+pub fn trace(message: String) -> () = ... // body supplied by the compiler
+```
+
+Being a sink is a property of these two declarations (`spec/diagnostics.md` Rules DG3.1, DG3.2): `inspect` takes a value of any type with no bound, and the argument of `trace` must be a string literal, whose names in braces are interpolated. A program that declares its own `inspect` or `trace` hides the prelude's (`warning[W060]`, `spec/type_system.md` Rule 4.3.a) and gets an ordinary function.
+
+Not built: the prelude does not declare `inspect` and `trace` yet (`docs/plans/implementation-plan.md`, Phase 4.2, item 5).
 
 ## 6. Migration from earlier drafts
 
@@ -284,20 +515,20 @@ Earlier drafts (`docs/plans/implementation-plan.md` line 352) classified `List`,
 |------------|---------------------------------------------------------------------|
 | `data List`     | unchanged (still data)                                             |
 | `data Json`     | unchanged (still data)                                             |
-| `data Pair`     | replaced by `cap Pair` + new `data Tuple` (the canonical satisfier) |
-| `data Ordering` | replaced by `cap Ordering` (no built-in concrete satisfier)        |
+| `data Pair`     | replaced by `cap Pair` + new `data Tuple` (its canonical satisfier, §5) |
+| `data Ordering` | replaced by `cap Ordering`; `data Order` is its canonical satisfier (§3.6) |
 
 ### 6.1 What changes in user code
 
-- **`Pair { first: a, second: b }` destructure patterns.** These are struct-destructure patterns (Rule M3.6) and require a single-variant data type. Replace with `Tuple { first: a, second: b }` if the pair is a `data Tuple` value. If the binding is `is Pair of (A, B)` (a cap-bound), use the accessor methods instead: `let a = p.first` and `let b = p.second`.
+- **`Pair { first: a, second: b }` destructure patterns.** These are struct-destructure patterns (`spec/pattern_matching.md` Rule M3.6.b) and require a single-variant data type. Replace with `Tuple { first: a, second: b }` if the pair is a `data Tuple` value. If the binding is `is Pair of (A, B)` (a cap-bound), use the accessor methods instead: `let a = p.first` and `let b = p.second`.
 - **`Pair(a, b)` construction.** Replace with `Tuple(a, b)` for direct construction. To construct via the cap (so the compiler can pick the representation), write `Pair.pair(a, b)`.
 - **`is Pair of (A, B)`.** Continues to work — `Pair` is now a cap, so `is Pair` is the natural form.
-- **`match ord: Ordering.Less => ... | Ordering.Equal => ... | Ordering.Greater => ...`.** No longer valid on a cap. Rewrite as `ord.fold((_) -> ..., (_) -> ..., (_) -> ...)` or, if a concrete `data` type that satisfies `Ordering` is in scope, match on that type's data variants.
+- **`match ord: Ordering.Less => ... | Ordering.Equal => ... | Ordering.Greater => ...`.** No longer valid on a cap. Rewrite as `ord.fold((_) -> ..., (_) -> ..., (_) -> ...)` or, on a value whose type is `Order`, match on `Order.Less`, `Order.Equal` and `Order.Greater`.
 
 ### 6.2 Why the change
 
 `Pair` and `Ordering` are abstract — there's no specific layout the compiler should commit to. Treating them as caps lets:
-- a sorted list use a packed `i8` tag for `Ordering` rather than a separate enum
+- a program pick another representation of `Ordering` than the prelude's `Order` where usage favours it (`spec/type_system.md` §6.5)
 - a key-value map use whatever pair layout is most efficient for its backing storage
 - foreign data types implement these caps without needing to be a literal `Tuple` or built-in enum
 
@@ -310,11 +541,13 @@ Earlier drafts (`docs/plans/implementation-plan.md` line 352) classified `List`,
 | `spec/type_system.md` | Auto-derivation rules (Rule 7.4); cap classification (§6.4); satisfaction resolution (§8) |
 | `spec/pattern_matching.md` | Match restricted to data types (Rule M3.4.c); `Tuple` matchable, `Pair` not |
 | `spec/effects.md` | I/O effects (`Console`, `FileSystem`, …) — separate module |
+| `spec/cost.md` | The contract language of §4.12; viability and scoring of representations |
+| `spec/compilation_model.md` | Capability tables are built from these declarations (Rule CM4.2); the standard library is a package (§6) |
 | `docs/plans/implementation-plan.md` | Phase 5 deliverables in `stdlib/*.fixed` |
 | `examples/03_option_result.fixed` | `data Maybe satisfies Optional`, `data Outcome satisfies Result` — typical user satisfactions |
 
 ## 8. Open questions
 
-- **OQ-S1 — Built-in `Show`.** Should `bool`, `i64`, `f64`, etc. auto-satisfy `Show`? Most programs need `.show()` constantly; refusing the default is friction. Provisional yes, formalize once `cap Show` lands.
+- **OQ-S1 — Built-in `Show`.** Closed: every primitive type satisfies `Show` (§4, and in the compiler).
 - **OQ-S2 — Map/Set.** `cap Map of (K, V)` and `cap Set of A` are mentioned in examples but not yet specified here. Defer to a Phase-5 stdlib doc.
-- **OQ-S3 — `String`.** Currently ambiguous: a primitive in the grammar (`PrimitiveType`), but example 11 declares refinements (`type Username = String + min_length(3)`) that expect cap-like composition. Decision: `String` is a primitive *and* satisfies a `cap Stringlike` (or similar) for refinement purposes. Formalize separately.
+- **OQ-S3 — `String`.** Settled by the owner (fourth round of P6): `String` is a type, and a refinement of it is written `String is minLength(3)` or, with the same meaning, `String + minLength(3)` (`spec/type_system.md` Rule 6.3.0). No capability `Stringlike` is introduced.

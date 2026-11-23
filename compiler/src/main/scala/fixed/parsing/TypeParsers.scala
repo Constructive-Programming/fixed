@@ -56,6 +56,7 @@ private[parsing] object TypeParsers:
       /** Either: `(T1, T2, ...)` → TupleArrowLhs/UnitType
         *         `(T)` → just T (parenthesised)
         *         `(T) of OfArg` → ParenTypeApp
+        *         `((T1, T2)) -> R`, `(()) -> R` → one parameter ([[listOfOne]])
         */
       val startSpan = s0.current.span
       val s1 = s0.advance
@@ -68,7 +69,8 @@ private[parsing] object TypeParsers:
             case (s3, Some(_)) =>
               val (s4, arg) = parseOfArg(s3)
               (s4, Trees.ParenTypeApp(first, arg, span(startSpan, s4.current.span)))
-            case (s3, None) => (s3, first)
+            case (s3, None) =>
+              (s3, if s3.current.kind == TokenKind.Arrow then listOfOne(first, startSpan, s3) else first)
     else parseTypeAtom(s0)
 
   private[parsing] def parseTypeAtom(s: ParserState)(using Reporter): Parsed[Tree] = s.current.kind match
@@ -172,9 +174,18 @@ private[parsing] object TypeParsers:
       val (s2, p) = parseParenBody(s1, startSpan)(parseDataOfItem)
       p match
         case Paren.Empty(sp)    => (s2, Trees.UnitType(sp))
-        case Paren.One(first)   => (s2, first)
+        case Paren.One(first)   => (s2, listOfOne(first, startSpan, s2))
         case Paren.Many(ts, sp) => (s2, Trees.TupleArrowLhs(ts, sp))
     else parseTypeExpr(s)
+
+  /** The one item of a parenthesised list (`of` arguments, an arrow's parameters). An item that
+    * is a tuple or `()` in its own parentheses (`Box of ((A, B, C))`, `((A, B)) -> R`,
+    * `(()) -> R`) stays an item inside a list of one, so the typer sees the tuple (Rule 5.12);
+    * any other item stands for the list (a list of one is its item).
+    */
+  private def listOfOne(item: Tree, start: Span, end: ParserState): Tree = item match
+    case _: (Trees.TupleArrowLhs | Trees.UnitType) => Trees.TupleArrowLhs(List(item), span(start, end.current.span))
+    case _                                         => item
 
   /** CapType ::= "cap" CapReturnSpec?
     * CapReturnSpec ::= "of" OfArg

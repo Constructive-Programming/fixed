@@ -1,0 +1,30 @@
+// The derived `fold` of linear data runs as two loops (`Generated.foldDown`): a list of 2,000,000
+// elements and a `Nat` of that depth fold in a bounded native stack, where the recursive form took
+// one frame per element and overflowed an 8 MiB stack. A list still used after its fold is shared:
+// its cells are copied, not reversed in place, so the list and the result are both right (the
+// checked runtime aborts on a write to a shared cell). Every line prints a different result.
+use std.io.Console
+
+data Chain of A:
+    End
+    Link(v: A, rest: Chain of A)
+
+Chain satisfies Functor
+
+fn upto(n: u64) -> Chain of u64 = Chain.unfold(0, (i) -> if i >= n: Chain.End else: Chain.Link(i, i + 1))
+
+fn sum(xs: Chain of u64) -> u64 = xs.fold(() -> 0, (x, acc) -> x + acc)
+
+fn digits(xs: Chain of u64) -> u64 = xs.fold(() -> 0, (x, acc) -> (acc * 10 + x) % 1000000007)
+
+fn depth(n: u64) -> Nat = Nat.unfold(n, (k) -> if k == 0: Nat.Zero else: Nat.Succ(k - 1))
+
+fn count(n: Nat) -> u64 = n.fold(() -> 0, (m) -> m + 1)
+
+fn main() -> () with Console =
+    Console.printLine(sum(upto(2000000)).show())
+    Console.printLine(count(depth(2000000)).show())
+    let xs = upto(5)
+    Console.printLine(digits(xs).show().concat(" ").concat(sum(xs).show()).concat(" ").concat(xs.show()))
+    let ys = upto(1000000)
+    Console.printLine(sum(ys).show().concat(" ").concat(digits(ys).show()))

@@ -1,0 +1,14 @@
+sequenceDiagram
+    autonumber
+    participant Caller as Caller Function
+    participant Callee as Callee (e.g., map / unfold)
+    participant Dest as Destination Buffer (Caller Stack / Region)
+
+    Caller->>Caller: Allocates destination hole in its current Frame/Region
+    Caller->>Callee: Passes hidden pointer (dest_ptr) as argument
+    Note over Callee,Dest: Tail Modulo Constructor (TMC)
+    Callee->>Dest: Writes constructor tag and value directly into *dest_ptr
+    opt Recursive Step
+        Callee->>Callee: Passes (dest_ptr + offset) into recursive child call
+    end
+    Callee-->>Caller: Returns void / finished pointer (Zero copying)

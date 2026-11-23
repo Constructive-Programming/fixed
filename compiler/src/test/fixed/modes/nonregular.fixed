@@ -1,0 +1,24 @@
+// A field of the data type at other arguments (M of (B, A)) is not Self (Rule 7.4.a): not pre-folded,
+// so `viaFold` hands it to `size`, which recurses structurally at other type arguments (Rule 7.4.h).
+use std.io.Console
+
+data M of (A, B):
+    Nil
+    X(a: A, r: M of (B, A))
+    Y(b: B, s: M of (A, B))
+
+fn size(m: M of (A, B)) -> u64 =
+    match m:
+        M.Nil => 0
+        M.X(a, r) => 1 + size(r)
+        M.Y(b, s) => 1 + size(s)
+
+fn viaFold(m: M of (A, B)) -> u64 = m.fold(() -> 0, (a, r) -> 1 + size(r), (b, s) -> s + 1)
+
+fn mk(a: u64, b: String) -> M of (u64, String) = M.Y(b, M.Y(b.concat("w"), M.Nil))
+
+fn mk2(a: u64, b: u64) -> M of (u64, u64) = M.X(a, M.Y(b, M.X(a, M.Nil)))
+
+fn main() -> () with Console =
+    Console.printLine(viaFold(mk(1, "x".concat("y"))).show())
+    Console.printLine(viaFold(mk2(1, 2)).show())

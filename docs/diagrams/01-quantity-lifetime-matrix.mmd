@@ -1,0 +1,93 @@
+flowchart TD
+    %% =========================================================================
+    %% PART 1: FRONT-END ANALYSIS GUIDANCE (HOW & WHY DECISIONS ARE MADE)
+    %% =========================================================================
+    subgraph FrontEnd["Front-End Compiler Pipeline & Analyses"]
+        direction TB
+        Source["Capability Source Code\ne.g., 'fn sum(c: is Folding of Numeric)'"]
+        
+        QTT["1. Quantitative Type Theory (M10)\nComputes Demands & Ownership Protocol:\n• none: Erased (Type/proof level only)\n• read: LEND (Caller Lends -> Callee Peeks)\n• one: GIVE (Caller Gives -> Callee Takes)\n• many: HOLD (Caller Shares -> Callee Holds)"]
+        
+        Escape["2. Escape & Churn Analysis (M10/Rule MM5.2)\nDetermines Extent & Lifetime:\n• Scope-bounded LIFO extent\n• Cohesive Group (single-root tree)\n• Non-garbage-free churn / unbounded escape"]
+
+        Source --> QTT
+        Source --> Escape
+    end
+
+    %% =========================================================================
+    %% PART 2: PLACEMENT DECISION TREE (RULE MM5.3 PRIORITY ORDER)
+    %% =========================================================================
+    subgraph DecisionTree["Placement Decision Engine (Rule MM5.3 Priority Order)"]
+        direction TB
+
+        CheckNone{"Is Demand 'none'?"}
+        ActErased["Class: Erased\nWhy: Pure type witness / proof token\nAction: Emitted as 0 runtime bytes"]
+
+        CheckConst{"Compile-time\nConstant?"}
+        ActStatic["Class: Static\nWhy: Immutable global data\nAction: Baked in rodata, persistent, no RC"]
+
+        CheckScope{"All uses inside\nScope 's'?"}
+        CheckDest{"Escapes ONLY into\nCaller Result?"}
+        ActDest["Class: Dest(p)\nWhy: Destination-Passing Style\nAction: Callee writes straight into caller memory"]
+        ActFrame["Class: Frame(s)\nWhy: LIFO temporary\nAction: Scratch stack bump alloc, O(1) reset"]
+
+        CheckCohesive{"Is Cohesive Group\n(Rule MM5.4)?"}
+        ActRegion["Class: Region(r)\nWhy: Syntax trees / DAGs with single root\nAction: 1 refcount per region, no per-node headers"]
+
+        ActHeap["Class: Perceus Heap\nWhy: Long-lived churn (loop accumulator) or escape\nAction: Individual cell RC headers + FBIP reuse"]
+
+        CheckNone -- Yes --> ActErased
+        CheckNone -- No --> CheckConst
+        CheckConst -- Yes --> ActStatic
+        CheckConst -- No --> CheckScope
+        CheckScope -- Yes --> CheckDest
+        CheckDest -- Yes --> ActDest
+        CheckDest -- No --> ActFrame
+        CheckScope -- No --> CheckCohesive
+        CheckCohesive -- Yes --> ActRegion
+        CheckCohesive -- No --> ActHeap
+    end
+
+    QTT -.->|Demands: none vs read / one / many| CheckNone
+    Escape -.->|Liveness & Scopes| CheckScope
+    Escape -.->|Cohesive Detection| CheckCohesive
+    Escape -.->|Churn Detection| ActHeap
+
+    %% =========================================================================
+    %% PART 3: THE 2-AXIS INTERACTION MATRIX (ORDERED: LEND -> GIVE -> HOLD)
+    %% =========================================================================
+    subgraph MatrixGrid["Runtime Execution: Ownership × Lifetime Class Matrix (Rule MM3.2)"]
+        direction TB
+
+        subgraph ColLend["1. LEND (Demand 'read')\nCaller: Lends (Lent) | Callee: Peeks (Peekable)"]
+            direction TB
+            L_Universal["Uniform Calling Convention (Rule MM7.2):\n• Caller: Retains ownership; passes Lent reference\n• Callee: Peeks read-only; cannot mutate or retain\n• Cell Header: Ignored\n• RC Ops: Exactly 0 across all classes\n• Stack Drop List: Bypassed completely (Rule MM13.3)"]
+        end
+
+        subgraph ColGive["2. GIVE (Demand 'one')\nCaller: Gives (Given) | Callee: Takes (Taken)"]
+            direction TB
+            G_Frame["Frame(s) / Dest(p):\n• Caller: Surrenders value (Given)\n• Callee: Takes sole ownership (Taken)\n• RC Ops: 0\n• In-Place Reuse: Unconditional (FBIP)\n• Reclamation: O(1) bump reset on scope exit"]
+            G_Region["Region(r):\n• Caller: Surrenders unique handle\n• Callee: Takes sole ownership in region\n• RC Ops: 1 region ref released when consumed\n• In-Place Reuse: Unconditional within region\n• Reclamation: Freed when region count = 0"]
+            G_Heap["Perceus Heap:\n• Caller: Moves unique cell (Given)\n• Callee: Takes sole ownership (Taken)\n• RC Ops: 0 (No dup/drop calls!)\n• In-Place Reuse: Unconditional (FBIP)\n• Reclamation: Immediate reuse or free at last use"]
+        end
+
+        subgraph ColHold["3. HOLD (Demand 'many')\nCaller: Shares (Shared) | Callee: Holds (Held)"]
+            direction TB
+            H_Frame["Frame(s) / Dest(p):\n• Caller: Retains alias (Shared)\n• Callee: Holds reference within scope (Held)\n• RC Ops: 0 (No RC traffic on data stack)\n• In-Place Reuse: Disabled (cannot mutate alias)\n• Reclamation: O(1) bump reset on scope exit"]
+            H_Region["Region(r):\n• Caller: Retains alias\n• Callee: Holds counted region handle (Held)\n• RC Ops: Region-level dup/drop\n• In-Place Reuse: Disabled\n• Reclamation: Bulk free when region count = 0"]
+            H_Heap["Perceus Heap:\n• Caller: Retains alias (Shared)\n• Callee: Holds counted reference (Held)\n• RC Ops: Standard Perceus dup/drop per cell\n• In-Place Reuse: Dynamic (After runtime rc == 1 test)\n• Reclamation: Freed when cell rc hits 0"]
+        end
+    end
+
+    ActFrame -.-> L_Universal
+    ActFrame -.-> G_Frame
+    ActFrame -.-> H_Frame
+    ActDest -.-> L_Universal
+    ActDest -.-> G_Frame
+    ActDest -.-> H_Frame
+    ActRegion -.-> L_Universal
+    ActRegion -.-> G_Region
+    ActRegion -.-> H_Region
+    ActHeap -.-> L_Universal
+    ActHeap -.-> G_Heap
+    ActHeap -.-> H_Heap
