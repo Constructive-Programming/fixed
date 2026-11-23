@@ -298,7 +298,6 @@ object Totality:
             case Lt | Le | Gt | Ge => Some("Ord" -> "compare")
             case _                 => None
 
-          /** The prelude's member, and in a default body the one its capability restates. */
           /** `l > r` and `l >= r` compare `r` with `l`. */
           val operands = if op == Gt || op == Ge then List(rhs, lhs) else List(lhs, rhs)
           val receiver = s.typeOf(operands.head)

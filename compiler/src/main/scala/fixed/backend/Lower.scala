@@ -332,7 +332,8 @@ final class Lower(private[backend] val unit: CompilationUnit, chosen: Set[(Strin
         )
 
   /** `l op r` on values of type parameter `t`, through the tables of its bound set (Rule CM4.1):
-    * `>` and `>=` are `lt` and `le` with the operands swapped (plan §2), `!=` is `eq` negated.
+    * `>` and `>=` are `lt` and `le` with the operands swapped
+    * (`docs/plans/phase-4.1-baseline-specialiser.md` §2), `!=` is `eq` negated.
     */
   private def slotOp(op: Trees.BinOperator, l: Atom, r: Atom, t: Type, b: Tree, sc: Scope)(k: K): Expr =
     import Trees.BinOperator.*

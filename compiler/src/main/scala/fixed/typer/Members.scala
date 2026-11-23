@@ -143,7 +143,7 @@ object Members:
   private val autoDerived = List("Show", "Eq", "Ord", "Clone")
 
   /** A value of type `t` is used through a witness and its bound set only (a type parameter, or an
-    * anonymous `is ...` bound), so it has no auto-derived member (P6 D10, Rule CM4.3).
+    * anonymous `is ...` bound), so it has no auto-derived member (P6 D10, `spec/type_system.md` Rule 5.1.3).
     */
   def abstractType(s: TyperState, t: Type): Boolean =
     t match

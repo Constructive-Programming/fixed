@@ -7,7 +7,7 @@ import fixed.core.{SymbolId, SymbolTable}
 import fixed.parsing.Parser
 import fixed.util.SourceFile
 
-/** The signature-only standard library under `resources/stdlib/`, parsed once. `prelude` is in
+/** The standard library under `resources/stdlib/`, parsed once. `prelude` is in
   * scope everywhere; each module is reachable through `use <module>.<Name>`.
   */
 object Stdlib:

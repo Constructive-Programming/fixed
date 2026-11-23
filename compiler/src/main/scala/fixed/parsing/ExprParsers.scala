@@ -56,8 +56,8 @@ private[parsing] object ExprParsers:
     }(Trees.BinOp.apply)
 
   /** Non-chaining: at most one comparison operator per expression.
-    * `a < b < c` parses as `(a < b) < c`'s LHS rejected by the typer
-    * (no `<` at boolean type), not as `a < b && b < c`. The grammar
+    * `a < b < c` is a parse error (the second `<` is left unconsumed),
+    * not `a < b && b < c`. The grammar
     * marks CmpExpr non-associative; that's why this production has no
     * outer loop, unlike its peers `parseAddExpr` / `parseMulExpr`.
     */
@@ -511,7 +511,7 @@ private[parsing] object ExprParsers:
         *   `T.Variant`           qualified unit-variant pattern
         *   `T(p1, ...)`          single-ctor sugar pattern (typical for
         *                         `data Point(x: N, y: N)`-style decls)
-        *   `T`                   no-qualifier variant pattern (Rule 3.4.a)
+        *   `T`                   no-qualifier variant pattern (`spec/pattern_matching.md` Rule M3.4.a)
         */
       val (s1, nameTok) = consume(s)
       accept(s1, TokenKind.Dot) match

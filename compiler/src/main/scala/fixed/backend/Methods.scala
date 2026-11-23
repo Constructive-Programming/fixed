@@ -92,7 +92,7 @@ private[backend] trait Methods:
           case (_, name, Nil) if productField(recvType, name).isDefined => fieldRead(recvType, m, sc)(k)
           case _ if hasBody(recvType, member, fromPrelude = true)       => bodyCall(m, member, recvType, sc)(k)
           case (c, name, _)                                             =>
-            unsupported(m.span, s"member $c.$name on ${symbols.render(recvType)} (arrives in 4.0.M4)", k)
+            unsupported(m.span, s"member $c.$name on ${symbols.render(recvType)}", k)
       case None | Some(_: Resolution.NestedFn) => unsupported(m.span, s"member `${m.method}`", k)
 
   /** `m`, resolved to capability member `member`, on a receiver of type parameter `t`, through the

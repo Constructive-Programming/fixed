@@ -6,7 +6,6 @@ import fixed.core.{Context, Phase, SymKind, SymbolTable}
 
 /** Namer, then Typer: types the body of every top-level `fn` against its declared return type,
   * then checks `satisfies` and capability declarations (3.1.M3).
-  * Cap, effect and satisfies method bodies join with capability member resolution (M5).
   */
 object TyperPhase extends Phase:
   def run(unit: CompilationUnit): CompilationUnit =

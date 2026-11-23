@@ -299,7 +299,7 @@ private[backend] trait Generated:
   private def recursiveField(data: SymbolId, tag: Int): Int =
     symbols.fieldsOf(symbols.variantsOf(data).toList(tag).id).indexWhere(_.info == declaredSelf(data))
 
-  /** `reverseOnto(acc, done)`: the cells of linear data `acc`, built in reverse by [[loop]], put in
+  /** `reverseOnto(acc, done)`: the cells of linear data `acc`, built in reverse by [[loopStep]], put in
     * front of `done` in order; a loop too.
     */
   private def reverseOnto(data: SymbolId, args: List[Type], span: Span): String =
@@ -464,9 +464,9 @@ private[backend] trait Generated:
         }
       case _ => None)
 
-  /** `Folding.fold(init, f)` on a list-shaped data type: a left fold. ponytail: generated here until
-    * `satisfies` bodies in Fixed are lowered; spec §7.4 does not derive it. Same for `length` and
-    * `find` below.
+  /** `Folding.fold(init, f)` on a list-shaped data type: a left fold. Spec §7.4 does not derive it;
+    * it is generated, as `length` and `find` below are, because it runs as a loop where the
+    * prelude's body recurses ([[Satisfied]]).
     */
   protected def foldLeft(data: SymbolId, args: List[Type], accType: Type, span: Span): String =
     val name = generatedName(data, args, "foldLeft", shown(accType))

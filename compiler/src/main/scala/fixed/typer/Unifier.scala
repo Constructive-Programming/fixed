@@ -82,7 +82,7 @@ final case class Unifier(
       case _                       => Left(())
 
   /** Make `a` and `b` equal. `Left` carries no message: the caller reports the mismatch with both
-    * zonked types. `is ...` bounds accept any type until capability checking lands (M6).
+    * zonked types. Unifying a type with an `is ...` bound records an obligation ([[oblige]]).
     */
   def unify(a: Type, b: Type, numeric: Type => Boolean): Either[Unit, Unifier] =
     if a eq b then Right(this) else unifyResolved(resolve(a), resolve(b), numeric)
@@ -118,7 +118,7 @@ final case class Unifier(
       case (Type.TypeRef(t, List(x, y)), Type.TupleType(List(a, b))) if tuple.contains(t) =>
         unifyAll(List(x, y), List(a, b), numeric)
 
-      /** A capability used as a type is an anonymous bound: checked by capability closure (M6). */
+      /** A capability used as a type is an anonymous bound: an obligation, like `is C`. */
       case (bound: Type.CapRef, value)    => Right(oblige(value, bound))
       case (expected, value: Type.CapRef) => Right(oblige(expected, value))
       case (Type.Layer(d1, xs, s1), Type.Layer(d2, ys, s2)) if d1 == d2 && xs.size == ys.size =>
@@ -158,9 +158,6 @@ final case class Unifier(
     if applied.size > full.size then Left(())
     else copy(bindings = bindings.updated(x, head)).unifyAll(applied, full.takeRight(applied.size), numeric)
 
-  /** Bounds are not yet checked against each other (M6), but a capability both sides name has
-    * its arguments unified: `is Optional of A` against `is Optional of u64` solves `A`.
-    */
   /** Two applications of the same constructor. A higher-kinded type variable used bare (`M`) and
     * applied (`M of A`) names the same type.
     */
@@ -181,6 +178,9 @@ final case class Unifier(
       case (Type.TypeVar(v), Type.NeverType) if !constrained(v) => bind(v, Type.NeverType, numeric)
       case _                                                    => unify(x, y, numeric)
 
+  /** A capability both sides name has its arguments unified: `is Optional of A` against
+    * `is Optional of u64` solves `A`.
+    */
   private def unifyShared(left: List[Type], right: List[Type], numeric: Type => Boolean): Solved =
     val pairs =
       for

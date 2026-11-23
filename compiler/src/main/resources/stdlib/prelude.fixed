@@ -1,5 +1,5 @@
-// The standard prelude: signature-only declarations, in scope in every
-// compilation unit (spec/stdlib.md). Bodies arrive with the Phase 5 stdlib.
+// The standard prelude, in scope in every compilation unit (spec/stdlib.md):
+// declarations, and bodies for the members the compiler does not generate.
 // `String` itself is built into the Namer: it has no variants to declare.
 
 data List of A:

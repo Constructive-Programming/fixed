@@ -22,9 +22,10 @@ import fixed.util.Span
   *
   * A member of the language the backend does not build yet ([[Tables.unbuilt]]) gets a null entry;
   * no lowering asks for one. Any other member a type does not define makes the table an error. The
-  * hidden entries `lt` and `le` stand in for `compare` (plan §2); a data type builds them from the
-  * `compare`, the program's or the derived one ([[Satisfied.compareOf]]), `String` from the
-  * runtime's order of strings ([[Satisfied.stringOrder]]), a scalar from a comparison.
+  * hidden entries `lt` and `le` stand in for `compare` (`docs/plans/phase-4.1-baseline-specialiser.md`
+  * §2, "plan §2" below); a data type builds them from the `compare`, the program's or the derived one
+  * ([[Satisfied.compareOf]]), `String` from the runtime's order of strings ([[Satisfied.stringOrder]]),
+  * a scalar from a comparison.
   */
 private[backend] trait Tables extends Satisfied:
   this: Lower =>
@@ -246,14 +247,16 @@ private[backend] trait Tables extends Satisfied:
       case (Some("Folding"), "fold", Some(r)) if list =>
         Some(adapter(name, foldLeft(data, own, r, Span.NoSpan), args, own))
       case (Some("Folding"), "find", _) if list =>
-        /** ponytail: the result is the prelude's `Maybe`; a callee-chosen result returns its witness record later. */
+        /** ponytail: the result is fixed to the prelude's `Maybe`; `spec/type_system.md` Rule 5.1.2
+          * lets the signature pick it.
+          */
         val maybe = symbols.prelude.get("Maybe").map(Type.TypeRef(_, own.lastOption.toList))
         maybe.map(m => adapter(name, find(data, own, cap, m, Span.NoSpan), args, own))
       case (Some("Sequencing"), "length", _) if list =>
         Some(adapter(name, length(data, own, Type.PrimType("u64"), Span.NoSpan), args, own))
       case (Some("Functor"), "map", Some(b)) => Some(adapter(name, derivedMap(data, own, b, Span.NoSpan), args, own))
 
-      /** Every cell is a heap cell, so the derived `clone` shares the receiver (`spec/stdlib.md` §4.11). */
+      /** The derived `clone` shares the receiver: values are immutable (`spec/stdlib.md` §4.11). */
       case (Some("Clone"), "clone", _) =>
         Some(instance(name) {
           val self: Atom.Var = Atom.Var("self", ctype(t, Span.NoSpan))

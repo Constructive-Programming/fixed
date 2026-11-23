@@ -44,7 +44,7 @@ object Patterns:
                 case None     => (si.error(DiagCode.T001, p.span, s"not found: field $name of $typeName"), ci)
             }
       case Trees.OrPat(left, right, _) =>
-        /** ponytail: both alternatives must bind the same names (Rule M5.5.b); not checked yet. */
+        /** ponytail: both alternatives must bind the same names (Rule M5.5.a, `E095`); not checked yet. */
         val (s1, c1) = bind(s, left, t)
         (bind(s1, right, t)._1.record(pat, t), c1)
       case _: Trees.Error => (s, ctx)

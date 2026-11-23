@@ -8,9 +8,6 @@ import fixed.CompilationUnit
 import fixed.core.render
 import fixed.util.{DiagCode, Diagnostic, Severity, Span}
 
-/** The backend slice's entry points (`docs/plans/phase-4.0-backend-slice.md`): a checked unit to
-  * LLVM IR, and LLVM IR plus the C runtime to a native executable through `clang`.
-  */
 /** Versioned Core and what M10 inferred about it; `fips` are the `fip fn` instances, `candidates`
   * the clone candidates of each function, on both axes, `typeClones` each clone of the type
   * axis with the function it is a clone of and its key, and `immediates` each data type lowered
@@ -41,6 +38,9 @@ object Mode:
   val Default: Mode = Mode(Versions.budget)
   val NoSpecialise: Mode = Mode(0)
 
+/** The backend slice's entry points (`docs/plans/phase-4.0-backend-slice.md`): a checked unit to
+  * LLVM IR, and LLVM IR plus the C runtime to a native executable through `clang`.
+  */
 object Backend:
 
   /** LLVM IR for `unit`, which must have passed the typer without errors. */
