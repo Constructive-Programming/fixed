@@ -43,7 +43,7 @@ item are in `docs/plans/phase-3-typer.md` §3.6–§3.9.
 - **`resume`** only inside an operation clause (`T009`), and never after an abortive operation
   (`T019`).
 - **Effect rows** (M7): every body's performed effects are declared by its `with` clause (`T015`;
-  an unused declared effect is a `T017` warning); `handle` removes the effects its clauses name and
+  an unused declared effect is an `E081` warning); `handle` removes the effects its clauses name and
   covers all their operations (`T018`); `main` performs only runtime effects (`T016`). Callbacks
   follow Rule E5.5.a (ambient pass-through).
 

@@ -96,7 +96,7 @@ object Effects:
     }
 
   /** Rule E5.2: every performed effect is declared (`T015`); a declared one never performed is a
-    * warning (`T017`); `main` declares only runtime effects (`T016`, Rule E5.4).
+    * warning (`E081`, Rule E3.6.e.3); `main` declares only runtime effects (`T016`, Rule E5.4).
     */
   def discharge(s: TyperState, c: RowCheck): TyperState =
     val declared = expand(s, c.declared.effects)
@@ -109,7 +109,7 @@ object Effects:
     }
     val unused = if c.unused then declared.filterNot(d => performed.exists(_._1.sym == d.sym)) else Nil
     val warned = unused.foldLeft(checked) { (si, d) =>
-      si.warn(DiagCode.T017, c.span, s"${c.owner} declares effect ${show(si, d)} but never performs it")
+      si.warn(DiagCode.E081, c.span, s"unused declared effect ${show(si, d)}")
     }
     val foreign = if c.runtime then declared.filterNot(d => mainMayLeave(s, d.sym)) else Nil
     foreign.foldLeft(warned) { (si, d) =>

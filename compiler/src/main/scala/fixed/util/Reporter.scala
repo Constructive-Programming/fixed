@@ -5,19 +5,19 @@ enum Severity:
   case Error, Warning
 
 /** Diagnostic codes. The case name is the rendered code. `E*`: lexical (scanner) and a few later
-  * checks (`E072`; `E102`, a prop the static prover refutes; `E110`); `P*`: syntactic (parser);
-  * `T*`: typer; `B*`: backend
+  * checks (`E072`; `E081`, an unused declared effect, a warning; `E102`, a prop the static prover
+  * refutes; `E110`); `P*`: syntactic (parser); `T*`: typer; `B*`: backend
   * (`docs/plans/phase-4.0-backend-slice.md` §5).
   */
 enum DiagCode:
-  case E001, E002, E003, E004, E005, E006, E007, E008, E009, E072, E102, E110
+  case E001, E002, E003, E004, E005, E006, E007, E008, E009, E072, E081, E102, E110
   case P001, P002, P003, P004, P005, P006, P007, P008, P010, P011, P012, P013, P014, P016, P017, P018, P019, P099
-  case T001, T002, T003, T004, T005, T006, T007, T008, T009, T010, T011, T013, T014, T015, T016, T017, T018, T019, T020,
+  case T001, T002, T003, T004, T005, T006, T007, T008, T009, T010, T011, T013, T014, T015, T016, T018, T019, T020,
     T021, T022, T023, T027, T028, T029, T031, T032
   case B002, B003, B004, B005
 
   /** The error class of `spec/reports.md` Rule RP5.5, which is the exit code of a run whose errors
-    * have no smaller class. `0` for a code the compiler reports only as a warning (`T017`, and
+    * have no smaller class. `0` for a code the compiler reports only as a warning (`E081`, and
     * `T021`, which the table does not list).
     */
   def errorClass: Int = this match
@@ -34,7 +34,7 @@ enum DiagCode:
     case E110                                                                                            => 14
     case B004                                                                                            => 18
     case T005 | B002 | B003 | B005                                                                       => 99
-    case T017 | T021                                                                                     => 0
+    case E081 | T021                                                                                     => 0
 
 /** A diagnostic: code, source span, explanation and an optional copy-pasteable suggestion. */
 final case class Diagnostic(

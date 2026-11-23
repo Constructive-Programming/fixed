@@ -80,7 +80,7 @@ class CompilerSuite extends munit.FunSuite:
   test("Rule RP5.5: every diagnostic code has a class of the table; codes that are only warnings have 0"):
     val classes = Set(0) ++ (3 to 20).filterNot(_ == 13) + 99
     DiagCode.values.foreach(c => assert(classes.contains(c.errorClass), s"$c has class ${c.errorClass}"))
-    assertEquals(DiagCode.values.filter(_.errorClass == 0).toList, List(DiagCode.T017, DiagCode.T021))
+    assertEquals(DiagCode.values.filter(_.errorClass == 0).toList, List(DiagCode.E081, DiagCode.T021))
 
   test("Rule RP5.5: the exit code is the smallest class among the errors of the run"):
     def exit(sources: String*) =

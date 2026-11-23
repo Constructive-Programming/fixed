@@ -115,10 +115,10 @@ class ExcludedFormsSuite extends munit.FunSuite:
         ("Num of (String, u8)", "Num takes 1 argument(s), given 2")
     )
 
-    /** Only the `T006`: an effect declared and not performed is also `T017`, a warning. */
+    /** Only the `T006`: an effect declared and not performed is also `E081`, a warning. */
     wrong.foreach { case (code, (at, message)) =>
       assertEquals(
-        diags(decls + code).filter(_._1 != DiagCode.T017),
+        diags(decls + code).filter(_._1 != DiagCode.E081),
         List((DiagCode.T006, (decls + code).indexOf(at), message)),
         code
       )
