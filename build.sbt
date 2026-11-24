@@ -1,3 +1,6 @@
+import fixed.build.FixedSyntax
+import laika.config.SyntaxHighlighting
+
 ThisBuild / scalaVersion := "3.10.1"
 ThisBuild / organization := "com.fixed"
 ThisBuild / version := "0.1.0-SNAPSHOT"
@@ -141,6 +144,10 @@ lazy val docs = (project in file("site"))
     // GitHub Pages is not used on this repo (same as eo).
     tlSitePublishBranch := None,
     tlSitePublishTags := false,
+    // Laika 1.3 has no highlight.js integration; register the language's
+    // highlighter with the built-in registry. Defined in project/FixedSyntax.scala
+    // because `laikaExtensions` is evaluated on the build-definition classpath.
+    laikaExtensions += SyntaxHighlighting.withSyntax(FixedSyntax),
     // The plugin's mdocIn default is the ROOT `docs/` directory, which holds
     // internal plans/decisions/baselines the public site should not ingest.
     // Point it at the site's own docs directory.

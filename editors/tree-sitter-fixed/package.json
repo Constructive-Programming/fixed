@@ -1,0 +1,27 @@
+{
+  "name": "tree-sitter-fixed",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for the Fixed programming language",
+  "license": "Apache-2.0",
+  "keywords": ["tree-sitter", "parser", "fixed"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Constructive-Programming/fixed",
+    "directory": "editors/tree-sitter-fixed"
+  },
+  "bugs": {
+    "url": "https://github.com/Constructive-Programming/fixed/issues"
+  },
+  "homepage": "https://fixed.constructive.dev",
+  "main": "bindings/node",
+  "tree-sitter": [
+    {
+      "scope": "source.fixed",
+      "file-types": ["fixed"],
+      "highlights": "queries/highlights.scm",
+      "locals": "queries/locals.scm",
+      "tags": "queries/tags.scm",
+      "injection-regex": "^(fixed)$"
+    }
+  ]
+}

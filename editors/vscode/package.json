@@ -1,0 +1,48 @@
+{
+  "name": "fixed",
+  "displayName": "Fixed",
+  "description": "Syntax highlighting and bracket matching for the Fixed programming language",
+  "version": "0.1.0",
+  "publisher": "constructive-programming",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "keywords": [
+    "fixed",
+    "fixed-lang",
+    "fixed language",
+    "syntax highlighting"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Constructive-Programming/fixed",
+    "directory": "editors/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/Constructive-Programming/fixed/issues"
+  },
+  "homepage": "https://fixed.constructive.dev",
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "fixed",
+        "aliases": ["Fixed", "fixed"],
+        "extensions": [".fixed"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "fixed",
+        "scopeName": "source.fixed",
+        "path": "./syntaxes/fixed.tmLanguage.json"
+      }
+    ]
+  }
+}

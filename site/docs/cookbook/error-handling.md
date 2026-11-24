@@ -11,7 +11,7 @@ Both are caps with constructor *requirements* (`Self.fn`) and a
 destructor (`fold`). Because they are capabilities, you consume them
 with `fold` — never `match`:
 
-```
+```fixed
 cap Optional extends Functor + Folding:
     Self.fn some(value: Part) -> Self
     Self.fn none -> Self
@@ -26,7 +26,7 @@ cap Result of (E, A):
 Concrete data provides them via `satisfies`, mapping data constructors
 to cap constructors:
 
-```
+```fixed
 data Outcome of (E, A):
     Success(value: A)
     Failure(error: E)
@@ -47,7 +47,7 @@ failures.
 to the call site). Inside a `with Fail of String` function, failing is
 a plain call — no wrapping, no re-throwing:
 
-```
+```fixed
 effect Fail of E:
     fn fail(error: E) -> !
 
@@ -62,7 +62,7 @@ fn divide(a: u64, b: u64) -> is Result of (String, u64) =
 
 At the boundary, one `handle` block turns the effect back into a value:
 
-```
+```fixed
 fn compute(input: String) -> is Result of (String, u64) =
     fn inner(input: String) -> u64 with Fail of String =
         let n = parse_u64(input).fold((v) -> v, (e) -> Fail.fail(e))
@@ -85,7 +85,7 @@ layer boundary, keep the layers themselves effectful.
 Reserve `Optional` for absence that isn't an error, and convert to
 `Fail` when absence *becomes* one:
 
-```
+```fixed
 fn require_user_age(users: is Map of (String, u64), name: String)
     -> u64 with Fail of String =
     lookup_user_age(users, name).fold(

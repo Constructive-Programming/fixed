@@ -10,7 +10,7 @@ Recursive positions are wrapped in `List` (and `Tuple` for objects) so
 the derived `fold` pre-folds through them — the array callback receives
 `List of R`, not raw JSON:
 
-```
+```fixed
 data Json:
     Null
     Bool(value: bool)
@@ -27,7 +27,7 @@ Instead each fold step produces a *function* `(u64) -> String`, and
 the array/object callbacks pass `indent + 2` to their already-folded
 children — the indent travels without an accumulator parameter:
 
-```
+```fixed
 fn pretty(json: Json, indent: u64) -> String =
     json.fold(
         () -> (_) -> "null",                                   // Null
@@ -48,7 +48,7 @@ fn pretty(json: Json, indent: u64) -> String =
 `match` is for data types; `fold` for capabilities. Both appear in one
 function — match the top shape, fold the `Optional` that comes back:
 
-```
+```fixed
 fn get_field(json: Json, key: String) -> is Optional of Json =
     match json:
         Json.Object(fields) =>
@@ -69,7 +69,7 @@ fn navigate(json: Json, path: List of String) -> is Optional of Json =
 
 Building a value reads exactly like the data it produces:
 
-```
+```fixed
 let user = Json.Object([
     ("name", Json.String("Alice")),
     ("age", Json.Number(30.0)),

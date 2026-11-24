@@ -52,7 +52,7 @@ The compiled samples use no integer arithmetic. Under a rule that is specified a
 
 ### Hello world
 
-```
+```fixed
 use std.io.Console
 
 fn greet(name: String) -> () with Console =
@@ -70,7 +70,7 @@ With `Ada` as input it prints `What is your name?` and `Hello, Ada!`. `with Cons
 
 A function states the capabilities it needs from its arguments, not the data structure that holds them:
 
-```
+```fixed
 use std.io.Console
 
 // A bundle of capabilities, named with a type alias.
@@ -100,7 +100,7 @@ It prints `3 12 40 `, `plum` and `none`. `T is Label` names the element type, so
 
 Not having to name the data structure is the main reason Fixed exists:
 
-```
+```fixed
 use std.io.Console
 
 // The type of the collection is never named.
@@ -117,7 +117,7 @@ It prints `is of`. `is` introduces a bound and `of` gives a capability its type 
 
 When a closed set of variants is needed, `data` declares the shape, one variant per line:
 
-```
+```fixed
 use std.io.Console
 
 data Color:
@@ -152,7 +152,7 @@ It prints `Rgb(255, 128, 0)` and `-4.5`. Neither type declares `fold` or `show`:
 
 ### Algebraic effects
 
-```
+```fixed
 use std.io.Console
 
 fn ratio(a: f64, b: f64) -> f64 with Fail of String =
@@ -173,7 +173,7 @@ It prints `ratio: 0.75` and `error: division by zero`. `Fail` is declared in the
 
 **Integer overflow and division by zero.** **Specified, not built** (`spec/effects.md` §3.6, Rules E3.6.b, E3.6.c and E3.6.h):
 
-```
+```fixed
 fn sum(numbers: is Folding of (N is Numeric)) -> N with Overflow =
     numbers.fold(0, (acc, x) -> acc + x)
 
@@ -190,7 +190,7 @@ Integer `+`, `-`, `*` and negation perform the effect `Overflow` when the result
 
 `prop` declares an invariant next to the capability or data type it governs. The static prover decides a small fragment today (props over bounded integers and `bool`); these two samples are outside it and are **specified, not built** (`spec/properties.md` Rules P3.1, P3.2 and P5.4; the second sample is the worked example of §11.1):
 
-```
+```fixed
 cap Sorted of (Part is Ord) extends Sequencing:
     prop sorted: fold(true, (acc, prev, curr) -> acc && prev <= curr)
 
@@ -199,7 +199,7 @@ data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
     prop inRange: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
 ```
 
-```
+```fixed
 cap Stack extends Sequencing + Sized:
     fn push(value: Part) -> Self
     fn pop -> Self
@@ -220,7 +220,7 @@ The static prover checks a prop where it can. Property-based testing in a separa
 
 A function can return a capability, which refines a type with a prop. **Specified, not built** (`spec/properties.md` Rule P3.4, `spec/type_system.md` Rule 6.3.0, and `TypeAliasParams` in §7 of the grammar):
 
-```
+```fixed
 fn between(min: N is Ord, max: N) -> cap of N =
     prop inRange: min <= Self && Self <= max
 
@@ -269,8 +269,12 @@ docs/diagrams/      Mermaid diagrams of memory layouts and value flow
 compiler/           Compiler front end and backend (Scala 3)
 scalafix/           Custom Scalafix rules + testkit harness
 bench/              JMH benchmarks for the front end
+editors/            VS Code, Zed, tree-sitter, Pygments, highlight.js, Laika support
 site/               Laika + Helium sources for fixed.constructive.dev
 ```
+
+Editor and highlighter artifacts are documented in `editors/README.md`; the
+site has an [editor support page](https://fixed.constructive.dev/editors.html).
 
 ## Running the compiler
 

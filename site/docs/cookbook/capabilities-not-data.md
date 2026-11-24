@@ -10,7 +10,7 @@ representation ([`spec/type_system.md` §6](../type_system.md)).
 A bound `is Folding of (N is Numeric)` admits any collection that can
 fold — linked list, array, tree, anything:
 
-```
+```fixed
 // Works on ANY collection — linked list, array, tree, anything
 fn sum(numbers: is Folding of (N is Numeric)) -> N {
     numbers.fold(0, (acc, x) -> acc + x)
@@ -24,7 +24,7 @@ Numeric` works for `u64`, `i64`, `f64`.
 `is` bounds stack with `+`, and `Self.fn` declarations make a
 capability *constructible*, not just consumable:
 
-```
+```fixed
 cap Sequencing:
     fn head -> is Optional of Part
     fn tail -> Self
@@ -45,7 +45,7 @@ to the concrete data type at the call site via `satisfies` — see
 `type` aliases name capability bundles. They are pure aliases — no new
 type, no wrapper:
 
-```
+```fixed
 type ArrayLike = Sequencing + RandomAccess + Sized + Empty
 
 // Requires index-based access — compiler SHOULD choose a contiguous representation

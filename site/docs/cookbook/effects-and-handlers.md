@@ -10,7 +10,7 @@ colored functions.
 A function's `with` clause is its whole effect story — unordered, and
 in the type, so "what does this function do?" is a type question:
 
-```
+```fixed
 fn read_config(path: String) -> Config
     with FileSystem + Fail of String =
     let contents = FileSystem.read_file(path).fold(
@@ -28,7 +28,7 @@ Each `handle` removes one effect from the row — stack them to run a
 program under a full environment. Handlers are ordinary code: the
 `Console` handler below is the whole "runtime", no magic:
 
-```
+```fixed
 handle (do:
     handle (do:
         handle (do:
@@ -61,7 +61,7 @@ test double that fails on demand.
 There is no built-in scheduler or async/await — spawning and yielding
 are effects like any other, and *you* can implement the scheduler:
 
-```
+```fixed
 effect Channel of A:
     fn send(value: A) -> ()
     fn receive -> A

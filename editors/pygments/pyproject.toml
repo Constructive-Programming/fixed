@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fixed-pygments"
+version = "0.1.0"
+description = "Pygments lexer for the Fixed programming language"
+requires-python = ">=3.9"
+dependencies = ["pygments>=2.16"]
+keywords = ["pygments", "lexer", "fixed", "syntax highlighting"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Libraries",
+]
+
+[project.urls]
+Homepage = "https://fixed.constructive.dev"
+Repository = "https://github.com/Constructive-Programming/fixed"
+Issues = "https://github.com/Constructive-Programming/fixed/issues"
+
+[project.entry-points."pygments.lexers"]
+fixed = "fixed_pygments.lexer:FixedLexer"
+
+[tool.setuptools.packages.find]
+include = ["fixed_pygments*"]

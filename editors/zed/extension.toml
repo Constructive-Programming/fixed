@@ -1,0 +1,13 @@
+id = "fixed"
+name = "Fixed"
+description = "Fixed language support: tree-sitter highlighting, indentation, text objects, and outline."
+version = "0.1.0"
+schema_version = 1
+authors = ["Constructive Programming"]
+repository = "https://github.com/Constructive-Programming/fixed"
+
+[grammars.fixed]
+repository = "https://github.com/Constructive-Programming/fixed"
+# ponytail: `main` works after the grammar is pushed; pin to a SHA before publishing.
+commit = "main"
+path = "editors/tree-sitter-fixed"

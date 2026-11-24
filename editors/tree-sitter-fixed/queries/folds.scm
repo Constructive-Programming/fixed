@@ -1,0 +1,20 @@
+; Fold regions. Neovim, Helix, and Zed use @fold.
+[
+  (fn_decl)
+  (fn_decl_no_params)
+  (static_fn_decl)
+  (cap_decl)
+  (data_decl)
+  (effect_decl)
+  (satisfies_decl)
+  (type_decl)
+  (prop_decl)
+  (block)
+  (data_block)
+  (match_cases)
+  (handler_clauses)
+  (do_body)
+  (struct_literal)
+  (list_expression)
+  (tuple_expression)
+] @fold

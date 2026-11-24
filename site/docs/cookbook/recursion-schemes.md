@@ -11,7 +11,7 @@ run recursion in-place.
 `fold` collapses a structure bottom-up: each variant gets a callback,
 and recursive positions arrive **already folded** to the result type:
 
-```
+```fixed
 data Expr:
     Lit(value: f64)
     Add(left: Expr, right: Expr)
@@ -35,7 +35,7 @@ expression, however deep the tree is.
 The dual: build a structure top-down from a seed. The step function
 returns one *layer*, with new seeds where the recursive children go:
 
-```
+```fixed
 fn to_nat(n: u64) -> Nat =
     Nat.unfold(
         n,
@@ -50,7 +50,7 @@ fn to_nat(n: u64) -> Nat =
 Unfold-then-fold is a **hylomorphism** — the intermediate structure is
 fusable and never needs to exist in memory. Factorial as a hylomorphism:
 
-```
+```fixed
 fn factorial(n: u64) -> u64 =
     let sequence = ListF.unfold(
         n,
@@ -75,7 +75,7 @@ other branch — use the auto-derived `para`, which provides each
 recursive position as `(original, folded)`
 ([`spec/type_system.md` Rule 7.4.g](../type_system.md)):
 
-```
+```fixed
 fn insert(tree: Tree of (A is Ord), value: A) -> Tree of A =
     tree.para(
         (v) ->

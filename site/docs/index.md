@@ -14,7 +14,7 @@ representations — `List`, `Vec`, `HashMap`, `Either`. Fixed programs
 declare *capabilities*: what values can do, not what container holds
 them. The compiler picks the representation.
 
-```
+```fixed
 // Works on ANY collection — linked list, array, tree, anything
 fn sum(numbers: is Folding of (N is Numeric)) -> N {
     numbers.fold(0, (acc, x) -> acc + x)
@@ -41,7 +41,7 @@ The compilation target is LLVM IR; memory management is Perceus.
 
 ## Hello, world
 
-```
+```fixed
 use std.io.Console
 
 fn greet(name: String) -> () with Console {
@@ -85,6 +85,8 @@ The compiler is under active development. The roadmap lives in the
 
 ## Where to go next
 
+- [Editor support](editors.md) — VS Code, Zed, Neovim/Helix,
+  Pygments, highlight.js, Shiki, and the Laika highlighter.
 - [Cookbook](cookbook/README.md) — worked recipes, one page per
   feature cluster, with the example program and spec section each
   recipe draws on.

@@ -1,0 +1,235 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Fixed",
+  "scopeName": "source.fixed",
+  "fileTypes": ["fixed"],
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#declaration" },
+    { "include": "#string" },
+    { "include": "#char" },
+    { "include": "#number" },
+    { "include": "#keyword" },
+    { "include": "#boolean" },
+    { "include": "#self" },
+    { "include": "#accessor" },
+    { "include": "#type" },
+    { "include": "#function-call" },
+    { "include": "#operator" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comment": {
+      "patterns": [
+        { "name": "comment.line.double-slash.fixed", "match": "//.*$" }
+      ]
+    },
+    "declaration": {
+      "patterns": [
+        {
+          "match": "\\b(Self)\\s*\\.\\s*(fn)\\s+([a-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "variable.language.self.fixed" },
+            "2": { "name": "storage.type.function.fixed" },
+            "3": { "name": "entity.name.function.fixed" }
+          }
+        },
+        {
+          "match": "\\b(fn)\\s+([a-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.function.fixed" },
+            "2": { "name": "entity.name.function.fixed" }
+          }
+        },
+        {
+          "match": "\\b(cap|data|effect|type)\\s+([A-Z][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.fixed" },
+            "2": { "name": "entity.name.type.fixed" }
+          }
+        },
+        {
+          "match": "\\b(prop)\\s+([a-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.fixed" },
+            "2": { "name": "entity.name.function.fixed" }
+          }
+        },
+        {
+          "match": "\\b(assume)\\s+(prop)\\b",
+          "captures": {
+            "1": { "name": "storage.modifier.fixed" },
+            "2": { "name": "storage.type.fixed" }
+          }
+        },
+        {
+          "match": "\\b([A-Z][A-Za-z0-9_]*|impossible)\\s+(satisfies)\\s+([A-Z][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "entity.name.type.fixed" },
+            "2": { "name": "keyword.other.satisfies.fixed" },
+            "3": { "name": "entity.name.type.fixed" }
+          }
+        },
+        {
+          "match": "\\b(satisfies)\\b",
+          "name": "keyword.other.satisfies.fixed"
+        },
+        {
+          "match": "\\b(fip)\\s*\\(\\s*(strict|\\d[\\d_]*)\\s*\\)",
+          "captures": {
+            "1": { "name": "storage.modifier.fixed" },
+            "2": { "name": "constant.language.fixed" }
+          }
+        },
+        {
+          "match": "\\b(use)\\s+([a-z_][A-Za-z0-9_.]*)",
+          "captures": {
+            "1": { "name": "keyword.control.import.fixed" },
+            "2": { "name": "entity.name.namespace.fixed" }
+          }
+        },
+        {
+          "match": "\\b(using)\\b",
+          "name": "keyword.control.import.fixed"
+        }
+      ]
+    },
+    "string": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.fixed",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.fixed",
+              "match": "\\\\(?:u\\{[0-9A-Fa-f]+\\}|.)"
+            }
+          ]
+        }
+      ]
+    },
+    "char": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.fixed",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.fixed",
+              "match": "\\\\(?:u\\{[0-9A-Fa-f]+\\}|.)"
+            }
+          ]
+        }
+      ]
+    },
+    "number": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.fixed",
+          "match": "\\b\\d[\\d_]*\\.\\d[\\d_]*(?:[eE][+-]?\\d+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.fixed",
+          "match": "\\b\\d[\\d_]*\\b"
+        }
+      ]
+    },
+    "keyword": {
+      "patterns": [
+        {
+          "name": "keyword.control.fixed",
+          "match": "\\b(?:if|else|match|handle|do|let|resume|return)\\b"
+        },
+        {
+          "name": "storage.type.fixed",
+          "match": "\\b(?:fn|cap|data|effect|type|prop|satisfies|use|using|pub|linear|fip)\\b"
+        },
+        {
+          "name": "keyword.other.fixed",
+          "match": "\\b(?:forall|suchThat|implies|is|of|with|as|extends|in|mod|impossible|unreachable)\\b"
+        }
+      ]
+    },
+    "boolean": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.fixed",
+          "match": "\\b(?:true|false)\\b"
+        }
+      ]
+    },
+    "self": {
+      "patterns": [
+        { "name": "variable.language.self.fixed", "match": "\\bSelf\\b" }
+      ]
+    },
+    "accessor": {
+      "patterns": [
+        {
+          "match": "\\.\\s*([A-Z][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "entity.name.function.constructor.fixed" }
+          }
+        },
+        {
+          "match": "\\.\\s*([a-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "variable.other.property.fixed" }
+          }
+        }
+      ]
+    },
+    "type": {
+      "patterns": [
+        {
+          "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(:)",
+          "captures": {
+            "1": { "name": "variable.parameter.fixed" },
+            "2": { "name": "punctuation.separator.fixed" }
+          }
+        },
+        {
+          "match": "\\b([A-Z][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "entity.name.type.fixed" }
+          }
+        }
+      ]
+    },
+    "function-call": {
+      "patterns": [
+        {
+          "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.fixed" }
+          }
+        }
+      ]
+    },
+    "operator": {
+      "patterns": [
+        {
+          "name": "keyword.operator.fixed",
+          "match": "->|=>|\\|>|<-"
+        },
+        {
+          "name": "keyword.operator.fixed",
+          "match": "==|!=|<=|>=|&&|\\|\\|"
+        },
+        {
+          "name": "keyword.operator.fixed",
+          "match": "[+\\-*/%<>=!|]"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.accessor.fixed", "match": "\\." },
+        { "name": "punctuation.separator.fixed", "match": "[:;,]" },
+        { "name": "punctuation.section.fixed", "match": "[(){}\\[\\]]" }
+      ]
+    }
+  }
+}

@@ -14,7 +14,7 @@ field or method signature is inferred **phantom**. Transitions are
 just functions between the phantom instantiations; the invalid ones
 don't exist, so they can't be called:
 
-```
+```fixed
 data Locked:
     Locked
 
@@ -47,7 +47,7 @@ move, and the compiler can reuse the cell in place
 A function polymorphic over the state works on any door — the same
 type variable constrains input and output (Quine's "reflection"):
 
-```
+```fixed
 fn inspect(door: is Door of S) -> String =
     "Door: ".concat(door.name)
 ```
@@ -60,7 +60,7 @@ Established` for a TCP socket, with `send` only accepting
 
 Tag a quantity with its unit the same way:
 
-```
+```fixed
 data Meters:
     Meters
 

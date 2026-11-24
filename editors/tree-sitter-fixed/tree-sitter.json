@@ -1,0 +1,28 @@
+{
+  "grammars": [
+    {
+      "name": "fixed",
+      "camelcase": "Fixed",
+      "scope": "source.fixed",
+      "path": ".",
+      "file-types": ["fixed"],
+      "highlights": "queries/highlights.scm",
+      "locals": "queries/locals.scm",
+      "tags": "queries/tags.scm",
+      "injection-regex": "^(fixed)$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "Apache-2.0",
+    "description": "Tree-sitter grammar for the Fixed programming language",
+    "authors": [
+      {
+        "name": "Constructive Programming"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/Constructive-Programming/fixed"
+    }
+  }
+}

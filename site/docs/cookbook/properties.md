@@ -10,7 +10,7 @@ verifier can and queued as property tests where it can't yet
 The invariant travels with the capability, so any value typed `C is
 Sorted` already *is* sorted — no separate postcondition needed:
 
-```
+```fixed
 cap Sorted of (Part is Ord) extends Sequencing:
     prop sorted: fold(true, (acc, prev, curr) -> acc && prev <= curr)
 
@@ -20,7 +20,7 @@ cap NonEmpty extends Sequencing + Sized:
 
 Quantify with `forall`, constrain with `suchThat`:
 
-```
+```fixed
 cap Stack extends Sequencing + Sized:
     fn push(value: Part) -> Self
     fn pop -> Self
@@ -35,7 +35,7 @@ cap Stack extends Sequencing + Sized:
 A function that returns `C is Sorted` has its sortedness obligation
 checked at the call site — the result type *is* the contract:
 
-```
+```fixed
 fn sort(collection: C is Sequencing + Sized of (A is Ord)) -> C is Sorted =
     collection.fold_right(C.empty, (x, acc) -> insert_sorted(acc, x))
 ```
@@ -45,7 +45,7 @@ fn sort(collection: C is Sequencing + Sized of (A is Ord)) -> C is Sorted =
 `satisfies` can mark a constructor `impossible` — a satisfaction that
 can never fire, statically:
 
-```
+```fixed
 // u64 is always present — it can never be "none"
 u64 satisfies Optional of Self:
     Self as some
@@ -62,7 +62,7 @@ same move makes `NonEmptyList` a `Sequencing` that can never be empty.
 refinement. The parameters become type-level indices, so the
 constraint holds without a wrapper value at runtime:
 
-```
+```fixed
 cap Bounded of (N is Numeric + Ord, lo: N, hi: N):
     Self.fn new(value: N) -> Self
     fn value -> N

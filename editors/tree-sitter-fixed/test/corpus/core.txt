@@ -1,0 +1,232 @@
+==================
+Function declaration
+==================
+
+fn add(x: u64, y: u64) -> u64 =
+    x + y
+
+---
+
+(source_file
+  (fn_decl
+    (identifier)
+    (fn_params
+      (fn_param
+        (identifier)
+        (primitive_type
+          (identifier)))
+      (fn_param
+        (identifier)
+        (primitive_type
+          (identifier))))
+    (primitive_type
+      (identifier))
+    (block_tail
+      (block
+        (binary_expression
+          (postfix_expression
+            (identifier))
+          (postfix_expression
+            (identifier)))))))
+
+==================
+Capabilities and data
+==================
+
+cap Sorted of (Part is Ord) extends Sequencing:
+    prop sorted: fold(true, (acc, prev, curr) -> acc && prev <= curr)
+    fn head -> is Optional of Part
+
+data Color:
+    Red
+    Green
+
+---
+
+(source_file
+  (cap_decl
+    (type_identifier)
+    (of_args
+      (of_simple_arg
+        (type_identifier)
+        (cap_bound_chain
+          (cap_bound
+            (type_identifier)))))
+    (cap_bound_chain
+      (cap_bound
+        (type_identifier)))
+    (decl_block
+      (block
+        (prop_decl
+          (identifier)
+          (postfix_expression
+            (identifier)
+            (call_suffix
+              (postfix_expression
+                (boolean))
+              (postfix_expression
+                (lambda
+                  (lambda_params
+                    (lambda_param
+                      (identifier))
+                    (lambda_param
+                      (identifier))
+                    (lambda_param
+                      (identifier)))
+                  (block_tail
+                    (binary_expression
+                      (postfix_expression
+                        (identifier))
+                      (binary_expression
+                        (postfix_expression
+                          (identifier))
+                        (postfix_expression
+                          (identifier))))))))))
+        (fn_decl_no_params
+          (identifier)
+          (is_bound
+            (cap_bound_chain
+              (cap_bound
+                (type_identifier)
+                (of_args
+                  (of_simple_arg
+                    (type_identifier))))))))))
+  (data_decl
+    (type_identifier)
+    (data_body
+      (data_block
+        (postfix_expression
+          (type_identifier))
+        (postfix_expression
+          (type_identifier))))))
+
+==================
+Effects and handlers
+==================
+
+effect Fail of E:
+    fn fail(error: E) -> !
+
+fn run() -> () with Fail of String =
+    handle Fail.fail("no"):
+        Fail.fail(error) => ()
+
+---
+
+(source_file
+  (effect_decl
+    (type_identifier)
+    (of_args
+      (of_simple_arg
+        (type_identifier)))
+    (decl_block
+      (block
+        (fn_decl
+          (identifier)
+          (fn_params
+            (fn_param
+              (identifier)
+              (type_identifier)))
+          (never_type)))))
+  (fn_decl
+    (identifier)
+    (fn_params)
+    (unit)
+    (with_clause
+      (effect_row
+        (effect_bound
+          (type_identifier)
+          (of_arg
+            (type_identifier)
+            (postfix_expression
+              (handle_expr
+                (postfix_expression
+                  (type_identifier)
+                  (field_access
+                    (identifier)
+                    (call_suffix
+                      (postfix_expression
+                        (string)))))
+                (handler_clauses
+                  (handler_clause
+                    (type_identifier)
+                    (identifier)
+                    (handler_param
+                      (identifier))
+                    (block_tail
+                      (postfix_expression
+                        (unit)))))))))))))
+
+==================
+Match and contextual keywords
+==================
+
+fn pick(xs: List of i64) -> i64 =
+    match xs:
+        [] => 0
+        [first, ..] => first
+
+fn sort(xs: C is Sequencing + Sized of (A is Ord)) -> C is Sorted =
+    xs
+
+---
+
+(source_file
+  (fn_decl
+    (identifier)
+    (fn_params
+      (fn_param
+        (identifier)
+        (type_identifier)
+        (of_args
+          (of_simple_arg
+            (primitive_type
+              (identifier))))))
+    (primitive_type
+      (identifier))
+    (block_tail
+      (block
+        (postfix_expression
+          (match_expr
+            (postfix_expression
+              (identifier))
+            (match_cases
+              (match_case
+                (or_pattern
+                  (list_pattern))
+                (block_tail
+                  (postfix_expression
+                    (number))))
+              (match_case
+                (or_pattern
+                  (list_pattern
+                    (identifier)
+                    (rest_pattern)))
+                (block_tail
+                  (postfix_expression
+                    (identifier))))))))))
+  (fn_decl
+    (identifier)
+    (fn_params
+      (fn_param
+        (identifier)
+        (type_identifier)
+        (cap_bound_chain
+          (cap_bound
+            (type_identifier)))
+        (cap_bound
+          (type_identifier)
+          (of_args
+            (of_simple_arg
+              (type_identifier)
+              (cap_bound_chain
+                (cap_bound
+                  (type_identifier))))))))
+    (type_identifier)
+    (cap_bound_chain
+      (cap_bound
+        (type_identifier)))
+    (block_tail
+      (block
+        (postfix_expression
+          (identifier))))))
