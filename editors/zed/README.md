@@ -12,19 +12,17 @@ For local development, open the command palette, run
 `zed: install dev extension`, and select this directory. Zed builds the
 extension host automatically.
 
-The extension loads the grammar from the main repository:
+The extension pins the grammar to the commit that contains it:
 
 ```toml
 [grammars.fixed]
 repository = "https://github.com/Constructive-Programming/fixed"
-commit = "main"
+commit = "5b57ded78ef78cfdcab1c330753ca9d4481a27c5"
 path = "editors/tree-sitter-fixed"
 ```
 
-`commit = "main"` tracks the branch. The grammar directory must be present on
-the tracked branch, so push `editors/tree-sitter-fixed` before installing the
-dev extension. Before publishing, replace `main` with the commit SHA that
-contains the grammar; the registry and users then get a reproducible grammar.
+Bump the SHA when the grammar changes; the registry and users then get a
+reproducible grammar.
 
 ## What it provides
 

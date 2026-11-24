@@ -8,6 +8,6 @@ repository = "https://github.com/Constructive-Programming/fixed"
 
 [grammars.fixed]
 repository = "https://github.com/Constructive-Programming/fixed"
-# ponytail: `main` works after the grammar is pushed; pin to a SHA before publishing.
-commit = "main"
+# Pinned to the commit that contains editors/tree-sitter-fixed.
+commit = "5b57ded78ef78cfdcab1c330753ca9d4481a27c5"
 path = "editors/tree-sitter-fixed"
