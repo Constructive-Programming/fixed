@@ -1,3 +1,7 @@
+{%
+laika.excludeFromNavigation = false
+%}
+
 # Fixed
 
 A purely functional programming language that operates at the
@@ -16,9 +20,8 @@ them. The compiler picks the representation.
 
 ```fixed
 // Works on ANY collection — linked list, array, tree, anything
-fn sum(numbers: is Folding of (N is Numeric)) -> N {
+fn sum(numbers: is Folding of (N is Numeric)) -> N =
     numbers.fold(0, (acc, x) -> acc + x)
-}
 ```
 
 Request `Sequencing + Folding`? The compiler might choose a linked
@@ -44,15 +47,13 @@ The compilation target is LLVM IR; memory management is Perceus.
 ```fixed
 use std.io.Console
 
-fn greet(name: String) -> () with Console {
-    Console.print_line("Hello, ".concat(name).concat("!"))
-}
+fn greet(name: String) -> () with Console =
+    Console.printLine("Hello, ".concat(name).concat("!"))
 
-fn main() -> () with Console {
-    Console.print_line("What is your name?")
-    let name = Console.read_line()
+fn main() -> () with Console =
+    Console.printLine("What is your name?")
+    let name = Console.readLine()
     greet(name)
-}
 ```
 
 `with Console` declares the effect. No hidden I/O — it's in the type.
@@ -78,13 +79,10 @@ most often — capability bounds, error handling with effects, recursion
 schemes, phantom-typed state machines, concurrency as algebraic
 effects, properties — each lifted from the tested `examples/` corpus.
 
-## Status
-
-The compiler is under active development. The roadmap lives in the
-[implementation plan][plan] on GitHub.
-
 ## Where to go next
 
+- [Getting started](getting-started.md) — build the compiler, check a
+  program, compile it to LLVM IR, and ship a native executable.
 - [Editor support](editors.md) — VS Code, Zed, Neovim/Helix,
   Pygments, highlight.js, Shiki, and the Laika highlighter.
 - [Cookbook](cookbook/README.md) — worked recipes, one page per
@@ -99,6 +97,15 @@ The compiler is under active development. The roadmap lives in the
   — the README documents the toolchain (scalafmt, scalafix, CPD,
   JMH) and how to run it. The 11 example programs under `examples/`
   are the living corpus the whole suite checks against.
+- [References](references/README.md) — assumptions, the bibliography and
+  the projects Fixed learns from.
 - [implementation plan][plan] — phases, milestones and open questions.
+
+@:details(Status)
+
+The compiler is under active development. The roadmap lives in the
+[implementation plan][plan] on GitHub.
+
+@:@
 
 [plan]: https://github.com/Constructive-Programming/fixed/blob/main/docs/plans/implementation-plan.md

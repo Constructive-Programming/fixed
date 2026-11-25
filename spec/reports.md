@@ -1,35 +1,5 @@
 # Fixed Reports: Coverage, Cardinality and the Tool Interface
 
-**Status:** Draft v0.2.9
-**Specifies:** two analyses the compiler runs and reports — coverage of code by verification, and cardinality of types — the report of what the link step chose, the files a build reads besides its sources, the interface external tools use, and the exit codes of every command.
-**Last revised:** 2026-11-22
-
-**Changes from v0.2.8.** Rule RP4.1 is restated around the four-term carrier `a·ε₀ + b·ωⁿ + c·ω + d` (new Rules RP4.1.a–RP4.1.c). The intermediate `ωⁿ` tier separates a finite product of countably infinite spaces from a countable sum without recording exponents; `ε₀` caps unbounded multiplicative depth. Addition keeps coefficients, multiplication is bilinear over the tier table, and powers use repeated squaring. A function whose row contains a resumable effect now counts as `ε₀` times its pure count, replacing the former flat `ω` (`bool -> bool with Console` is `4ε₀`), so the coefficient distinguishes such functions. The count is exact only in the finite tier; above it the tiers are structural, not cardinal numbers. Rule RP4.4 prints the normal form, and the JSON form gives the four coefficients.
-
-**Changes from v0.2.7.** Rule RP4.1: the count of a function type is exact only for a function without `Diverge` (`spec/type_system.md` Rule 7.4.h); how to count one with it is left to the owner. Later the same day the owner settled it: each abortive effect of the row, `Diverge` included, adds its outcomes to the count of the result. On 2026-11-22 the count became a value of four coordinates, `a·ε₀ + b·ωⁿ + c·ω + d`, and a function with a resumable effect counts `ε₀`.
-
-**Changes from v0.2.6.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Recursion inside a capability"): Rule RP5.5 gives class `6` to `T028` (a default body of a capability that reaches itself through `self`, `spec/type_system.md` Rule 7.4.j).
-
-**Changes from v0.2.5.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"): the lock file (Rule RP5.3) and the link report (Rule RP5.4) hold no deferred satisfaction site, and class `7` of Rule RP5.5 arises at package compile only.
-
-**Changes from v0.2.4.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Shadowing of prelude names"): `W` codes are warnings numbered in the decade of the document that defines them, as `E` codes are (`W060`, `spec/type_system.md` Rule 4.3.a).
-
-**Changes from v0.2.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"). Rule RP5.5 gives classes to `T025` (constant arithmetic that does not fit, class `6`), `E107` (an integer refinement not proved where it is established, class `11`) and `T026` (`widen` at a 64-bit type, class `99`), and says that a program's abort on an unhandled arithmetic effect is the program's exit status, not a class.
-
-**Changes from v0.2.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"), decision 1. New Rule RP5.5: exit code `0` for no failure and one number per error class, for every command; the smallest class number wins when a run has several. The table is proposed by the author; the owner confirms the class list. Decision 2 adds `T024` (an ascription that names a bound, `spec/type_system.md` Rule 5.11) to the type errors.
-
-**Changes from v0.2.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule RP3.2: the specification status follows the order of Rule P7.7.
-
-**Changes from v0.2.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the link report shows props tested under another binding, decisions resting on `assumed` props and each satisfier's claims beside the contract (Rule RP5.4); the lock file's deferred satisfaction sites (Rule RP5.3); layout uses no count, since a tag is one byte and each type has one layout (Rule RP4.3); "per satisfaction" replaces "per satisfying type".
-
-**Changes from v0.1** (`docs/decisions/P6-resolution-round-2026-11-20.md`, D4, D6, D10).
-- **Counters are the measurement lane's input** (Rule RP3.3). Region and request counters are the demand side of `spec/properties.md` Rule P7.9; they go to the profile file and never license a fact.
-- **The lock file and the profile file** (new Rule RP5.3) are build inputs and things tools read (Rule RP5.1). A build is a function of its sources, its dependencies, the lock file and the profile file; it never measures.
-- **The link report** (new Rule RP5.4, `--explain-selection`): per choice point the candidates, their scores, the disambiguation rule that decided and whether the data was measured or static.
-- **Cardinality of choice points** (Rule RP4.2): symbolic until link, a number after it. An unbounded type variable still admits no inspection, so the parametric count is unchanged.
-
-**Why this document exists.** Both analyses were proposed as optional plugins. Both turned out to be things the compiler needs for itself: counters are the input of measured selection and specialisation (`spec/properties.md` Rule P7.9), and counting inhabitants is already done three times (exhaustiveness, generators, layout). They are therefore compiler passes with reports, and tools outside the compiler read those reports and the package interface. The decisions are recorded in `docs/decisions/P5-reports-and-tools.md`.
-
 ## 1. Scope
 
 This document specifies coverage (§3), cardinality (§4), and the tool interface with the files and reports it reads (§5). It does not specify the report of `spec/memory_management.md` §19, to which `spec/compilation_model.md` Rule CM5.8 and `spec/cost.md` Rule CT6.4 add; it only places the new reports in the same family.
@@ -349,3 +319,37 @@ Every command uses this one table: the checker `fixed <file>...`, `fixed compile
 | `spec/type_system.md` | §6.4 refinement capabilities lower the count; Rule 6.5.5 names the disambiguation rule the link report shows |
 | `spec/memory_management.md` | §19 is the first report of the family |
 | `docs/decisions/P5-reports-and-tools.md` | The decision and the alternatives rejected |
+
+@:details(Status and changes)
+
+**Status:** Draft v0.2.9
+**Specifies:** two analyses the compiler runs and reports — coverage of code by verification, and cardinality of types — the report of what the link step chose, the files a build reads besides its sources, the interface external tools use, and the exit codes of every command.
+**Last revised:** 2026-11-22
+
+**Changes from v0.2.8.** Rule RP4.1 is restated around the four-term carrier `a·ε₀ + b·ωⁿ + c·ω + d` (new Rules RP4.1.a–RP4.1.c). The intermediate `ωⁿ` tier separates a finite product of countably infinite spaces from a countable sum without recording exponents; `ε₀` caps unbounded multiplicative depth. Addition keeps coefficients, multiplication is bilinear over the tier table, and powers use repeated squaring. A function whose row contains a resumable effect now counts as `ε₀` times its pure count, replacing the former flat `ω` (`bool -> bool with Console` is `4ε₀`), so the coefficient distinguishes such functions. The count is exact only in the finite tier; above it the tiers are structural, not cardinal numbers. Rule RP4.4 prints the normal form, and the JSON form gives the four coefficients.
+
+**Changes from v0.2.7.** Rule RP4.1: the count of a function type is exact only for a function without `Diverge` (`spec/type_system.md` Rule 7.4.h); how to count one with it is left to the owner. Later the same day the owner settled it: each abortive effect of the row, `Diverge` included, adds its outcomes to the count of the result. On 2026-11-22 the count became a value of four coordinates, `a·ε₀ + b·ωⁿ + c·ω + d`, and a function with a resumable effect counts `ε₀`.
+
+**Changes from v0.2.6.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Recursion inside a capability"): Rule RP5.5 gives class `6` to `T028` (a default body of a capability that reaches itself through `self`, `spec/type_system.md` Rule 7.4.j).
+
+**Changes from v0.2.5.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"): the lock file (Rule RP5.3) and the link report (Rule RP5.4) hold no deferred satisfaction site, and class `7` of Rule RP5.5 arises at package compile only.
+
+**Changes from v0.2.4.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Shadowing of prelude names"): `W` codes are warnings numbered in the decade of the document that defines them, as `E` codes are (`W060`, `spec/type_system.md` Rule 4.3.a).
+
+**Changes from v0.2.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"). Rule RP5.5 gives classes to `T025` (constant arithmetic that does not fit, class `6`), `E107` (an integer refinement not proved where it is established, class `11`) and `T026` (`widen` at a 64-bit type, class `99`), and says that a program's abort on an unhandled arithmetic effect is the program's exit status, not a class.
+
+**Changes from v0.2.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"), decision 1. New Rule RP5.5: exit code `0` for no failure and one number per error class, for every command; the smallest class number wins when a run has several. The table is proposed by the author; the owner confirms the class list. Decision 2 adds `T024` (an ascription that names a bound, `spec/type_system.md` Rule 5.11) to the type errors.
+
+**Changes from v0.2.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule RP3.2: the specification status follows the order of Rule P7.7.
+
+**Changes from v0.2.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the link report shows props tested under another binding, decisions resting on `assumed` props and each satisfier's claims beside the contract (Rule RP5.4); the lock file's deferred satisfaction sites (Rule RP5.3); layout uses no count, since a tag is one byte and each type has one layout (Rule RP4.3); "per satisfaction" replaces "per satisfying type".
+
+**Changes from v0.1** (`docs/decisions/P6-resolution-round-2026-11-20.md`, D4, D6, D10).
+- **Counters are the measurement lane's input** (Rule RP3.3). Region and request counters are the demand side of `spec/properties.md` Rule P7.9; they go to the profile file and never license a fact.
+- **The lock file and the profile file** (new Rule RP5.3) are build inputs and things tools read (Rule RP5.1). A build is a function of its sources, its dependencies, the lock file and the profile file; it never measures.
+- **The link report** (new Rule RP5.4, `--explain-selection`): per choice point the candidates, their scores, the disambiguation rule that decided and whether the data was measured or static.
+- **Cardinality of choice points** (Rule RP4.2): symbolic until link, a number after it. An unbounded type variable still admits no inspection, so the parametric count is unchanged.
+
+**Why this document exists.** Both analyses were proposed as optional plugins. Both turned out to be things the compiler needs for itself: counters are the input of measured selection and specialisation (`spec/properties.md` Rule P7.9), and counting inhabitants is already done three times (exhaustiveness, generators, layout). They are therefore compiler passes with reports, and tools outside the compiler read those reports and the package interface. The decisions are recorded in `docs/decisions/P5-reports-and-tools.md`.
+
+@:@

@@ -1,29 +1,5 @@
 # Fixed Memory Management
 
-**Status:** Draft v0.5.6
-**Specifies:** how the compiler places, frees and reference-counts runtime values for Fixed v0.4.4 source: lifetime classes, immediates, data-stack regions, counted regions, the Perceus heap, destinations, value witnesses, reuse (FBIP), borrowing, effect-handler memory, structured parallelism, the `fip` contract and the memory report.
-**Last revised:** 2026-11-21
-
-**Changes from v0.5.5.** The examples of §22 whose integer arithmetic is not proved in range declare `Overflow` (`spec/effects.md` §3.6, specified and not built).
-
-**Changes from v0.5.4.** Settles minor 8 of the consistency review of 2026-11-20 by an author's ruling: Rule MM5.2(b) no longer decides placement in a baseline version from a cost contract, which `spec/cost.md` Rule CT6.5 forbids; a carried value of parameter type is long-lived there unless the requirement that rebuilds it is `fip`, and a clone for a known type repeats the check.
-
-**Changes from v0.5.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"): the application link (§20) resolves no satisfaction site (`spec/compilation_model.md` Rule CM6.6).
-
-**Changes from v0.5.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"), decision 3. OQ-PR5: derived `fold`, `unfold` and `map` of linear data run in bounded native stack (`spec/type_system.md` Rule 7.4.b.3); trees do not yet.
-
-**Changes from v0.5.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Descriptors on every cell are decided; only the optimisation of omitting one stays open (OQ-MM7). Rule MM20.2: no witness travels with an anonymous result.
-
-**Changes from v0.5.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): an `Inline` value that is not an immediate is copied out to a cell with a descriptor where it meets code that does not know its type (Rule MM3.1); a `Static` cell carries a count word holding the immortal sentinel, and a `Heap` cell holds counted references only to cells with a count (Rules PR3.1, PR7.3); the type table has a row for every kind of cell (Rules PR3.1, MM7.3); Rules PR5.5 and PR5.6 cite the table convention of Rule CM4.6 instead of restating it; §20.3 no longer gives the static prover `assumed` props, places `E071`, `E083`, `E085` and the deferred-site binding, and states where a `proved` status from enumeration reaches; "header" is the descriptor plus the count word, and stale phrases about tags and headers are corrected.
-
-**Changes from v0.4.** Applies decision P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`, D6, D7, D9, D11, D15, D16). A data type instance that holds no reference and fits in 64 bits is an **immediate**: no cell, no header, no count (§3.3, `spec/compilation_model.md` Rule CM3.5). The value witness gains `width`, and its family is fixed: `imm1`, `imm2`, `imm4`, `imm8`, `ref` (Rule MM7.3); `copy` takes size and field kinds from the link-time type table. A flat container stores elements at the witness's width (Rule MM16.3). The cell tag is unique in the link unit and indexes the type table; every cell, in every class, carries its tag and reference map (provisional, OQ-MM7), and only a `Heap` cell carries a count (Rule PR3.1). Rule PR7.3 states what the runtime's drop does now and what it still owes. Ownership clones are requested only where the run-time `rc == 1` test cannot stand in (Rule PR6.3). Calls through a capability table follow the convention derived from the requirement's signature (Rule PR5.5). §20.3 follows the pipeline of package compile, application link and test build; only `proved` and `assumed` props may justify reuse. §22.2 says that its `map` is what the derived `map` does. The "Recheck-style" label on a pass over Core is withdrawn.
-
-**Changes from v0.3.** The compilation model is now `spec/compilation_model.md`: every function has a polymorphic **baseline** version that receives witnesses, and specialised **clones** are built on top of it under one size budget. In this document: the class witness of Rule MM7.3 becomes the value witness, gains `copy` and `kind`, and is the default instead of a boundary case; Rule MM7.4 defers to the clone rules; the cell header carries a reference map (Rule PR3.1); the version cap and copying beyond it are withdrawn (Rule PR5.5); a `fip fn` gains a copying shared entry and may be polymorphic (§18); `fip(n)` and `fip` on method requirements are specified (Rule MM18.5, resolving OQ-MM1); the signature facts of Rule MM20.2 are the core of the package interface. The callee, not the caller, evacuates at a floor entry (Rule MM5.5). Stale wording that still said "quantity" where ownership is meant was corrected.
-
-**Changes from v0.2.** Reference-count traffic and reuse are decided by **demands** and **exclusive ownership** (`spec/quantities.md` §4.1), not by quantity 1: a binding used once is not necessarily a value owned once. Reuse is hybrid: unconditional for exclusively owned values, after a runtime `rc == 1` test for shared `Heap` values (Rule PR6.3). A caller holding a shared value calls the callee's shared version, or copies the demanded part beyond the version cap and into `fip` functions (`spec/quantities.md` Rule Q9.3). Borrowing is the `read` demand (§13). Closures whose parameter is `exclusive` carry two code pointers (Rule PR5.6). Escape facts, classes and demands are computed on Core after lowering (§20.3).
-
-**Changes from v0.1 (`spec/perceus.md`).** The document is renamed and widened. v0.1 specified a pure Perceus model in which stack allocation was keyed on quantity 1. v0.2 separates two axes: **quantity** (0 / 1 / ω, `spec/quantities.md`) decides reference-count traffic, and **lifetime class** (§3) decides placement. Most values live in headerless, refcount-free data-stack regions in the style of Goose; the Perceus heap and counted regions hold only values that are long-lived in the sense of Rule MM5.2. Perceus rules keep their `PR` identifiers so existing citations stay valid; new rules use `MM`. Rule PR3.1.a (SCC stack allocation gated on escape) is superseded by §5 and §15. OQ-PR2 is resolved for structured parallelism (§17).
-
 ## 1. Scope
 
 This document specifies:
@@ -221,7 +197,7 @@ Copying the demanded part of a shared value in the shared entry of a `fip fn` (�
 
 **Warning W110 (evacuation in hot code).** The compiler warns when it inserts an evacuation in hot code. Without profile data, hot means inside a `fold` / `unfold` step, or inside a handler clause that runs inside one. With profile data (Phase 6), the profile decides.
 
-```
+```text
 warning[W110]: value copied to the heap inside a fold step
   --> src/index.fixed:42:17
    |
@@ -297,7 +273,7 @@ A baseline version (`spec/compilation_model.md` §3) receives a hidden **value w
 
 **The family is fixed.** A value witness is one of `imm1`, `imm2`, `imm4`, `imm8` (an immediate of that width, §3.3) or `ref` (a cell). An immediate needs no `dup`, `drop` or `copy`, so its witness does not depend on its type or class. A `ref` witness does not depend on the type either: what is specific to a type (size, field kinds) is read from the cell's descriptor and the link-time type table (Rule PR3.1, `spec/compilation_model.md` Rule CM8.8). `ref` has one static instance per class that can hold a cell (`Frame` and stack `Dest`, `Region`, `Heap`, `Static`), because `drop` and `reuse_test` differ by class. Generic code picks a witness from this family, for a parameterised instance as a function of the witnesses of its arguments (Rule CM3.5); it never builds a value witness at run time. The reason is that a witness per type instance would have to be built where the instance first appears, which baseline code cannot do without allocating.
 
-```
+```text
 witness(op, v, dest)    op ∈ { drop, dup, reuse_test, evacuate, copy, size, width, kind }
 ```
 
@@ -338,7 +314,7 @@ A function larger than the budget has no clones and keeps its one witness-taking
 
 Every cell carries a **descriptor**; a `Heap` or `Static` cell also carries a count word in front of it, and the two together are its **header**:
 
-```
+```text
 {
     rc: i64,            // refcount in Heap cells; the immortal sentinel in Static cells; absent otherwise
     tag,                // unique in the link unit; indexes the type table
@@ -416,7 +392,7 @@ Input invariants:
 
 The pass first converts the IR to A-normal form: every non-trivial subexpression is named via `let`, so every argument position is a variable reference.
 
-```
+```fixed
 // Before ANF:
 g(f(x), h(x))
 
@@ -479,7 +455,7 @@ Every entry of a capability table also carries two pointers (Rule CM4.2); what e
 
 When `drop x` (or `consume x`) precedes a constructor of the same heap shape, the compiler generates a reuse token for `x`'s memory and passes it to the constructor.
 
-```
+```fixed
 // Original:
 match list:
     List.Cons(h, t) => List.Cons(transform(h), recur(t))
@@ -551,7 +527,7 @@ Drop functions apply to `Heap` values. Fields that are not RC-tracked are skippe
 
 When the type is fully known at a `drop` site, the drop sequence is inlined:
 
-```
+```fixed
 // drop x where x: List of i64, x is List.Cons:
 let h = x.head
 let t = x.tail
@@ -568,7 +544,7 @@ Dropping a value must run in bounded native stack, whatever the shape of the val
 
 A drop function that drops a recursive field last makes it a tail call:
 
-```
+```fixed
 fn dropList(x: List of A) -> () =
     match x:
         List.Nil => free(x)
@@ -588,7 +564,7 @@ The compiler must guarantee tail-call optimization for compiler-emitted drop fun
 
 **Rule PR7.3.a (Tail calls in the program's code).** A call of a function to itself in tail position is a jump: it takes no native frame, in every version of the function (baseline and clone) and in every build. This is a guarantee of the language, so a loop written as recursion under `Diverge` (`spec/type_system.md` Rule 7.4.h) runs in bounded native stack:
 
-```
+```fixed
 fn serve(state: State) -> ! with Console + Diverge =
     let next = step(state)
     serve(next)
@@ -681,7 +657,7 @@ Mutually recursive data types form an SCC (`spec/type_system.md` §7.5). SCC mem
 
 All members of an SCC share one header layout; their tags, unique in the link unit (Rule PR3.1), already distinguish every variant of every member. Drop functions for SCC members may share fingerprints, which enables reuse across members.
 
-```
+```fixed
 data Tree:
     Branch(node: Node)
     Leaf
@@ -784,7 +760,7 @@ A `fip fn` has **one body**: the version in which every part it reuses is exclus
 
 A violation is `error[E110]: fip contract violated`. The error names the rule item violated and prints the reason chain (§19) of the offending allocation or RC operation.
 
-```
+```text
 error[E110]: fip contract violated: heap allocation (Rule MM18.1(1))
   --> src/tree.fixed:31:13
    |
@@ -899,7 +875,7 @@ Every performance statement in this document is a hypothesis until measured; the
 
 ### 22.1 Simple let-binding (quantity ω, `Frame`)
 
-```
+```fixed
 fn countPairs(x: i64, y: i64) -> i64 with Overflow =
     let pair = makePair(x, y)        // built in this function's Frame region (Dest at makePair)
     pair.first + pair.second           // two borrowed reads
@@ -909,7 +885,7 @@ fn countPairs(x: i64, y: i64) -> i64 with Overflow =
 
 ### 22.2 Match with reuse (FBIP)
 
-```
+```fixed
 fn map(list: List of A, f: A -> B) -> List of B =
     match list:
         List.Cons(h, t) => List.Cons(f(h), map(t, f))
@@ -922,7 +898,7 @@ Fixed functions cannot call themselves. The code above is what the auto-derived 
 
 ### 22.3 Fold with per-step temporaries
 
-```
+```fixed
 fn totalLen(words: List of String) -> u64 with Overflow =
     words.fold(0, (acc, w) -> acc + w.trim().length())
 ```
@@ -931,7 +907,7 @@ fn totalLen(words: List of String) -> u64 with Overflow =
 
 ### 22.4 Churn sent to the heap
 
-```
+```fixed
 fn index(lines: List of String) -> Map of (String, u64) =
     lines.fold(Map.empty, (m, line) -> m.insert(keyOf(line), line.length()))
 ```
@@ -940,7 +916,7 @@ If `m` is exclusively owned and `insert` reuses the path it rebuilds, the step i
 
 ### 22.5 Linear effect handler
 
-```
+```fixed
 linear effect Lock:
     fn release -> ()
 
@@ -983,3 +959,31 @@ The `Lock` handler is installed once and consumed by `Lock.release`. Its continu
 | `spec/stdlib.md` | `.clone()` is the explicit copy; borrow inference (§13) is the implicit mechanism |
 | `docs/plans/implementation-plan.md` | Phase 4 deliverables (`perceus/PerceusInserter.scala`, region and witness emission); Phase 6 PGO witness specialization |
 | `docs/plans/phase-3-typer.md` | M10 (§5.7) computes §20 |
+
+@:details(Status and changes)
+
+**Status:** Draft v0.5.6
+**Specifies:** how the compiler places, frees and reference-counts runtime values for Fixed v0.4.4 source: lifetime classes, immediates, data-stack regions, counted regions, the Perceus heap, destinations, value witnesses, reuse (FBIP), borrowing, effect-handler memory, structured parallelism, the `fip` contract and the memory report.
+**Last revised:** 2026-11-21
+
+**Changes from v0.5.5.** The examples of §22 whose integer arithmetic is not proved in range declare `Overflow` (`spec/effects.md` §3.6, specified and not built).
+
+**Changes from v0.5.4.** Settles minor 8 of the consistency review of 2026-11-20 by an author's ruling: Rule MM5.2(b) no longer decides placement in a baseline version from a cost contract, which `spec/cost.md` Rule CT6.5 forbids; a carried value of parameter type is long-lived there unless the requirement that rebuilds it is `fip`, and a clone for a known type repeats the check.
+
+**Changes from v0.5.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"): the application link (§20) resolves no satisfaction site (`spec/compilation_model.md` Rule CM6.6).
+
+**Changes from v0.5.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"), decision 3. OQ-PR5: derived `fold`, `unfold` and `map` of linear data run in bounded native stack (`spec/type_system.md` Rule 7.4.b.3); trees do not yet.
+
+**Changes from v0.5.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Descriptors on every cell are decided; only the optimisation of omitting one stays open (OQ-MM7). Rule MM20.2: no witness travels with an anonymous result.
+
+**Changes from v0.5.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): an `Inline` value that is not an immediate is copied out to a cell with a descriptor where it meets code that does not know its type (Rule MM3.1); a `Static` cell carries a count word holding the immortal sentinel, and a `Heap` cell holds counted references only to cells with a count (Rules PR3.1, PR7.3); the type table has a row for every kind of cell (Rules PR3.1, MM7.3); Rules PR5.5 and PR5.6 cite the table convention of Rule CM4.6 instead of restating it; §20.3 no longer gives the static prover `assumed` props, places `E071`, `E083`, `E085` and the deferred-site binding, and states where a `proved` status from enumeration reaches; "header" is the descriptor plus the count word, and stale phrases about tags and headers are corrected.
+
+**Changes from v0.4.** Applies decision P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`, D6, D7, D9, D11, D15, D16). A data type instance that holds no reference and fits in 64 bits is an **immediate**: no cell, no header, no count (§3.3, `spec/compilation_model.md` Rule CM3.5). The value witness gains `width`, and its family is fixed: `imm1`, `imm2`, `imm4`, `imm8`, `ref` (Rule MM7.3); `copy` takes size and field kinds from the link-time type table. A flat container stores elements at the witness's width (Rule MM16.3). The cell tag is unique in the link unit and indexes the type table; every cell, in every class, carries its tag and reference map (provisional, OQ-MM7), and only a `Heap` cell carries a count (Rule PR3.1). Rule PR7.3 states what the runtime's drop does now and what it still owes. Ownership clones are requested only where the run-time `rc == 1` test cannot stand in (Rule PR6.3). Calls through a capability table follow the convention derived from the requirement's signature (Rule PR5.5). §20.3 follows the pipeline of package compile, application link and test build; only `proved` and `assumed` props may justify reuse. §22.2 says that its `map` is what the derived `map` does. The "Recheck-style" label on a pass over Core is withdrawn.
+
+**Changes from v0.3.** The compilation model is now `spec/compilation_model.md`: every function has a polymorphic **baseline** version that receives witnesses, and specialised **clones** are built on top of it under one size budget. In this document: the class witness of Rule MM7.3 becomes the value witness, gains `copy` and `kind`, and is the default instead of a boundary case; Rule MM7.4 defers to the clone rules; the cell header carries a reference map (Rule PR3.1); the version cap and copying beyond it are withdrawn (Rule PR5.5); a `fip fn` gains a copying shared entry and may be polymorphic (§18); `fip(n)` and `fip` on method requirements are specified (Rule MM18.5, resolving OQ-MM1); the signature facts of Rule MM20.2 are the core of the package interface. The callee, not the caller, evacuates at a floor entry (Rule MM5.5). Stale wording that still said "quantity" where ownership is meant was corrected.
+
+**Changes from v0.2.** Reference-count traffic and reuse are decided by **demands** and **exclusive ownership** (`spec/quantities.md` §4.1), not by quantity 1: a binding used once is not necessarily a value owned once. Reuse is hybrid: unconditional for exclusively owned values, after a runtime `rc == 1` test for shared `Heap` values (Rule PR6.3). A caller holding a shared value calls the callee's shared version, or copies the demanded part beyond the version cap and into `fip` functions (`spec/quantities.md` Rule Q9.3). Borrowing is the `read` demand (§13). Closures whose parameter is `exclusive` carry two code pointers (Rule PR5.6). Escape facts, classes and demands are computed on Core after lowering (§20.3).
+
+**Changes from v0.1 (`spec/perceus.md`).** The document is renamed and widened. v0.1 specified a pure Perceus model in which stack allocation was keyed on quantity 1. v0.2 separates two axes: **quantity** (0 / 1 / ω, `spec/quantities.md`) decides reference-count traffic, and **lifetime class** (§3) decides placement. Most values live in headerless, refcount-free data-stack regions in the style of Goose; the Perceus heap and counted regions hold only values that are long-lived in the sense of Rule MM5.2. Perceus rules keep their `PR` identifiers so existing citations stay valid; new rules use `MM`. Rule PR3.1.a (SCC stack allocation gated on escape) is superseded by §5 and §15. OQ-PR2 is resolved for structured parallelism (§17).
+
+@:@

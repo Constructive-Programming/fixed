@@ -1,39 +1,5 @@
 # Fixed Type System
 
-**Status:** Draft v0.5.8
-**Specifies:** typing of Fixed source as defined by `spec/syntax_grammar.ebnf` v0.4.15.
-**Last revised:** 2026-11-21
-
-**Changes from v0.5.7.** Text the compiler or later rules have overtaken. Rule 7.4.b.3 lists `para`, says how it runs for linear data, and says that the loop form of `fold` is built; Rule 7.4.b.1 no longer says that function recursion is not available (Rule 7.4.h). §4.3 no longer names the pair form `using T satisfies C`, withdrawn by Rule 8.4.d. Rule 5.10 cites `spec/stdlib.md` §4.14 for `Sequencing`. The example of §8.5.1 notes that its refinement on `u64` is `E107` as written (`spec/effects.md` Rule E3.6.e). The `fibIter` signature of §5.1 and the examples of Rules 7.4.h and 7.4.j whose arithmetic is not proved in range declare `Overflow` (`spec/effects.md` §3.6, specified and not built).
-
-**Changes from v0.5.6.** Applies two owner's decisions of 2026-11-21, fourth round (P6, "Recursion inside a capability" and "Data that holds a function of itself"). New Rule 7.4.j: a default body of a capability that reaches itself through members of its capability on `self` is `T028`, which neither a structural argument nor `Diverge` admits. Rule 7.4.h's closing paragraph no longer leaves that case open, and records the non-termination through a data type that holds a function of itself as accepted for now (new OQ-T5).
-
-**Changes from v0.5.5.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"). Rule 8.4.b is rewritten: a site that the levels of Rule 8.4 do not decide is `E061` when its package is compiled, in a library as in an application, and the diagnostic suggests a `using` or an explicit bound on a type parameter. There are no deferred sites, and the link stage resolves no satisfaction. Rule 8.4 loses its fifth level, `using` in the application root, which now decides nothing; a data type whose pair the site that created a choice point does not decide does not enter that choice point's pool (§6.5.2). Rules 8.4.c and 8.6.a no longer mention the fifth level or deferred sites.
-
-**Changes from v0.5.4.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Shadowing of prelude names"). New §4.3: the scope order (local binders, the package's declarations and `use`s, the prelude); a package may hide a prelude name, with `warning[W060]` (Rule 4.3.a), and so may a `use` (Rule 4.3.b); collisions inside a package are `T003` (Rule 4.3.c); a type-level local binder named like a prelude type is `T004` (Rule 4.3.d); the prelude is the package `std.prelude`, reached with `use std.prelude.List as PreludeList` (Rule 4.3.e, grammar v0.4.15); diagnostics print paths, never internal names (Rule 4.3.f); syntax and derivation always mean the prelude's entities (Rule 4.3.g); interactions with list literals, ascription, satisfactions, visibility and exports (Rule 4.3.h). New Rule 4.1.b states `T004` for every binder position. The example of Rule 8.4 imports a satisfaction from a program package (`shop.box`) instead of `std.maybe.Maybe`: `Maybe` is the prelude's, whose satisfactions are always in scope.
-
-**Changes from v0.5.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"). §5.7: what arithmetic does when a result leaves its type is `spec/effects.md` §3.6; constant arithmetic that does not fit is `T025` (§5.7, Rule 6.3.3). §8.5.1: a refinement on a bounded integer type is established only by `proved` or `assumed` (`E107`, `spec/effects.md` Rule E3.6.e). New OQ-T3 records the owner's note that dependent types may be a better answer to raising the integer size.
-
-**Changes from v0.5.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"). New Rule 5.10: a list literal is an abstract constructor call through `Sequencing`, and a choice point unless a concrete expected type or an ascription fixes its type; its bound set is `Sequencing of E` and what the context requires. New Rule 5.11: the type ascription `e is T` on any expression fixes its type and is not a conversion (`T024` when `T` is a bound). Rule 5.1.1 and Rule 5.7 refer to both. The example of Rule 7.3.c, which wrote `let x: T = …`, uses an ascription. New Rule 7.4.b.3: derived `fold`, `unfold` and `map` of linear data run in bounded native stack; trees do not yet (decision 3).
-
-**Changes from v0.5.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule 5.1.2: no witness travels with an anonymous result, and a requirement's anonymous result is one choice point shared by its implementations. Rule 8.4: the sixth resolution level is removed; a derived or unnamed satisfaction gets no preference over a named one, so the ambiguity error stands, and `using Money satisfies Ord` names such a satisfaction by its pair.
-
-**Changes from v0.5.0.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): derived, built-in and prelude satisfactions are always in scope, and "sees" is defined (Rule 8.4); deferred sites are bound by level 5 (Rule 8.4.b); the test build's application root; private satisfactions (Rule 8.6.a); the pool's satisfaction is resolved at the site that created the choice point (§6.5.2); rule 4 of Rule 6.5.5 names the first capability of the bound set, and built-ins precede the standard library's source declarations; examples that used `let x: T = …` use parameter types (§5.1.1, §8.4, §8.5); new codes `E061`–`E065`; wrong references and "(TBD)" cross-references repaired.
-
-**Changes from v0.4.3.** Applies decision record P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`). New Rule 5.1.1: an abstract type is bound per use, per link unit (a *choice point*) or per package. Rule 4.1: a type variable local to a `data` variant field, and an anonymous bound in a field, is a choice point (closes OQ-T2). New Rule 5.1.2: the signature decides who picks the representation of a result (`-> is C` against `-> R is C`). The inferred caller-chosen / callee-chosen split is withdrawn. New Rule 5.1.3: `show`, `==` and `clone` on an unbounded type parameter are type errors. New §8.6: visibility (`pub`). §6.5: selection is staged between package compile and application link. The score of Rule 6.5.4 is usage × cost, with the bound-class table and static weights as fallback. **Rule 6.5.5 is replaced**: a tie never halts. Five disambiguation rules decide, and the only error is zero viable candidates. §6.5.6–§6.5.8 give the commit at link and the lock file. §8.4 is rewritten as Rules 8.4, 8.4.a and 8.4.b. Coherence per link unit is withdrawn: a link unit may hold several satisfactions of one pair, which a `using` or the scope resolves, and a satisfaction on a type's own parameter becomes part of the type. §8.5 no longer contradicts Rule 8.1.a. Rule 8.2 refers to the table of a satisfaction, not of a type.
-
-**Changes from v0.4.2.** Aligned with `spec/compilation_model.md` (baseline versions, witnesses, clones, packages) and `spec/cost.md` (cost contracts). §6.5: a representation is chosen where a value originates and travels by witness; the bound set is closed over the package and the signatures it imports; cost contracts are an input, a viability criterion (§6.5.3) and the source of two scoring dimensions (§6.5.4); the cache key includes the lifetime class. Rule 6.1.1 Phase 2 no longer re-checks a default body per satisfying type. Rules 7.4.b.1 and 7.4.b.2 are restated without "after monomorphisation": they are the mandatory specialisations of Rule CM5.5. Rule 7.3.b covers baseline code. Rule 8.2: the panic of an `impossible` constructor lives in the capability table. §8.4: satisfactions are coherent per link unit. §8.5 points to Rule CM4.5 for results typed by a capability bound. New OQ-T2 (type variables of variant fields).
-
-**Changes from v0.4.1.** §8 reframed to make the *capabilities-declare-requirements, types-provide-constructors* distinction explicit (new §8 intro). §8.1 wording updated (Rule 8.1.a / 8.1.b refer to "constructor requirements"). §8.2 (`impossible`) example replaced with a self-contained `Either` / `AlwaysRight` pair to avoid ambiguity between the simplified `Optional` and the canonical one. **Rule 8.2 weakened**: `impossible` is no longer statically verified to be unreachable — calls to an impossible-mapped constructor compile to runtime panics rather than compile errors. Users who need static guarantees may add a `prop` excluding the offending path. Wording across §6.4, §6.6, §7.4.f tightened to "constructor requirements" instead of "constructors".
-
-**Changes from v0.4.** `phantom` is no longer a keyword; phantom-ness of type parameters is inferred from usage (new §5.9). §6.5 representation-selection algorithm expanded from a one-paragraph sketch to a normative procedure with inputs, candidate pool, viability filter, scoring, ambiguity handling, phase placement, and caching. Rule 6.6 (priority) updated previously to put built-ins on equal footing with user-`satisfies` types — see §6.5.4 / 6.5.5 for how the equal priority resolves through scoring.
-
-**Changes from v0.3.** Body introducer for fn/method definitions changed from `:` to `=` (block introducers `:` reserved for cap/data/effect/satisfies bodies and control-flow branches; definitions use `=`). Cap instance and static methods may carry default bodies (Rule 6.1). Lambda parameters gain optional types and defaults. EffectMember gains `WithClause?` and `TypeParamsHint?`. TupleExpr/TuplePattern simplified. Code examples updated.
-
-**Changes from v0.2.** Code examples updated to the v0.3 indentation-based syntax (no block braces; `:` introduces blocks). No semantic rules changed.
-
-**Changes from v0.1.** OQ1 resolved (multi-arg `Self of B`, Rule 5.4.b); OQ2 resolved (mutual data recursion, §7.5); OQ3 resolved (auto-derivation matrix, §7.4 expanded); OQ4 resolved (built-in representation candidates, §6.6); OQ5 resolved as deferred-to-v0.3 (§7.6); OQ6 resolved (type-alias `of`-distribution, §5.8); OQ7 pre-resolved and deferred to `spec/properties.md`.
-
 ## 1. Scope
 
 This document defines the **typing rules** for Fixed: how the parser's untyped trees become typed trees, how capabilities and data types relate, how `of` application works, and how constructor calls resolve to concrete representations.
@@ -91,7 +57,7 @@ Subsequent occurrences of the same `UPPER_IDENT` within the same signature **ref
 
 **Type variables of variant fields (Rule 4.1.a, closes OQ-T2).** A type variable introduced in a field of a `data` variant, and not declared in the data type's `of` clause, is local to the data declaration. The same holds for an anonymous bound written as a field's type. Such a variable is not a parameter of the data type. It is a **choice point** (Rule 5.1.1, item 2): one representation for every value of the data type, chosen once per link unit. No cell stores a witness for it.
 
-```
+```fixed
 data Color:
     Red
     RGB(red: N is Numeric, green: N, blue: N)   // N: one choice for all Colors
@@ -106,7 +72,7 @@ Reason: a per-value variable would need a witness in every cell. A per-use varia
 
 **Examples.**
 
-```
+```fixed
 // `examples/01_basics.fixed:30`  —  N introduced once, referenced twice
 fn fibIter(n: N is Numeric) -> N: ...
 //          ^introduces      ^refers
@@ -126,7 +92,7 @@ cap Folding:
 
 **Non-example.** The following is rejected:
 
-```
+```fixed
 fn bad(x: N is Numeric) -> N =
     fn inner(x: N is Numeric) -> N: ...      // ERROR: N already in scope
 ```
@@ -147,7 +113,7 @@ Decided by the owner (`docs/decisions/P6-resolution-round-2026-11-20.md`, fourth
 
 **Rule 4.3.a (Hiding a prelude name).** A package may declare at top level a name that the prelude declares: a data type, a capability, an effect, a type alias or a function. In the package the name then means the package's declaration (level 2). The compiler warns at the declaration. The warning `W060` is confirmed by the owner and is always given for a hidden name. Selecting a named satisfaction with `using` (Rule 8.4.c) hides no name and gives no warning.
 
-```
+```text
 warning[W060]: `List` hides the prelude's data type `std.prelude.List` in this package
   --> shapes.fixed:3:6
    = help: the prelude's stays reachable: `use std.prelude.List as PreludeList`
@@ -169,7 +135,7 @@ A `use … as …` resolves each case. A named satisfaction's name is a type-lev
 
 **Rule 4.3.e (The prelude's path).** The prelude is the package `std.prelude`, beside the standard modules such as `std.io` (`README.md`, `use std.io.Console`), and every prelude declaration has the path `std.prelude.<Name>` *(author's choice of the path)*. A package that hides a prelude name reaches the prelude's entity by importing it under another name (grammar v0.4.15, `UseRename`):
 
-```
+```fixed
 data List of A:                          // warning[W060]: hides std.prelude.List
     Node(items: is Sequencing of A)
 
@@ -182,7 +148,7 @@ fn toPrelude(xs: List of u8) -> PreludeList of u8 = ...
 
 **Rule 4.3.f (Names in diagnostics).** A diagnostic names an entity by the name that means it at the site. Where that name means another entity there, it prints the entity's path: `std.prelude.List` for the prelude's, `geometry.List` for another package's. It never prints a name of the compiler's own making. Where a fix needs an entity the site cannot name, the help line gives the `use … as …` that makes it nameable:
 
-```
+```text
 error[T022]: `show` needs the bound std.prelude.Show on T
    = help: `use std.prelude.Show as PreludeShow`, then write `T is PreludeShow`
 ```
@@ -227,7 +193,7 @@ Two forms:
 
 **Composition (§10 grammar `CapBoundChain`):** `is C1 + C2` means "satisfies both `C1` and `C2`." `+` is associative and commutative; `is C1 + C2` ≡ `is C2 + C1`.
 
-```
+```fixed
 fn count(c: is Folding) -> u64                          // anonymous: any Folding
 fn fibIter(n: N is Numeric) -> N with Overflow + Diverge  // named: input and output share type
 fn evenDoubled(numbers: C is Filtering of (N is Numeric) + Functor of N) -> C
@@ -254,7 +220,7 @@ The signature decides who picks the representation of a result. The body cannot 
 - **`-> R is C` (named, `R` in no parameter type).** `R` is an ordinary type parameter: the caller picks it and passes its witness. A body that returns a concrete data type where `R` is expected is a type error: `Maybe.Just(x)` is a `Maybe`, not an `R`. An abstract constructor call for `R` stays abstract. It resolves at the caller, through the capability table in `R`'s witness.
 - **A requirement whose result is `-> is C`** (`fn compare(other: Self) -> is Ordering`) follows the first case, with one difference: the choice point is owned by the requirement and shared by every satisfaction's implementation of it, so that a call through a capability table knows the type of the result without a witness. An implementation that constructs data directly restricts the choice point to that data type; two implementations that restrict it to different types leave no viable candidate (`E060`, §6.5.3).
 
-```
+```fixed
 fn parse(s: String) -> is Optional of u64 = ...     // the function's choice point
 fn emptyOf() -> R is Optional of u64 = Optional.none // the caller picks R
 fn wrong() -> R is Optional of u64 = Maybe.Nothing    // ERROR: Maybe is not R
@@ -268,7 +234,7 @@ A value whose type is a type parameter or a choice point has the members of its 
 
 A value of an unbounded type parameter can only be moved: bound to a name, passed, returned, stored in a field or captured. Nothing else may be done with it, except to hand it to a diagnostic sink (below).
 
-```
+```fixed
 fn keep(x: T) -> T = x                          // allowed: moves x
 fn label(x: T) -> String = x.show               // ERROR: T has no bound Show
 fn label(x: T is Show) -> String = x.show       // allowed
@@ -282,7 +248,7 @@ Reason: a function of type `T -> T` has one implementation only if it cannot ins
 
 `Cap of A` applies `A` to `Cap`'s first type parameter. Multi-parameter caps use a tuple: `Cap of (A, B)`.
 
-```
+```fixed
 cap Sized of (Part, Size is Numeric)           // declares two params
 fn sizeOf(c: is Sized of (i64, u64)) -> u64    // applies both
 ```
@@ -297,7 +263,7 @@ fn sizeOf(c: is Sized of (i64, u64)) -> u64    // applies both
 
 Inside a `cap` body, the bare identifier `Part` refers to the cap's element-type parameter — the *first* parameter of the cap's `of` clause. If the cap declares no `of` clause, `Part` is the cap's single implicit element-type parameter.
 
-```
+```fixed
 cap Folding:                                   // no `of` — Part is the implicit element type
     fn fold(init: R, f: (R, Part) -> R) -> R
 
@@ -313,7 +279,7 @@ Inside a `cap` body, `Self` refers to the type implementing this capability. Ins
 
 `Self of B` denotes "the same container shape as `Self`, but with element type `B`" — used for higher-kinded returns:
 
-```
+```fixed
 cap Functor:
     fn map(f: Part -> B) -> Self of B          // B introduces a fresh type variable
 ```
@@ -322,7 +288,7 @@ cap Functor:
 
 **Rule 5.4.b (multi-arg, resolves OQ1).** `Self of (B1, B2, ..., Bk)` substitutes `B1..Bk` positionally over the **last `k` non-phantom type parameters** of `Self` (right-aligned positional substitution). The arity `k` must be at most the number of non-phantom parameters of `Self`; supplying more is a compile error.
 
-```
+```fixed
 data Tuple of (A, B):
     Tuple(first: A, second: B)
 
@@ -339,7 +305,7 @@ data Triple of (X, Y, Z):
 
 **Rationale for right-bias.** Earlier drafts (≤ v0.4.4) substituted left (first non-phantom). That rule was inconsistent with Rule 7.4.c, which auto-derives Functor over the rightmost type parameter, and with the corresponding stdlib commitment (`Tuple satisfies Functor` over the second projection — see `spec/stdlib.md` §5). v0.4.5 unifies the conventions: every "active parameter" choice in Fixed is right-biased.
 
-```
+```fixed
 cap BiFunctor of (A, B):
     fn bimap<A2, B2>(f: A -> A2, g: B -> B2) -> Self of (A2, B2)
 ```
@@ -348,7 +314,7 @@ cap BiFunctor of (A, B):
 
 `self` is **only** bound in instance method bodies. In static method bodies (`Self.fn name(...) = body`) there is no receiver, so `self` is unbound — using it is a compile error. Outside method bodies, `self` is a normal identifier with no special meaning.
 
-```
+```fixed
 cap Optional:
     fn isDefined -> bool = self.fold((_) -> true, () -> false)
     //                     ^^^^ receiver value, type Self
@@ -359,7 +325,7 @@ cap Optional:
 
 Inside a `match`/`fold` discriminator, `self` is the natural scrutinee:
 
-```
+```fixed
 Maybe satisfies Optional:
     fn isDefined = match self:
         Maybe.Just(_) => true
@@ -387,7 +353,7 @@ Two ways to obtain `!`:
 - `unreachable` — keyword expression, with an optional message: `unreachable("…")` (`spec/syntax_grammar.ebnf` §13). Reaching it at runtime is a panic. The message is a diagnostic sink (`spec/diagnostics.md` Rule DG3.2).
 - A function returning `!` — by convention, an effect operation that does not return (e.g., `Fail.fail`).
 
-```
+```fixed
 // examples/03_option_result.fixed:56  —  `Fail.fail` returns `!`
 effect Fail of E:
     fn fail(error: E) -> !
@@ -424,7 +390,7 @@ A type alias `type T = C1 + C2 + ... + Cn` is a bag of capabilities. When applie
 - For each `Ci` that has at least one non-phantom type parameter: `Ci of (X1, ..., Xk)` (positional substitution per Rule 5.4.b, capped at `Ci`'s declared arity).
 - For each `Ci` that has no type parameters: `Ci` unchanged.
 
-```
+```fixed
 type ArrayLike = Sequencing + RandomAccess + Sized + Empty
 
 // `is ArrayLike of A` distributes to:
@@ -463,7 +429,7 @@ Both are erased; only the value-param has an extractable value.
 
 **Examples.**
 
-```
+```fixed
 // State, Tag are phantom (unused at runtime); Value is non-phantom (used in Tagged's field).
 data Tagged of (Tag, Value):
     Tagged(value: Value)
@@ -526,7 +492,7 @@ A `cap` declaration may contain three kinds of members (see grammar §4):
 
 Instance and static methods may carry an optional body (v0.4):
 
-```
+```fixed
 cap Optional:
     Self.fn some(value: Part) -> Self
     Self.fn none -> Self
@@ -564,7 +530,7 @@ The default body itself is not checked again. It is compiled once, as a baseline
 
 **Why two phases.** Phase 1 catches obvious bugs early and gives cap authors actionable errors at the cap-declaration site, without requiring N satisfying types to be in scope. Phase 2 states what a default body may assume about every satisfying type, so a package can satisfy a capability of another package without seeing that capability's default bodies. Earlier drafts re-checked each default body per satisfying type for quantities and effects; that needed the body wherever a satisfaction was declared.
 
-```
+```fixed
 cap Optional:
     Self.fn some(v: Part) -> Self
     Self.fn none -> Self
@@ -581,7 +547,7 @@ cap Optional:
 
 `cap A extends B + C` declares that any type satisfying `A` must also satisfy `B` and `C`. All members of `B` and `C` are inherited by `A`.
 
-```
+```fixed
 cap Optional extends Functor + Folding: ...    // examples/02_collections.fixed:60
 ```
 
@@ -591,7 +557,7 @@ cap Optional extends Functor + Folding: ...    // examples/02_collections.fixed:
 
 A capability with value parameters is sugar for a function returning a capability:
 
-```
+```fixed
 cap Between(min: N is Ord, max: N) of N:
     prop inRange: min <= Self && Self <= max
 
@@ -607,7 +573,7 @@ Both forms produce a *cap-generating function* (see `spec/properties.md` for the
 
 A function `fn f(args) -> cap of T` (or `fn f(args) -> cap extends C`) is a **cap-generating function**. Its declaration site uses the `cap`-prefixed return-type form (per grammar `FnReturnType` and `CapType`). Its **use sites** in `is`-bound position do **not** repeat the `cap` keyword — instead, they call the generator by name as a `RefinementCall`:
 
-```
+```fixed
 fn between(min: N is Ord, max: N) -> cap of N =
     prop inRange: min <= Self && Self <= max
 
@@ -626,7 +592,7 @@ Per the grammar (`syntax_grammar.ebnf` §10 — `CapBound = CapRef | RefinementC
 
 Rule 6.3.0 establishes the equivalence:
 
-```
+```fixed
 fn f(...) -> cap of T = body      ≡      f as a value of type (...) -> cap of T
 ```
 
@@ -641,7 +607,7 @@ Two cap-generator applications produce the **same cap** iff:
 
 Different generators always produce different caps even if their prop bodies are syntactically identical. Equality is **nominal** at the (generator-name, value-args) tuple, not structural over prop bodies.
 
-```
+```fixed
 fn between(lo: N is Ord, hi: N) -> cap of N = prop r: lo <= Self && Self <= hi
 fn altBetween(lo: N is Ord, hi: N) -> cap of N = prop r: lo <= Self && Self <= hi
 // Even though the bodies match, `between(0, 10)` and `altBetween(0, 10)`
@@ -660,7 +626,7 @@ This nominal rule is decidable, predictable, and forward-compatible: a future re
 
 Cap-generator returns are **Marker** classification (per §6.4 — no methods, only `prop` obligations). Auto-derivations from §7.4 (Functor, Folding, accessors, etc.) **never apply** to a cap-generator's return cap. Auto-derivation operates on the *base type* the refinement narrows, not on the refinement cap itself.
 
-```
+```fixed
 // `is Functor of (i64 + between(0, 10))` — Functor auto-derives over the
 // underlying `i64`'s structure (well, `i64` isn't a Functor-bearing type;
 // substitute a List-of-i64 here). The `between(0, 10)` refinement adds an
@@ -703,7 +669,7 @@ Programs that need richer computed bounds must lift the computation to a `let` w
 
 **Aliases with value parameters.** A type alias may take value parameters (`type PortRange(min: u16, max: u16) = u16 + between(min, max)`; grammar `TypeAliasParams`). The alias is expanded where it is used, and the rule above is checked on the expansion: `PortRange(1024, 2048)` is `u16 + between(1024, 2048)` and is legal; `PortRange(lo, 9000)` with `lo` a parameter of the enclosing function is the same error as `between(lo, 9000)`. Inside the alias's own declaration its parameters stand for the constants of each use. (Owner's decision, fourth round of P6.)
 
-```
+```fixed
 // accepted:
 fn validateAge(age: u8 is between(0, 150)) -> u8 = age
 let upper = 150
@@ -785,7 +751,7 @@ Each viable candidate gets a **score** in `[0, 10]`; higher is better.
 
 **Measured score.** The expected cost of candidate `r` at choice point `p` is
 
-```
+```text
 expected(p, r) = Σ over members m of the bound set:  usage(p, m) × cost(m, r)
 ```
 
@@ -910,7 +876,7 @@ The full list of built-ins is implementation-defined and may grow with the compi
 
 A `data` declaration introduces a closed set of named variants. Two forms (grammar §6):
 
-```
+```fixed
 data Direction:                              // unit variants (indented form)
     North
     South
@@ -928,7 +894,7 @@ data Config(host: String, port: u16, debug: bool)              // single-ctor su
 
 Fields may have **default values**:
 
-```
+```fixed
 data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
     Bounded(value: N)
     // ...
@@ -944,7 +910,7 @@ A variant constructor call passes arguments **positionally**, with trailing argu
 
 A `data` declaration is recursive iff at least one variant has a field whose type mentions the data type itself (transitively). Recursive data gets a lifetime class like any other value; recursion alone does not force heap allocation (see `spec/memory_management.md` §5).
 
-```
+```fixed
 data Tree of A:
     Leaf(value: A)
     Branch(left: Tree of A, value: A, right: Tree of A)
@@ -955,7 +921,7 @@ data Tree of A:
 
 Non-`phantom` `of` parameters with a type annotation (e.g., `lo: N = 16`) are **type-level indices**: different supplied values produce **distinct types**.
 
-```
+```fixed
 data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
     Bounded(value: N)
     prop inRange: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
@@ -967,7 +933,7 @@ data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
 
 **Rule 7.3.a (Defaults at type-application sites).** Missing trailing args at a type-application site take their declared defaults; positional only.
 
-```
+```fixed
 Bounded of N                ≡  Bounded of (N, 16, 24)       // both defaults
 Bounded of (N, 5)           ≡  Bounded of (N, 5, 24)        // hi default
 Bounded of (N, 5, 30)       — exact application
@@ -981,7 +947,7 @@ Omitting an arg with no declared default is a compile error.
 
 **Rule 7.3.c (Constructor calls).** A variant constructor call passes only the variant's **declared fields** positionally. The values of the data type's `of` value-params come from the type at which the variant is being constructed:
 
-```
+```fixed
 let x = Bounded.Bounded(5) is Bounded of (i64, 0, 10)
 //                 ^value=5, lo=0, hi=10 from the ascribed type (Rule 5.11)
 ```
@@ -994,7 +960,7 @@ A `data` declaration automatically satisfies certain capabilities based on its v
 
 **Rule 7.4.a.1 (Functor-mediated recursion in `fold`).** A field of type `F of Self` (or transitively `F1 of (F2 of (... of Self))`) where every `Fi` satisfies `Functor` (auto-derived per Rule 7.4.c, or explicit via `satisfies`) is also pre-folded: the callback receives `F of R` (resp. `F1 of (F2 of (... of R))`) — every element in the wrapping `Functor` chain has been folded element-wise to `R`. This generalises catamorphism through composed-Functor-wrapped recursive positions.
 
-```
+```fixed
 data Json:
     Null
     Bool(value: bool)
@@ -1016,7 +982,7 @@ data Json:
 
 The Functor composition is computed by the typer at fold-derivation time: for each recursive position, walk outward through Functor-satisfying type constructors until either `Self` is reached (apply 7.4.a.1) or a non-Functor wrapper is encountered (the field is left unfolded — the callback receives the original type and recursive descent must be expressed by the user via stdlib helpers or other folds).
 
-```
+```fixed
 data Expr:
     Lit(value: f64)
     Add(left: Expr, right: Expr)
@@ -1036,7 +1002,7 @@ Auto-derived `fold` is the canonical eliminator and the destructuring path for a
 
 **Rule 7.4.b (Unfolding).** A recursive `data` declaration (any variant has at least one field of type `Self`, transitively) gets an auto-derived `unfold<S>` method (anamorphism). Given a seed `s: S` and a step function returning one variant of `Self` with seeds in recursive positions, `unfold` builds the structure:
 
-```
+```fixed
 fn unfold<S>(seed: S, step: S -> Self) -> Self
 ```
 
@@ -1078,7 +1044,7 @@ This rule applies to **named** data types only. Anonymous caps produced by cap-g
 
 The auto-derived `map` is implemented as a `fold` that re-builds each variant with the function applied to fields of type `Xn`, leaving fields of other types untouched. The map's range type substitutes `Xn` with the supplied target type:
 
-```
+```fixed
 data Maybe of A:
     Just(value: A)
     Nothing
@@ -1088,7 +1054,7 @@ data Maybe of A:
 
 **Rule 7.4.d (Accessors for product-shaped data).** A single-variant `data T(field1: T1, ..., fieldn: Tn)` (or equivalently `data T:` followed by an indented `T(field1: T1, ..., fieldn: Tn)` variant) automatically gets accessor methods:
 
-```
+```fixed
 fn field1 -> T1
 fn field2 -> T2
 ...
@@ -1100,7 +1066,7 @@ These accessors are auto-implemented and require no `satisfies` declaration.
 
 **Rule 7.4.g (Paramorphism — `para`).** Every recursive `data` declaration (any variant has at least one field of type `Self`, transitively) gets an auto-derived `para<R>` method (paramorphism). The `para` shape mirrors `fold` (Rule 7.4.a) one callback per variant, recursive positions pre-folded to `R` — *plus* each recursive field's original subtree is also passed to the callback alongside the folded result.
 
-```
+```fixed
 data Tree of A:
     Leaf(value: A)
     Branch(left: Tree of A, value: A, right: Tree of A)
@@ -1122,7 +1088,7 @@ Fixed's auto-derived `para` is sound for any total-recursion `data` declaration;
 
 **Rule 7.4.f (Caps with `Self.fn` constructor requirements require explicit `satisfies`).** A cap declaring any `Self.fn` constructor *requirement* (sum or product classification, §6.4) is **never** auto-derived. An explicit `satisfies` mapping is required to bind data variants to those requirements:
 
-```
+```fixed
 data Maybe of A:
     Just(value: A)
     Nothing
@@ -1139,7 +1105,7 @@ Maybe satisfies Optional:
 
 Two or more `data` declarations may recursively reference each other:
 
-```
+```fixed
 data Tree:
     Branch(node: Node)
     Leaf
@@ -1168,7 +1134,7 @@ A recursive function that is neither is `error[T027]: <f> calls itself` (or `<f>
 - matching on the parameter, when the call would be structural if the argument were bound by a pattern;
 - `with Diverge`, when the recursion is not on a sub-value at all.
 
-```
+```fixed
 fn total(xs: L) -> u64 with Overflow =      // accepted: structural on xs
     match xs:
         L.C(h, t) => h + total(t)
@@ -1203,7 +1169,7 @@ A step of another shape leaves `Diverge` in the row; the program declares it, us
 
 **Rule 7.4.i.1 (`unfoldN`).** Beside `unfold`, a recursive data type gets the derived member
 
-```
+```fixed
 fn unfoldN<S>(limit: u64, seed: S, step: S -> Self, end: Self) -> Self
 ```
 
@@ -1217,7 +1183,7 @@ Built (`typer/Totality.scala`), with three conservative limits that reject funct
 - write the default with members that do not call back;
 - write it with `fold` or `para` of the data the capability exposes.
 
-```
+```fixed
 cap Sz:
     fn sz() -> u64 = self.sz()                        // ERROR T028, also `with Diverge`
 cap Sz:
@@ -1236,7 +1202,7 @@ The bodies of a `satisfies` block are ordinary functions under Rule 7.4.h *(conf
 
 Rationale: auto-derivation operates on a single declaration's variants and fields; mutually recursive types require interleaved fold/para callbacks (Tree's fold needs Node's fold, and vice versa). Specifying that interleaving as a generated mutual-fold combinator is non-trivial and not justified by current example code; refusing auto-derivation for v0.4.5 keeps the spec simple. Singleton SCCs (a single self-recursive data type) continue to receive auto-derivations under §7.4 — including paramorphism (Rule 7.4.g) for self-recursive types like `Tree` or `Expr` in `examples/07_recursive_data.fixed`.
 
-```
+```fixed
 data Tree:
     Branch(node: Node)
     Leaf
@@ -1270,7 +1236,7 @@ The same distinction applies to abstract methods: a cap declares `fn name(...) -
 
 ### 8.1 Mapping form
 
-```
+```fixed
 data Maybe of A:
     Just(value: A)
     Nothing
@@ -1286,7 +1252,7 @@ Maybe satisfies Optional:
 
 A field may *refine* its parameter: `cons(h: Part, t: is Sequencing of Part)` may map to a variant whose `tail` is `List of A`, because `List` satisfies `Sequencing`. This stays sound because a call is typed against the variant it resolves to (§8.5): `Sequencing.cons(x, t)` resolving to `List.Cons` checks `t` against `List of A`, at the call site. A requirement call for a type parameter stays abstract and resolves at the caller. A requirement call that is a choice point admits only candidates whose fields its arguments fit (§6.5.3).
 
-```
+```fixed
 cap TaskQueue:
     Self.fn empty -> Self
 
@@ -1298,7 +1264,7 @@ SimpleQueue satisfies TaskQueue:
 
 **Rule 8.1.b (Coverage).** A complete `satisfies` declaration must map every `Self.fn` constructor requirement of the cap to a data variant (or, in the partial-satisfaction case below, to `impossible`):
 
-```
+```fixed
 data Outcome of (E, A):
     Success(value: A)
     Failure(error: E)
@@ -1316,7 +1282,7 @@ A satisfying type may declare that a particular constructor requirement does not
 
 A self-contained example. Define a sum-style cap with two requirements:
 
-```
+```fixed
 cap Either of (L, R):
     Self.fn left(value: L) -> Self
     Self.fn right(value: R) -> Self
@@ -1337,7 +1303,7 @@ Calling `Either.right(v)` at a position whose expected type resolves to `AlwaysR
 
 Static guarantees that the panic is unreachable are the user's responsibility, expressible as `prop` declarations on the surrounding code per `spec/properties.md`. For instance:
 
-```
+```fixed
 fn unwrapRight(x: AlwaysRight of (L, R)) -> R =
     prop neverCallsLeft: ...     // user-supplied invariant ruling out Either.left
     x.fold((_) -> unreachable, (r) -> r)
@@ -1349,7 +1315,7 @@ Why runtime panic rather than static rejection? Static reachability analysis acr
 
 A `satisfies` block may also provide explicit method definitions:
 
-```
+```fixed
 Maybe satisfies Optional:
     fn isDefined = match Self:
         Maybe.Nothing => false
@@ -1365,7 +1331,7 @@ This is required when the auto-derivation rules (§7.4) cannot uniquely produce 
 
 A satisfaction may be **named**:
 
-```
+```fixed
 Money satisfies Ord as ByAmount:
     fn compare(other: Self) -> is Ordering = self.amount.compare(other.amount)
 ```
@@ -1374,7 +1340,7 @@ Money satisfies Ord as ByAmount:
 
 A satisfaction is **in scope** at a site where a `use` brings it in, or when it is declared in the site's own package. Derived satisfactions (§7.4), built-in ones (§6.6, and those the compiler provides for primitive types) and the prelude's satisfactions (`spec/stdlib.md` §5) are always in scope. A site **sees** a satisfaction that is in scope there; every other document uses "sees" in this sense. A `use` brings a satisfaction in with a `satisfies` clause:
 
-```
+```fixed
 use shop.box.Box satisfies Optional           // the type and the satisfaction
 use shop.money.ByAmount                       // a named satisfaction, by its name
 use shop.money.ByAmount as ByValue            // renamed, like any other import
@@ -1417,7 +1383,7 @@ A `using` names satisfactions, and each name determines its pair. At the call si
 
 **The ambiguity error halts on purpose.** Two satisfactions of one pair differ in results, not in speed. The score, the lock file and declaration order (Rule 6.5.5) therefore never choose between them. The message states the level at which the ambiguity arose, suggests a named `using`, and lists as examples the satisfactions of the pair in scope:
 
-```
+```text
 error[E061]: two satisfactions of (Money, Ord) are in scope, and nothing chooses between them
   --> report.fixed:12:5   (level 4: in scope by `use`)
    |   shop.money.ByAmount   (use at report.fixed:2)
@@ -1440,7 +1406,7 @@ Besides the level and the satisfactions in scope (above), the diagnostic must su
 1. **Choose here.** A `using` at the call, in a type, at the top of the file, or in `package.fixed`.
 2. **Let the caller choose.** Take the satisfaction as an explicit bound on a type parameter. The caller's site resolves the pair, and its choice reaches the function as an ordinary witness, bound per use (Rule 5.1.1, item 1).
 
-```
+```fixed
 // package reports, which sees ByAmount and ByDate
 fn sortAll(xs: List of Money) -> List of Money = sort(xs)
 // error[E061]: two satisfactions of (Money, Ord) are in scope, and nothing chooses between them
@@ -1454,7 +1420,7 @@ fn sortAll(xs: List of (T is Ord)) -> List of T = sort(xs)   // accepted
 
 **Worked examples.**
 
-```
+```fixed
 data Money(amount: i64, date: Date)
 
 Money satisfies Ord as ByAmount:
@@ -1478,7 +1444,7 @@ fn combine(
 
 An application's `package.fixed` that holds
 
-```
+```fixed
 use shop.money.ByAmount
 using ByAmount
 ```
@@ -1487,7 +1453,7 @@ decides the sites of the application package (level 3). It decides no site of a 
 
 **Rule 8.4.c (A satisfaction where one already exists).** A package's satisfaction of a (type, capability) pair that already has a built-in satisfaction (`i64 satisfies Eq`) or a satisfaction declared by the prelude (`List satisfies Show`) must carry a name:
 
-```
+```fixed
 i64 satisfies Eq as Loose:
     fn eq(other: i64) = self / 10 == other / 10
 ```
@@ -1526,7 +1492,7 @@ When the expected type contains refinement caps (Marker classification, per §6.
 
 **Stage C — Re-apply refinements as obligations.** The chosen constructor's result is a value of the satisfying type, which by virtue of having satisfied `E_base` is well-typed. The refinement caps in `E_ref` become **prop obligations** on that result, discharged by the verifier per `spec/properties.md` §7. For a refinement on a bounded integer type the obligation must be `proved` or `assumed` (`spec/effects.md` Rule E3.6.e, `E107`). If `E_base` is empty (the expected type is *only* refinement caps), resolution fails with `error[E065]: refinement caps have no constructors; the expected type must include a base capability with a constructor requirement`.
 
-```
+```fixed
 fn tryMake(i: u64) -> is Optional of u64 + between(1, 99) =
     Optional.some(i)
 //  ^^^^^^^^^^^^^^^^
@@ -1551,7 +1517,7 @@ A declaration is private to its package by default. `pub` makes a `fn`, `data`, 
 
 There is no opaque-type feature. `pub data` exposes its variants and their fields. To hide a representation, make the capability public, keep the `data` private, and let its values leave the package as a choice point (`-> is C`, Rule 5.1.2):
 
-```
+```fixed
 pub cap Stack:
     Self.fn empty -> Self
     fn push(x: i64) -> Self
@@ -1587,7 +1553,7 @@ The typer is **bidirectional** with **prototype types** carried as expected-type
 
 Every typed expression carries an **expected type (prototype)** flowing from the surrounding context. The typer's main entry is roughly:
 
-```
+```fixed
 typed(expr, pt) → typed expression of type T such that T <: pt
 ```
 
@@ -1662,3 +1628,41 @@ Subtyping in Fixed is intentionally narrow:
 | `spec/diagnostics.md` | `inspect`, `trace`, interpolation in diagnostic sinks (Rule 5.1.3) |
 | `docs/references/scala3-compiler-reference.md` | Reference patterns from dotc — bidirectional typing, Recheck pattern |
 | `docs/plans/implementation-plan.md` | Phase plan, open design questions migrated above |
+
+@:details(Status and changes)
+
+**Status:** Draft v0.5.8
+**Specifies:** typing of Fixed source as defined by `spec/syntax_grammar.ebnf` v0.4.15.
+**Last revised:** 2026-11-21
+
+**Changes from v0.5.7.** Text the compiler or later rules have overtaken. Rule 7.4.b.3 lists `para`, says how it runs for linear data, and says that the loop form of `fold` is built; Rule 7.4.b.1 no longer says that function recursion is not available (Rule 7.4.h). §4.3 no longer names the pair form `using T satisfies C`, withdrawn by Rule 8.4.d. Rule 5.10 cites `spec/stdlib.md` §4.14 for `Sequencing`. The example of §8.5.1 notes that its refinement on `u64` is `E107` as written (`spec/effects.md` Rule E3.6.e). The `fibIter` signature of §5.1 and the examples of Rules 7.4.h and 7.4.j whose arithmetic is not proved in range declare `Overflow` (`spec/effects.md` §3.6, specified and not built).
+
+**Changes from v0.5.6.** Applies two owner's decisions of 2026-11-21, fourth round (P6, "Recursion inside a capability" and "Data that holds a function of itself"). New Rule 7.4.j: a default body of a capability that reaches itself through members of its capability on `self` is `T028`, which neither a structural argument nor `Diverge` admits. Rule 7.4.h's closing paragraph no longer leaves that case open, and records the non-termination through a data type that holds a function of itself as accepted for now (new OQ-T5).
+
+**Changes from v0.5.5.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"). Rule 8.4.b is rewritten: a site that the levels of Rule 8.4 do not decide is `E061` when its package is compiled, in a library as in an application, and the diagnostic suggests a `using` or an explicit bound on a type parameter. There are no deferred sites, and the link stage resolves no satisfaction. Rule 8.4 loses its fifth level, `using` in the application root, which now decides nothing; a data type whose pair the site that created a choice point does not decide does not enter that choice point's pool (§6.5.2). Rules 8.4.c and 8.6.a no longer mention the fifth level or deferred sites.
+
+**Changes from v0.5.4.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Shadowing of prelude names"). New §4.3: the scope order (local binders, the package's declarations and `use`s, the prelude); a package may hide a prelude name, with `warning[W060]` (Rule 4.3.a), and so may a `use` (Rule 4.3.b); collisions inside a package are `T003` (Rule 4.3.c); a type-level local binder named like a prelude type is `T004` (Rule 4.3.d); the prelude is the package `std.prelude`, reached with `use std.prelude.List as PreludeList` (Rule 4.3.e, grammar v0.4.15); diagnostics print paths, never internal names (Rule 4.3.f); syntax and derivation always mean the prelude's entities (Rule 4.3.g); interactions with list literals, ascription, satisfactions, visibility and exports (Rule 4.3.h). New Rule 4.1.b states `T004` for every binder position. The example of Rule 8.4 imports a satisfaction from a program package (`shop.box`) instead of `std.maybe.Maybe`: `Maybe` is the prelude's, whose satisfactions are always in scope.
+
+**Changes from v0.5.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"). §5.7: what arithmetic does when a result leaves its type is `spec/effects.md` §3.6; constant arithmetic that does not fit is `T025` (§5.7, Rule 6.3.3). §8.5.1: a refinement on a bounded integer type is established only by `proved` or `assumed` (`E107`, `spec/effects.md` Rule E3.6.e). New OQ-T3 records the owner's note that dependent types may be a better answer to raising the integer size.
+
+**Changes from v0.5.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"). New Rule 5.10: a list literal is an abstract constructor call through `Sequencing`, and a choice point unless a concrete expected type or an ascription fixes its type; its bound set is `Sequencing of E` and what the context requires. New Rule 5.11: the type ascription `e is T` on any expression fixes its type and is not a conversion (`T024` when `T` is a bound). Rule 5.1.1 and Rule 5.7 refer to both. The example of Rule 7.3.c, which wrote `let x: T = …`, uses an ascription. New Rule 7.4.b.3: derived `fold`, `unfold` and `map` of linear data run in bounded native stack; trees do not yet (decision 3).
+
+**Changes from v0.5.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule 5.1.2: no witness travels with an anonymous result, and a requirement's anonymous result is one choice point shared by its implementations. Rule 8.4: the sixth resolution level is removed; a derived or unnamed satisfaction gets no preference over a named one, so the ambiguity error stands, and `using Money satisfies Ord` names such a satisfaction by its pair.
+
+**Changes from v0.5.0.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): derived, built-in and prelude satisfactions are always in scope, and "sees" is defined (Rule 8.4); deferred sites are bound by level 5 (Rule 8.4.b); the test build's application root; private satisfactions (Rule 8.6.a); the pool's satisfaction is resolved at the site that created the choice point (§6.5.2); rule 4 of Rule 6.5.5 names the first capability of the bound set, and built-ins precede the standard library's source declarations; examples that used `let x: T = …` use parameter types (§5.1.1, §8.4, §8.5); new codes `E061`–`E065`; wrong references and "(TBD)" cross-references repaired.
+
+**Changes from v0.4.3.** Applies decision record P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`). New Rule 5.1.1: an abstract type is bound per use, per link unit (a *choice point*) or per package. Rule 4.1: a type variable local to a `data` variant field, and an anonymous bound in a field, is a choice point (closes OQ-T2). New Rule 5.1.2: the signature decides who picks the representation of a result (`-> is C` against `-> R is C`). The inferred caller-chosen / callee-chosen split is withdrawn. New Rule 5.1.3: `show`, `==` and `clone` on an unbounded type parameter are type errors. New §8.6: visibility (`pub`). §6.5: selection is staged between package compile and application link. The score of Rule 6.5.4 is usage × cost, with the bound-class table and static weights as fallback. **Rule 6.5.5 is replaced**: a tie never halts. Five disambiguation rules decide, and the only error is zero viable candidates. §6.5.6–§6.5.8 give the commit at link and the lock file. §8.4 is rewritten as Rules 8.4, 8.4.a and 8.4.b. Coherence per link unit is withdrawn: a link unit may hold several satisfactions of one pair, which a `using` or the scope resolves, and a satisfaction on a type's own parameter becomes part of the type. §8.5 no longer contradicts Rule 8.1.a. Rule 8.2 refers to the table of a satisfaction, not of a type.
+
+**Changes from v0.4.2.** Aligned with `spec/compilation_model.md` (baseline versions, witnesses, clones, packages) and `spec/cost.md` (cost contracts). §6.5: a representation is chosen where a value originates and travels by witness; the bound set is closed over the package and the signatures it imports; cost contracts are an input, a viability criterion (§6.5.3) and the source of two scoring dimensions (§6.5.4); the cache key includes the lifetime class. Rule 6.1.1 Phase 2 no longer re-checks a default body per satisfying type. Rules 7.4.b.1 and 7.4.b.2 are restated without "after monomorphisation": they are the mandatory specialisations of Rule CM5.5. Rule 7.3.b covers baseline code. Rule 8.2: the panic of an `impossible` constructor lives in the capability table. §8.4: satisfactions are coherent per link unit. §8.5 points to Rule CM4.5 for results typed by a capability bound. New OQ-T2 (type variables of variant fields).
+
+**Changes from v0.4.1.** §8 reframed to make the *capabilities-declare-requirements, types-provide-constructors* distinction explicit (new §8 intro). §8.1 wording updated (Rule 8.1.a / 8.1.b refer to "constructor requirements"). §8.2 (`impossible`) example replaced with a self-contained `Either` / `AlwaysRight` pair to avoid ambiguity between the simplified `Optional` and the canonical one. **Rule 8.2 weakened**: `impossible` is no longer statically verified to be unreachable — calls to an impossible-mapped constructor compile to runtime panics rather than compile errors. Users who need static guarantees may add a `prop` excluding the offending path. Wording across §6.4, §6.6, §7.4.f tightened to "constructor requirements" instead of "constructors".
+
+**Changes from v0.4.** `phantom` is no longer a keyword; phantom-ness of type parameters is inferred from usage (new §5.9). §6.5 representation-selection algorithm expanded from a one-paragraph sketch to a normative procedure with inputs, candidate pool, viability filter, scoring, ambiguity handling, phase placement, and caching. Rule 6.6 (priority) updated previously to put built-ins on equal footing with user-`satisfies` types — see §6.5.4 / 6.5.5 for how the equal priority resolves through scoring.
+
+**Changes from v0.3.** Body introducer for fn/method definitions changed from `:` to `=` (block introducers `:` reserved for cap/data/effect/satisfies bodies and control-flow branches; definitions use `=`). Cap instance and static methods may carry default bodies (Rule 6.1). Lambda parameters gain optional types and defaults. EffectMember gains `WithClause?` and `TypeParamsHint?`. TupleExpr/TuplePattern simplified. Code examples updated.
+
+**Changes from v0.2.** Code examples updated to the v0.3 indentation-based syntax (no block braces; `:` introduces blocks). No semantic rules changed.
+
+**Changes from v0.1.** OQ1 resolved (multi-arg `Self of B`, Rule 5.4.b); OQ2 resolved (mutual data recursion, §7.5); OQ3 resolved (auto-derivation matrix, §7.4 expanded); OQ4 resolved (built-in representation candidates, §6.6); OQ5 resolved as deferred-to-v0.3 (§7.6); OQ6 resolved (type-alias `of`-distribution, §5.8); OQ7 pre-resolved and deferred to `spec/properties.md`.
+
+@:@

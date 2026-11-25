@@ -1,25 +1,5 @@
 # Fixed Cost Contracts
 
-**Status:** Draft v0.2.3
-**Specifies:** what a cost contract bounds (steps, constructions, releases), how one is written (cost props, `fip`), the size index, how cost is inferred and verified, when a change to a contract is an ABI change, and how representation selection uses contracts and measured costs.
-**Last revised:** 2026-11-21
-
-**Changes from v0.2.2.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"). Rule CT8.1: the satisfaction of a data type that enters the pool is resolved at the site that created the choice point; if that site does not decide, the type is not a candidate there. Nothing is resolved at link.
-
-**Changes from v0.2.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule CT6.2: an asymptotic bound the checker cannot decide is open, and `assumed` only if the programmer wrote `assume`.
-
-**Changes from v0.2.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the cost checker makes its own solver call and cost props skip the static prover (Rule CT6.2); the pool's satisfaction is resolved at the site that created the choice point, the link check is said to catch version skew and implicit satisfactions, and an open prop does not make a candidate non-viable (Rule CT8.1); "per satisfaction" replaces "per satisfying type".
-
-**Changes from v0.1** (`docs/decisions/P6-resolution-round-2026-11-20.md`, D4, D5, D6, D10, D12).
-- **The selector's score is usage × cost** (Rule CT8.2, rewritten). Usage per capability method and the cost of one call are measured where data exists (`spec/properties.md` Rule P7.9, `spec/compilation_model.md` Rule CM8.6); the bound-class table (Rule CT8.3) and the static weights are the fallback. `K < ε` now holds for the fallback only; measured changes are covered by the lock file's hysteresis (`spec/type_system.md` Rule 6.5.5). A tie no longer halts.
-- **Viability moves to application link** for the choice points bound there (Rule CT8.1). Zero viable candidates is a link error. At package compile a call on a choice-point value costs the requirement's contract, and `?` where it states none (Rule CT6.1).
-- **Lanes** (Rule CT6.5, new). A cost prop never justifies a decision that is wrong if the prop is false; contracts and measured costs feed only the measurement lane of `spec/properties.md` Rule P7.8. A `tested` exact bound is a measurement; an asymptotic bound stays `proved`, failed or `assumed`.
-- **`clone`** (Rule CT4.5, new): the cost prop of a satisfaction's `clone` tells whether it shares or copies.
-- **Candidates are satisfactions** (Rule CT8.1): two satisfactions of the same (type, capability) are never ranked against each other.
-- Diagnostics are not steps (Rule CT3.5). A reference cost table shipped by a package is measurement, not contract (Rule CT7.1).
-
-**Why this document exists.** In Fixed the programmer does not pick a data structure, so the source alone does not say what an operation costs: `get(i)` is constant on an array and linear on a list. Cost is therefore a **contract on capability members**. A representation that cannot meet a capability's contract cannot satisfy the capability; among those that can, the contracts, and measured costs where they exist, tell representation selection how they differ. The decisions behind this document are recorded in `docs/decisions/P3-cost-contracts.md`.
-
 ## 1. Scope
 
 This document specifies:
@@ -101,7 +81,7 @@ Witness operations (`spec/compilation_model.md` §4), reference-count operations
 
 A **cost prop** is a `prop` (`spec/properties.md` §3) whose body is a comparison with a cost term on the left:
 
-```
+```ebnf
 prop <name>: <cost term> <= <bound>
 
 <cost term> ::= steps(<member>)
@@ -112,7 +92,7 @@ prop <name>: <cost term> <= <bound>
 
 `<member>` is the name of a member of the enclosing `cap` or `data` declaration, including a member the data type gets from a `satisfies` block or by derivation. It is named, not called.
 
-```
+```fixed
 cap RandomAccess of (Part, Index is Numeric):
     fn get(index: Index) -> is Optional of Part
 
@@ -161,7 +141,7 @@ A member with no contract has an inferred cost (§6.1), which is reported and is
 
 `clone` returns a value equal to its receiver (`spec/stdlib.md` §4.11). The satisfier chooses whether it **shares** (the result is the same cell, with its count raised) or **copies** (the result is new cells), and its cost prop says which:
 
-```
+```fixed
 Rope satisfies Clone:
     fn clone -> Self = self                       // shares
     prop cloneCells: constructs(clone) <= 0
@@ -276,7 +256,7 @@ This is where contracts decide. If `RandomAccess` promises `steps(get) <= O(1)`,
 
 Among viable candidates, the selector ranks by **expected cost** (`spec/type_system.md` Rule 6.5.4):
 
-```
+```text
 expected(p, r) = Σ_m usage(p, m) × unit(m, r)
 ```
 
@@ -289,7 +269,7 @@ Measured and static numbers are never mixed in one comparison. When some viable 
 
 **Static fallback.** Let the **written bounds** be the capabilities of the bound set as the program states them, before `extends`-closure. For a candidate `r` and a written bound `c`, let `steps_fit(c, r)` be the usage-weighted mean, over the members of `c` (inherited ones included) that `p` calls, of the table value (Rule CT8.3) of `r`'s bound on `steps` of that member; if `p` calls no member of `c`, the lowest such value over all members of `c`. `cells_fit(c, r)` is the same for the bounds on `constructs − releases`. A member with no bound counts as *other*. A written bound with no members (a refinement capability) is skipped.
 
-```
+```text
 access_fit(r)      = max(0, 10 − 0.6 × Σ_c (10 − steps_fit(c, r)) / 10)
 contract_cells(r)  = max(0, 10 − 0.6 × Σ_c (10 − cells_fit(c, r)) / 10)
 allocation_cost(r) = min(class_score(r), contract_cells(r))
@@ -345,3 +325,27 @@ A package cannot see how an importer uses a value it returns, nor how a dependen
 | `spec/diagnostics.md` | Rule DG3.3: diagnostics are not steps |
 | `spec/stdlib.md` | §4.12 contracts of the core capabilities |
 | `docs/decisions/P3-cost-contracts.md` | The decision and the alternatives rejected |
+
+@:details(Status and changes)
+
+**Status:** Draft v0.2.3
+**Specifies:** what a cost contract bounds (steps, constructions, releases), how one is written (cost props, `fip`), the size index, how cost is inferred and verified, when a change to a contract is an ABI change, and how representation selection uses contracts and measured costs.
+**Last revised:** 2026-11-21
+
+**Changes from v0.2.2.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"). Rule CT8.1: the satisfaction of a data type that enters the pool is resolved at the site that created the choice point; if that site does not decide, the type is not a candidate there. Nothing is resolved at link.
+
+**Changes from v0.2.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule CT6.2: an asymptotic bound the checker cannot decide is open, and `assumed` only if the programmer wrote `assume`.
+
+**Changes from v0.2.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the cost checker makes its own solver call and cost props skip the static prover (Rule CT6.2); the pool's satisfaction is resolved at the site that created the choice point, the link check is said to catch version skew and implicit satisfactions, and an open prop does not make a candidate non-viable (Rule CT8.1); "per satisfaction" replaces "per satisfying type".
+
+**Changes from v0.1** (`docs/decisions/P6-resolution-round-2026-11-20.md`, D4, D5, D6, D10, D12).
+- **The selector's score is usage × cost** (Rule CT8.2, rewritten). Usage per capability method and the cost of one call are measured where data exists (`spec/properties.md` Rule P7.9, `spec/compilation_model.md` Rule CM8.6); the bound-class table (Rule CT8.3) and the static weights are the fallback. `K < ε` now holds for the fallback only; measured changes are covered by the lock file's hysteresis (`spec/type_system.md` Rule 6.5.5). A tie no longer halts.
+- **Viability moves to application link** for the choice points bound there (Rule CT8.1). Zero viable candidates is a link error. At package compile a call on a choice-point value costs the requirement's contract, and `?` where it states none (Rule CT6.1).
+- **Lanes** (Rule CT6.5, new). A cost prop never justifies a decision that is wrong if the prop is false; contracts and measured costs feed only the measurement lane of `spec/properties.md` Rule P7.8. A `tested` exact bound is a measurement; an asymptotic bound stays `proved`, failed or `assumed`.
+- **`clone`** (Rule CT4.5, new): the cost prop of a satisfaction's `clone` tells whether it shares or copies.
+- **Candidates are satisfactions** (Rule CT8.1): two satisfactions of the same (type, capability) are never ranked against each other.
+- Diagnostics are not steps (Rule CT3.5). A reference cost table shipped by a package is measurement, not contract (Rule CT7.1).
+
+**Why this document exists.** In Fixed the programmer does not pick a data structure, so the source alone does not say what an operation costs: `get(i)` is constant on an array and linear on a list. Cost is therefore a **contract on capability members**. A representation that cannot meet a capability's contract cannot satisfy the capability; among those that can, the contracts, and measured costs where they exist, tell representation selection how they differ. The decisions behind this document are recorded in `docs/decisions/P3-cost-contracts.md`.
+
+@:@

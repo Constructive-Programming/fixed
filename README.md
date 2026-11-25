@@ -345,12 +345,23 @@ See [`docs/plans/implementation-plan.md`](docs/plans/implementation-plan.md) for
 
 ## References
 
+The full annotated bibliography, grouped by the part of the language each
+source informs, is on the site:
+[References](https://fixed.constructive.dev/references/bibliography.html).
+
+Core sources:
+
 - [Death of Data](https://degoes.net/articles/kill-data) — De Goes on eliminating premature type commitment
 - [Quine's Predicate Functor Logic](https://en.wikipedia.org/wiki/Predicate_functor_logic) — variable-free predicate logic
 - [Tagless Final](https://okmij.org/ftp/tagless-final/) — encoding programs against abstract interfaces
 - [Koka language](https://koka-lang.github.io/koka/doc/index.html) — algebraic effects, Perceus RC, FBIP, evidence passing
 - [Quantitative Type Theory](https://bentnib.org/quantitative-type-theory.html) — Atkey, 2018. Dependent types with resource tracking via usage quantities
-- [Perceus: Garbage Free Reference Counting with Reuse](https://www.microsoft.com/en-us/research/publication/perceus-garbage-free-reference-counting-with-reuse/) — Reinking et al., 2021
+- [Perceus: Garbage Free Reference Counting with Reuse](https://doi.org/10.1145/3453483.3454032) — Reinking et al., PLDI 2021
+- [FP²: Fully in-Place Functional Programming](https://doi.org/10.1145/3607840) — Lorenzen, Leijen, Swierstra, ICFP 2023
+- [Counting Immutable Beans](https://doi.org/10.1145/3412932.3412935) — Ullrich, de Moura, IFL 2019
+- [The Goose Language — Specification](https://aardappel.github.io/goose/docs/goose_spec.html) — data stacks, destinations, regions
+- [Neut](https://vekatze.github.io/neut/) — closed resource functions and value witnesses
+- [Capturing Types](https://doi.org/10.1145/3618003) — Scala 3's capture checker, the closest analog to capabilities
 - [Rethinking Data and Codata through Matrix Transposition](https://hackernoon.com/rethinking-data-and-codata-through-matrix-transposition) — data/codata duality and its implications for language design
 
 ## License

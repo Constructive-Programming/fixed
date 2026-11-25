@@ -1,4 +1,4 @@
-import fixed.build.FixedSyntax
+import fixed.build.{FixedDirectives, FixedSite, FixedSpecSplit, FixedSyntax}
 import laika.config.SyntaxHighlighting
 
 ThisBuild / scalaVersion := "3.10.1"
@@ -148,6 +148,8 @@ lazy val docs = (project in file("site"))
     // highlighter with the built-in registry. Defined in project/FixedSyntax.scala
     // because `laikaExtensions` is evaluated on the build-definition classpath.
     laikaExtensions += SyntaxHighlighting.withSyntax(FixedSyntax),
+    laikaExtensions += FixedDirectives,
+    laikaTreeProcessors += LaikaTreeProcessor(FixedSpecSplit.processTree),
     // The plugin's mdocIn default is the ROOT `docs/` directory, which holds
     // internal plans/decisions/baselines the public site should not ingest.
     // Point it at the site's own docs directory.
@@ -187,6 +189,8 @@ lazy val docs = (project in file("site"))
           bgGradient = (Color.hex("1f242b"), Color.hex("23272e"))
         )
         .site
+        .mainNavigation(appendLinks = FixedSite.navigation)
+        .site
         .topNavigationBar(
           // Home link: project name as a text link to the site root.
           // Helium's default home link (`DynamicHomeLink.default`)
@@ -205,6 +209,8 @@ lazy val docs = (project in file("site"))
             )
           )
         )
+        .site
+        .internalCSS(Path.Root / "css" / "site.css")
     }
   )
 

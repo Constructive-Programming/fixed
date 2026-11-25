@@ -1,25 +1,5 @@
 # Fixed Compilation Model
 
-**Status:** Draft v0.3.5
-**Specifies:** how Fixed v0.4.4 source becomes code: the baseline version of every function, the travel form and the rest form of a value, immediates, accessors, witnesses, specialisation (clones, budget, score, mandatory cases), build modes, packages and the package ABI, visibility, satisfactions in a link unit, the interface and body tiers, and the application link (choice points, summaries, selection, the lock file, the profile file, clones at link, the type table).
-**Last revised:** 2026-11-21
-
-**Changes from v0.3.4.** §6 no longer says that a library's deferred satisfaction sites stay unbound until an application links it: there are none (P6, fourth round, "No deferred sites").
-
-**Changes from v0.3.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"). Rule CM6.6: every satisfaction site is resolved at package compile, and an ambiguous one is `E061` there (`spec/type_system.md` Rule 8.4.b); the deferred sites are withdrawn, and with them the resolution level `using` in the application root. The interface tier (Rule CM7.1), the application link (§8) and the lock file (Rule CM8.5) no longer record or resolve them; Rule CM6.7 no longer speaks of a link error for one. Rule CM8.4: a data type whose pair the site that created a choice point does not decide does not enter the pool, so selection resolves no satisfaction and its only error stays zero viable candidates. §8: a test build's application root is no longer a resolution level.
-
-**Changes from v0.3.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"). Rule CM8.1: a list literal whose type is not fixed is a choice point (`spec/type_system.md` Rule 5.10).
-
-**Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). No witness travels with an anonymous result: its choice point is bound by symbol, and a requirement's anonymous result is one choice point shared by every implementation (Rules CM4.2, CM4.5). A link unit is an application; a library is not one (Rule CM6.1). The sixth resolution level is removed, and derived satisfactions get no preference (Rule CM6.6).
-
-**Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the table convention is one containment test with a table of examples (Rule CM4.6); an `Inline` value that is not an immediate is copied out before it meets a `ref` witness (Rules CM3.5, CM4.1); new accessor `T.variant` (Rule CM3.7); level 4 of satisfaction resolution, deferred sites (level 5 only) and private satisfactions follow `spec/type_system.md` Rules 8.4 and 8.6.a (Rule CM6.6); the test build's application root (§8); the pool's satisfaction, viability at link and the score cite their owners (Rule CM8.4); the type table has a row for every kind of cell (Rule CM8.8); "descriptor" replaces "header" for the tag and reference map.
-
-**Changes from v0.2.** Applies `docs/decisions/P6-resolution-round-2026-11-20.md` (D1–D17). The 64-bit slot is the *travel form* (Rule CM3.3); new Rules CM3.5 (immediates: every data type instance with no reference that fits in 64 bits), CM3.6 (rest form and `width`) and CM3.7 (accessors for layouts not known at package compile). The value witness gains `width` and its family is fixed (Rule CM4.1). Witness records are built on the stack in baseline code and are static where the instance is known at link (Rule CM4.2). A closure captures its evidence; choice points are not hidden parameters (Rule CM4.3). The signature alone decides who picks the representation of a result; the caller-chosen / callee-chosen split is withdrawn (Rule CM4.5). The convention of a call through a table is derived from the requirement's signature, with an exclusive pointer narrowed to `own` parameters of type `Self` (Rule CM4.6). Ownership clones are requested only where a run-time test cannot stand in, and the static weight is carried along call edges (§5). Declarations are private unless marked `pub` (Rule CM6.2). Coherence per link unit is withdrawn: a link unit may hold several satisfactions of one pair, resolved by `using` (Rule CM6.6). Bodies ship by default (Rule CM7.3). New §8 specifies the application link. Open questions move to §9 and cross-references to §10; OQ-CM1, OQ-CM4, OQ-CM5, OQ-CM8, OQ-CM10, OQ-CM11 and OQ-CM12 are closed, and OQ-CM13 to OQ-CM18 are new.
-
-**Changes from v0.1.** Amended from the first implementation (`docs/plans/phase-4.1-baseline-specialiser.md`, `docs/baselines/runtime-2026-11-20-phase-4.1.md`): the clones a `fip fn` body requests are mandatory (Rule CM5.5); a clone that nothing reaches at the end is dropped and reported as `unused` (Rules CM5.4, CM5.8); the specialiser may repeat its pass until ownership facts are stable (Rule CM5.4); new OQ-CM10 to OQ-CM12 record what the measurements showed about the weight, the order of the axes and tables per instance.
-
-**Why this document exists.** Until v0.3 of `spec/memory_management.md` the compilation model was implicit: lowering monomorphised every function from `main`, and code that could not be monomorphised (higher-order code, separate compilation) was a special case handled by class witnesses. This document reverses the default. Every function has one **baseline** version that is polymorphic and passes witnesses, in the style of Neut. Specialised versions are an optimisation added where the compiler can identify the types, ownership and classes that matter. A package cannot know how the rest of the program uses an abstract type it declares, so a choice of representation that depends on that use is made when the application is linked, from summaries, and bound by the linker: **decide late, compile early** (§8). The decisions behind it are recorded in `docs/decisions/P1`–`P6`.
-
 ## 1. Scope
 
 This document specifies:
@@ -127,7 +107,7 @@ The rule, *provisional* (OQ-CM13):
 - The **width** of an immediate instance is its size, as above, rounded up to 1, 2, 4 or 8 bytes. A type with no field and one variant has size 0 and width 1.
 - A field whose type is always a reference (`String`, a closure, a type that is statically a cell) makes the type **statically a cell**. Every recursive type is statically a cell.
 
-```
+```fixed
 data Order: Less | Equal | Greater              // tag only: size 1, imm1
 data Rgb: Rgb(red: u8, green: u8, blue: u8)     // one variant, no tag: size 3, imm4
 data Pair of (A, B): Pair(first: A, second: B)  // Pair of (u8, u16): size 3, imm4
@@ -176,7 +156,7 @@ A witness is what a baseline version needs to know about a type it cannot see. T
 
 The **value witness** of a (type, lifetime class) pair is the class witness of `spec/memory_management.md` Rule MM7.3, a closed function after Neut:
 
-```
+```text
 witness(op, v, dest)    op ∈ { drop, dup, reuse_test, evacuate, copy, size, kind, width }
 ```
 
@@ -263,7 +243,7 @@ The signature decides. The body cannot change the calling convention.
 - **Named result, `-> R is C`, with `R` in no parameter type.** `R` is an ordinary type parameter. The caller passes its witness (Rule CM4.3). A body that returns a concrete data type where `R` is expected is a type error. An abstract constructor call for `R` stays abstract and is resolved by the caller: at a call site, `R` is a concrete type, a named type parameter of the caller (whose witness is passed on), or else a choice point of the caller (Rule CM8.1).
 - **Requirements.** A requirement whose result is `-> is C` (`compare -> is Ordering`) owns one choice point, shared by every satisfaction's implementation of it. A call through a capability table therefore knows the type of the result without a witness. An implementation that constructs a concrete data type restricts the candidates of that choice point to that type; two implementations that restrict it to different types leave no viable candidate, which is the link error of Rule CM8.4.
 
-```
+```fixed
 fn parse(s: String) -> is Optional of u64      // choice point of parse; no witness travels
 fn empty() -> R is Empty                       // caller passes R's witness
     Empty.empty()                              // stays abstract; resolved at the caller
@@ -283,7 +263,7 @@ A capability method **requirement** has no body, so it has no inferred demand (`
 - **Shared pointer.** `read` parameters are borrowed. `own` parameters are passed as counted references, moved at the caller's last use; the callee may keep, drop or reuse-after-test each one.
 - **Exclusive pointer.** As above, and the caller guarantees that it exclusively owns, in every part, each `own` parameter whose type is `Self`. Other arguments may stay shared. The caller picks this pointer statically, as for a closure (Rule PR5.6), and only when the guarantee holds.
 
-```
+```fixed
 cap Sequencing of Part:
     fn size(self) -> u64
     fn compare(self, other: Self) -> is Ordering
@@ -366,7 +346,7 @@ Clones requested by call sites inside the package and versions exported by Rule 
 
 Every call site inside the package whose arguments determine a key for the callee is a **request** for that clone. The candidates for `f` are the keys requested. Each candidate has a score:
 
-```
+```text
 score(f, key) = removed(f, key) × weight(f, key) ÷ size(f)
 ```
 
@@ -712,3 +692,27 @@ A release build strips `inspect` and `trace` unless a flag keeps them; the table
 | `spec/diagnostics.md` | Rules DG3.1–DG3.6: the diagnostic sinks; Rule DG3.6 prints through the type table of Rule CM8.8 |
 | `spec/reports.md` | Coverage, cardinality and the tool interface built on §7; Rule RP3.3 counters are the demand side of Rule CM8.6 |
 | `docs/decisions/P1`–`P6` | The decisions and the alternatives rejected; P6 is the source of v0.3 |
+
+@:details(Status and changes)
+
+**Status:** Draft v0.3.5
+**Specifies:** how Fixed v0.4.4 source becomes code: the baseline version of every function, the travel form and the rest form of a value, immediates, accessors, witnesses, specialisation (clones, budget, score, mandatory cases), build modes, packages and the package ABI, visibility, satisfactions in a link unit, the interface and body tiers, and the application link (choice points, summaries, selection, the lock file, the profile file, clones at link, the type table).
+**Last revised:** 2026-11-21
+
+**Changes from v0.3.4.** §6 no longer says that a library's deferred satisfaction sites stay unbound until an application links it: there are none (P6, fourth round, "No deferred sites").
+
+**Changes from v0.3.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "No deferred sites"). Rule CM6.6: every satisfaction site is resolved at package compile, and an ambiguous one is `E061` there (`spec/type_system.md` Rule 8.4.b); the deferred sites are withdrawn, and with them the resolution level `using` in the application root. The interface tier (Rule CM7.1), the application link (§8) and the lock file (Rule CM8.5) no longer record or resolve them; Rule CM6.7 no longer speaks of a link error for one. Rule CM8.4: a data type whose pair the site that created a choice point does not decide does not enter the pool, so selection resolves no satisfaction and its only error stays zero viable candidates. §8: a test build's application root is no longer a resolution level.
+
+**Changes from v0.3.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"). Rule CM8.1: a list literal whose type is not fixed is a choice point (`spec/type_system.md` Rule 5.10).
+
+**Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). No witness travels with an anonymous result: its choice point is bound by symbol, and a requirement's anonymous result is one choice point shared by every implementation (Rules CM4.2, CM4.5). A link unit is an application; a library is not one (Rule CM6.1). The sixth resolution level is removed, and derived satisfactions get no preference (Rule CM6.6).
+
+**Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): the table convention is one containment test with a table of examples (Rule CM4.6); an `Inline` value that is not an immediate is copied out before it meets a `ref` witness (Rules CM3.5, CM4.1); new accessor `T.variant` (Rule CM3.7); level 4 of satisfaction resolution, deferred sites (level 5 only) and private satisfactions follow `spec/type_system.md` Rules 8.4 and 8.6.a (Rule CM6.6); the test build's application root (§8); the pool's satisfaction, viability at link and the score cite their owners (Rule CM8.4); the type table has a row for every kind of cell (Rule CM8.8); "descriptor" replaces "header" for the tag and reference map.
+
+**Changes from v0.2.** Applies `docs/decisions/P6-resolution-round-2026-11-20.md` (D1–D17). The 64-bit slot is the *travel form* (Rule CM3.3); new Rules CM3.5 (immediates: every data type instance with no reference that fits in 64 bits), CM3.6 (rest form and `width`) and CM3.7 (accessors for layouts not known at package compile). The value witness gains `width` and its family is fixed (Rule CM4.1). Witness records are built on the stack in baseline code and are static where the instance is known at link (Rule CM4.2). A closure captures its evidence; choice points are not hidden parameters (Rule CM4.3). The signature alone decides who picks the representation of a result; the caller-chosen / callee-chosen split is withdrawn (Rule CM4.5). The convention of a call through a table is derived from the requirement's signature, with an exclusive pointer narrowed to `own` parameters of type `Self` (Rule CM4.6). Ownership clones are requested only where a run-time test cannot stand in, and the static weight is carried along call edges (§5). Declarations are private unless marked `pub` (Rule CM6.2). Coherence per link unit is withdrawn: a link unit may hold several satisfactions of one pair, resolved by `using` (Rule CM6.6). Bodies ship by default (Rule CM7.3). New §8 specifies the application link. Open questions move to §9 and cross-references to §10; OQ-CM1, OQ-CM4, OQ-CM5, OQ-CM8, OQ-CM10, OQ-CM11 and OQ-CM12 are closed, and OQ-CM13 to OQ-CM18 are new.
+
+**Changes from v0.1.** Amended from the first implementation (`docs/plans/phase-4.1-baseline-specialiser.md`, `docs/baselines/runtime-2026-11-20-phase-4.1.md`): the clones a `fip fn` body requests are mandatory (Rule CM5.5); a clone that nothing reaches at the end is dropped and reported as `unused` (Rules CM5.4, CM5.8); the specialiser may repeat its pass until ownership facts are stable (Rule CM5.4); new OQ-CM10 to OQ-CM12 record what the measurements showed about the weight, the order of the axes and tables per instance.
+
+**Why this document exists.** Until v0.3 of `spec/memory_management.md` the compilation model was implicit: lowering monomorphised every function from `main`, and code that could not be monomorphised (higher-order code, separate compilation) was a special case handled by class witnesses. This document reverses the default. Every function has one **baseline** version that is polymorphic and passes witnesses, in the style of Neut. Specialised versions are an optimisation added where the compiler can identify the types, ownership and classes that matter. A package cannot know how the rest of the program uses an abstract type it declares, so a choice of representation that depends on that use is made when the application is linked, from summaries, and bound by the linker: **decide late, compile early** (§8). The decisions behind it are recorded in `docs/decisions/P1`–`P6`.
+
+@:@

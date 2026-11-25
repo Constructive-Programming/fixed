@@ -1,27 +1,5 @@
 # Fixed Effects
 
-**Status:** Draft v0.3.4
-**Specifies:** algebraic effect declarations, the arithmetic effects, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.4 source.
-**Last revised:** 2026-11-21
-
-**Changes from v0.3.3.** Settles minor 14 of the consistency review of 2026-11-20 by an author's ruling: the wrapper of Rule E7.8, item 1, is an ordinary closure with captures, with the cost and the `fip` status of one.
-
-**Changes from v0.3.2.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"), with the author's choices that the owner confirmed. New §3.6: integer overflow and division by zero are the abortive effects `Overflow` and `DivideByZero` (Rules E3.6–E3.6.j): which operations perform them, how a generic `T is Numeric` body gets its row, when the prover or a refinement removes the effect (a facts-lane decision), derived members and prop bodies, the abort at `main`, and the widening form. Rule E5.4: both effects are in the set the runtime handles for `main`. Rule E8.2 no longer says a callback must perform the concrete part of a row: its row is a sub-row of it, as Rule E5.5.a already said. New code `E107` (an integer refinement not proved where it is established). Not built.
-
-**Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule E7.8: a closure carries one bit that is set when it holds captured evidence; a fork site tests it.
-
-**Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): every evidence entry, passed or captured, has one layout that holds the handler's marker, through which the frame is found (§7.1, Rule E7.2); Rule E7.7 no longer says a table call passes every argument `own` (it follows `spec/compilation_model.md` Rule CM4.6); Rule E5.5.b cites the containment test of Rule CM4.6; wrong references to a diagnostics section and to a rule number for §7.6 corrected.
-
-**Changes from v0.2.3.** Applies decision P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`, D11, D14). A closure captures the evidence of the effects that its type does not mention, at the point where it is given that type; it captures the handler's marker, not a stack address (new Rule E7.8). A closure that captured evidence must not outlive the handler (new Rule E5.5.b, `E085`); the prose caveat of Rule E5.5.a about callbacks stored and invoked later is replaced by these two rules. `inspect` and `trace` are not effects and never appear in a row (new §4.6). Mechanical repairs from the review of 2026-11-20 (`docs/decisions/P0-spec-review-2026-11-20.md` §3): Rule E4.5.b no longer shows an alias application that does not parse; §4.2 says package instead of a `module` construct that does not exist; the unused declared effect is `warning[E081]`, listed as a warning; the cross-references no longer say prop bodies are "checked at quantity 0". §5.5 and §8.3 no longer say that a receiving function must declare its callback's effects. New OQ-E9 (parameterised effect aliases) and OQ-E10 (a handler clause cannot name an effect's `of` argument).
-
-**Changes from v0.2.2.** §7 aligned with `spec/compilation_model.md`: operation arguments and results are 64-bit slots (§7.1); evidence is passed in every baseline version, and a known handler is one component of a clone key, not a consequence of monomorphisation (§7.6); new Rule E7.7 fixes what an operation call hands over and how an evidence vector is ordered.
-
-**Changes from v0.2.1.** Adds Rule E5.5.a (ambient pass-through): a callback whose expected function type declares no `with` clause passes its effects to the enclosing body. Adds Rule E8.1.a (how row variables are solved) and OQ-E8 (row-polymorphic data).
-
-**Changes from v0.2.** Re-opens OQ-E5: §3.5 (linear effects) is now marked **Proposal**, contingent on the resolution of OQ-Q5 in `spec/quantities.md` (whether effect rows participate in QTT quantity). The proposed semantics in §3.5 are unchanged in shape but no longer normative until OQ-Q5 is closed. No other semantic changes from v0.2; bump tracks the v0.4.4 source grammar.
-
-**Changes from v0.1.** Resolved OQ-E6 (effect aliasing → §4.5). Removed Rule E6.5 (wildcard handler clauses) per OQ-E2 decision. OQ-E1, OQ-E3, OQ-E4 marked as deferred decisions.
-
 ## 1. Scope
 
 This document specifies Fixed's algebraic effect system end-to-end: declarations, the type-level effect-row machinery, the inference algorithm, the runtime semantics of handlers, and how all of the above is compiled to evidence vectors. It covers:
@@ -57,7 +35,7 @@ It does **not** specify:
 
 ### 3.1 Syntactic form (recap)
 
-```
+```fixed
 effect E [of OfArgs]:
     fn op1(args) -> T1 [with EffectRow]
     fn op2(args) -> T2
@@ -74,7 +52,7 @@ Each operation declared inside `effect E:` is treated as a method on the effect 
 2. Adds `E` (with its `of` arguments resolved against the call-site context) to the caller's inferred effect row (§5.1).
 3. The expression's type is the operation's declared return type.
 
-```
+```fixed
 effect Console:
     fn printLine(msg: String) -> ()
     fn readLine -> String
@@ -87,7 +65,7 @@ effect Console:
 
 An operation declared with return type `!` (the never type) is **abortive**: it transfers control to its handler clause and never returns to the call site.
 
-```
+```fixed
 effect Fail of E:
     fn fail(error: E) -> !
 ```
@@ -103,7 +81,7 @@ This is what makes `Fail` ergonomically usable as exceptions: throwing transfers
 
 Effects may carry `of` type arguments (per `CapOfParams` in the grammar):
 
-```
+```fixed
 effect Fail of E:
     fn fail(error: E) -> !
 
@@ -120,7 +98,7 @@ effect Channel of A:
 
 An effect declared with the `linear` modifier is a **linear effect** — its operations are subject to a usage constraint enforced by the typer:
 
-```
+```fixed
 linear effect FileHandle:
     fn readAll -> Bytes
 
@@ -142,7 +120,7 @@ A linear effect's row entry carries quantity 1 (per `spec/quantities.md` §3 sem
 
 **Use case.** Linear effects encode resource lifecycles where double-use is a bug. For multi-step lifecycles (acquire + use* + release), the canonical approach is to **split each linear operation into its own `linear effect`**: each effect carries its own usage budget, tracked independently. This is intentional — keeping linearity at the *effect* granularity (not per-op within a multi-op effect) preserves the simplicity of Rule E3.5 and the QTT-row semantics of §4.1. Examples:
 
-```
+```fixed
 // One-shot lock release:
 linear effect Lock:
     fn release -> ()
@@ -156,7 +134,7 @@ linear effect Handle of R:
 
 **Exclusive captures across linear clause bodies (resolves L6).** Because a linear effect's clause body runs at most once per `handle` block, the clause body itself has quantity 1 — see `spec/quantities.md` Rule Q7.4. An exclusively owned outer value captured into a linear-effect clause body therefore stays exclusive:
 
-```
+```fixed
 let lockToken = makeToken()        // quantity 1
 handle (do: ... Lock.release):
     Lock.release =>
@@ -174,7 +152,7 @@ Decided by the owner (`docs/decisions/P6-resolution-round-2026-11-20.md`, fourth
 
 **Rule E3.6 (The two effects).** The prelude declares (`spec/stdlib.md` §4.13):
 
-```
+```fixed
 pub effect Overflow:
     fn overflow -> !
 
@@ -219,7 +197,7 @@ This is the simplest sound rule: the row of a generic body does not depend on it
 2. **Proved range.** The static prover (`spec/properties.md` Rule P7.1) proves that the mathematical result lies in the range of the type; for `/` and `%`, that the divisor is not zero (for `DivideByZero`) and that the operands are not the most negative value and `-1` (for `Overflow`). Its premises are the conditions of the enclosing `if` branches and `match` guards, the refinements of the operands' types (item 3), the data invariants (`spec/properties.md` Rule P3.2) of the values the operands were read from, and the props of the operands' bounds, each with its status.
 3. **Refinement.** A refinement capability on an operand's type (`spec/type_system.md` §6.3: `u64 is between(0, 1000000)`, `N is boundedPositive(1, 10)`) is a premise of item 2. A divisor whose type is refined to exclude zero (`u64 is positive()`) does not perform `DivideByZero`.
 
-```
+```fixed
 fn mean(xs: is Folding of u64, n: u64) -> u64 with Arithmetic =
     xs.fold(0, (acc, x) -> acc + x) / n          // the lambda's Overflow joins the row (Rule E5.5.a)
 
@@ -260,7 +238,7 @@ fn percent(part: u64 is between(0, 1000000), whole: u64 is positive()) -> u64 =
   3. A call inside `body` keeps its callee's signature: an argument computed at `W` and passed where `A` is expected is narrowed there, which may perform `Overflow`.
   4. The result type of `body` must be a bounded integer type; any other type is a type mismatch (`T002`). For `i64` and `u64` the wider type needs the 128-bit immediates of `spec/compilation_model.md` OQ-CM7; until they exist `widen` at those types is `error[T026]: widen at <type> needs a 128-bit integer type`, a limit of the compiler.
 
-```
+```fixed
 fn scale(a: u32, b: u32, c: u32) -> u32 with Arithmetic =
     widen(() -> a * b / c)       // a * b at u64 cannot overflow; one narrowing at the end
 ```
@@ -279,7 +257,7 @@ An **effect row** is an unordered, duplicate-free **set** of `EffectBound`s, wri
 
 `+` on effect rows is set union: associative, commutative, idempotent.
 
-```
+```text
 with Console + Fail of String                    ≡  with Fail of String + Console
 with Console + Console                            ≡  with Console
 with Console + (Fail of String + Console)         ≡  with Console + Fail of String
@@ -314,7 +292,7 @@ The `type` syntax (per `spec/syntax_grammar.ebnf` §7) extends to effect rows. T
 
 **Rule E4.5.a (Effect-alias expansion).** An effect alias `type X = E1 + E2 + ...` is expanded at every use site to its constituent effects:
 
-```
+```fixed
 effect Console:
     fn printLine(msg: String) -> ()
 effect FileSystem:
@@ -331,7 +309,7 @@ fn run() -> () with IO = ...
 
 **Rule E4.5.b (No parameterised effect aliases).** An effect alias takes no type parameter. The grammar's `TypeAliasParams` are value parameters: `type AppEffect(E) = …` parses, but `E` is a value, not a type. An `EffectBound` in a row takes arguments only through `of`, so the use `with AppEffect(String)` does not parse. A row with a parameterised effect is written out:
 
-```
+```fixed
 type AppEffect = Console + Log
 
 fn run() -> () with AppEffect + Fail of String = ...
@@ -342,7 +320,7 @@ Whether effect aliases should take type parameters (for example `type AppEffect 
 
 **Rule E4.5.c (Aliases in handlers).** When a `handle` block subtracts effects from a row containing an alias, the alias is first expanded and then individual effects are subtracted per Rule E5.3:
 
-```
+```fixed
 type IO = Console + FileSystem
 
 fn run() -> () with IO = ...
@@ -356,7 +334,7 @@ handle run():
 
 **Rule E4.5.c.1 (An alias as the name of a clause's effect).** A handler clause may name an alias that expands to exactly one effect, and then handles that effect (owner's decision, fourth round of P6; it settles OQ-E12):
 
-```
+```fixed
 type ParseFail = Fail of String
 
 fn parse(s: String) -> u64 with ParseFail + Fail of i64 = ...
@@ -370,7 +348,7 @@ The alias is a name and nothing more: `ParseFail` and `Fail of String` are the s
 
 **Rule E4.5.d (Composition).** Aliases compose freely:
 
-```
+```fixed
 type IO = Console + FileSystem
 type RuntimeEffects = IO + Clock + Log
 // expanded RuntimeEffects: Console + FileSystem + Clock + Log
@@ -380,13 +358,13 @@ A linear effect appearing inside an alias retains its linearity (Rule E3.5) when
 
 **Rule E4.5.e (No `extends` in effect aliases) — resolves X4.** Effect aliases are **pure aliases** — textual expansion to a `+`-combined row of effects. The `extends` keyword is **not** valid in an `EffectAliasDecl`; an alias declaration of the form
 
-```
+```fixed
 type X extends Y = E1 + E2     // ❌ compile error
 ```
 
 is rejected by the parser (and would have no useful semantics since aliases are not nominal types). Composition of effect rows is achieved by the `+` operator inside the RHS, not by inheritance:
 
-```
+```fixed
 type X = Y + E1 + E2           // ✅ correct — Y is expanded, then E1 + E2 added
 ```
 
@@ -458,7 +436,7 @@ This means a lambda passed as a callback can carry effects. Either the receiving
 
 Invoking a value adds the row in its type. A parameter declared `f: A -> B` therefore contributes nothing inside the callee, and the callee's caller has already accounted for the callback's effects. This is how the stdlib's higher-order members, written without row variables, accept effectful callbacks:
 
-```
+```fixed
 fn inner(input: String) -> u64 with Fail of String =
     parseU64(input).fold((v) -> v, (e) -> Fail.fail(e))   // Fail joins inner's row here
 ```
@@ -475,7 +453,7 @@ At run time the effects of `R_v` that the expected type does not mention are per
 
 Examples. `Log` is handled inside each function shown.
 
-```
+```fixed
 effect Log:
     fn write(msg: String) -> ()
 
@@ -488,7 +466,7 @@ fn logId(s: String) -> String with Log =
     s
 ```
 
-```
+```fixed
 // Safe by type. `List of B` cannot contain a value of type `A -> B`,
 // so `f` dies with the call.
 fn map(xs: List of A, f: A -> B) -> List of B
@@ -498,7 +476,7 @@ fn ok(xs: List of String) -> List of u64 with Console =
         Log.write(m) => resume(Console.printLine(m))
 ```
 
-```
+```fixed
 // The result may contain `f` and `g`. The closure `compose` returns is
 // placed in the same handler region as its arguments, and the caller's
 // escape analysis continues on it.
@@ -511,7 +489,7 @@ fn alsoOk(xs: List of String) -> List of u64 with Console =
         Log.write(m) => resume(Console.printLine(m))
 ```
 
-```
+```fixed
 // Rejected: the closure leaves the handler inside the returned list.
 fn later(f: () -> ()) -> List of (() -> ()) = List.Cons(f, List.Nil)
 
@@ -529,7 +507,7 @@ With the help applied, the closure captures nothing, the list's type says that i
 
 ### 6.1 Syntactic form (recap)
 
-```
+```fixed
 handle SUBJECT:
     E.op(args) => body
     F.op(args) => body
@@ -540,7 +518,7 @@ Per the grammar (`HandleExpr`), `SUBJECT` is a single `Expr`. For multi-line sub
 
 **Rule E6.1.a (One effect at two `of` arguments).** `Fail of String` and `Fail of i64` are distinct effects (Rule E4.2), and one `handle` may handle both. A clause says which instance it handles by the type of a parameter (grammar `HandlerParam`):
 
-```
+```fixed
 handle parse(input):
     Fail.fail(e: String) => 0
     Fail.fail(code: i64) => code.toU64()
@@ -550,7 +528,7 @@ Where the subject's row holds one instance of the effect, a clause needs no type
 
 **Rule E6.1.b (Performing one of two instances).** The same two means pick the instance at the place where an operation is performed, in a function whose row holds one effect at several `of` arguments (owner's decision, fourth round of P6):
 
-```
+```fixed
 type ParseFail = Fail of String
 
 fn parse(s: String) -> u64 with ParseFail + Fail of i64 =
@@ -584,7 +562,7 @@ Evaluating `handle SUBJECT: clauses` proceeds:
 
 An optional `return(v) => body` clause transforms the normal-completion value:
 
-```
+```fixed
 handle compute(input):
     Fail.fail(e) => Result.err(e)         // abortive: no resume
     return(v) => Result.ok(v)              // normal completion: wrap in Ok
@@ -604,7 +582,7 @@ For abortive operations (`-> !`), `resume` is never present in the clause — th
 
 `handle` blocks nest. Inner handlers run first; an effect bubbles outward until a handler claims it. Clauses in an inner handler do not see outer handlers' clauses — each `handle` has its own clause scope.
 
-```
+```fixed
 handle outerSubject:
     OuterEff.op() => ...
 ```
@@ -669,7 +647,7 @@ Quantity-1 resume (Rule Q5.11) means each captured continuation is consumed exac
 
 When a clause body's only use of `resume` is a tail call — `resume(expr)` as the final expression of the body — the compiler may emit a *tail-resume* that avoids capturing and restoring the stack:
 
-```
+```fixed
 handle f():
     Channel.send(value) =>
         logSend(value)
@@ -717,7 +695,7 @@ The reason for capture over passing: a pure higher-order function in a library d
 
 A function may be polymorphic over an effect row, written with a row variable:
 
-```
+```fixed
 fn map<E>(list: is List of A, f: A -> B with E) -> is List of B with E
 ```
 
@@ -731,7 +709,7 @@ Row variables are bound by the function and follow the same scoping as type vari
 
 A function may have a concrete effect row plus a row variable:
 
-```
+```fixed
 fn mapConsole<E>(list: is List of A, f: A -> B with Console + E) -> is List of B with Console + E
 ```
 
@@ -741,7 +719,7 @@ Calls to this function may supply a callback whose row is a sub-row of `Console 
 
 Generic combinators like `map`, `filter` and `fold` accept effectful callbacks without row variables, through Rule E5.5.a and captured evidence (Rule E7.8), as long as the callback does not outlive its handler (Rule E5.5.b). A row variable is needed where the combinator's own type must say that it performs the callback's effects, for example because it stores the callback or because its caller must handle the effects.
 
-```
+```fixed
 fn each<E>(list: is List of A, f: A -> () with E) -> () with E =
     list.fold((), (_, x) -> f(x))
 ```
@@ -775,7 +753,7 @@ fn each<E>(list: is List of A, f: A -> () with E) -> () with E =
 
 ### 10.1 `examples/03_option_result.fixed` — `compute`
 
-```
+```fixed
 fn compute(input: String) -> is Result of (String, u64) =
     fn inner(input: String) -> u64 with Fail of String =
         let n = parseU64(input).fold((v) -> v, (e) -> Fail.fail(e))
@@ -805,7 +783,7 @@ The deeply nested `handle (do: ... ): clauses` chain in `main` removes one effec
 
 ### 10.3 `examples/06_functor_monad.fixed` — `sequence` (effect-poly callback)
 
-```
+```fixed
 fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A) =
     match list:
         List.Cons(head, tail) =>
@@ -833,3 +811,29 @@ fn sequence(list: is List of (M is Monad of A)) -> M of (is List of A) =
 | `spec/pattern_matching.md` | Handler clauses reuse pattern syntax; coverage is Rule M6.4 |
 | `docs/references/scala3-compiler-reference.md` | Recheck pattern; effect inference is a Recheck pass like quantity inference |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `effects/EffectChecker.scala` (effect inference); Phase 4: `effects/EvidencePasser.scala` (evidence-passing compilation) |
+
+@:details(Status and changes)
+
+**Status:** Draft v0.3.4
+**Specifies:** algebraic effect declarations, the arithmetic effects, effect-row inference, handler semantics, and evidence-passing compilation for Fixed v0.4.4 source.
+**Last revised:** 2026-11-21
+
+**Changes from v0.3.3.** Settles minor 14 of the consistency review of 2026-11-20 by an author's ruling: the wrapper of Rule E7.8, item 1, is an ordinary closure with captures, with the cost and the `fip` status of one.
+
+**Changes from v0.3.2.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"), with the author's choices that the owner confirmed. New §3.6: integer overflow and division by zero are the abortive effects `Overflow` and `DivideByZero` (Rules E3.6–E3.6.j): which operations perform them, how a generic `T is Numeric` body gets its row, when the prover or a refinement removes the effect (a facts-lane decision), derived members and prop bodies, the abort at `main`, and the widening form. Rule E5.4: both effects are in the set the runtime handles for `main`. Rule E8.2 no longer says a callback must perform the concrete part of a row: its row is a sub-row of it, as Rule E5.5.a already said. New code `E107` (an integer refinement not proved where it is established). Not built.
+
+**Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule E7.8: a closure carries one bit that is set when it holds captured evidence; a fork site tests it.
+
+**Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): every evidence entry, passed or captured, has one layout that holds the handler's marker, through which the frame is found (§7.1, Rule E7.2); Rule E7.7 no longer says a table call passes every argument `own` (it follows `spec/compilation_model.md` Rule CM4.6); Rule E5.5.b cites the containment test of Rule CM4.6; wrong references to a diagnostics section and to a rule number for §7.6 corrected.
+
+**Changes from v0.2.3.** Applies decision P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`, D11, D14). A closure captures the evidence of the effects that its type does not mention, at the point where it is given that type; it captures the handler's marker, not a stack address (new Rule E7.8). A closure that captured evidence must not outlive the handler (new Rule E5.5.b, `E085`); the prose caveat of Rule E5.5.a about callbacks stored and invoked later is replaced by these two rules. `inspect` and `trace` are not effects and never appear in a row (new §4.6). Mechanical repairs from the review of 2026-11-20 (`docs/decisions/P0-spec-review-2026-11-20.md` §3): Rule E4.5.b no longer shows an alias application that does not parse; §4.2 says package instead of a `module` construct that does not exist; the unused declared effect is `warning[E081]`, listed as a warning; the cross-references no longer say prop bodies are "checked at quantity 0". §5.5 and §8.3 no longer say that a receiving function must declare its callback's effects. New OQ-E9 (parameterised effect aliases) and OQ-E10 (a handler clause cannot name an effect's `of` argument).
+
+**Changes from v0.2.2.** §7 aligned with `spec/compilation_model.md`: operation arguments and results are 64-bit slots (§7.1); evidence is passed in every baseline version, and a known handler is one component of a clone key, not a consequence of monomorphisation (§7.6); new Rule E7.7 fixes what an operation call hands over and how an evidence vector is ordered.
+
+**Changes from v0.2.1.** Adds Rule E5.5.a (ambient pass-through): a callback whose expected function type declares no `with` clause passes its effects to the enclosing body. Adds Rule E8.1.a (how row variables are solved) and OQ-E8 (row-polymorphic data).
+
+**Changes from v0.2.** Re-opens OQ-E5: §3.5 (linear effects) is now marked **Proposal**, contingent on the resolution of OQ-Q5 in `spec/quantities.md` (whether effect rows participate in QTT quantity). The proposed semantics in §3.5 are unchanged in shape but no longer normative until OQ-Q5 is closed. No other semantic changes from v0.2; bump tracks the v0.4.4 source grammar.
+
+**Changes from v0.1.** Resolved OQ-E6 (effect aliasing → §4.5). Removed Rule E6.5 (wildcard handler clauses) per OQ-E2 decision. OQ-E1, OQ-E3, OQ-E4 marked as deferred decisions.
+
+@:@

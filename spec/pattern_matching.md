@@ -1,17 +1,5 @@
 # Fixed Pattern Matching
 
-**Status:** Draft v0.3.2
-**Specifies:** pattern syntax, type rules, exhaustiveness/redundancy checking, and match-expression semantics for Fixed v0.4.3 source.
-**Last revised:** 2026-11-21
-
-**Changes from v0.3.1.** §8.1 no longer says that a function cannot call itself: structural recursion is admitted (`spec/type_system.md` Rule 7.4.h). Its example declares `Overflow` (`spec/effects.md` §3.6, specified and not built). §3.3 says what is built.
-
-**Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): in generic code a `match` reads the variant through the accessor `T.variant` (§8.4); examples destructure the data type `Tuple`, not the capability `Pair`.
-
-**Changes from v0.2.** §8.1's example no longer has a function call itself (functions cannot); it folds the raw subtrees. The or-pattern binder error of Rule M5.5.a is renumbered `E095`: `E093` stays the handler-coverage error of Rule M6.4.c and `spec/effects.md` §5.3. §8.4 says how a `match` reads the variant of a cell and of an immediate under decision P6 (`spec/compilation_model.md` Rules CM3.5, CM8.8). The cross-reference to `spec/memory_management.md` notes that an immediate has no cell to reuse.
-
-**Changes from v0.1.** Resolves OQ-M1 (`..` field elision in struct-destructure patterns → §3.6), OQ-M3 (or-patterns → §5.5), OQ-M4 (guards → §5.6); strengthens Rule M6.2 from "may use refinement caps" to "must use refinement caps". Closes OQ-M2 (refutable handler clause parameters), OQ-M5 (view patterns), OQ-M6 (range patterns — subsumed by guards).
-
 ## 1. Scope
 
 This document specifies pattern matching end-to-end — what a pattern is, where patterns can appear, how the typer assigns types and binds names, and how the compiler verifies that match expressions are exhaustive and that no case is unreachable. Concretely:
@@ -45,7 +33,7 @@ It does **not** specify:
 
 The wildcard pattern matches any value of any type and binds nothing.
 
-```
+```fixed
 match x:
     _ => "default"
 ```
@@ -54,7 +42,7 @@ match x:
 
 A bare lowercase identifier introduces a binding for the matched value at the pattern's static type.
 
-```
+```fixed
 match opt:
     Maybe.Just(v) => v + 1     // v is bound, type matches the variant's field type
     Maybe.Nothing => 0
@@ -87,7 +75,7 @@ Three forms (all parse via `DataVariantPattern` per the grammar):
 2. **Bare:** `Variant` or `Variant(field-patterns)` — the typer disambiguates from the scrutinee's type.
 3. **Self-qualified:** `Self.Variant(...)` — used inside `satisfies` blocks where `Self` refers to the satisfying type.
 
-```
+```fixed
 match d:
     Direction.North => "N"        // qualified
     East => "E"                     // bare; typer infers Direction.East from scrutinee
@@ -105,7 +93,7 @@ match d:
 
 `TuplePattern` matches a tuple of the same arity, element-wise:
 
-```
+```fixed
 let (a, b) = pair                                 // 2-tuple binding
 let (single,) = unitTuple                         // 1-tuple binding (mandatory trailing comma)
 match triple:
@@ -119,7 +107,7 @@ match triple:
 
 `StructDestructurePattern` destructures a value of a single-variant `data` type by field name:
 
-```
+```fixed
 let Tuple { first: x, second: y } = p
 let Config { host, port, debug: d } = cfg     // shorthand: `host` ≡ `host: host`
 ```
@@ -155,7 +143,7 @@ Every pattern has a **pattern type** equal to the scrutinee position's type. The
 
 ### 5.1 Form (recap)
 
-```
+```fixed
 match SCRUTINEE:
     Pattern_1 => Body_1
     Pattern_2 => Body_2
@@ -182,7 +170,7 @@ Cases whose bodies have type `!` (the never type, e.g., `Fail.fail(...)` or `unr
 
 A pattern's binders are in scope only within that case's body. Each case has its own binding scope; binders do not leak between cases or to the surrounding context.
 
-```
+```fixed
 match x:
     Maybe.Just(v) => v + 1     // v in scope here
     Maybe.Nothing => v          // ERROR: v not in scope (different case)
@@ -192,7 +180,7 @@ match x:
 
 A match case's pattern position is an `OrPattern`: one or more `Pattern` alternatives separated by `|`. The case fires when the scrutinee matches **any** alternative.
 
-```
+```fixed
 match pair:
     (0, 1) | (1, 0) => "swap pair"
     (a, b) => a + b
@@ -204,7 +192,7 @@ match status:
 
 **Rule M5.5.a (Binder agreement).** Every alternative in an or-pattern must bind exactly the same set of names at exactly the same types. Otherwise: `error[E095]: or-pattern alternatives bind different names`. Bodies may reference any of the common binders.
 
-```
+```fixed
 // VALID — both bind `r: f64`:
 match shape:
     Shape.Circle(_, r) | Shape.Sphere(r) => r * r
@@ -222,7 +210,7 @@ match opt:
 
 A match case may carry an optional **guard** — an `if`-suffixed boolean expression that the case requires to be true after the pattern matches:
 
-```
+```fixed
 match value:
     n if n > 0 => "positive"
     0 => "zero"
@@ -243,7 +231,7 @@ match value:
 
 When a match case has both an or-pattern and a guard, the guard sees the common binders of the or-pattern's alternatives and is evaluated once for whichever alternative matched:
 
-```
+```fixed
 match pair:
     (a, 0) | (0, a) if a > 0 => a       // a is the common binder; guard fires after either alt matches
     (a, b) => a + b
@@ -276,7 +264,7 @@ The typer uses a standard *pattern-matrix algorithm* (Maranget 2008): the residu
 
 When a refinement cap (per type_system.md §6.4 Marker class — e.g., `between(1, 3)`, `multipleOf(2)`, `between(0, 10) + multipleOf(2)`) restricts the scrutinee's domain to a finite set, exhaustiveness checks against that narrowed set. Literal patterns covering the narrowed set certify exhaustiveness without a wildcard:
 
-```
+```fixed
 fn name(d: u8 is between(1, 3)) -> String =
     match d:
         1 => "one"
@@ -314,7 +302,7 @@ Both are checked by the same algorithm at the implementation level — the const
 
 The check is the dual of exhaustiveness: a case `K` is unreachable iff the *uncovered space before case K* (per the pattern-matrix algorithm) is empty. Implementation re-uses the matrix machinery from §6.
 
-```
+```fixed
 match x:
     Maybe.Just(v) => v + 1
     _ => 0                        // wildcard
@@ -329,7 +317,7 @@ Both `match` and the auto-derived `fold` of type_system.md §7.4.a destructure a
 
 A match case receives the **raw fields** of the matched variant. For recursive types, recursive subtrees are *not* pre-folded: the case receives them as values of the data type. A case that needs a result for a subtree folds it, as below, or calls the function on it, which is structural recursion (`spec/type_system.md` Rule 7.4.h):
 
-```
+```fixed
 fn count(t: Tree of A) -> u64 with Overflow =
     match t:
         Tree.Empty => 0
@@ -343,7 +331,7 @@ fn count(t: Tree of A) -> u64 with Overflow =
 
 A fold callback for a recursive variant receives **pre-folded** results for `Self`-typed fields and raw values for non-`Self` fields. The fold is the structural catamorphism:
 
-```
+```fixed
 fn count(t: Tree of A) -> u64 with Overflow =
     t.fold(
         () -> 0,                                              // Empty
@@ -356,7 +344,7 @@ fn count(t: Tree of A) -> u64 with Overflow =
 
 When the data type has **no recursive variants** (no field of type `Self`), `match` and `fold` are operationally equivalent — pre-folding and raw-field access coincide because there is nothing to pre-fold.
 
-```
+```fixed
 data Direction:
     North
     South
@@ -392,7 +380,7 @@ Dispatch reads the variant from the value's representation. A cell's tag is uniq
 
 For refutable patterns, use `match`:
 
-```
+```fixed
 // REFUTABLE — use match:
 match opt:
     Maybe.Just(v) => useV(v)
@@ -409,7 +397,7 @@ let Tuple { first: key, second: value } = pair
 
 Per `spec/effects.md` §6, handler clauses have their own pattern syntax distinct from match cases but sharing the binder rules:
 
-```
+```ebnf
 HandlerClause
     = UPPER_IDENT "." LOWER_IDENT "(" PatternList? ")" "=>" BlockTail
     | "return" "(" Pattern ")" "=>" BlockTail
@@ -452,3 +440,19 @@ The `return(Pat) => ...` clause's `Pat` is similarly irrefutable, matching the S
 | `spec/memory_management.md` | Match-bound values' RC and reuse: an exclusively owned scrutinee gives exclusively owned field binders and, if it is a cell, an unconditionally reusable cell (an immediate has no cell, Rule PR6.3); a shared scrutinee gives shared binders (`spec/quantities.md` Rule Q4.1.b) |
 | `docs/references/scala3-compiler-reference.md` | The dotc PatternMatcher transform (`transform/PatternMatcher.scala`) — Maranget's algorithm; reference implementation |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `typer/Exhaustiveness.scala`; Phase 4: `transform/MatchDesugar.scala` |
+
+@:details(Status and changes)
+
+**Status:** Draft v0.3.2
+**Specifies:** pattern syntax, type rules, exhaustiveness/redundancy checking, and match-expression semantics for Fixed v0.4.3 source.
+**Last revised:** 2026-11-21
+
+**Changes from v0.3.1.** §8.1 no longer says that a function cannot call itself: structural recursion is admitted (`spec/type_system.md` Rule 7.4.h). Its example declares `Overflow` (`spec/effects.md` §3.6, specified and not built). §3.3 says what is built.
+
+**Changes from v0.3.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): in generic code a `match` reads the variant through the accessor `T.variant` (§8.4); examples destructure the data type `Tuple`, not the capability `Pair`.
+
+**Changes from v0.2.** §8.1's example no longer has a function call itself (functions cannot); it folds the raw subtrees. The or-pattern binder error of Rule M5.5.a is renumbered `E095`: `E093` stays the handler-coverage error of Rule M6.4.c and `spec/effects.md` §5.3. §8.4 says how a `match` reads the variant of a cell and of an immediate under decision P6 (`spec/compilation_model.md` Rules CM3.5, CM8.8). The cross-reference to `spec/memory_management.md` notes that an immediate has no cell to reuse.
+
+**Changes from v0.1.** Resolves OQ-M1 (`..` field elision in struct-destructure patterns → §3.6), OQ-M3 (or-patterns → §5.5), OQ-M4 (guards → §5.6); strengthens Rule M6.2 from "may use refinement caps" to "must use refinement caps". Closes OQ-M2 (refutable handler clause parameters), OQ-M5 (view patterns), OQ-M6 (range patterns — subsumed by guards).
+
+@:@

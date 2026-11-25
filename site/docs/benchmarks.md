@@ -1,3 +1,7 @@
+{%
+laika.excludeFromNavigation = true
+%}
+
 # Benchmarks
 
 Two suites, both reproducible from the repository:
@@ -85,7 +89,7 @@ is what `--explain-memory` prints ([`spec/memory_management.md`
 
 ## Reproducing
 
-```
+```sh
 sbt "bench/Jmh/run -prof gc"     # front-end suite (as measured above)
 ```
 

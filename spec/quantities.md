@@ -1,50 +1,5 @@
 # Fixed Quantities (QTT)
 
-**Status:** Draft v0.6.5
-**Specifies:** quantity and demand inference for Fixed v0.4.4 source.
-**Last revised:** 2026-11-21
-
-**Changes from v0.6.4.** Examples brought in line with rules decided since. §10.1 showed `fibIter` as a nested function that calls itself, which `spec/type_system.md` Rule 7.4.h now rejects (`T027`); it shows the body of `examples/01_basics.fixed`, an `unfold` followed by a `fold`, with the same quantity walk, and the row that §3.6 of `spec/effects.md` and Rule 7.4.i give it. Examples whose integer arithmetic is not proved in range declare `Overflow` (`spec/effects.md` §3.6, specified and not built).
-
-**Changes from v0.6.3.** Settles minor 7 of the consistency review of 2026-11-20 by an author's ruling: fork site 3 (Rule Q5.13.a) rests on props of a capability only where the satisfaction is known, as `spec/properties.md` Rule P7.8.c requires; OQ-Q6 says the same of props on `Numeric`. Site 3 names `assumed` beside `proved`, as the third round decided.
-
-**Changes from v0.6.2.** The example of §10.3 that wrote `let x: T = …`, which the grammar does not admit, uses the type ascription of the owner's decisions of 2026-11-21, fourth round (`spec/type_system.md` Rule 5.11).
-
-**Changes from v0.6.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule Q5.13.a: fork site 3 takes facts-lane props (`proved` or `assumed`); a closure carries a bit for captured evidence, and a fork site that would call a function-typed parameter tests it.
-
-**Changes from v0.6.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): Rule Q4.1.e cites the table convention of `spec/compilation_model.md` Rule CM4.6 instead of restating it, and an effect operation has one pointer; a use in `inspect` or `trace` counts as an ordinary use where diagnostics are kept (§4); §4 and Rule Q5.5 say where a `proved` status obtained by enumeration in the test build reaches; wrong references to P7.9 and §6.2 corrected.
-
-**Changes from v0.5.** Applies decision P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`, D6, D9, D15).
-- §4: property verification is no longer one pass that runs before quantity inference. The static prover runs after the typer and before quantity inference; the cost checker runs on Core; property-based testing is a separate test build whose results never enter the facts lane (`spec/properties.md` Rule P7.8). This resolves the phase-order contradiction with `spec/memory_management.md` §20.3.
-- Rule Q4.1.e: a call through a capability table follows the convention derived from the requirement's signature (`spec/compilation_model.md` Rule CM4.6); closures of unknown identity and effect operations keep `own` on every argument.
-- Rule Q9.3: an exclusive version is requested only where the run-time `rc == 1` test cannot stand in (`fip fn` bodies and what they request; values with no count). The measurement behind this is under suspicion (open).
-- Rule Q5.13: fork site 3 takes only `proved` props; whether an admissible site forks (granularity) is in the measurement lane.
-- Rule Q7.1: the diagnostic codes are `E071` for a `fip` obligation, `E072` for `resume` and `E083` for a linear effect; the text had given `E071` for all three.
-- The "Recheck-style" label applies to the quantity pass on the typed tree only, not to demand inference on Core.
-
-**Changes from v0.4.**
-- Demands are inferred on the **baseline version** of each function, which is polymorphic and shared (`spec/compilation_model.md` §3), and again on each clone. The statement that Core has one instance per type is withdrawn (§4).
-- Rule Q9.3 rewritten: the **shared** version is the function's baseline and always exists; an **exclusive** version is a clone, built when the clone budget allows. The version cap and the rule that a caller copies beyond it are withdrawn; OQ-Q7 is closed. Copying the demanded part remains only in the shared entry of a `fip fn`.
-- New Rule Q4.1.e: a capability method requirement has no body and so no inferred demand; calls through a capability table follow a fixed convention.
-- Cost props join `fip` as the ways a program states something about ownership (Rule Q4.1, `spec/cost.md`).
-- Rule Q5.12: a default body is analysed once; the per-satisfaction pass happens only in clones.
-- Stale statements corrected: the semiring table no longer says quantity 1 enables in-place update; the pass table in §4 describes the quantity pass only; the scope list and cross-references no longer say prop bodies are "checked at quantity 0".
-
-**Changes from v0.3.**
-- **Demands** (§4.1) decide ownership at runtime: `0`, `read`, `own` or `exclusive`, per part of a value. A parameter's demand is a contract. A caller that cannot pass an exclusively owned value to an `exclusive` parameter calls the callee's **shared version** instead (§9.3). Quantities (§3, §5) stay, but only count occurrences: erasure, closure call counts, `resume` and diagnostics.
-- §9 rewritten: an argument contributes according to where its value goes, not where its name appears. The v0.3 rule scaled every binder inside an argument by the parameter's quantity, which contradicted §10.1.
-- New Rule Q9.2 fixes evaluation order (left to right; moves take effect when the call starts) and Rule Q9.4 forbids aliasing an exclusive argument.
-- §7 reframed as exclusivity. Linearity errors (`E071`) arise only from declared obligations: `fip` parameters, `resume`, linear effects.
-- Effectful arguments are evaluated even when their value is erased (Rule Q6.1.3).
-
-**Changes from v0.2.**
-- New Rule Q5.13 (parallel composition): where the compiler may evaluate parts of a `fold` / `unfold` in parallel lanes, and how quantities compose across lanes. There is no surface syntax; fork sites are found automatically.
-- OQ-Q2 resolved: quantities stay inferred, and a function can demand in-place behaviour with the checked `fip fn` contract (§7.5, `spec/memory_management.md` §18).
-- Placement moved out: quantity decides reference-count traffic only. Where a value lives is its lifetime class (`spec/memory_management.md`, which replaces `spec/perceus.md`).
-- New OQ-Q6 (where associativity props live).
-
-**Changes from v0.1.** Rule Q5.5 reframed: prop bodies are not "checked at quantity 0" — they are *excluded from the compiled artifact*. References inside prop bodies do not contribute to a binding's runtime quantity in the artifact, but PBT (`spec/properties.md` §7) may run prop bodies as code in a separate test build; that build computes its own quantities independently. The semantic effect on the compiled binary is the same as before; the framing now distinguishes *artifact* (program binary) from *test build* (PBT driver).
-
 ## 1. Scope
 
 This document specifies how the compiler assigns **QTT quantities** (0, 1, ω) to every binding in a Fixed program, and what each quantity means for code generation. Concretely:
@@ -187,7 +142,7 @@ Each rule names the syntactic position it governs and the quantity assigned. `Q5
 
 A `let x = expr` binding's quantity is the sum (using `+` from §3.1) of its usages in the rest of the enclosing block.
 
-```
+```fixed
 let x = compute()      // 1 use of x below
 let y = x + 1          // x used once → contributes 1
 y * 2                  // y used once → y has quantity 1
@@ -199,7 +154,7 @@ If `x` is used 0 times: quantity 0, with a "dead binding" warning unless the nam
 
 A function parameter's quantity is the sum of its usages in the body, taken under the body's quantity context.
 
-```
+```fixed
 fn double(x: i64) -> i64 with Overflow = x + x   // x used twice → quantity ω
 fn identity(x: i64) -> i64 = x            // x used once → quantity 1
 fn constZero(x: i64) -> i64 = 0          // x used zero times → quantity 0 (warning unless _x)
@@ -233,7 +188,7 @@ The earlier framing ("prop bodies are checked at quantity 0") was a shorthand fo
 
 Same as Rule Q5.2: a lambda parameter's quantity is the sum of its usages in the body. Lambda *captures* of outer-scope bindings count toward the outer binding's quantity according to Rule Q5.7 below.
 
-```
+```fixed
 let inc = (x: i64) -> x + 1        // x is quantity 1 within inc's body
 let byTwo = (x: i64) -> x + x     // x is quantity ω
 ```
@@ -242,7 +197,7 @@ let byTwo = (x: i64) -> x + x     // x is quantity ω
 
 A closure captures a binding `y` from the enclosing scope. The closure's body uses `y` with some quantity `q`. The closure value itself is then used at the call site with some quantity `q'` (per Rule Q5.2). The total quantity contributed to `y` by the closure is `q · q'` (multiplication, §3.2).
 
-```
+```fixed
 let y = compute()                  // quantity TBD
 let g = (x) -> x + y               // closure body uses y once → q = 1
 g(1) + g(2)                        // g used twice → q' = ω; so y contributes 1·ω = ω
@@ -262,7 +217,7 @@ For match cases specifically: a binding's quantity within the case body follows 
 
 For an expression with **mutually exclusive branches** — `if c: A else: B`, or `match e: pat1 => a1 | pat2 => a2 | …`, or handler clauses in a `handle` — a free binding's contribution is the **join** (`⊔`, §3.3) over all branches, *not* the sum.
 
-```
+```fixed
 fn f(x: i64, c: bool) -> i64 with Overflow =
     if c:
         x        // x used once in this branch
@@ -277,7 +232,7 @@ Rationale: at runtime exactly one branch executes, so the worst-case usage acros
 
 For a block `e1; e2; …; en` (sequenced expressions in a `Block`), each free binding's quantity is the **sum** (`+`) over its usages across the sequence.
 
-```
+```fixed
 fn g(x: i64) -> i64 with Overflow =
     let a = x + 1     // x used once
     let b = x + 2     // x used once
@@ -289,7 +244,7 @@ fn g(x: i64) -> i64 with Overflow =
 
 `resume(v)` inside a handler clause body is **always quantity 1** (single-shot). The clause body must contain `resume(...)` exactly zero or one time on every code path; two or more `resume` calls reachable on a single path is a compile error (`E072`, Rule Q7.1).
 
-```
+```fixed
 handle action():
     Eff.op(x) =>
         let v = compute(x)
@@ -393,7 +348,7 @@ A handler clause body for a `linear effect` (per `spec/effects.md` §3.5) is its
 
 Consequence: an exclusively owned outer value captured by a linear-effect clause body **stays exclusive** there, because the clause runs at most once (Rule Q5.7 with `q' = 1`). The capture's contribution to the outer scope's usage of that binding is the join of (clause-body usage) and (other-paths usage), bounded above by 1.
 
-```
+```fixed
 let lockToken = makeToken()        // quantity 1
 handle (do: ... Lock.release):
     Lock.release =>
@@ -434,7 +389,7 @@ At a call, each binding contributes according to where its **value** goes, not w
 
 For quantities, the same rule applies: an argument expression is evaluated once, so a binding used inside a composite argument is counted once, while a binding passed as itself, and a lambda argument's captures, are scaled by the parameter's quantity. The v0.3 rule scaled every binding inside an argument, which in a strict language counts work that never happens twice and contradicted §10.1.
 
-```
+```fixed
 fn pairDouble(x: String) -> String = x ++ x     // x: own (kept twice)
 
 fn caller(y: String) -> String =
@@ -458,7 +413,7 @@ An **exclusive version** is a clone of it, compiled for a caller that exclusivel
 
 An exclusively owned `Heap` argument goes to the shared version, whose run-time test succeeds on it. The reason is the first measurement, in which the test ran as fast as unconditional reuse. **Open:** the project owner suspects that this measurement hides a compiler fault; until that is ruled out (`spec/memory_management.md` §21), the rule is provisional.
 
-```
+```fixed
 fn bump(xs: List of u64) -> List of u64 with Overflow =
     match xs:
         List.Cons(h, t) => List.Cons(h + 1, t)     // xs: exclusive on the first cell, own on t
@@ -484,7 +439,7 @@ An argument meets an `exclusive` demand only if no other argument or capture of 
 
 ### 10.1 `examples/01_basics.fixed` — `fibIter`
 
-```
+```fixed
 fn fibIter(n: N is Numeric) -> N with Overflow + Diverge =
     Nat.unfold(n, (k: N) ->
         if k == 0:
@@ -514,7 +469,7 @@ In a clone for a scalar `N` the values are unboxed scalars, so their demands are
 
 ### 10.2 `examples/05_phantom_types.fixed` — `Door` and `Quantity`
 
-```
+```fixed
 cap Door of (State):                  // State inferred phantom (§5.9)
     Self.fn new -> Self
     fn name -> String
@@ -530,7 +485,7 @@ This is the canonical case where QTT's erasure makes phantom-typed state machine
 
 ### 10.3 `examples/11_properties.fixed` — `Bounded` constructor
 
-```
+```fixed
 data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
     Bounded(value: N)
     prop inRange: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
@@ -572,3 +527,52 @@ let result = x.value + x.lo                     // x.value: runtime read; x.lo: 
 | `spec/cost.md` | Cost props: `releases` is defined on `exclusive` parts |
 | `docs/references/scala3-compiler-reference.md` | The Recheck pattern (§5.4) that this pass adopts |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `qtt/QuantityChecker.scala` (Recheck phase) |
+
+@:details(Status and changes)
+
+**Status:** Draft v0.6.5
+**Specifies:** quantity and demand inference for Fixed v0.4.4 source.
+**Last revised:** 2026-11-21
+
+**Changes from v0.6.4.** Examples brought in line with rules decided since. §10.1 showed `fibIter` as a nested function that calls itself, which `spec/type_system.md` Rule 7.4.h now rejects (`T027`); it shows the body of `examples/01_basics.fixed`, an `unfold` followed by a `fold`, with the same quantity walk, and the row that §3.6 of `spec/effects.md` and Rule 7.4.i give it. Examples whose integer arithmetic is not proved in range declare `Overflow` (`spec/effects.md` §3.6, specified and not built).
+
+**Changes from v0.6.3.** Settles minor 7 of the consistency review of 2026-11-20 by an author's ruling: fork site 3 (Rule Q5.13.a) rests on props of a capability only where the satisfaction is known, as `spec/properties.md` Rule P7.8.c requires; OQ-Q6 says the same of props on `Numeric`. Site 3 names `assumed` beside `proved`, as the third round decided.
+
+**Changes from v0.6.2.** The example of §10.3 that wrote `let x: T = …`, which the grammar does not admit, uses the type ascription of the owner's decisions of 2026-11-21, fourth round (`spec/type_system.md` Rule 5.11).
+
+**Changes from v0.6.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). Rule Q5.13.a: fork site 3 takes facts-lane props (`proved` or `assumed`); a closure carries a bit for captured evidence, and a fork site that would call a function-typed parameter tests it.
+
+**Changes from v0.6.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): Rule Q4.1.e cites the table convention of `spec/compilation_model.md` Rule CM4.6 instead of restating it, and an effect operation has one pointer; a use in `inspect` or `trace` counts as an ordinary use where diagnostics are kept (§4); §4 and Rule Q5.5 say where a `proved` status obtained by enumeration in the test build reaches; wrong references to P7.9 and §6.2 corrected.
+
+**Changes from v0.5.** Applies decision P6 (`docs/decisions/P6-resolution-round-2026-11-20.md`, D6, D9, D15).
+- §4: property verification is no longer one pass that runs before quantity inference. The static prover runs after the typer and before quantity inference; the cost checker runs on Core; property-based testing is a separate test build whose results never enter the facts lane (`spec/properties.md` Rule P7.8). This resolves the phase-order contradiction with `spec/memory_management.md` §20.3.
+- Rule Q4.1.e: a call through a capability table follows the convention derived from the requirement's signature (`spec/compilation_model.md` Rule CM4.6); closures of unknown identity and effect operations keep `own` on every argument.
+- Rule Q9.3: an exclusive version is requested only where the run-time `rc == 1` test cannot stand in (`fip fn` bodies and what they request; values with no count). The measurement behind this is under suspicion (open).
+- Rule Q5.13: fork site 3 takes only `proved` props; whether an admissible site forks (granularity) is in the measurement lane.
+- Rule Q7.1: the diagnostic codes are `E071` for a `fip` obligation, `E072` for `resume` and `E083` for a linear effect; the text had given `E071` for all three.
+- The "Recheck-style" label applies to the quantity pass on the typed tree only, not to demand inference on Core.
+
+**Changes from v0.4.**
+- Demands are inferred on the **baseline version** of each function, which is polymorphic and shared (`spec/compilation_model.md` §3), and again on each clone. The statement that Core has one instance per type is withdrawn (§4).
+- Rule Q9.3 rewritten: the **shared** version is the function's baseline and always exists; an **exclusive** version is a clone, built when the clone budget allows. The version cap and the rule that a caller copies beyond it are withdrawn; OQ-Q7 is closed. Copying the demanded part remains only in the shared entry of a `fip fn`.
+- New Rule Q4.1.e: a capability method requirement has no body and so no inferred demand; calls through a capability table follow a fixed convention.
+- Cost props join `fip` as the ways a program states something about ownership (Rule Q4.1, `spec/cost.md`).
+- Rule Q5.12: a default body is analysed once; the per-satisfaction pass happens only in clones.
+- Stale statements corrected: the semiring table no longer says quantity 1 enables in-place update; the pass table in §4 describes the quantity pass only; the scope list and cross-references no longer say prop bodies are "checked at quantity 0".
+
+**Changes from v0.3.**
+- **Demands** (§4.1) decide ownership at runtime: `0`, `read`, `own` or `exclusive`, per part of a value. A parameter's demand is a contract. A caller that cannot pass an exclusively owned value to an `exclusive` parameter calls the callee's **shared version** instead (§9.3). Quantities (§3, §5) stay, but only count occurrences: erasure, closure call counts, `resume` and diagnostics.
+- §9 rewritten: an argument contributes according to where its value goes, not where its name appears. The v0.3 rule scaled every binder inside an argument by the parameter's quantity, which contradicted §10.1.
+- New Rule Q9.2 fixes evaluation order (left to right; moves take effect when the call starts) and Rule Q9.4 forbids aliasing an exclusive argument.
+- §7 reframed as exclusivity. Linearity errors (`E071`) arise only from declared obligations: `fip` parameters, `resume`, linear effects.
+- Effectful arguments are evaluated even when their value is erased (Rule Q6.1.3).
+
+**Changes from v0.2.**
+- New Rule Q5.13 (parallel composition): where the compiler may evaluate parts of a `fold` / `unfold` in parallel lanes, and how quantities compose across lanes. There is no surface syntax; fork sites are found automatically.
+- OQ-Q2 resolved: quantities stay inferred, and a function can demand in-place behaviour with the checked `fip fn` contract (§7.5, `spec/memory_management.md` §18).
+- Placement moved out: quantity decides reference-count traffic only. Where a value lives is its lifetime class (`spec/memory_management.md`, which replaces `spec/perceus.md`).
+- New OQ-Q6 (where associativity props live).
+
+**Changes from v0.1.** Rule Q5.5 reframed: prop bodies are not "checked at quantity 0" — they are *excluded from the compiled artifact*. References inside prop bodies do not contribute to a binding's runtime quantity in the artifact, but PBT (`spec/properties.md` §7) may run prop bodies as code in a separate test build; that build computes its own quantities independently. The semantic effect on the compiled binary is the same as before; the framing now distinguishes *artifact* (program binary) from *test build* (PBT driver).
+
+@:@

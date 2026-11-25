@@ -1,3 +1,7 @@
+{%
+laika.excludeFromNavigation = true
+%}
+
 # Editor support
 
 Fixed ships syntax highlighting and language support for VS Code, Zed,

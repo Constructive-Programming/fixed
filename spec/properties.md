@@ -1,53 +1,5 @@
 # Fixed Properties
 
-**Status:** Draft v0.3.5
-**Specifies:** `prop` declarations, `forall` / `implies` / `suchThat` constructs, the three verifiers (static prover, cost checker, property-based testing) and where each runs, verification statuses and the two lanes they feed, measurement during testing, property-based test generation, and how verified properties feed compiler decisions for Fixed v0.4.5 source.
-**Last revised:** 2026-11-21
-
-**Changes from v0.3.4.** Settles minor 7 of the consistency review of 2026-11-20 by an author's ruling: the optimisations of §9.1 rest on props of capabilities, so by Rule P7.8.c they apply only where the satisfaction is known (code at a concrete type, a clone for a known type, or a clone built at link), never in baseline code over a type parameter or a choice point; the `median` example of Rule P9.2 says so, and the exception "unless the prop holds for every satisfaction" is withdrawn.
-
-**Changes from v0.3.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"). Rule P4.2: the arithmetic effects `Overflow` and `DivideByZero` are allowed in a prop body, and performing one is a counterexample (`spec/effects.md` Rule E3.6.g). Rule P7.8.a: removing an arithmetic effect from an operation's type, and establishing a refinement on a bounded integer type (`E107`), are facts-lane decisions (Rule E3.6.e). Rule P7.2: the prover also decides the range goals of function bodies. Rule P7.8.c lists the `assumed` props of the package's own source among what the package compile sees, as the third round decided. §9.1: a range invariant removes `Overflow` instead of eliding "checked overflow".
-
-**Changes from v0.3.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"), decision 1. Rule P7.7.b no longer gives an exit code of its own: the exit code follows the one table of `spec/reports.md` Rule RP5.5.
-
-**Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). `assumed` arises only when the programmer writes `assume prop` (keyword confirmed by the owner, fourth round). A prop nobody checked is open and steers nothing: `--no-pbt` and an undecided asymptotic cost bound leave a prop open. The order of Rule P7.7 is open < `tested` < `assumed` < `proved`. OQ-P8 is closed.
-
-**Changes from v0.3.0.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): cost props skip the static prover and go to the cost checker (Rule P7.1); the viability of a refinement-capability candidate is a facts-lane decision (Rules P7.7.c, P7.8); a status is per (prop, satisfaction), and the reported status is the weakest over the satisfactions that ran (Rule P7.7.a); the failure report of a prop is printed by the diagnostic printer and is not a string literal (Rule P8.4); the test build keeps diagnostics (§4.2); "per satisfaction" replaces "per satisfying type".
-
-**Changes from v0.2.3** (`docs/decisions/P6-resolution-round-2026-11-20.md`, D4, D6, D11, D12).
-- **Three verifiers, placed where their inputs exist** (Rule P7.1, rewritten): the static prover on the typed tree right after the typer, the cost checker on Core, and property-based testing in the test build that `fixed verify` runs. A prop the package compile leaves undecided is *open*, which is not a status. `fixed compile` no longer runs property-based testing; the testing flags of Rule P7.6 belong to `fixed verify`.
-- **A status is the weakest status of everything it rests on** (Rule P7.7). v0.2.3 let a `proved` prop rest on an inherited prop that was only `tested`, against Rule P7.7.c.
-- **Two lanes** (new Rule P7.8). Decisions that are wrong if a claim is false take only `proved` and `assumed` props; decisions among correct alternatives take anything measured. This replaces v0.2.1's "only `proved` props are compiler assumptions": `assumed` props now enter the facts lane, and §9 and Rule P9.2 say so. In baseline code no facts-lane decision rests on a capability's prop whose satisfaction is not known there (Rule P7.8.c).
-- **Measurement during testing** (new Rule P7.9): the test build records supply-side costs per (capability method, satisfaction, size class, target), machine facts and demand-side counters, for the profile file.
-- **Binders range over satisfactions** (Rules P5.3, P5.3.b, P7.7.a), since a link unit may hold several satisfactions of one (type, capability).
-- **Rule P7.4**: the cache key of a `tested` result includes the satisfactions it ran under, including the link-time bindings of the choice points it reaches; the content hash does not cover them.
-- **Rule P8.4**: a counterexample is printed by the diagnostic printer (`spec/diagnostics.md` Rule DG3.4); values of unbounded type print as represented.
-- Mechanical fixes from `docs/decisions/P0-spec-review-2026-11-20.md` §3: §3.4 no longer says other fn bodies carry postconditions; §2 no longer says this document resolves OQ7; Rule P4.2's reason no longer says prop bodies are checked at quantity 0; Rule P4.3 no longer calls a `prop` in an ordinary block a parse error; Rule P5.4 uses the grammar's nonterminals; Rule P5.3.b no longer credits Hypothesis and Hedgehog with sampling across satisfying types; the §10.3 example now implies its parent. The second "Rule P5.3" (generator availability) is renumbered Rule P5.3.d.
-
-**Changes from v0.2.2.**
-- **Cost props** (new Rule P3.5): a prop whose left side is a cost term states a cost contract (`spec/cost.md`). An asymptotic bound can be `proved` or `assumed`, never `tested`.
-- **Prop bodies travel with a package** (§4.1): they are excluded from the binary but are part of the interface tier, because a package that satisfies an imported capability must verify its props (Rule P7.7.a).
-- **Rule P5.3.c**: a test build may run a prop against the baseline version and a clone and compare.
-- **Rule P7.4**: the cache key is the transitive content hash. The earlier key did not change when a function called by the prop body changed, so a `tested` result could be stale.
-- **Rule P8.5**: a prop whose binders have few enough values is checked for all of them, and is then `proved`.
-- New OQ-P7 (generators for types whose constructors are not public).
-
-**Changes from v0.2.1.**
-- **Verification status** (new Rule P7.7). Every accepted prop carries one of three statuses: `proved`, `tested` or `assumed`. `fixed verify` reports the count of each in one verdict line, and the new `--require-proved` flag rejects a build that has any prop below `proved`.
-- **§9 restricted to `proved` props.** v0.2.1 let a prop accepted by PBT become a compiler assumption, and its examples (binary search, bounds-check elision, unchecked arithmetic) change program behaviour when the prop is false. That was unsound. Only `proved` props now license an optimisation whose correctness depends on the prop.
-
-**Changes from v0.2.**
-- **Function-result postconditions deferred** (re-opens OQ7 from `spec/type_system.md`). The §3.3 mechanism — a `prop` declaration at the top of a fn body, with `result` as an implicit binder for the return value — is removed from v0.4.5. Postconditions are reserved for a future release if user demand emerges. The grammar still admits `PropDecl` as an `Expr` alternative because refinement-cap fn bodies (§3.4) require it; the typer rejects `prop` declarations inside non-cap-returning fn bodies. OQ-P5 is moot under this deferral.
-- See §3.3 below for the new (deferred) status note.
-
-**Changes from v0.1.**
-- `implies` is now **eager** (no automatic vacuous-truth discard in PBT) — it is plain propositional implication in both static and PBT contexts.
-- New `suchThat` clause on `forall` (§5.4) is the dedicated **filter** for PBT: only values satisfying the `suchThat` expression count toward the iteration budget. This separates *logic* (`implies`) from *generator filtering* (`suchThat`) and makes test intent more explicit.
-- §4.1 reframed: prop bodies are **excluded from the compiled artifact** rather than "checked at quantity 0". The semantic effect is the same; the framing accommodates PBT, which genuinely runs the prop body in a separate test build with normal quantity arithmetic.
-- New §7.4 specifies a verification cache (deferred implementation) keyed on prop-body hash + obligation set.
-- New Rule P7.6 specifies compiler flags for disabling PBT, treating PBT failure/timeout as errors, and overriding iteration count and time budget.
-- All open questions (OQ-P1..P6) remain open.
-
 ## 1. Scope
 
 This document specifies Fixed's `prop` system end-to-end: where invariants can be declared, how their bodies are typed, the strategy by which the compiler verifies them, what falls out as compiler optimization, and how `prop` interacts with `extends` inheritance. Concretely:
@@ -91,7 +43,7 @@ Theoretical basis:
 
 A `PropDecl` per the grammar has the form:
 
-```
+```fixed
 prop NAME: BODY
 ```
 
@@ -101,7 +53,7 @@ where `BODY` is a `PropExpr` (extends `Expr` with `forall` and `implies`, per §
 
 A `prop` declared inside a `cap` body is an **interface invariant**: every type that satisfies the cap must uphold the property. The typer adds the prop to the cap's obligation set; verification runs for every satisfaction `T satisfies C`, named or not (`spec/type_system.md` Rule 8.4).
 
-```
+```fixed
 cap Sorted of (Part is Ord) extends Sequencing:
     prop sorted: fold(true, (acc, prev, curr) -> acc && prev <= curr)
 ```
@@ -116,7 +68,7 @@ Implicit bindings inside the body:
 
 A `prop` declared inside a `data` body is a **data invariant**: every value of the data type must uphold the property. The static prover verifies the invariant at every constructor call site, right after the typer (Rule P7.1); a runtime check is elided where the invariant is in the facts lane (Rule P7.8).
 
-```
+```fixed
 data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
     Bounded(value: N)
     prop inRange: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
@@ -142,7 +94,7 @@ Implicit bindings inside the body:
 
 A function whose return type is `cap of T` (or `cap extends C`) — a **cap-generating function** per type_system.md §6.3 — has a body composed entirely of `prop` declarations. The body defines the refinement cap's invariants:
 
-```
+```fixed
 fn between(min: N is Ord, max: N) -> cap of N =
     prop inRange: min <= Self && Self <= max
 
@@ -206,7 +158,7 @@ Inside a prop body, the keywords `Self` and `Part` follow the same scoping rules
 
 Pattern matching and conditional expressions are allowed inside prop bodies. They follow Rule Q5.9 (branching uses `⊔`) at quantity 0:
 
-```
+```fixed
 cap Sorted extends Sequencing:
     prop sortedOrEmpty: match Self.head:
         Optional.none => true
@@ -219,7 +171,7 @@ Match cases inside prop bodies are checked at quantity 0, but the same exhaustiv
 
 ### 5.1 Syntax recap
 
-```
+```ebnf
 ForallExpr = "forall" "(" Binder ( "," Binder )* ","? ")" "->" PropExpr
 Binder     = LOWER_IDENT ":" TypeExpr
 ```
@@ -264,12 +216,12 @@ A future weighting hint (`@sampling(weights = ...)` or similar attribute) is ant
 
 A `forall` quantifier may carry an optional `suchThat` clause that filters generated values:
 
-```
+```ebnf
 ForallExpr     = "forall" "(" Binder ( "," Binder )* ","? ")" SuchThatClause? "->" PropExpr
 SuchThatClause = "suchThat" Expr
 ```
 
-```
+```fixed
 prop popDecrements: forall (s: Self) suchThat s.size > 0 ->
     s.pop().size == s.size - 1
 ```
@@ -291,7 +243,7 @@ This makes `suchThat` a precise tool for narrowing the test domain to inputs tha
 
 ### 6.1 Syntax recap
 
-```
+```ebnf
 ImpliesExpr = OrExpr "implies" PropExpr
 ```
 
@@ -314,7 +266,7 @@ In **PBT**, every generated input contributes one case to the iteration counter 
 
 Example contrasting the two:
 
-```
+```fixed
 // `implies` — every generated stack tested; empty stacks pass vacuously
 //             (they make the antecedent false, but PBT still counts the case).
 prop popDecrementsImplies: forall (s: Self) ->
@@ -436,7 +388,7 @@ A satisfaction that received no run for a prop (one that sampling never picked, 
 
 **Rule P7.7.b (verdict).** `fixed verify` ends with one verdict line giving the count of each status and of failures:
 
-```
+```text
 props: 41 proved, 6 tested, 1 assumed, 3 open, 0 failed
 ```
 
@@ -568,7 +520,7 @@ The props in the table are props of capabilities (`Sequencing`, `NonEmpty`, `Bou
 
 A prop in the facts lane may discharge `unreachable` calls. If the prop excludes the value-domain that would reach `unreachable`, the optimiser can elide the unreachable branch entirely:
 
-```
+```fixed
 fn median(collection: C is SortedNonEmpty of (N is Numeric)) -> N =
     let mid = collection.size / 2
     collection.get(mid).fold(
@@ -587,7 +539,7 @@ When `cap A extends B`, every prop of `B` becomes an obligation on every satisfa
 
 ### 10.1 Simple inheritance (Rule P10.1)
 
-```
+```fixed
 cap NonEmpty extends Sequencing + Sized:
     prop nonEmpty: size > 0
 
@@ -609,7 +561,7 @@ Failure to redeclare in the diamond case is `error[E104]: ambiguous prop <name> 
 
 A child cap may redeclare a prop already present in a parent. The redeclaration must imply the parent's version (the child's body, conjuncted with the parent's body, must equal the child's body — i.e., the child strengthens):
 
-```
+```fixed
 cap Eq:
     prop eqReflexive: forall (a: Self) -> a == a
 
@@ -625,7 +577,7 @@ The static prover verifies that the override implies the parent. Failure is `err
 
 ### 11.1 `examples/11_properties.fixed` — `Stack` invariants
 
-```
+```fixed
 cap Stack extends Sequencing + Sized:
     fn push(value: Part) -> Self
     fn pop -> Self
@@ -648,7 +600,7 @@ Verification walk:
 
 ### 11.2 `Bounded` data type
 
-```
+```fixed
 data Bounded of (N is Numeric + Ord, lo: N = 16, hi: N = 24):
     Bounded(value: N)
     prop inRange: forall (b: Self) -> b.lo <= b.value && b.value <= b.hi
@@ -660,7 +612,7 @@ When verification succeeds, the runtime constructor is a plain assignment with n
 
 ### 11.3 `fn -> cap` refinement caps
 
-```
+```fixed
 fn between(min: N is Ord, max: N) -> cap of N =
     prop inRange: min <= Self && Self <= max
 
@@ -703,3 +655,55 @@ fn parsePort(s: String) -> N is PortRange(1024, 49151) with Fail of String =
 | `spec/memory_management.md` | Props in the facts lane (Rule P7.8) inform reuse decisions and bounds-check elision |
 | `docs/references/scala3-compiler-reference.md` | Phase-indexed denotations (§4.4) — verified props annotate symbols |
 | `docs/plans/implementation-plan.md` | Phase 3 deliverable: `caps/PropVerifier.scala`; structured error reporting per the project-wide CLI guidelines |
+
+@:details(Status and changes)
+
+**Status:** Draft v0.3.5
+**Specifies:** `prop` declarations, `forall` / `implies` / `suchThat` constructs, the three verifiers (static prover, cost checker, property-based testing) and where each runs, verification statuses and the two lanes they feed, measurement during testing, property-based test generation, and how verified properties feed compiler decisions for Fixed v0.4.5 source.
+**Last revised:** 2026-11-21
+
+**Changes from v0.3.4.** Settles minor 7 of the consistency review of 2026-11-20 by an author's ruling: the optimisations of §9.1 rest on props of capabilities, so by Rule P7.8.c they apply only where the satisfaction is known (code at a concrete type, a clone for a known type, or a clone built at link), never in baseline code over a type parameter or a choice point; the `median` example of Rule P9.2 says so, and the exception "unless the prop holds for every satisfaction" is withdrawn.
+
+**Changes from v0.3.3.** Applies the owner's decision of 2026-11-21, fourth round (P6, "Integer overflow and division"). Rule P4.2: the arithmetic effects `Overflow` and `DivideByZero` are allowed in a prop body, and performing one is a counterexample (`spec/effects.md` Rule E3.6.g). Rule P7.8.a: removing an arithmetic effect from an operation's type, and establishing a refinement on a bounded integer type (`E107`), are facts-lane decisions (Rule E3.6.e). Rule P7.2: the prover also decides the range goals of function bodies. Rule P7.8.c lists the `assumed` props of the package's own source among what the package compile sees, as the third round decided. §9.1: a range invariant removes `Overflow` instead of eliding "checked overflow".
+
+**Changes from v0.3.2.** Applies the owner's decisions of 2026-11-21, fourth round (P6, "Owner's decisions (fourth round)"), decision 1. Rule P7.7.b no longer gives an exit code of its own: the exit code follows the one table of `spec/reports.md` Rule RP5.5.
+
+**Changes from v0.3.1.** Applies the owner's decisions of 2026-11-20, third round (P6, "Owner's decisions after the consistency review"). `assumed` arises only when the programmer writes `assume prop` (keyword confirmed by the owner, fourth round). A prop nobody checked is open and steers nothing: `--no-pbt` and an undecided asymptotic cost bound leave a prop open. The order of Rule P7.7 is open < `tested` < `assumed` < `proved`. OQ-P8 is closed.
+
+**Changes from v0.3.0.** Applies the rulings of the consistency review of 2026-11-20 (amendments in P6): cost props skip the static prover and go to the cost checker (Rule P7.1); the viability of a refinement-capability candidate is a facts-lane decision (Rules P7.7.c, P7.8); a status is per (prop, satisfaction), and the reported status is the weakest over the satisfactions that ran (Rule P7.7.a); the failure report of a prop is printed by the diagnostic printer and is not a string literal (Rule P8.4); the test build keeps diagnostics (§4.2); "per satisfaction" replaces "per satisfying type".
+
+**Changes from v0.2.3** (`docs/decisions/P6-resolution-round-2026-11-20.md`, D4, D6, D11, D12).
+- **Three verifiers, placed where their inputs exist** (Rule P7.1, rewritten): the static prover on the typed tree right after the typer, the cost checker on Core, and property-based testing in the test build that `fixed verify` runs. A prop the package compile leaves undecided is *open*, which is not a status. `fixed compile` no longer runs property-based testing; the testing flags of Rule P7.6 belong to `fixed verify`.
+- **A status is the weakest status of everything it rests on** (Rule P7.7). v0.2.3 let a `proved` prop rest on an inherited prop that was only `tested`, against Rule P7.7.c.
+- **Two lanes** (new Rule P7.8). Decisions that are wrong if a claim is false take only `proved` and `assumed` props; decisions among correct alternatives take anything measured. This replaces v0.2.1's "only `proved` props are compiler assumptions": `assumed` props now enter the facts lane, and §9 and Rule P9.2 say so. In baseline code no facts-lane decision rests on a capability's prop whose satisfaction is not known there (Rule P7.8.c).
+- **Measurement during testing** (new Rule P7.9): the test build records supply-side costs per (capability method, satisfaction, size class, target), machine facts and demand-side counters, for the profile file.
+- **Binders range over satisfactions** (Rules P5.3, P5.3.b, P7.7.a), since a link unit may hold several satisfactions of one (type, capability).
+- **Rule P7.4**: the cache key of a `tested` result includes the satisfactions it ran under, including the link-time bindings of the choice points it reaches; the content hash does not cover them.
+- **Rule P8.4**: a counterexample is printed by the diagnostic printer (`spec/diagnostics.md` Rule DG3.4); values of unbounded type print as represented.
+- Mechanical fixes from `docs/decisions/P0-spec-review-2026-11-20.md` §3: §3.4 no longer says other fn bodies carry postconditions; §2 no longer says this document resolves OQ7; Rule P4.2's reason no longer says prop bodies are checked at quantity 0; Rule P4.3 no longer calls a `prop` in an ordinary block a parse error; Rule P5.4 uses the grammar's nonterminals; Rule P5.3.b no longer credits Hypothesis and Hedgehog with sampling across satisfying types; the §10.3 example now implies its parent. The second "Rule P5.3" (generator availability) is renumbered Rule P5.3.d.
+
+**Changes from v0.2.2.**
+- **Cost props** (new Rule P3.5): a prop whose left side is a cost term states a cost contract (`spec/cost.md`). An asymptotic bound can be `proved` or `assumed`, never `tested`.
+- **Prop bodies travel with a package** (§4.1): they are excluded from the binary but are part of the interface tier, because a package that satisfies an imported capability must verify its props (Rule P7.7.a).
+- **Rule P5.3.c**: a test build may run a prop against the baseline version and a clone and compare.
+- **Rule P7.4**: the cache key is the transitive content hash. The earlier key did not change when a function called by the prop body changed, so a `tested` result could be stale.
+- **Rule P8.5**: a prop whose binders have few enough values is checked for all of them, and is then `proved`.
+- New OQ-P7 (generators for types whose constructors are not public).
+
+**Changes from v0.2.1.**
+- **Verification status** (new Rule P7.7). Every accepted prop carries one of three statuses: `proved`, `tested` or `assumed`. `fixed verify` reports the count of each in one verdict line, and the new `--require-proved` flag rejects a build that has any prop below `proved`.
+- **§9 restricted to `proved` props.** v0.2.1 let a prop accepted by PBT become a compiler assumption, and its examples (binary search, bounds-check elision, unchecked arithmetic) change program behaviour when the prop is false. That was unsound. Only `proved` props now license an optimisation whose correctness depends on the prop.
+
+**Changes from v0.2.**
+- **Function-result postconditions deferred** (re-opens OQ7 from `spec/type_system.md`). The §3.3 mechanism — a `prop` declaration at the top of a fn body, with `result` as an implicit binder for the return value — is removed from v0.4.5. Postconditions are reserved for a future release if user demand emerges. The grammar still admits `PropDecl` as an `Expr` alternative because refinement-cap fn bodies (§3.4) require it; the typer rejects `prop` declarations inside non-cap-returning fn bodies. OQ-P5 is moot under this deferral.
+- See §3.3 below for the new (deferred) status note.
+
+**Changes from v0.1.**
+- `implies` is now **eager** (no automatic vacuous-truth discard in PBT) — it is plain propositional implication in both static and PBT contexts.
+- New `suchThat` clause on `forall` (§5.4) is the dedicated **filter** for PBT: only values satisfying the `suchThat` expression count toward the iteration budget. This separates *logic* (`implies`) from *generator filtering* (`suchThat`) and makes test intent more explicit.
+- §4.1 reframed: prop bodies are **excluded from the compiled artifact** rather than "checked at quantity 0". The semantic effect is the same; the framing accommodates PBT, which genuinely runs the prop body in a separate test build with normal quantity arithmetic.
+- New §7.4 specifies a verification cache (deferred implementation) keyed on prop-body hash + obligation set.
+- New Rule P7.6 specifies compiler flags for disabling PBT, treating PBT failure/timeout as errors, and overriding iteration count and time budget.
+- All open questions (OQ-P1..P6) remain open.
+
+@:@
