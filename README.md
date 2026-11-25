@@ -343,6 +343,15 @@ The language design is explored through 11 example programs covering:
 
 See [`docs/plans/implementation-plan.md`](docs/plans/implementation-plan.md) for the full roadmap.
 
+## Lean formalization
+
+[`formal/`](formal/README.md) contains a standalone Lean project proving type
+safety and empty-type consistency for an initial simply typed core, plus
+checker correctness, the quantity algebra, and abstract memory safety for frame
+reclamation, heap ownership, scoped borrows, and drop obligations. It does not yet
+verify the full language or Scala compiler. Run `cd formal && lake build` with
+elan installed.
+
 ## References
 
 The full annotated bibliography, grouped by the part of the language each
